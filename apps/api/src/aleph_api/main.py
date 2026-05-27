@@ -17,13 +17,20 @@ from aleph_api.middleware.errors import ErrorMiddleware
 from aleph_api.middleware.request_id import RequestIDMiddleware
 from aleph_api.routes import (
     agent_tokens,
+    aliases,
+    chunks,
+    connectors,
     cost,
+    feedback,
+    handedits,
     health,
     ledger,
     me,
     model_profile,
     projects,
     smoketest,
+    sources,
+    wiki,
 )
 
 
@@ -59,6 +66,14 @@ def create_app() -> FastAPI:
     app.include_router(model_profile.router)
     app.include_router(agent_tokens.router)
     app.include_router(smoketest.router)
+    # Inc 1
+    app.include_router(sources.router)
+    app.include_router(chunks.router)
+    app.include_router(wiki.router)
+    app.include_router(handedits.router)
+    app.include_router(feedback.router)
+    app.include_router(aliases.router)
+    app.include_router(connectors.router)
 
     instrument_fastapi(app)
 

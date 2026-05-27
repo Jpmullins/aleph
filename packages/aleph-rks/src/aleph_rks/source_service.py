@@ -1,0 +1,188 @@
+"""Source-side business logic: registration, status transitions, asset writes.
+
+`SourceService` is the only path that creates `Source` + `SourceVersion` +
+`SourceAsset` triplets. The Upload connector calls this; future connectors
+(Inc 3+) call it too. All mutations write a ledger event.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+from uuid import UUID
+
+from sqlalchemy import func, select
+
+from aleph_core.ids import uuid7
+from aleph_core.time import utcnow
+from aleph_rks.asset_store import AssetStore
+from aleph_rks.models import Source, SourceAsset, SourceVersion
+from aleph_observability.tracing import current_trace_id
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from aleph_db.repos.ledger import LedgerWriter
+    from aleph_security.principal import Principal
+
+
+@dataclass(frozen=True)
+class SourceCreated:
+    source: Source
+    version: SourceVersion
+    asset: SourceAsset
+
+
+async def _next_short_id(session: "AsyncSession") -> str:
+    """Allocate the next `S0001`-style id by counting existing sources."""
+    n = (await session.execute(select(func.count()).select_from(Source))).scalar_one()
+    return f"S{int(n) + 1:04d}"
+
+
+async def register_uploaded_source(
+    session: "AsyncSession",
+    *,
+    ledger: "LedgerWriter",
+    principal: "Principal",
+    asset_store: AssetStore,
+    project_id: UUID,
+    title: str,
+    data: bytes,
+    filename: str,
+    mime_type: str,
+) -> SourceCreated:
+    """Store the bytes, create Source + SourceVersion + SourceAsset rows,
+    set Source.status="normalizing", emit ledger events.
+    """
+    source_id = uuid7()
+    short_id = await _next_short_id(session)
+
+    # Store bytes. Upload connector stores by (project_id, source_id, sha256, ext).
+    extension = (filename.rsplit(".", 1)[-1] if "." in filename else "bin").lower()[
+        :16
+    ]
+    stored = asset_store.put_source_asset(
+        project_id=project_id,
+        source_id=source_id,
+        data=data,
+        mime_type=mime_type,
+        extension=extension,
+    )
+
+    sha = stored.sha256
+
+    asset = SourceAsset(
+        id=uuid7(),
+        project_id=project_id,
+        storage_uri=stored.storage_uri,
+        mime_type=mime_type,
+        size_bytes=stored.size_bytes,
+        sha256=sha,
+        created_by=principal.user_id,
+        access_scope="project",
+    )
+    session.add(asset)
+    await session.flush()
+
+    source = Source(
+        id=source_id,
+        project_id=project_id,
+        connector_kind="upload",
+        external_id=f"{principal.user_id}::{filename}",
+        title=title or filename,
+        url=None,
+        source_metadata_jsonb={
+            "filename": filename,
+            "uploader_id": str(principal.user_id),
+            "original_size": len(data),
+            "storage_uri": stored.storage_uri,
+        },
+        short_id=short_id,
+        status="normalizing",
+        current_version_id=None,
+        created_by=principal.user_id,
+        access_scope="project",
+    )
+    session.add(source)
+    await session.flush()
+
+    version = SourceVersion(
+        id=uuid7(),
+        source_id=source_id,
+        version_no=1,
+        asset_id=asset.id,
+        sha256=sha,
+        fetched_at=utcnow(),
+        parser_version=None,
+        normalized_document_id=None,
+        created_by=principal.user_id,
+        access_scope="project",
+    )
+    session.add(version)
+    source.current_version_id = version.id
+    await session.flush()
+
+    trace_id = current_trace_id()
+    await ledger.append(
+        project_id=project_id,
+        actor_id=principal.user_id,
+        actor_kind=principal.actor_kind,
+        action_kind="source.create",
+        target_id=source_id,
+        target_kind="source",
+        payload={
+            "short_id": short_id,
+            "title": source.title,
+            "connector_kind": "upload",
+            "mime_type": mime_type,
+            "sha256": sha,
+            "size_bytes": len(data),
+        },
+        trace_id=trace_id,
+    )
+    await ledger.append(
+        project_id=project_id,
+        actor_id=principal.user_id,
+        actor_kind=principal.actor_kind,
+        action_kind="source_version.create",
+        target_id=version.id,
+        target_kind="source_version",
+        payload={"source_id": str(source_id), "version_no": 1, "sha256": sha},
+        trace_id=trace_id,
+    )
+
+    return SourceCreated(source=source, version=version, asset=asset)
+
+
+async def mark_status(
+    session: "AsyncSession",
+    *,
+    ledger: "LedgerWriter",
+    principal: "Principal",
+    project_id: UUID,
+    source_id: UUID,
+    status: str,
+    failure_reason: str | None = None,
+) -> None:
+    src = (
+        await session.execute(select(Source).where(Source.id == source_id))
+    ).scalar_one_or_none()
+    if src is None:
+        msg = f"source {source_id} not found"
+        raise ValueError(msg)
+    prior = src.status
+    src.status = status
+    if failure_reason is not None:
+        src.failure_reason = failure_reason[:2048]
+    await session.flush()
+    await ledger.append(
+        project_id=project_id,
+        actor_id=principal.user_id,
+        actor_kind=principal.actor_kind,
+        action_kind="source.status_change",
+        target_id=source_id,
+        target_kind="source",
+        payload={"from": prior, "to": status, "failure_reason": failure_reason},
+        trace_id=current_trace_id(),
+    )

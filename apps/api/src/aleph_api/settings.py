@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str
 
-    # MinIO (not used in Inc 0 routes, but readiness checks it)
+    # MinIO. Inc 1 routes use it for source asset storage.
     minio_endpoint: str | None = None
     aleph_s3_bucket: str | None = None
     minio_root_user: str | None = None

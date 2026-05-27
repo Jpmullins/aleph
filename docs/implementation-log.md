@@ -1,5 +1,141 @@
 # Implementation log
 
+## Increment 1: RKS + intra-source retrieval + wiki skeleton
+
+**Completed:** 2026-05-27
+**Commit range:** (will be filled at merge time)
+
+### What was built
+
+- Two new Python packages: `aleph-rks` and `aleph-wiki`. Workspace
+  manifest (`pyproject.toml`) updated; Alembic `env.py` imports both so
+  their models register with the shared `Base.metadata`.
+- **`aleph-rks`:** SQLAlchemy models for `Connector`, `ConnectorBinding`,
+  `Source`, `SourceVersion`, `SourceAsset`, `NormalizedDocument`,
+  `DocumentChunk` (pgvector + FTS), `RetrievalIndexRecord`. Sentence-aware
+  markdown chunker (tiktoken-counted, overlap-carrying). Per-MIME
+  normalization pipeline (pypdf primary + pdfminer fallback for PDFs;
+  python-docx; readability-lxml + bs4 for HTML; ebooklib for EPUB;
+  passthrough for MD/TXT). Batched embedding via `LiteLLMClient.embed`
+  (`purpose="rks.embed"`). MinIO/S3 `AssetStore` with sha256 verify on
+  read and presigned URL minting. Source registration service that
+  writes Source + SourceVersion + SourceAsset atomically with ledger
+  events.
+- **`aleph-wiki`:** SQLAlchemy models for `WikiPage`, `WikiRevision`
+  (immutable), `WikiSection`, `WikiLink`, `WikiClaim`, `Citation`,
+  `SourcePage`, `Alias`, `HandEditMark`, `RejectionFeedback`, `WikiIndex`.
+  `WikiService.commit_revision` — atomic, idempotent (no-op when body
+  unchanged), hand-edit splicing (splices protected section text from
+  the prior revision into the agent's proposed body before commit),
+  ledger-event-per-revision, full claim + citation insert,
+  WikiIndex refresh in the same transaction. `IndexService` for tsvector
+  FTS over (title + aliases + summary) — the substrate Inc 2's LLM
+  page-selector layers on top of. `AliasService` with `upsert`,
+  `resolve`, and `repair_broken_links`. `HandEditMarkService` with
+  `mark_section`, `clear_section`, `list_active_for_page`.
+  `feedback_service` with `write_feedback`, `pending_for_concept`,
+  `mark_addressed`.
+- **Wiki ingest workflow (LangGraph DAG, 7 nodes):**
+  concept_extraction → alias_extraction → source_page_compose →
+  topic_page_stubs → wikilink_resolve → commit_revision →
+  wiki_index_update. Prompts in `aleph_wiki/agent/prompts/` as
+  versioned markdown files. Each node opens an OTEL span tagged with
+  `aleph.node`, `aleph.agent_kind="wiki"`, project + source IDs. Hand-edit
+  protection and rejection-feedback consumption are wired (feedback rows'
+  `addressed_in_revision_id` is set on commit).
+- **Alembic migration `inc1_rks_wiki`:** creates every Inc 1 table, the
+  HNSW vector index on `document_chunks.embedding` (cosine), the GIN
+  tsvector indexes on `document_chunks.text_tsv` and `wiki_index.index_tsv`,
+  the immutability triggers on `wiki_revisions`, tsvector-maintenance
+  triggers, and seeds the Upload connector row.
+- **Worker jobs:** `normalize_job` (Source → NormalizedDocument; verifies
+  sha256, dispatches by MIME, writes markdown to MinIO, enqueues
+  downstream jobs, ledger event normalization.completed),
+  `chunk_embed_job` (chunks + batched embed via gateway → DocumentChunk
+  rows + RetrievalIndexRecord; budget rollups via the existing trigger),
+  `wiki_ingest_job` (drives the LangGraph workflow, owns the AgentRun
+  lifecycle including failure → wiki_failed). All jobs verify agent
+  tokens; mint via the existing `/v1/agent-tokens` path.
+- **API routes (8):** `/sources` (upload, list, detail, asset URL,
+  normalized markdown), `/chunks` (list + intra-source search via the
+  LiteLLM embed of the query against the HNSW index hybrid-scored with
+  ts_rank), `/wiki` (pages, page detail with claims + wikilinks_out,
+  by-slug, revisions, FTS search via `IndexService.select_pages`),
+  `/handedits` (mark/clear), `/feedback` (write/list), `/aliases`
+  (list/add/repair), `/connectors` (list + per-project bindings).
+  Every state-changing route writes ledger events and is gated by the
+  Inc 0 project-scope dependency.
+- **Web tabs:** `SourcesTab` with upload modal and status badges (auto-
+  refreshing as the worker progresses), `WikiTab` with page list +
+  detail + lightweight markdown renderer (`WikiBodyMarkdown` renders
+  `[[wikilink]]` chips and `[c12]` markers; clicking a chip navigates
+  within the wiki). The Sources tab is added as a 6th right-panel tab
+  for Inc 1 — it'll be folded into the WikiSurface's source-page filter
+  view in Inc 4 alongside the A2UI conversion.
+- **Unit tests:** chunking determinism, section_path preservation, empty
+  edge cases (`aleph_rks/tests/test_chunking.py`); normalization
+  dispatch and passthrough (`aleph_rks/tests/test_normalization.py`);
+  wiki_service helpers — section splitting, slug, hand-edit splicing,
+  hash (`aleph_wiki/tests/test_wiki_service.py`).
+
+### Migrations added
+
+- `inc1_rks_wiki` — every Inc 1 table; HNSW + GIN indexes; immutability
+  triggers on `wiki_revisions`; tsvector-maintenance triggers for
+  `document_chunks` and `wiki_index`; seeded Upload connector.
+
+### Trace and ledger behavior added
+
+- Ledger action kinds (new in Inc 1): `source.create`,
+  `source_version.create`, `source.status_change`,
+  `normalization.completed`, `embeddings.completed`,
+  `wiki.revision.commit`, `wiki_ingest.succeeded`, `wiki_ingest.failed`,
+  `connector_binding.create`, `connector_binding.update`.
+- OTEL spans: `worker.normalize`, `worker.chunk_embed`,
+  `worker.wiki_ingest`, `wiki.commit_revision`, and one
+  `wiki.node.<name>` span per workflow node.
+- Cost ledger covers all embedding calls (`purpose="rks.embed"`) and
+  every wiki-agent LLM call (`wiki.concept_extraction`,
+  `wiki.alias_extraction`, `wiki.source_page_compose`,
+  `wiki.topic_page_stub`, plus the `rks.descent.query_embed` used by
+  the intra-source search route).
+
+### Known issues / debts
+
+- **Live-stack validation pending.** The Inc 1 code compiles cleanly
+  and the unit tests pass against the pure-function logic, but I have
+  not run the full compose stack with a real MinIO / Postgres / gateway
+  to validate the end-to-end upload→wiki path. The integration tests
+  enumerated in §1.13 of the spec (upload-to-wiki, hand-edit
+  preservation, rejection feedback consumed, embedder change reembed,
+  failure path visible) are NOT yet written — they need the live stack
+  to be useful and should land in the next session.
+- **Eval datasets (`coverage_minimum.jsonl`, `alias_extraction.jsonl`)
+  not yet authored.** The eval runner skeleton (Inc 0) will pick them
+  up automatically once they're added; the gates in `--gate strict`
+  are honored.
+- **Web source-detail route not yet implemented.** The Sources tab
+  surfaces sources and their status; clicking opens nothing in Inc 1.
+  The detail page (normalized preview + chunk debug pane) lands next.
+- **AssetStore in API process is best-effort.** If MinIO is unreachable
+  at lifespan, the API still boots — uploads fail with a clear
+  `validation_failed` problem detail. Production behavior should be
+  to fail `/readyz`; this lands when the deployment story for the
+  asset store firms up.
+
+### Next increment entry point
+
+See `docs/superpowers/specs/2026-05-27-inc-2-wiki-first-chat-design.md`.
+Increment 2 adds `AssistantThread`/`Message`/`Session`, the wiki
+retrieval router (LLM page-selector layered on top of
+`IndexService.select_pages` + 1-hop wikilink expansion + answer
+composer), intra-source descent via the existing chunks/search
+endpoint, the center-panel chat UI, and the cost banner enforcement
+loop. No schema changes to Inc 1 entities are needed; if any are
+required they'll go through a new Alembic migration.
+
+---
+
 ## Increment 0: Foundations, ledger, cost spine, LiteLLM transport
 
 **Completed:** 2026-05-27

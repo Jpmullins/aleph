@@ -23,6 +23,12 @@ class WorkerSettings(BaseSettings):
     database_url: str
     redis_url: str
 
+    # MinIO / S3 for the asset store used by normalize/chunk_embed jobs.
+    minio_endpoint: str = "http://minio:9000"
+    minio_root_user: str = "aleph"
+    minio_root_password: str = "changeme-local"
+    aleph_s3_bucket: str = "aleph-local"
+
     langfuse_host: str
     langfuse_public_key: str
     langfuse_secret_key: str

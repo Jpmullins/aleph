@@ -21,6 +21,8 @@ dependencies = [
     "aleph-observability",
     "aleph-models",
     "aleph-evals",
+    "aleph-rks",
+    "aleph-wiki",
 ]
 
 [project.scripts]

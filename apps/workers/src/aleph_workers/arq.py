@@ -20,8 +20,14 @@ from aleph_observability import (
     shutdown_langfuse,
     shutdown_otel,
 )
+from aleph_rks.asset_store import AssetStore
 
-from aleph_workers.jobs import smoke_llm_job
+from aleph_workers.jobs import (
+    chunk_embed_job,
+    normalize_job,
+    smoke_llm_job,
+    wiki_ingest_job,
+)
 from aleph_workers.settings import get_worker_settings
 
 
@@ -54,12 +60,21 @@ async def _startup(ctx: dict[str, Any]) -> None:
         session_maker=maker,
         redis_client=redis,
     )
+    asset_store = AssetStore(
+        endpoint=s.minio_endpoint,
+        access_key=s.minio_root_user,
+        secret_key=s.minio_root_password,
+        bucket=s.aleph_s3_bucket,
+        secure=False,
+    )
     ctx["settings"] = s
     ctx["db_engine"] = engine
     ctx["session_maker"] = maker
     ctx["litellm_client"] = litellm
     ctx["gateway_http"] = gateway_http
     ctx["redis"] = redis
+    ctx["redis_pool"] = redis  # arq.create_pool would also work; reusing the same connection
+    ctx["asset_store"] = asset_store
     ctx["agent_token_secret"] = s.aleph_agent_token_secret
 
 
@@ -76,11 +91,15 @@ def _redis_from_url(url: str) -> RedisSettings:
 
 
 class WorkerSettings:
-    functions = [smoke_llm_job]
+    functions = [
+        smoke_llm_job,
+        normalize_job,
+        chunk_embed_job,
+        wiki_ingest_job,
+    ]
     on_startup = _startup
     on_shutdown = _shutdown
     redis_settings = _redis_from_url(get_worker_settings().redis_url)
-    # Reasonable defaults — Arq tunes per workload in Inc 1+.
     max_jobs = 10
-    job_timeout = 300
+    job_timeout = 600
     keep_result = 3600

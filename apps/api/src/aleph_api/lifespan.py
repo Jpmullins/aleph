@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from aleph_db.session import async_engine_for, async_sessionmaker_for
 from aleph_models.client import LiteLLMClient
 from aleph_models.pricing import get_default_pricing
+from aleph_rks.asset_store import AssetStore
 from aleph_observability import (
     configure_logging,
     init_langfuse,
@@ -75,6 +76,19 @@ async def lifespan(app: "FastAPI") -> "AsyncIterator[None]":
         redis_client=redis_client,
     )
 
+    asset_store: AssetStore | None = None
+    if settings.minio_endpoint and settings.minio_root_user and settings.minio_root_password and settings.aleph_s3_bucket:
+        try:
+            asset_store = AssetStore(
+                endpoint=settings.minio_endpoint,
+                access_key=settings.minio_root_user,
+                secret_key=settings.minio_root_password,
+                bucket=settings.aleph_s3_bucket,
+                secure=False,
+            )
+        except Exception:  # noqa: BLE001
+            asset_store = None
+
     app.state.settings = settings
     app.state.db_engine = engine
     app.state.session_maker = session_maker
@@ -83,6 +97,7 @@ async def lifespan(app: "FastAPI") -> "AsyncIterator[None]":
     app.state.redis = redis_client
     app.state.gateway_http = gateway_http
     app.state.auth_http = auth_http
+    app.state.asset_store = asset_store
 
     try:
         yield
