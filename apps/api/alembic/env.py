@@ -28,6 +28,12 @@ try:
     import aleph_assistant.models  # noqa: F401
 except ImportError:
     pass
+# Inc 3: connectors + AIQ.
+try:
+    import aleph_connectors.credentials  # noqa: F401
+    import aleph_connectors.models  # noqa: F401
+except ImportError:
+    pass
 
 config = context.config
 if config.config_file_name is not None:

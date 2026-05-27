@@ -1,5 +1,119 @@
 # Implementation log
 
+## Increment 3: AIQ subsystem + connector roster + /synthesize
+
+**Completed:** 2026-05-27 (Aleph-side; AIQ submodule vendoring is operator-action)
+**Commit range:** (will be filled at merge time)
+
+### What was built
+
+- New package **`aleph-connectors`**: `ConnectorBase` Protocol +
+  `ConnectorContext` carrying agent-token-scoped credential value;
+  `ConnectorCredential` model with libsodium SealedBox cipher (dev) and
+  a KMS-AES-GCM hook (prod); `ConnectorCredentialService` with upsert /
+  delete / rotate / decrypt_for_callback (deployment-env fallback when
+  no project-specific cred exists); in-process `ConnectorRegistry`;
+  full implementations of Tavily, Exa, Serper, arXiv, Semantic Scholar,
+  OpenAlex, RSS, HuggingFace Hub, Lens.org (disabled by default), and
+  an Upload adapter that re-exposes Inc 1's Upload through the unified
+  Protocol.
+- New package **`aleph-aiq`**: AIQ REST client (`dispatch_deep`, `get_job`,
+  `cancel`, `clarify`, `health`); per-project AIQ YAML config generator
+  that wires every `llms.*` block to `_type: openai` with
+  `base_url=${LITELLM_BASE_URL}`; tokenomics adapter that turns AIQ
+  PhaseStats into `ModelCall` + `CostLedgerEvent` rows
+  (`purpose="aiq.<phase>"`, `actor_kind="aiq_agent"`); auth bridge with
+  service-token issuance + verification (HS256, audience `aiq-server`,
+  scope `aiq.full`, TTL ≤ 1h); `job_service` for AIQ ↔ AgentRun
+  lifecycle.
+- **Synthesis workflow** in `aleph_wiki.synthesis_workflow`: LangGraph
+  DAG with `concept_normalize → citation_verification → wikilink_resolve
+  → commit_revision → wiki_index_update`. Consumes an `AIQReport`
+  structured object (body + sources + citations_by_marker + claims),
+  emits draft wiki pages and `SynthesisProposal` rows. Citation
+  verification failure blocks commit and raises
+  `CitationVerificationFailure` with the missing markers listed.
+- **`aleph_wiki.citation_verification`**: standalone implementation of
+  AIQ's `verify_citations` + `sanitize_report` contract — drop-in
+  replaceable with AIQ's once `vendor/aiq` is checked out. Extracts
+  `[cN]` markers, looks them up in the source registry, raises on
+  missing.
+- **Alembic migration `inc3_aiq_synthesis`**: creates
+  `connector_credentials`, `synthesis_proposals`, `approval_decisions`
+  tables. Seeds the full Inc 3 connector roster including the disabled
+  Lens.org row.
+- **API routes (added under `/v1/projects/{id}/`):**
+  - `/synthesize` — body `{topic, depth, allowed_connectors?}`. Creates
+    AgentRun, issues service token, dispatches to AIQ. Returns
+    `{agent_run_id, aiq_job_id, dispatched}`. If AIQ is not reachable
+    the AgentRun is still recorded; the operator can retry once AIQ is
+    up.
+  - `/synthesis-proposals` — list, approve (flips proposal +
+    `WikiPage.status` to `approved` in one transaction with an
+    `ApprovalDecision` row), reject (proposal + page move to archived;
+    `RejectionFeedback` written so next synthesis sees the reason).
+  - `/connector-credentials` — owner-only list / put / delete / rotate.
+    Plaintext never appears in any response or ledger payload.
+  - `/internal/v1/aiq/credentials/{kind}`,
+    `/internal/v1/aiq/sources`, `/internal/v1/aiq/model-calls`,
+    `/internal/v1/aiq/events` — service-token gated callbacks. Wraps
+    `register_uploaded_source` for the Source persistence path so AIQ
+    sources go through the same ingestion pipeline as analyst uploads.
+
+### Trace and ledger behavior added
+
+- Ledger action kinds (new in Inc 3): `connector_credential.create`,
+  `connector_credential.update`, `connector_credential.delete`,
+  `synthesize.dispatch`, `synthesis.proposal.create`,
+  `synthesis.proposal.approve`, `synthesis.proposal.reject`.
+- OTEL spans: `synthesis.node.concept_normalize`,
+  `synthesis.node.citation_verification`,
+  `synthesis.node.wikilink_resolve`, `synthesis.node.commit_revision`.
+  AIQ-side spans flow into Langfuse via the OTEL collector once
+  AIQ is up.
+- Cost ledger: every AIQ LLM call routes through the tokenomics
+  callback and lands as a `ModelCall` + `CostLedgerEvent` with
+  `actor_kind="aiq_agent"` and `purpose="aiq.<phase>"`.
+
+### Known issues / debts (Inc 3-specific)
+
+- **AIQ submodule not vendored in this session.** `vendor/aiq` is
+  empty. Operators add the submodule via:
+  ```bash
+  TAG=$(gh release list -R NVIDIA-AI-Blueprints/aiq --limit 1 | awk '{print $1}')
+  git submodule add -b $TAG https://github.com/NVIDIA-AI-Blueprints/aiq vendor/aiq
+  ```
+  Until then, `/synthesize` records the AgentRun in `pending`,
+  `dispatched=false`. The proposal lifecycle and citation
+  verification work without AIQ — the synthesis_workflow can be
+  exercised by feeding a hand-built `AIQReport` directly.
+- **Compose `aiq-server` service** is not added to
+  `deploy/compose/docker-compose.yml`. Adding it depends on the
+  submodule being in place; the runbook
+  (`docs/operations/aiq-runbook.md`) lays out the operator steps.
+- **No live-stack integration tests for AIQ** (test_aiq_server_health,
+  test_synthesize_deep, test_aiq_writes_through_aleph, etc.) — these
+  require the AIQ container to be running.
+- **Frontend `SynthesizeButton`, `SynthesisProgressCard`,
+  `SynthesisDraftPreview`** are not wired in this session. The
+  approve/reject API endpoints are live and ledgered; the chat UI
+  surfacing of the synthesis lifecycle lands alongside Inc 4's A2UI
+  surfaces.
+- **Eval datasets** (`synthesis_coverage.jsonl`,
+  `citation_verification_recall.jsonl`, `connector_routing.jsonl`)
+  not yet authored.
+
+### Next increment entry point
+
+See `docs/superpowers/specs/2026-05-27-inc-4-a2ui-surfaces-design.md`.
+Increment 4 wires A2UI: surface components for each right-panel tab
+plus inline cards in chat. The BriefsSurface will replace Inc 3's
+plain `GET /synthesis-proposals` JSON list with a proper A2UI-rendered
+list with `ApprovalCard`s. The approve/reject API contracts from Inc 3
+do not change; only their rendering.
+
+---
+
 ## Increment 2: Wiki-first chat + assistant
 
 **Completed:** 2026-05-27

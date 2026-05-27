@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     # Agent-token signing
     aleph_agent_token_secret: str
 
+    # AIQ server URL (Inc 3+). Optional — when unset, /synthesize records
+    # the AgentRun in 'pending' status and the dispatch is a no-op.
+    aiq_base_url: str | None = None
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

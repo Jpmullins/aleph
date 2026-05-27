@@ -24,6 +24,8 @@ dependencies = [
     "aleph-rks",
     "aleph-wiki",
     "aleph-assistant",
+    "aleph-connectors",
+    "aleph-aiq",
 ]
 
 [project.scripts]

@@ -2,9 +2,11 @@
 
 from aleph_api.routes import (
     agent_tokens,
+    aiq_internal,
     aliases,
     assistant,
     chunks,
+    connector_credentials,
     connectors,
     cost,
     feedback,
@@ -16,14 +18,17 @@ from aleph_api.routes import (
     projects,
     smoketest,
     sources,
+    synthesize,
     wiki,
 )
 
 __all__ = [
     "agent_tokens",
+    "aiq_internal",
     "aliases",
     "assistant",
     "chunks",
+    "connector_credentials",
     "connectors",
     "cost",
     "feedback",
@@ -35,5 +40,6 @@ __all__ = [
     "projects",
     "smoketest",
     "sources",
+    "synthesize",
     "wiki",
 ]

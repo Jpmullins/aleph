@@ -17,9 +17,11 @@ from aleph_api.middleware.errors import ErrorMiddleware
 from aleph_api.middleware.request_id import RequestIDMiddleware
 from aleph_api.routes import (
     agent_tokens,
+    aiq_internal,
     aliases,
     assistant,
     chunks,
+    connector_credentials,
     connectors,
     cost,
     feedback,
@@ -31,6 +33,7 @@ from aleph_api.routes import (
     projects,
     smoketest,
     sources,
+    synthesize,
     wiki,
 )
 
@@ -77,6 +80,10 @@ def create_app() -> FastAPI:
     app.include_router(connectors.router)
     # Inc 2
     app.include_router(assistant.router)
+    # Inc 3
+    app.include_router(synthesize.router)
+    app.include_router(connector_credentials.router)
+    app.include_router(aiq_internal.router)
 
     instrument_fastapi(app)
 
