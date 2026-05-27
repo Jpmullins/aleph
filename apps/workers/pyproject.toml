@@ -17,6 +17,9 @@ dependencies = [
     "aleph-security",
     "aleph-observability",
     "aleph-models",
+    "aleph-rks",
+    "aleph-wiki",
+    "aleph-assistant",
 ]
 
 [build-system]

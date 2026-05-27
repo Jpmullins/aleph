@@ -1,5 +1,88 @@
 # Implementation log
 
+## Increment 2: Wiki-first chat + assistant
+
+**Completed:** 2026-05-27
+**Commit range:** (will be filled at merge time)
+
+### What was built
+
+- New package `aleph-assistant` with `AssistantSession`,
+  `AssistantThread`, and `AssistantMessage` models, the wiki-first
+  retrieval router, the answer composer, and the LangGraph turn
+  workflow.
+- **`WikiFirstRetrievalRouter`:** FTS candidate generation via
+  `IndexService.select_pages` → LLM page-selector
+  (capability `page_selection`) tagging each pick as
+  `primary`/`supporting`/`peripheral` → deterministic 1-hop wikilink
+  expansion (bounded) → composer (capability `synthesis`) returning
+  `{body_md, descent_requests, synthesis_requests}` → optional descent
+  loop (LiteLLM embed of the inner query + `descend_into_source`
+  hybrid-score against a single source's HNSW + FTS indexes) →
+  re-compose. `coverage_judgment ∈ {ok, descent_used, descent_needed,
+  synthesis_needed}` recorded on every result.
+- **Assistant turn workflow (LangGraph DAG):** budget_gate →
+  query_rewrite (deterministic deictic substitution from the last
+  assistant message's first `[[wikilink]]`) → retrieve → finalize.
+  Every node opens an OTEL span; every LLM call goes through
+  `LiteLLMClient` so cost is ledgered.
+- **API routes (`/v1/projects/{id}/...`):** sessions create/list/rename
+  with `auto-create initial thread`, threads list + fork, messages
+  list + post + get + SSE stream (`/messages/{id}/stream`),
+  retrieval debug (`/retrieval/debug`, owner/editor only).
+- **Worker:** `assistant_turn_job` verifies the agent token, loads
+  prior messages + profile, runs the workflow, finalizes the AgentRun.
+- **Alembic migration `inc2_assistant`:** creates `assistant_sessions`,
+  `assistant_threads`, `assistant_messages` with the
+  `uq_messages_thread_ord` constraint. No Inc 1 schema changes.
+- **Web:** `ChatSurface` is now the center panel — auto-creates a
+  session, posts user messages, polls for the in-progress assistant
+  message, surfaces coverage judgment + cited wiki page titles +
+  descent chunk counts on each bubble. Reuses `WikiBodyMarkdown` from
+  Inc 1 for `[[wikilink]]` chips and `[cN]` markers.
+
+### Trace and ledger behavior added
+
+- Ledger action kinds (new in Inc 2):
+  `assistant.session.create`, `assistant.session.rename`,
+  `assistant.thread.fork`, `assistant.message.user_posted`,
+  `assistant.message.complete`, `assistant.message.failed`,
+  `assistant.message.budget_blocked`.
+- OTEL spans: `assistant.turn`, `assistant.retrieve`,
+  `assistant.page_selection` (via LiteLLM span),
+  `assistant.compose` (via LiteLLM span), `litellm.embed` for
+  `assistant.descent.query_embed`.
+- Cost ledger covers every chat/embed call inside a turn.
+
+### Known issues / debts
+
+- **SSE streaming is approximate.** The assistant_turn workflow
+  writes `body_md` in one shot at finalize; SSE streaming polls
+  `body_md` length for incremental deltas. True composer token
+  streaming lands in Inc 4 alongside the A2UI conversion.
+- **No live-stack integration tests yet.** The pure-function tests
+  for `_safe_json` and the existing chunking/wiki-service tests
+  pass. The full §2.9 integration suite (chat_wiki_first,
+  chat_descent, chat_synthesis_flag, chat_budget_*, chat_retry_fork,
+  no_raw_chunk_rag) needs a running compose stack to be useful.
+- **Eval datasets** (`page_selection.jsonl`, `descent_correctness.jsonl`,
+  `citation_correctness.jsonl`, `synthesis_flag_precision.jsonl`) are
+  not yet authored. The eval runner skeleton picks them up
+  automatically once they're added.
+- **Forking UI not wired.** The fork API endpoint is live; the
+  per-message "retry from here" affordance lands in Inc 4.
+
+### Next increment entry point
+
+See `docs/superpowers/specs/2026-05-27-inc-3-aiq-connectors-synthesize-design.md`.
+Increment 3 vendors AIQ, rewrites its LLM configs to point at the
+LiteLLM gateway, adds the full connector roster, and wires the
+`/synthesize` action to the AIQ DeepResearcher so the wiki grows from
+real queries. `RetrievalResult.synthesis_requests` is the contract Inc 3
+consumes.
+
+---
+
 ## Increment 1: RKS + intra-source retrieval + wiki skeleton
 
 **Completed:** 2026-05-27

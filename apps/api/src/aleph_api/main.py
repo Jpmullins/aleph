@@ -18,6 +18,7 @@ from aleph_api.middleware.request_id import RequestIDMiddleware
 from aleph_api.routes import (
     agent_tokens,
     aliases,
+    assistant,
     chunks,
     connectors,
     cost,
@@ -74,6 +75,8 @@ def create_app() -> FastAPI:
     app.include_router(feedback.router)
     app.include_router(aliases.router)
     app.include_router(connectors.router)
+    # Inc 2
+    app.include_router(assistant.router)
 
     instrument_fastapi(app)
 

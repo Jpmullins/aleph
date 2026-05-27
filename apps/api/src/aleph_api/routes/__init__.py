@@ -3,6 +3,7 @@
 from aleph_api.routes import (
     agent_tokens,
     aliases,
+    assistant,
     chunks,
     connectors,
     cost,
@@ -21,6 +22,7 @@ from aleph_api.routes import (
 __all__ = [
     "agent_tokens",
     "aliases",
+    "assistant",
     "chunks",
     "connectors",
     "cost",

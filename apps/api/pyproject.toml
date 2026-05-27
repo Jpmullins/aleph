@@ -23,6 +23,7 @@ dependencies = [
     "aleph-evals",
     "aleph-rks",
     "aleph-wiki",
+    "aleph-assistant",
 ]
 
 [project.scripts]

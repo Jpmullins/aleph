@@ -23,6 +23,11 @@ try:
     import aleph_wiki.models  # noqa: F401
 except ImportError:
     pass
+# Inc 2: assistant.
+try:
+    import aleph_assistant.models  # noqa: F401
+except ImportError:
+    pass
 
 config = context.config
 if config.config_file_name is not None:

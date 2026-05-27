@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { ChatSurface } from "@/components/ChatSurface";
 import { CostBanner } from "@/components/CostBanner";
 import { SourcesTab } from "@/components/SourcesTab";
 import { WikiTab } from "@/components/WikiTab";
@@ -29,7 +30,7 @@ export function ProjectWorkspace({ projectId, onBack }: Props) {
       <CostBanner projectId={projectId} />
       <div className="flex min-h-0 flex-1">
         <LeftPanel onBack={onBack} title={project.data?.title ?? "—"} />
-        <CenterPanel />
+        <CenterPanel projectId={projectId} />
         <RightPanel projectId={projectId} tab={tab} setTab={setTab} />
       </div>
     </div>
@@ -63,17 +64,10 @@ function LeftPanel({ onBack, title }: { onBack: () => void; title: string }) {
   );
 }
 
-function CenterPanel() {
+function CenterPanel({ projectId }: { projectId: string }) {
   return (
     <main className="flex min-w-0 flex-1 flex-col bg-slate-50">
-      <div className="flex-1 overflow-y-auto p-6">
-        <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-slate-500">
-          Chat lands in Increment 2.
-        </div>
-      </div>
-      <div className="border-t border-slate-200 bg-white p-4 text-sm text-slate-500">
-        <span className="font-medium text-slate-700">Activity</span> — no agents running.
-      </div>
+      <ChatSurface projectId={projectId} />
     </main>
   );
 }
