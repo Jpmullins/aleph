@@ -1,0 +1,109 @@
+[project]
+name = "aleph-workspace"
+version = "0.1.0"
+description = "Aleph monorepo workspace root"
+requires-python = ">=3.13"
+
+[tool.uv.workspace]
+members = [
+    "apps/api",
+    "apps/workers",
+    "packages/aleph-core",
+    "packages/aleph-db",
+    "packages/aleph-security",
+    "packages/aleph-observability",
+    "packages/aleph-models",
+    "packages/aleph-evals",
+    "packages/aleph-rks",
+    "packages/aleph-wiki",
+]
+
+[tool.uv.sources]
+aleph-core = { workspace = true }
+aleph-db = { workspace = true }
+aleph-security = { workspace = true }
+aleph-observability = { workspace = true }
+aleph-models = { workspace = true }
+aleph-evals = { workspace = true }
+aleph-rks = { workspace = true }
+aleph-wiki = { workspace = true }
+aleph-api = { workspace = true }
+aleph-workers = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "ruff==0.15.14",
+    "pyright==1.1.409",
+    "pytest==9.0.3",
+    "pytest-asyncio==1.4.0",
+    "pytest-httpx==0.36.2",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = [
+    "integration: requires docker compose stack",
+]
+testpaths = ["tests", "packages", "apps"]
+addopts = "-ra --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = [
+    "apps/api/src",
+    "apps/workers/src",
+    "packages/aleph-core/src",
+    "packages/aleph-db/src",
+    "packages/aleph-security/src",
+    "packages/aleph-observability/src",
+    "packages/aleph-models/src",
+    "packages/aleph-evals/src",
+    "packages/aleph-rks/src",
+    "packages/aleph-wiki/src",
+]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W", "I", "B", "C4", "UP", "RUF", "PL", "SIM", "TCH", "ASYNC",
+]
+ignore = [
+    "PLR0913",  # too many arguments — services have many kwargs
+    "PLR2004",  # magic values — common in tests
+    "PLR0911",  # too many returns
+    "PLR0912",  # too many branches
+    "PLR0915",  # too many statements
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+"**/alembic/**/*.py" = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pyright]
+pythonVersion = "3.13"
+typeCheckingMode = "strict"
+include = [
+    "apps/api/src",
+    "apps/workers/src",
+    "packages/aleph-core/src",
+    "packages/aleph-db/src",
+    "packages/aleph-security/src",
+    "packages/aleph-observability/src",
+    "packages/aleph-models/src",
+    "packages/aleph-evals/src",
+    "packages/aleph-rks/src",
+    "packages/aleph-wiki/src",
+]
+exclude = [
+    "**/.venv",
+    "**/__pycache__",
+    "**/alembic/versions",
+    "**/tests",
+]
+reportMissingTypeStubs = "warning"
+reportUnknownMemberType = "warning"
+reportUnknownVariableType = "warning"
+reportUnknownArgumentType = "warning"

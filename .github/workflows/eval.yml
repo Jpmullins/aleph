@@ -1,0 +1,28 @@
+name: eval
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Daily eval run; per-PR runs live in ci.yml's evals job.
+    - cron: "0 7 * * *"
+
+jobs:
+  full-evals:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.5.21"
+      - run: uv sync --all-extras
+      - name: Run all evals (strict)
+        run: |
+          uv run python -m aleph_evals \
+            --datasets all \
+            --gate strict \
+            --report .eval-reports/report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-report
+          path: .eval-reports/

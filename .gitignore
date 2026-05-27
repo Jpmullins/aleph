@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.pyright/
+.mypy_cache/
+.venv/
+venv/
+.python-version
+build/
+dist/
+
+# Node
+node_modules/
+.pnpm-store/
+*.tsbuildinfo
+.vite/
+dist/
+.next/
+
+# Env + secrets — never commit
+.env
+.env.local
+.env.*.local
+deploy/compose/.env
+*.env.local
+API_keys.txt
+secrets/
+
+# MinIO / data dirs
+deploy/compose/data/
+**/.minio.sys/
+
+# Editor + OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Coverage + reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.eval-reports/
+
+# uv lockfile is committed; per-app caches are not
+.uv/

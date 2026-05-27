@@ -1,0 +1,168 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+
+import { ApiError, api, type ProjectOut } from "@/lib/api";
+
+interface Props {
+  onOpen: (projectId: string) => void;
+}
+
+export function ProjectList({ onOpen }: Props) {
+  const [showCreate, setShowCreate] = useState(false);
+  const projectsQuery = useQuery<ProjectOut[]>({
+    queryKey: ["projects"],
+    queryFn: () => api.get<ProjectOut[]>("/v1/projects"),
+  });
+
+  return (
+    <div className="mx-auto max-w-4xl px-6 py-12">
+      <header className="mb-8 flex items-center justify-between">
+        <h1 className="text-3xl font-semibold tracking-tight">Projects</h1>
+        <button
+          type="button"
+          onClick={() => setShowCreate(true)}
+          className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow hover:bg-slate-700"
+        >
+          New project
+        </button>
+      </header>
+      {projectsQuery.isPending && <p className="text-slate-500">Loading projects…</p>}
+      {projectsQuery.isError && (
+        <p className="text-red-700">
+          Failed to load projects: {(projectsQuery.error as ApiError).message}
+        </p>
+      )}
+      {projectsQuery.isSuccess && projectsQuery.data.length === 0 && (
+        <div className="rounded-lg border border-dashed border-slate-300 p-12 text-center">
+          <p className="text-slate-500">No projects yet. Create one to get started.</p>
+        </div>
+      )}
+      <ul className="space-y-2">
+        {projectsQuery.data?.map((p) => (
+          <li key={p.id}>
+            <button
+              type="button"
+              onClick={() => onOpen(p.id)}
+              className="block w-full rounded-md border border-slate-200 bg-white px-4 py-3 text-left shadow-sm hover:border-slate-400"
+            >
+              <div className="font-medium text-slate-900">{p.title}</div>
+              <div className="mt-1 text-xs text-slate-500">
+                {p.status} · created {new Date(p.created_at).toLocaleDateString()}
+              </div>
+            </button>
+          </li>
+        ))}
+      </ul>
+      {showCreate && (
+        <ProjectCreateModal
+          onClose={() => setShowCreate(false)}
+          onCreated={(id) => {
+            setShowCreate(false);
+            onOpen(id);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+interface CreateProps {
+  onClose: () => void;
+  onCreated: (id: string) => void;
+}
+
+function ProjectCreateModal({ onClose, onCreated }: CreateProps) {
+  const qc = useQueryClient();
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [profile, setProfile] = useState<"aleph-dev" | "aleph-production">("aleph-dev");
+  const [budget, setBudget] = useState("100.00");
+  const create = useMutation({
+    mutationFn: async () =>
+      api.post<ProjectOut>("/v1/projects", {
+        title,
+        description,
+        model_profile_name: profile,
+        budget_usd: budget,
+      }),
+    onSuccess: (p) => {
+      qc.invalidateQueries({ queryKey: ["projects"] });
+      onCreated(p.id);
+    },
+  });
+  return (
+    <div className="fixed inset-0 flex items-center justify-center bg-slate-900/40 px-4">
+      <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
+        <h2 className="mb-4 text-xl font-semibold">New project</h2>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            create.mutate();
+          }}
+          className="space-y-4"
+        >
+          <label className="block">
+            <span className="text-sm font-medium text-slate-700">Title</span>
+            <input
+              required
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            />
+          </label>
+          <label className="block">
+            <span className="text-sm font-medium text-slate-700">Description</span>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={3}
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            />
+          </label>
+          <label className="block">
+            <span className="text-sm font-medium text-slate-700">Model profile</span>
+            <select
+              value={profile}
+              onChange={(e) => setProfile(e.target.value as typeof profile)}
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            >
+              <option value="aleph-dev">aleph-dev (cheap)</option>
+              <option value="aleph-production">aleph-production (premium)</option>
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-sm font-medium text-slate-700">Budget (USD)</span>
+            <input
+              required
+              value={budget}
+              onChange={(e) => setBudget(e.target.value)}
+              type="number"
+              step="0.01"
+              min="0.01"
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            />
+          </label>
+          {create.isError && (
+            <p className="text-sm text-red-600">{(create.error as ApiError).message}</p>
+          )}
+          <div className="flex justify-end gap-3 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md border border-slate-300 px-4 py-2 text-sm hover:border-slate-500"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={create.isPending || !title}
+              className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+            >
+              {create.isPending ? "Creating…" : "Create"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,16 @@
+[project]
+name = "aleph-core"
+version = "0.1.0"
+description = "Aleph shared domain primitives and Pydantic schemas"
+requires-python = ">=3.13"
+dependencies = [
+    "pydantic==2.13.4",
+    "orjson==3.11.9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aleph_core"]

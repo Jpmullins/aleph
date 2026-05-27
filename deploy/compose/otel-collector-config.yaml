@@ -1,0 +1,44 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 256
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: local
+        action: insert
+
+exporters:
+  # Forward OTLP to Langfuse's OTLP ingestion endpoint.
+  otlphttp/langfuse:
+    endpoint: ${env:LANGFUSE_HOST}/api/public/otel
+    headers:
+      Authorization: "Basic ${env:LANGFUSE_AUTH}"
+    encoding: proto
+  # Mirror to stdout for local debugging.
+  debug:
+    verbosity: basic
+    sampling_initial: 5
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch, resource]
+      exporters: [otlphttp/langfuse, debug]
+    metrics:
+      receivers: [otlp]
+      processors: [batch, resource]
+      exporters: [debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch, resource]
+      exporters: [debug]
