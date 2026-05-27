@@ -19,6 +19,8 @@ members = [
     "packages/aleph-assistant",
     "packages/aleph-connectors",
     "packages/aleph-aiq",
+    "packages/aleph-a2ui",
+    "packages/aleph-notes",
 ]
 
 [tool.uv.sources]
@@ -33,6 +35,8 @@ aleph-wiki = { workspace = true }
 aleph-assistant = { workspace = true }
 aleph-connectors = { workspace = true }
 aleph-aiq = { workspace = true }
+aleph-a2ui = { workspace = true }
+aleph-notes = { workspace = true }
 aleph-api = { workspace = true }
 aleph-workers = { workspace = true }
 
@@ -70,6 +74,8 @@ src = [
     "packages/aleph-assistant/src",
     "packages/aleph-connectors/src",
     "packages/aleph-aiq/src",
+    "packages/aleph-a2ui/src",
+    "packages/aleph-notes/src",
 ]
 
 [tool.ruff.lint]
@@ -108,6 +114,8 @@ include = [
     "packages/aleph-assistant/src",
     "packages/aleph-connectors/src",
     "packages/aleph-aiq/src",
+    "packages/aleph-a2ui/src",
+    "packages/aleph-notes/src",
 ]
 exclude = [
     "**/.venv",

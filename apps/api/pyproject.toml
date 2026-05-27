@@ -26,6 +26,8 @@ dependencies = [
     "aleph-assistant",
     "aleph-connectors",
     "aleph-aiq",
+    "aleph-a2ui",
+    "aleph-notes",
 ]
 
 [project.scripts]

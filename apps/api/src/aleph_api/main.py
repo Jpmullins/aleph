@@ -20,6 +20,8 @@ from aleph_api.routes import (
     aiq_internal,
     aliases,
     assistant,
+    briefs,
+    cards,
     chunks,
     connector_credentials,
     connectors,
@@ -30,9 +32,11 @@ from aleph_api.routes import (
     ledger,
     me,
     model_profile,
+    notes,
     projects,
     smoketest,
     sources,
+    surfaces,
     synthesize,
     wiki,
 )
@@ -84,6 +88,11 @@ def create_app() -> FastAPI:
     app.include_router(synthesize.router)
     app.include_router(connector_credentials.router)
     app.include_router(aiq_internal.router)
+    # Inc 4
+    app.include_router(notes.router)
+    app.include_router(cards.router)
+    app.include_router(briefs.router)
+    app.include_router(surfaces.router)
 
     instrument_fastapi(app)
 

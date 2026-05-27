@@ -34,6 +34,12 @@ try:
     import aleph_connectors.models  # noqa: F401
 except ImportError:
     pass
+# Inc 4: A2UI + notes.
+try:
+    import aleph_a2ui.models  # noqa: F401
+    import aleph_notes.models  # noqa: F401
+except ImportError:
+    pass
 
 config = context.config
 if config.config_file_name is not None:

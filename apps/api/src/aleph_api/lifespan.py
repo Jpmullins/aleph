@@ -24,6 +24,7 @@ from aleph_observability import (
 )
 from aleph_security.jwt import JWKSCache
 
+from aleph_api.a2ui_handlers import build_action_router
 from aleph_api.settings import Settings, get_settings
 
 if TYPE_CHECKING:
@@ -98,6 +99,7 @@ async def lifespan(app: "FastAPI") -> "AsyncIterator[None]":
     app.state.gateway_http = gateway_http
     app.state.auth_http = auth_http
     app.state.asset_store = asset_store
+    app.state.action_router = build_action_router()
 
     try:
         yield

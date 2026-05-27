@@ -1,5 +1,111 @@
 # Implementation log
 
+## Increment 4: A2UI Catalog v1.0.0 + Interactive Workspace surfaces
+
+**Completed:** 2026-05-27
+**Commit range:** (will be filled at merge time)
+
+### What was built
+
+- **`aleph-a2ui` package:** JSON Schema catalog v1.0.0 with 5 surfaces
+  (`WikiSurface`, `ArtifactsSurface`, `NotesSurface`,
+  `HypothesesSurface`, `BriefsSurface`) and 12 inline cards
+  (`ClaimCard`, `SourceCard`, `ChartCard`, `TableCard`, `MapCard`,
+  `GraphCard`, `ApprovalCard`, `FindingCard`, `HypothesisCard`,
+  `NotebookCellCard`, `FormCard`, `DiffCard`); typed Python builders
+  for every component; full action schema for the 10 action kinds
+  (`approve`, `reject`, `open`, `navigate_wiki`, `submit_form`,
+  `create_hypothesis`, `edit_note`, `clarify`, `mark_handedit`,
+  `clear_handedit`); validators (`validate_component`,
+  `validate_surface`).
+- **`InteractiveCard` / `InteractiveCardVersion` (immutable triggers) /
+  `CardAction`** SQLAlchemy models.
+- **`ActionRouter`:** single dispatch chokepoint. Validates params
+  against the catalog action schema, resolves the handler, runs it
+  inside the dispatching session, writes a `CardAction` row + a
+  `a2ui.action.<kind>` ledger event in one transaction. Built-in
+  handlers wired for approve / reject / open / navigate_wiki /
+  submit_form / create_hypothesis / edit_note / clarify /
+  mark_handedit / clear_handedit.
+- **`aleph-notes` package:** Note + NoteSection models, `note_service`
+  for CRUD.
+- **Alembic migration `inc4_a2ui`:** creates `interactive_cards`,
+  `interactive_card_versions` (with immutability triggers — same
+  pattern as `wiki_revisions`), `card_actions`, `notes`, and
+  `note_sections`.
+- **API routes (`/v1/projects/{id}/...`):**
+  - `/notes` — list / create / get / sections (post / patch).
+  - `/cards/actions` — single dispatch endpoint. Body is the
+    `CardActionIn` shape; result includes the `action_id` and the
+    handler's structured result.
+  - `/briefs` — returns a `BriefsSurface` payload populated with
+    `ApprovalCard`s for pending `SynthesisProposal`s.
+  - `/surfaces/{tab}` — returns the A2UI surface JSON for the
+    requested tab (wiki / artifacts / notes / hypotheses / briefs).
+    Validates the emitted surface against the catalog before
+    responding.
+  - `/a2ui/catalog` — exposes the canonical JSON Schema catalog so the
+    web app can validate inbound surfaces against the same contract.
+- **Web:**
+  - `apps/web/src/a2ui/catalog.ts` — TypeScript mirror of the catalog
+    (component names + action names).
+  - `apps/web/src/a2ui/components/` — real React renderers for all 17
+    components. `ApprovalCard` ships the full approve/reject flow with
+    a reason modal. `NotebookCellCard` debounced auto-save via
+    `edit_note`. `FormCard` builds dynamic forms from the
+    `fields` spec.
+  - `apps/web/src/a2ui/register.tsx` — single dispatcher that walks the
+    surface tree.
+  - `apps/web/src/components/A2UIRightPanel.tsx` — replaces the
+    placeholder right panel. Queries `/surfaces/{tab}`, renders the
+    surface tree, posts every action through `/cards/actions`,
+    invalidates the surface query on action success so the renderer
+    re-fetches.
+
+### Trace and ledger behavior added
+
+- Ledger action kinds (new in Inc 4): `a2ui.action.<kind>` for every
+  one of the 10 catalog actions; `note.create`, `note.section.create`,
+  `note.section.update`.
+- OTEL spans: `a2ui.action` per dispatch.
+- The `CardAction` row schema is durable for every analyst click that
+  produced a state change.
+
+### Honest scope
+
+The catalog includes `ChartCard` / `TableCard` / `MapCard` / `GraphCard`
+schemas but the underlying `DatasetVersion` model lands in Inc 6. The
+renderers ship a clear "Datasets land in Increment 6" placeholder
+state — the *catalog contract* is real now so Inc 6 can plug content
+in without schema churn. Same for `HypothesesSurface` / `FindingCard`
+(Inc 5) and `ArtifactsSurface` (Inc 7).
+
+### Known issues / debts
+
+- **`@a2ui/react` not yet imported.** The renderer is a homegrown
+  walk-and-dispatch (`apps/web/src/a2ui/register.tsx`) rather than the
+  upstream `@a2ui/react`. Inc 5 / 6 can swap to upstream once a
+  particular release crosses our minimum-feature bar; the catalog
+  contract is identical so the swap is mechanical.
+- **No SSE-driven surface push.** Inc 4 surfaces refresh via
+  client-side polling (10s for Briefs). The SSE channel from Inc 2 is
+  the obvious next path.
+- **Pin-card route not yet exposed.** `InteractiveCard.pinned_to` is
+  in the schema; the corresponding `POST /cards/{id}/pin` route lands
+  alongside Inc 6's chart pinning.
+
+### Next increment entry point
+
+See `docs/superpowers/specs/2026-05-27-inc-5-reviewers-hypotheses-design.md`.
+Increment 5 lands the MechanicalReviewer + EditorialReviewer agents,
+the `Hypothesis` / `HypothesisVersion` / `HypothesisEvidence` model
+family, and `ReviewFinding` + `ApprovalRequest`. The Inc 4 catalog
+already has the schemas for `FindingCard` and `HypothesisCard` and
+the action handlers for `approve`/`reject`/`create_hypothesis` so the
+Inc 5 work plugs into existing slots.
+
+---
+
 ## Increment 3: AIQ subsystem + connector roster + /synthesize
 
 **Completed:** 2026-05-27 (Aleph-side; AIQ submodule vendoring is operator-action)
