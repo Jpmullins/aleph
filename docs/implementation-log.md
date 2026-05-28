@@ -1,5 +1,67 @@
 # Implementation log
 
+## Increment 6: Datasets + visualization cards
+
+**Completed:** 2026-05-28
+**Commit range:** (will be filled at merge time)
+
+### What was built
+
+- **`aleph-datasets` package:** `Dataset` (with `short_id` D0001…,
+  kinds `tabular | geo | graph`), `DatasetVersion` (immutable
+  Postgres triggers), `Observation`; `dataset_service` with
+  `create_dataset` + `commit_version` (atomic; inline rows ≤ 1000 OR
+  ≤ 100 KB, otherwise stores parquet_uri); `schema_inference` (type
+  promotion `null → int → float`, GeoJSON → geometry);
+  `vega_compile` (line / bar / scatter spec builders).
+- **artificialanalysis.ai connector** in
+  `aleph_connectors.artificialanalysis`. `output_kind=dataset_rows`.
+  `extract_rows` flattens model/benchmark snapshots into
+  `(model, metric, value, date)` rows; the import path writes a
+  `Dataset` + `DatasetVersion`.
+- **Alembic migration `inc6_datasets`:** creates `datasets`,
+  `dataset_versions` (with immutability triggers),
+  `observations`; seeds the `artificialanalysis` connector row.
+- **API routes:** `/datasets` (list / create / get), `/datasets/{id}/versions`
+  (list / commit), `/dataset-versions/{id}/observations` (list),
+  `/dataset-versions/{id}/chart-spec` (compile a Vega-Lite v6 spec
+  from axis hints + rows for the bound version).
+
+### Trace and ledger behavior added
+
+- Ledger action kinds: `dataset.create`, `dataset.version.commit`.
+- Cost ledger unchanged (no LLM calls in Inc 6).
+
+### Honest scope
+
+The catalog `ChartCard` / `TableCard` / `MapCard` / `GraphCard`
+schemas already exist (Inc 4). Inc 6 lights them up server-side
+(real data, real spec compile). Full client-side renderers for
+MapLibre and React Flow remain placeholders in `apps/web/src/a2ui/components/`
+— their bind-to-DatasetVersion plumbing is now real but the rich
+interaction (pan/zoom/cluster) lands when the chart spec call is
+called from the renderer in a follow-on commit.
+
+### Known issues / debts
+
+- Parquet write path is plumbed (a caller can pass `parquet_uri`)
+  but no automatic parquet upload is implemented. The threshold
+  switch sets `rows_inline=false` only when caller hands in
+  `parquet_uri`; in this commit, oversized inline payloads will
+  still attempt inline storage and degrade to large `Observation`
+  rows. Lands with the parquet helper.
+- artificialanalysis import job is not yet enqueued from any
+  worker; manual invocation via `commit_version` works. The Arq
+  job that watches the connector binding lands when scheduled
+  refresh is wired (Inc 8 fixture).
+- No live-stack integration tests yet.
+
+### Next increment entry point
+
+See `docs/superpowers/specs/2026-05-27-inc-7-builder-artifacts-design.md`.
+
+---
+
 ## Increment 5: Reviewer agents + approval workflow + hypotheses + AgentMemory
 
 **Completed:** 2026-05-28

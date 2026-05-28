@@ -26,6 +26,7 @@ from aleph_api.routes import (
     connector_credentials,
     connectors,
     cost,
+    datasets,
     feedback,
     handedits,
     health,
@@ -98,6 +99,8 @@ def create_app() -> FastAPI:
     # Inc 5
     app.include_router(reviews.router)
     app.include_router(hypotheses.router)
+    # Inc 6
+    app.include_router(datasets.router)
 
     instrument_fastapi(app)
 

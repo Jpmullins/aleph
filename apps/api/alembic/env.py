@@ -47,6 +47,11 @@ try:
     import aleph_reviewer.models  # noqa: F401
 except ImportError:
     pass
+# Inc 6: datasets.
+try:
+    import aleph_datasets.models  # noqa: F401
+except ImportError:
+    pass
 
 config = context.config
 if config.config_file_name is not None:
