@@ -22,6 +22,7 @@ from sqlalchemy.dialects.postgresql import insert
 from aleph_core.ids import uuid7
 from aleph_core.schemas.model_profile import Capability
 from aleph_core.time import utcnow
+from aleph_db.models.agent import AgentRun
 from aleph_db.models.model_profile import ModelProfile
 from aleph_db.repos.ledger import LedgerWriter
 from aleph_observability.tracing import current_trace_id, start_span
@@ -55,6 +56,40 @@ async def chunk_embed_job(
     maker = ctx["session_maker"]
     asset_store = ctx["asset_store"]
     litellm = ctx["litellm_client"]
+
+    # AgentRun lifecycle so progress is visible to the UI Activity card.
+    # Unique correlation_id per worker run (uq_agent_runs_correlation_id).
+    chunk_run_id = uuid7()
+    async with maker() as session:
+        session.add(
+            AgentRun(
+                id=chunk_run_id,
+                project_id=claims.project_id,
+                agent_kind="chunk_embed",
+                correlation_id=f"chunk-{chunk_run_id.hex[:12]}",
+                status="running",
+                started_at=utcnow(),
+                input_payload={"normalized_document_id": str(normalized_id)},
+                created_by=principal.user_id,
+                access_scope="project",
+            )
+        )
+        await session.commit()
+
+    async def _finalize(status: str, result_payload: dict[str, Any] | None = None, error_text: str | None = None) -> None:
+        async with maker() as session:
+            run = (
+                await session.execute(select(AgentRun).where(AgentRun.id == chunk_run_id))
+            ).scalar_one_or_none()
+            if run is None:
+                return
+            run.status = status
+            run.completed_at = utcnow()
+            if result_payload is not None:
+                run.result_payload = result_payload
+            if error_text is not None:
+                run.error_text = error_text[:4096]
+            await session.commit()
 
     with start_span(
         "worker.chunk_embed",
@@ -97,6 +132,7 @@ async def chunk_embed_job(
         markdown = markdown_bytes.decode("utf-8")
         chunks = chunk_markdown(markdown)
         if not chunks:
+            await _finalize("succeeded", {"chunk_count": 0})
             return {"ok": True, "chunk_count": 0}
 
         # Embed (this writes a ModelCall + CostLedgerEvent per batch).
@@ -183,4 +219,8 @@ async def chunk_embed_job(
             )
             await session.commit()
 
+    await _finalize(
+        "succeeded",
+        {"chunk_count": len(chunks), "embedder": embed_result.model},
+    )
     return {"ok": True, "chunk_count": len(chunks), "embedder": embed_result.model}

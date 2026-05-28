@@ -50,5 +50,10 @@ coverage.xml
 *.cover
 .eval-reports/
 
+# Playwright artifacts (dev iteration + CI test outputs)
+.playwright-mcp/
+tests/playwright/test-results/
+tests/playwright/playwright-report/
+
 # uv lockfile is committed; per-app caches are not
 .uv/

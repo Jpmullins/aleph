@@ -60,10 +60,17 @@ async def lifespan(app: "FastAPI") -> "AsyncIterator[None]":
     gateway_http = httpx.AsyncClient()
     auth_http = httpx.AsyncClient()
 
-    jwks_cache = JWKSCache(
-        jwks_url=settings.aleph_auth_jwks_url,
-        http_client=auth_http,
-    )
+    # JWKS cache is only needed in OIDC mode; in local mode the auth
+    # middleware bypasses JWT verification entirely.
+    jwks_cache: JWKSCache | None = None
+    if settings.aleph_auth_mode == "oidc":
+        if not settings.aleph_auth_jwks_url:
+            msg = "ALEPH_AUTH_JWKS_URL is required when ALEPH_AUTH_MODE=oidc"
+            raise RuntimeError(msg)
+        jwks_cache = JWKSCache(
+            jwks_url=settings.aleph_auth_jwks_url,
+            http_client=auth_http,
+        )
 
     redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
 

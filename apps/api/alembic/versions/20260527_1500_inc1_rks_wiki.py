@@ -182,7 +182,7 @@ def upgrade() -> None:
     )
 
     # ---- document_chunks (pgvector + FTS) ----------------------------------
-    op.execute("CREATE EXTENSION IF NOT EXISTS pgvector")
+    op.execute("CREATE EXTENSION IF NOT EXISTS vector")
     op.create_table(
         "document_chunks",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
@@ -567,8 +567,8 @@ def upgrade() -> None:
               id, created_by, access_scope, kind, name, output_kind,
               requires_auth, metadata_schema_jsonb, enabled_by_default
             ) VALUES (
-              :id, :sys, 'global', 'upload', 'Upload', 'document',
-              false, :schema, true
+              CAST(:id AS uuid), CAST(:sys AS uuid), 'global', 'upload', 'Upload', 'document',
+              false, CAST(:schema AS jsonb), true
             )
             """
         ).bindparams(

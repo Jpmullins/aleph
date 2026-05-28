@@ -1,6 +1,8 @@
-import { CardShell, Pill, type RendererProps } from "./_shared";
+import { useSurface } from "../register";
+import { CardShell, FeedbackButton, Pill, type RendererProps } from "./_shared";
 
 export function SourceCard({ component, onAction }: RendererProps) {
+  const { projectId, surface } = useSurface();
   const p = component.props as {
     source_id: string;
     short_id: string;
@@ -33,6 +35,14 @@ export function SourceCard({ component, onAction }: RendererProps) {
             </a>
           )}
         </span>
+      }
+      actions={
+        <FeedbackButton
+          projectId={projectId}
+          targetKind="source"
+          targetId={p.source_id}
+          surface={surface}
+        />
       }
     >
       <div className="flex gap-2">

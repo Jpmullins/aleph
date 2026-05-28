@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 import redis.asyncio as aioredis
+from arq import create_pool
 from arq.connections import RedisSettings
 
 from aleph_db.session import async_engine_for, async_sessionmaker_for
@@ -56,6 +57,10 @@ async def _startup(ctx: dict[str, Any]) -> None:
     instrument_httpx()
     gateway_http = httpx.AsyncClient()
     redis = aioredis.from_url(s.redis_url, decode_responses=False)
+    # The plain Redis client above is used by LiteLLMClient for idempotency
+    # caching. Job-to-job enqueue (normalize → chunk → wiki) needs an
+    # ArqRedis pool, which only `arq.create_pool` returns.
+    redis_pool = await create_pool(RedisSettings.from_dsn(s.redis_url))
     litellm = LiteLLMClient(
         base_url=s.litellm_base_url,
         api_key=s.insights_litellm_api_key,
@@ -77,7 +82,7 @@ async def _startup(ctx: dict[str, Any]) -> None:
     ctx["litellm_client"] = litellm
     ctx["gateway_http"] = gateway_http
     ctx["redis"] = redis
-    ctx["redis_pool"] = redis  # arq.create_pool would also work; reusing the same connection
+    ctx["redis_pool"] = redis_pool
     ctx["asset_store"] = asset_store
     ctx["agent_token_secret"] = s.aleph_agent_token_secret
 
@@ -85,6 +90,7 @@ async def _startup(ctx: dict[str, Any]) -> None:
 async def _shutdown(ctx: dict[str, Any]) -> None:
     await ctx["gateway_http"].aclose()
     await ctx["redis"].aclose()
+    await ctx["redis_pool"].aclose()
     await ctx["db_engine"].dispose()
     shutdown_langfuse()
     shutdown_otel()

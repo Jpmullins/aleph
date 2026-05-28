@@ -8,7 +8,7 @@ dependencies = [
     "pydantic==2.13.4",
     "httpx==0.28.1",
     "pynacl==1.6.0",
-    "feedparser==6.0.13",
+    "feedparser>=6.0.10,<7",
     "aleph-core",
     "aleph-db",
     "aleph-rks",

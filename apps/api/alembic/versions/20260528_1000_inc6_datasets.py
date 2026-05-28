@@ -159,8 +159,8 @@ def upgrade() -> None:
               id, created_by, access_scope, kind, name, output_kind,
               requires_auth, metadata_schema_jsonb, enabled_by_default
             ) VALUES (
-              :id, :sys, 'global', 'artificialanalysis', 'artificialanalysis.ai',
-              'dataset_rows', true, :schema, true
+              CAST(:id AS uuid), CAST(:sys AS uuid), 'global', 'artificialanalysis', 'artificialanalysis.ai',
+              'dataset_rows', true, CAST(:schema AS jsonb), true
             )
             ON CONFLICT (kind) DO NOTHING
             """

@@ -12,10 +12,18 @@
 ```bash
 cp deploy/compose/.env.example deploy/compose/.env
 # Edit deploy/compose/.env:
-#   - INSIGHTS_LITELLM_API_KEY=<your gateway bearer>
+#   - INSIGHTS_LITELLM_API_KEY=<gateway bearer>
+#   - NGC_API_KEY=<NGC personal API key, for pulling the aiq-server image>
 #   - LANGFUSE_NEXTAUTH_SECRET / LANGFUSE_SALT / LANGFUSE_ENCRYPTION_KEY
-#     openssl rand -hex 32 → paste 3 different values into these
+#     openssl rand -hex 32 → three different values
+#   - LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY → any values; then
+#     LANGFUSE_AUTH=$(echo -n "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" | base64 -w0)
 #   - ALEPH_AGENT_TOKEN_SECRET=$(openssl rand -hex 32)
+#   - POSTGRES_PASSWORD / MINIO_ROOT_PASSWORD → any strong values
+# Leave ALEPH_AUTH_MODE=local for now.
+
+# One-time NGC login so docker can pull nvcr.io/nvidia/blueprint/aiq-agent:
+echo "$NGC_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
 
 ./scripts/bootstrap-local.sh
 ```
@@ -26,8 +34,9 @@ After bootstrap the following are up:
 |---|---|---|
 | Web | http://localhost:5173 | Vite dev server |
 | API | http://localhost:8000 | FastAPI |
+| AIQ | http://localhost:8001 | NVIDIA AI-Q research subsystem |
 | Langfuse | http://localhost:3000 | trace + eval UI |
-| MinIO console | http://localhost:9001 | login: `aleph` / `changeme-local` |
+| MinIO console | http://localhost:9001 | login: see `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` in `.env` |
 
 ## Day-to-day
 
@@ -70,10 +79,9 @@ pnpm -C apps/web build
 
 ## Auth in dev
 
-The default `.env.example` points to a Keycloak realm at `localhost:8080`.
-For local UI work without Keycloak, use the API directly with a fake
-`Authorization: Bearer` header and patch in the test-only auth bypass.
-Production deployments use a real OIDC IdP (Auth0, Cognito, Keycloak).
+Local dev runs with `ALEPH_AUTH_MODE=local`: the API skips OIDC verification entirely and JIT-provisions a fixed `dev@aleph.local` user on first request. No IdP service runs locally — there is no Keycloak in the compose stack. The frontend mirrors this with `VITE_AUTH_MODE=local`; it skips `oidc-client-ts` and sends a sentinel bearer the API recognizes.
+
+For production, set `ALEPH_AUTH_MODE=oidc` and fill in `ALEPH_AUTH_ISSUER`, `ALEPH_AUTH_AUDIENCE`, `ALEPH_AUTH_JWKS_URL` against any OIDC IdP (Cognito, Auth0, Authentik, Keycloak, ALB OIDC). See `docs/security/auth.md` for the per-IdP env shape.
 
 ## Common issues
 

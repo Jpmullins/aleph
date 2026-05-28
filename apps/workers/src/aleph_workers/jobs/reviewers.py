@@ -39,24 +39,38 @@ async def mechanical_review_job(
     page_id = UUID(page_id_str)
     maker = ctx["session_maker"]
 
+    # If wiki_ingest pre-created a pending AgentRun for this review,
+    # promote it to running rather than inserting a duplicate (the
+    # correlation_id is unique-constrained).
     async with maker() as session:
-        run = AgentRun(
-            id=uuid7(),
-            project_id=project_id,
-            agent_kind="mechanical_reviewer",
-            correlation_id=claims.correlation_id or f"mech-{revision_id.hex[:8]}",
-            status="running",
-            started_at=utcnow(),
-            input_payload={
-                "revision_id": str(revision_id),
-                "page_id": str(page_id),
-            },
-            created_by=principal.user_id,
-            access_scope="project",
-        )
-        session.add(run)
+        existing = (
+            await session.execute(
+                select(AgentRun).where(AgentRun.id == claims.agent_run_id)
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            existing.status = "running"
+            existing.started_at = utcnow()
+            agent_run_id = existing.id
+        else:
+            run = AgentRun(
+                id=uuid7(),
+                project_id=project_id,
+                agent_kind="mechanical_reviewer",
+                correlation_id=f"mech-{uuid7().hex}",
+                status="running",
+                started_at=utcnow(),
+                input_payload={
+                    "revision_id": str(revision_id),
+                    "page_id": str(page_id),
+                },
+                created_by=principal.user_id,
+                access_scope="project",
+            )
+            session.add(run)
+            await session.flush()
+            agent_run_id = run.id
         await session.commit()
-        agent_run_id = run.id
 
     workflow = MechanicalReviewerWorkflow(
         session_maker=maker, principal=principal

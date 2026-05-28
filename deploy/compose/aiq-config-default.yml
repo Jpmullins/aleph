@@ -1,0 +1,105 @@
+# Boot config for the `aiq-server` compose service.
+#
+# Aleph routes ALL AIQ LLM calls through the Insights LiteLLM Gateway as
+# OpenAI-compatible endpoints (no `_type: nim` blocks). Per-project AIQ
+# configs (emitted at request time by aleph_aiq.config_generator) override
+# this default for real research jobs; this file just lets the container
+# boot.
+#
+# Telemetry is intentionally omitted from this boot config — AIQ 2.0.0
+# rejects unknown discriminator values, and Aleph already receives OTEL
+# spans from aleph-api/aleph-workers via the otel-collector. AIQ's own
+# traces can be wired later via the `nat.plugins.opentelemetry/otelcollector`
+# tracer once we've confirmed schema compatibility.
+
+general:
+  use_uvloop: true
+  front_end:
+    _type: aiq_api
+    runner_class: aiq_api.plugin.AIQAPIWorker
+    db_url: ${NAT_JOB_STORE_DB_URL:-sqlite+aiosqlite:///./jobs.db}
+    expiry_seconds: 86400
+    cors:
+      allow_origin_regex: 'http://localhost(:\d+)?|http://127.0.0.1(:\d+)?|http://aleph-api(:\d+)?'
+      allow_methods: [GET, POST, DELETE, OPTIONS]
+      allow_headers: ["*"]
+      allow_credentials: true
+      expose_headers: ["*"]
+
+llms:
+  intent_llm:
+    _type: openai
+    model_name: claude-haiku-4-5
+    base_url: ${LITELLM_BASE_URL}
+    api_key: ${INSIGHTS_LITELLM_API_KEY}
+    temperature: 0.0
+    max_tokens: 4096
+
+  shallow_llm:
+    _type: openai
+    model_name: claude-sonnet-4-6
+    base_url: ${LITELLM_BASE_URL}
+    api_key: ${INSIGHTS_LITELLM_API_KEY}
+    temperature: 0.2
+    max_tokens: 16384
+
+  deep_orchestrator_llm:
+    _type: openai
+    model_name: claude-sonnet-4-6
+    base_url: ${LITELLM_BASE_URL}
+    api_key: ${INSIGHTS_LITELLM_API_KEY}
+    temperature: 0.2
+    max_tokens: 32768
+
+  clarifier_llm:
+    _type: openai
+    model_name: claude-haiku-4-5
+    base_url: ${LITELLM_BASE_URL}
+    api_key: ${INSIGHTS_LITELLM_API_KEY}
+    temperature: 0.0
+    max_tokens: 4096
+
+functions:
+  # No connector tools at boot — Aleph emits per-project configs that
+  # add tools (tavily / arxiv / semantic_scholar / etc.) when a real
+  # synthesize job is dispatched.
+
+  intent_classifier:
+    _type: intent_classifier
+    llm: intent_llm
+    verbose: false
+    tools: []
+
+  clarifier_agent:
+    _type: clarifier_agent
+    llm: clarifier_llm
+    planner_llm: clarifier_llm
+    tools: []
+    max_turns: 3
+    enable_plan_approval: false
+    verbose: false
+
+  shallow_research_agent:
+    _type: shallow_research_agent
+    llm: shallow_llm
+    verbose: false
+    tools: []
+    max_llm_turns: 10
+    max_tool_iterations: 5
+
+  deep_research_agent:
+    _type: deep_research_agent
+    orchestrator_llm: deep_orchestrator_llm
+    researcher_llm: shallow_llm
+    planner_llm: deep_orchestrator_llm
+    max_loops: 2
+    verbose: false
+    tools: []
+
+workflow:
+  _type: chat_deepresearcher_agent
+  verbose: false
+  enable_escalation: true
+  enable_clarifier: true
+  use_async_deep_research: true
+  checkpoint_db: ${AIQ_CHECKPOINT_DB:-sqlite+aiosqlite:///./checkpoints.db}

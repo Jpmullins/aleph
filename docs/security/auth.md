@@ -1,9 +1,26 @@
 # Auth
 
-## User auth (OIDC)
+## Modes
+
+`ALEPH_AUTH_MODE` selects the user-auth path:
+
+| Mode | When | Behavior |
+|---|---|---|
+| `local` | Local dev (default in `deploy/compose/.env.example`) | JWT path bypassed. Every non-public request is associated with a fixed `dev@aleph.local` user, JIT-provisioned on first sight. No IdP service runs locally. |
+| `oidc` | Production / any deployment with a real IdP | Full OIDC JWT verification (see below). |
+
+Agent tokens (HS256, internal) are accepted in **both** modes.
+
+The split exists so local dev is fast and deployment-agnostic: pick the IdP at deploy time (Cognito, Auth0, Authentik, Keycloak, ALB OIDC), set three env vars, switch the mode. No code change.
+
+## User auth (OIDC mode)
 
 `aleph-api` validates incoming `Authorization: Bearer <jwt>` against the
-configured OIDC IdP (Keycloak / Auth0 / Cognito). The middleware:
+configured OIDC IdP. Any IdP that exposes a JWKS endpoint works —
+Cognito, Auth0, Authentik, Keycloak, Microsoft Entra, Google, Okta,
+ALB OIDC (the `x-amzn-oidc-data` header is JWT signed by ALB's keys).
+
+The middleware:
 
 1. Pulls `kid` from the JWT header.
 2. Looks up the public key in the cached JWKS (fetches from `ALEPH_AUTH_JWKS_URL` on miss).
@@ -13,6 +30,23 @@ configured OIDC IdP (Keycloak / Auth0 / Cognito). The middleware:
 
 Subjects with no `User` row trigger one insert; subsequent requests
 hit the row by `subject` (the OIDC `sub` claim).
+
+### Picking an IdP at deploy time
+
+The three env vars below are all you change between IdPs:
+
+```
+ALEPH_AUTH_MODE=oidc
+ALEPH_AUTH_ISSUER=<iss claim issued by the IdP>
+ALEPH_AUTH_AUDIENCE=<aud claim, default "aleph">
+ALEPH_AUTH_JWKS_URL=<https URL to the IdP's JWKS document>
+```
+
+Examples:
+- AWS Cognito: `ALEPH_AUTH_ISSUER=https://cognito-idp.{region}.amazonaws.com/{userPoolId}` · `ALEPH_AUTH_JWKS_URL={issuer}/.well-known/jwks.json`
+- Auth0: `ALEPH_AUTH_ISSUER=https://{tenant}.auth0.com/` (trailing slash matters) · JWKS at `{issuer}.well-known/jwks.json`
+- Authentik / Keycloak: realm URL · `{issuer}/protocol/openid-connect/certs`
+- ALB OIDC: `ALEPH_AUTH_JWKS_URL=https://public-keys.auth.elb.{region}.amazonaws.com/` and the bearer is the `x-amzn-oidc-data` header.
 
 ## Project scoping
 

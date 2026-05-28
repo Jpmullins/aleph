@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { ProjectList } from "@/components/ProjectList";
 import { ProjectWorkspace } from "@/components/ProjectWorkspace";
-import { handleCallback, getAccessToken, getCurrentUser, login } from "@/lib/auth";
+import { handleCallback, getAccessToken, getCurrentUser, isLocalAuth, login } from "@/lib/auth";
 
 interface Route {
   kind: "loading" | "login" | "callback" | "projects" | "workspace";
@@ -43,6 +43,7 @@ export function App() {
   useEffect(() => {
     if (route.kind === "loading") return;
     if (route.kind === "callback") return;
+    if (isLocalAuth()) return;
     (async () => {
       const token = await getAccessToken();
       if (!token) {

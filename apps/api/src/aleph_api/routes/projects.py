@@ -20,6 +20,7 @@ from aleph_core.schemas.project import (
     ProjectOut,
     ProjectUpdate,
 )
+from aleph_db.models.agent import AgentRun
 from aleph_db.models.identity import ProjectMember
 from aleph_db.models.project import Project
 from aleph_db.repos import model_profile as profile_repo
@@ -190,6 +191,10 @@ async def update_project(
             payload=changed,
             trace_id=current_trace_id(),
         )
+        # Flush bumped `updated_at` server-side; refresh so Pydantic
+        # serialization doesn't trigger a lazy reload outside the
+        # greenlet context.
+        await session.refresh(p)
     return ProjectOut.model_validate(p)
 
 
@@ -315,3 +320,43 @@ async def list_members(
     )
     rows = list((await session.execute(stmt)).scalars().all())
     return [ProjectMemberOut.model_validate(m) for m in rows]
+
+
+class AgentRunOut(BaseModel):
+    id: UUID
+    agent_kind: str
+    status: str
+    started_at: str | None
+    completed_at: str | None
+    correlation_id: str
+    error_text: str | None
+    created_at: str
+
+
+@router.get("/{project_id}/agent-runs", response_model=list[AgentRunOut])
+async def list_agent_runs(
+    project_id: ProjectScopeDep,
+    session: SessionDep,
+    limit: int = 20,
+) -> list[AgentRunOut]:
+    """Recent agent runs for the Activity card. Newest first."""
+    stmt = (
+        select(AgentRun)
+        .where(AgentRun.project_id == project_id)
+        .order_by(AgentRun.created_at.desc())
+        .limit(max(1, min(limit, 100)))
+    )
+    rows = list((await session.execute(stmt)).scalars().all())
+    return [
+        AgentRunOut(
+            id=r.id,
+            agent_kind=r.agent_kind,
+            status=r.status,
+            started_at=r.started_at.isoformat() if r.started_at else None,
+            completed_at=r.completed_at.isoformat() if r.completed_at else None,
+            correlation_id=r.correlation_id,
+            error_text=r.error_text,
+            created_at=r.created_at.isoformat(),
+        )
+        for r in rows
+    ]

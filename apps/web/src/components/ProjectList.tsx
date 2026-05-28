@@ -39,18 +39,7 @@ export function ProjectList({ onOpen }: Props) {
       )}
       <ul className="space-y-2">
         {projectsQuery.data?.map((p) => (
-          <li key={p.id}>
-            <button
-              type="button"
-              onClick={() => onOpen(p.id)}
-              className="block w-full rounded-md border border-slate-200 bg-white px-4 py-3 text-left shadow-sm hover:border-slate-400"
-            >
-              <div className="font-medium text-slate-900">{p.title}</div>
-              <div className="mt-1 text-xs text-slate-500">
-                {p.status} · created {new Date(p.created_at).toLocaleDateString()}
-              </div>
-            </button>
-          </li>
+          <ProjectRow key={p.id} project={p} onOpen={onOpen} />
         ))}
       </ul>
       {showCreate && (
@@ -63,6 +52,51 @@ export function ProjectList({ onOpen }: Props) {
         />
       )}
     </div>
+  );
+}
+
+function ProjectRow({
+  project,
+  onOpen,
+}: {
+  project: ProjectOut;
+  onOpen: (id: string) => void;
+}) {
+  const qc = useQueryClient();
+  const archive = useMutation({
+    mutationFn: async () =>
+      api.patch<ProjectOut>(`/v1/projects/${project.id}`, { status: "deleted" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["projects"] }),
+  });
+
+  return (
+    <li className="flex items-stretch overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm hover:border-slate-400">
+      <button
+        type="button"
+        onClick={() => onOpen(project.id)}
+        className="flex-1 px-4 py-3 text-left"
+        data-testid={`project-open-${project.id}`}
+      >
+        <div className="font-medium text-slate-900">{project.title}</div>
+        <div className="mt-1 text-xs text-slate-500">
+          {project.status} · created {new Date(project.created_at).toLocaleDateString()}
+        </div>
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          if (window.confirm(`Delete project "${project.title}"? This is reversible by an admin.`)) {
+            archive.mutate();
+          }
+        }}
+        disabled={archive.isPending}
+        className="border-l border-slate-200 px-4 text-xs font-medium text-slate-500 hover:bg-red-50 hover:text-red-700 disabled:opacity-50"
+        data-testid={`project-delete-${project.id}`}
+        title="Delete project"
+      >
+        {archive.isPending ? "…" : "Delete"}
+      </button>
+    </li>
   );
 }
 

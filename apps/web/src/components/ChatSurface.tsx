@@ -1,9 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { WikiBodyMarkdown } from "@/components/WikiBodyMarkdown";
 import { api, type ApiError } from "@/lib/api";
-import { getAccessToken } from "@/lib/auth";
 
 interface Message {
   id: string;
@@ -22,64 +21,17 @@ interface Message {
   created_at: string;
 }
 
-interface SessionInfo {
-  id: string;
-  title: string;
-  last_activity_at: string;
-}
-
-interface ThreadInfo {
-  id: string;
-  session_id: string;
-  parent_thread_id: string | null;
-  title: string | null;
-}
-
 interface Props {
   projectId: string;
+  threadId: string | null;
+  emptyHint?: string;
 }
 
-export function ChatSurface({ projectId }: Props) {
+export function ChatSurface({ projectId, threadId, emptyHint }: Props) {
   const qc = useQueryClient();
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [threadId, setThreadId] = useState<string | null>(null);
   const [composer, setComposer] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
-
-  // Sessions list — we auto-open the most recent or create one.
-  const sessions = useQuery<SessionInfo[]>({
-    queryKey: ["sessions", projectId],
-    queryFn: () => api.get<SessionInfo[]>(`/v1/projects/${projectId}/sessions`),
-  });
-
-  const createSession = useMutation({
-    mutationFn: async () => {
-      const r = await api.post<{ session_id: string; thread_id: string }>(
-        `/v1/projects/${projectId}/sessions`,
-        { title: "New session" },
-      );
-      return r;
-    },
-    onSuccess: (r) => {
-      qc.invalidateQueries({ queryKey: ["sessions", projectId] });
-      setSessionId(r.session_id);
-      setThreadId(r.thread_id);
-    },
-  });
-
-  useEffect(() => {
-    if (sessionId || !sessions.data) return;
-    if (sessions.data.length === 0) {
-      if (!createSession.isPending) createSession.mutate();
-    } else {
-      // Pick the most-recent.
-      const first = sessions.data[0];
-      setSessionId(first.id);
-      void fetchThreadForSession(first.id, projectId).then((t) => {
-        if (t) setThreadId(t.id);
-      });
-    }
-  }, [sessions.data, sessionId, projectId]);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const messages = useQuery<Message[]>({
     queryKey: ["messages", threadId],
@@ -98,6 +50,10 @@ export function ChatSurface({ projectId }: Props) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.data]);
 
+  useEffect(() => {
+    if (threadId) inputRef.current?.focus();
+  }, [threadId]);
+
   const sendMessage = useMutation({
     mutationFn: async () => {
       if (!threadId) throw new Error("no thread");
@@ -109,14 +65,26 @@ export function ChatSurface({ projectId }: Props) {
     onSuccess: () => {
       setComposer("");
       qc.invalidateQueries({ queryKey: ["messages", threadId] });
+      qc.invalidateQueries({ queryKey: ["agent-runs", projectId] });
     },
   });
+
+  const trySend = () => {
+    if (composer.trim() && threadId && !sendMessage.isPending) sendMessage.mutate();
+  };
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex-1 overflow-y-auto p-6">
         {!threadId && (
-          <div className="text-sm text-slate-500">Setting up a new session…</div>
+          <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
+            {emptyHint ?? "Select or create a session in the left panel."}
+          </div>
+        )}
+        {threadId && messages.data?.length === 0 && (
+          <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
+            Ask anything about the project wiki. Use <kbd className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-mono">Enter</kbd> to send, <kbd className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-mono">Shift+Enter</kbd> for a newline.
+          </div>
         )}
         {messages.data?.map((m) => (
           <MessageBubble key={m.id} m={m} />
@@ -126,23 +94,32 @@ export function ChatSurface({ projectId }: Props) {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (composer.trim()) sendMessage.mutate();
+          trySend();
         }}
         className="border-t border-slate-200 bg-white p-4"
       >
         <div className="flex gap-2">
           <textarea
+            ref={inputRef}
             value={composer}
             onChange={(e) => setComposer(e.target.value)}
-            placeholder={threadId ? "Ask about the wiki…" : "Setting up…"}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                trySend();
+              }
+            }}
+            placeholder={threadId ? "Ask about the wiki…  (Enter to send, Shift+Enter for newline)" : "Create a session to start chatting"}
             disabled={!threadId || sendMessage.isPending}
             rows={2}
-            className="flex-1 resize-none rounded-md border border-slate-300 px-3 py-2 text-sm"
+            className="flex-1 resize-none rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+            data-testid="chat-composer"
           />
           <button
             type="submit"
             disabled={!threadId || !composer.trim() || sendMessage.isPending}
             className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+            data-testid="chat-send"
           >
             {sendMessage.isPending ? "Sending…" : "Send"}
           </button>
@@ -163,7 +140,7 @@ function MessageBubble({ m }: { m: Message }) {
     ? "ml-12 border-slate-200 bg-slate-50"
     : "mr-12 border-slate-200 bg-white";
   return (
-    <div className={`mb-4 rounded-lg border p-4 shadow-sm ${tone}`}>
+    <div className={`mb-4 rounded-lg border p-4 shadow-sm ${tone}`} data-testid={`message-${m.role}`}>
       <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-wider text-slate-400">
         <span>{m.role}</span>
         <span className="flex items-center gap-2">
@@ -206,19 +183,4 @@ function MessageBubble({ m }: { m: Message }) {
       )}
     </div>
   );
-}
-
-async function fetchThreadForSession(
-  sessionId: string,
-  projectId: string,
-): Promise<ThreadInfo | null> {
-  const token = await getAccessToken();
-  const baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8000";
-  const resp = await fetch(
-    `${baseUrl}/v1/projects/${projectId}/sessions/${sessionId}/threads`,
-    { headers: token ? { Authorization: `Bearer ${token}` } : {} },
-  );
-  if (!resp.ok) return null;
-  const ts = (await resp.json()) as ThreadInfo[];
-  return ts.length > 0 ? ts[0] : null;
 }

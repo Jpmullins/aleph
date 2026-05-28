@@ -1,4 +1,4 @@
-import type { ComponentType } from "react";
+import { createContext, useContext, type ComponentType, type ReactNode, type JSX } from "react";
 
 import { ApprovalCard } from "./components/ApprovalCard";
 import { ArtifactsSurface } from "./components/ArtifactsSurface";
@@ -60,4 +60,36 @@ export function renderA2UI(
     );
   }
   return <Renderer component={component} onAction={onAction} />;
+}
+
+// Context — components need projectId to fetch live data (dataset rows,
+// chart specs, hypothesis evidence, etc.) and to POST feedback. The
+// right panel sets this for the entire surface tree.
+interface SurfaceCtx {
+  projectId: string;
+  surface: string;
+}
+
+const SurfaceContext = createContext<SurfaceCtx | null>(null);
+
+export function SurfaceProvider({
+  projectId,
+  surface,
+  children,
+}: {
+  projectId: string;
+  surface: string;
+  children: ReactNode;
+}) {
+  return (
+    <SurfaceContext.Provider value={{ projectId, surface }}>{children}</SurfaceContext.Provider>
+  );
+}
+
+export function useSurface(): SurfaceCtx {
+  const ctx = useContext(SurfaceContext);
+  if (!ctx) {
+    throw new Error("useSurface must be used within a SurfaceProvider");
+  }
+  return ctx;
 }

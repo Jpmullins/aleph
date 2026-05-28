@@ -145,6 +145,9 @@ async def upload_source(
         created.source.status = "failed"
         created.source.failure_reason = f"failed to enqueue normalize job: {exc}"[:2048]
 
+    # Refresh so Pydantic doesn't trigger a lazy reload outside the
+    # async greenlet context (server_default-bumped updated_at).
+    await session.refresh(created.source)
     return SourceOut.model_validate(created.source)
 
 

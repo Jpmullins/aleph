@@ -1,15 +1,20 @@
 """Auth middleware.
 
-Two token forms are accepted:
+Behavior depends on `settings.aleph_auth_mode`:
 
-  * User OIDC bearer (RS256, validated against JWKS). Resolves a
-    `Principal(actor_kind="user")`. JIT-provisions the `User` row on
-    first sight, ledgered as `user.create`.
-  * Agent token (HS256, signed by aleph-api). Resolves a
-    `Principal(actor_kind="aleph_agent"|"aiq_agent")`.
+  * `local` (default for local dev) — JWT path is skipped entirely. Every
+    non-public request is associated with a fixed `dev@aleph.local`
+    user, JIT-provisioned on first sight (ledgered as `user.create`).
+    Agent tokens (HS256) are still accepted in this mode so
+    aleph-workers and aiq-server can present scoped credentials.
+  * `oidc` — accepts two token forms:
+      - User OIDC bearer (RS256 against JWKS) → `Principal(actor_kind="user")`.
+        JIT-provisions the `User` row on first sight.
+      - Agent token (HS256, signed by aleph-api) →
+        `Principal(actor_kind="aleph_agent"|"aiq_agent")`.
 
 Unauthenticated routes (`/healthz`, `/readyz`, `/docs`, `/openapi.json`)
-bypass.
+bypass in both modes.
 """
 
 from __future__ import annotations
@@ -45,35 +50,53 @@ _PUBLIC_PATHS = frozenset(
     }
 )
 
+# Routes that authenticate themselves with a different scheme (e.g. AIQ
+# internal callbacks present `X-Aleph-Service-Token`, not a user bearer).
+# The middleware skips its bearer check for these prefixes; the route
+# handler is responsible for its own verification.
+_SELF_AUTH_PREFIXES: tuple[str, ...] = ("/internal/v1/aiq/",)
+
 
 class AuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp) -> None:
         super().__init__(app)
 
     async def dispatch(self, request: Request, call_next):  # type: ignore[override]
+        path = request.url.path
         if (
-            request.url.path in _PUBLIC_PATHS
-            or request.url.path.startswith("/static/")
+            path in _PUBLIC_PATHS
+            or path.startswith("/static/")
+            or any(path.startswith(p) for p in _SELF_AUTH_PREFIXES)
         ):
             return await call_next(request)
 
+        settings = request.app.state.settings
         auth = request.headers.get("authorization") or ""
-        if not auth.lower().startswith("bearer "):
+
+        # Agent tokens are accepted in both modes — they carry their own
+        # HS256 signature and are how workers/aiq-server authenticate.
+        if auth.lower().startswith("bearer "):
+            token = auth[7:].strip()
+            try:
+                if _looks_like_agent_token(token):
+                    principal = await _principal_from_agent_token(request, token)
+                elif settings.aleph_auth_mode == "oidc":
+                    principal = await _principal_from_user_jwt(request, token)
+                else:
+                    # Local mode: ignore the bearer content (could be the
+                    # frontend's sentinel) and synthesize the dev principal.
+                    principal = await _principal_local_dev(request)
+            except PermissionDenied as exc:
+                return _problem(401, "auth_failed", exc.message, request)
+        elif settings.aleph_auth_mode == "local":
+            principal = await _principal_local_dev(request)
+        else:
             return _problem(
                 401,
                 "missing_bearer",
                 "Authorization: Bearer <token> required",
                 request,
             )
-        token = auth[7:].strip()
-
-        try:
-            if _looks_like_agent_token(token):
-                principal = await _principal_from_agent_token(request, token)
-            else:
-                principal = await _principal_from_user_jwt(request, token)
-        except PermissionDenied as exc:
-            return _problem(401, "auth_failed", exc.message, request)
 
         request.state.principal = principal
         bind_request_context(
@@ -102,9 +125,34 @@ def _looks_like_agent_token(token: str) -> bool:
     return header.get("alg") == "HS256"
 
 
+async def _principal_local_dev(request: Request) -> Principal:
+    """Materialize the hardcoded local-dev principal.
+
+    Goes through the same JIT-provisioning path as a real first-login,
+    so the User row exists, is `user.create`-ledgered, and is stable
+    across restarts (keyed on `local_dev_subject`).
+    """
+    s = request.app.state.settings
+    user_id = await _resolve_or_provision_user(
+        request,
+        subject=s.local_dev_subject,
+        email=s.local_dev_email,
+        display_name=s.local_dev_display_name,
+    )
+    return Principal(
+        user_id=user_id,
+        subject=s.local_dev_subject,
+        email=s.local_dev_email,
+        actor_kind="user",
+    )
+
+
 async def _principal_from_user_jwt(request: Request, token: str) -> Principal:
     s = request.app.state.settings
     jwks_cache = request.app.state.jwks_cache
+    if jwks_cache is None or not s.aleph_auth_issuer:
+        msg = "OIDC auth requested but not configured"
+        raise PermissionDenied(msg)
     claims = await verify_user_jwt(
         token,
         jwks_cache=jwks_cache,

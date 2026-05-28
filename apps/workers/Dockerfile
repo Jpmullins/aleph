@@ -13,10 +13,13 @@ RUN apt-get update \
 COPY --from=ghcr.io/astral-sh/uv:0.5.21 /uv /usr/local/bin/uv
 
 COPY pyproject.toml ./pyproject.toml
+COPY uv.lock ./uv.lock
 COPY packages /app/packages
 COPY apps/api /app/apps/api
 COPY apps/workers /app/apps/workers
 
-RUN uv sync --no-dev --frozen || uv sync --no-dev
+# --all-packages installs every workspace member (and their deps,
+# including arq's CLI). The root pyproject has no direct dependencies.
+RUN uv sync --no-dev --all-packages
 
 CMD ["uv", "run", "arq", "aleph_workers.arq.WorkerSettings"]

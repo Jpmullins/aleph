@@ -129,8 +129,8 @@ def upgrade() -> None:
                   id, created_by, access_scope, kind, name, output_kind,
                   requires_auth, metadata_schema_jsonb, enabled_by_default
                 ) VALUES (
-                  :id, :sys, 'global', :kind, :name, :output_kind,
-                  :req_auth, :schema, :enabled
+                  CAST(:id AS uuid), CAST(:sys AS uuid), 'global', :kind, :name, :output_kind,
+                  :req_auth, CAST(:schema AS jsonb), :enabled
                 )
                 ON CONFLICT (kind) DO NOTHING
                 """

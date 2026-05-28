@@ -1,6 +1,8 @@
-import { CardShell, Pill, type RendererProps } from "./_shared";
+import { useSurface } from "../register";
+import { CardShell, FeedbackButton, Pill, type RendererProps } from "./_shared";
 
 export function FindingCard({ component, onAction }: RendererProps) {
+  const { projectId, surface } = useSurface();
   const p = component.props as {
     finding_id: string;
     severity: "info" | "low" | "medium" | "high";
@@ -12,6 +14,14 @@ export function FindingCard({ component, onAction }: RendererProps) {
     <CardShell
       title={p.kind}
       subtitle={<Pill tone={tone}>{p.severity}</Pill>}
+      actions={
+        <FeedbackButton
+          projectId={projectId}
+          targetKind="finding"
+          targetId={p.finding_id}
+          surface={surface}
+        />
+      }
     >
       <p className="text-sm text-slate-700">{p.summary}</p>
       <div className="mt-2 flex gap-2">

@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import type { A2UIComponent } from "@/a2ui/catalog";
-import { renderA2UI } from "@/a2ui/register";
+import { SurfaceProvider, renderA2UI } from "@/a2ui/register";
 import { api } from "@/lib/api";
 
 const TABS = ["Wiki", "Artifacts", "Notes", "Hypotheses", "Briefs"] as const;
@@ -64,14 +64,17 @@ export function A2UIRightPanel({ projectId }: Props) {
           </button>
         ))}
       </nav>
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 overflow-y-auto">
         {surfaceQuery.isPending && (
           <div className="p-6 text-sm text-slate-500">Loading surface…</div>
         )}
-        {surfaceQuery.data &&
-          renderA2UI(surfaceQuery.data.surface, (actionName, params) =>
-            action.mutate({ actionName, params }),
-          )}
+        {surfaceQuery.data && (
+          <SurfaceProvider projectId={projectId} surface={`${tab}Surface`}>
+            {renderA2UI(surfaceQuery.data.surface, (actionName, params) =>
+              action.mutate({ actionName, params }),
+            )}
+          </SurfaceProvider>
+        )}
       </div>
     </aside>
   );

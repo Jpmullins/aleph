@@ -17,6 +17,8 @@ from uuid import UUID
 from sqlalchemy import select
 
 from aleph_core.ids import uuid7
+from aleph_core.time import utcnow
+from aleph_db.models.agent import AgentRun
 from aleph_db.repos.ledger import LedgerWriter
 from aleph_observability.tracing import current_trace_id, start_span
 from aleph_rks.models import (
@@ -29,6 +31,44 @@ from aleph_rks.normalization import NormalizationFailed, normalize_bytes
 from aleph_rks.source_service import mark_status
 from aleph_security.agent_token import verify_agent_token
 from aleph_security.principal import Principal
+
+
+async def _set_run_status(
+    maker: Any,
+    agent_run_id: UUID | None,
+    *,
+    status: str,
+    result_payload: dict[str, Any] | None = None,
+    error_text: str | None = None,
+) -> None:
+    """Update the AgentRun row's lifecycle state in its own short transaction.
+
+    Kept out of the main session so a normalization-success commit can't be
+    rolled back by a later AgentRun-update failure (and vice versa).
+    """
+    if agent_run_id is None:
+        return
+    async with maker() as session:
+        run = (
+            await session.execute(select(AgentRun).where(AgentRun.id == agent_run_id))
+        ).scalar_one_or_none()
+        if run is None:
+            return
+        now = utcnow()
+        if status == "running":
+            run.status = "running"
+            run.started_at = now
+        elif status == "succeeded":
+            run.status = "succeeded"
+            run.completed_at = now
+            if result_payload is not None:
+                run.result_payload = result_payload
+        elif status == "failed":
+            run.status = "failed"
+            run.completed_at = now
+            if error_text is not None:
+                run.error_text = error_text[:4096]
+        await session.commit()
 
 
 async def normalize_job(
@@ -49,6 +89,8 @@ async def normalize_job(
 
     maker = ctx["session_maker"]
     asset_store = ctx["asset_store"]
+
+    await _set_run_status(maker, claims.agent_run_id, status="running")
 
     with start_span(
         "worker.normalize",
@@ -98,6 +140,9 @@ async def normalize_job(
                     failure_reason=str(exc),
                 )
                 await session.commit()
+                await _set_run_status(
+                    maker, claims.agent_run_id, status="failed", error_text=str(exc)
+                )
                 return {"ok": False, "error": str(exc)}
 
             md_uri = asset_store.put_normalized_markdown(
@@ -157,4 +202,9 @@ async def normalize_job(
         await redis_pool.enqueue_job(
             "wiki_ingest_job", str(normalized_id), agent_token
         )
+
+    result_payload = {"normalized_document_id": str(normalized_id)}
+    await _set_run_status(
+        maker, claims.agent_run_id, status="succeeded", result_payload=result_payload
+    )
     return {"ok": True, "normalized_document_id": str(normalized_id)}

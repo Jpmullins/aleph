@@ -83,7 +83,7 @@ _ALEPH_DEV_BINDINGS = {
         "cache_discount_pct": "0",
     },
     "embedding": {
-        "model": "cohere-embed-english-v3",
+        "model": "titan-embed-v2",
         "provider": "litellm",
         "fallback": None,
         "max_input_tokens": 8192,
@@ -149,7 +149,7 @@ _ALEPH_PROD_BINDINGS = {
         "cache_discount_pct": "0",
     },
     "embedding": {
-        "model": "cohere-embed-v4",
+        "model": "titan-embed-v2",
         "provider": "litellm",
         "fallback": None,
         "max_input_tokens": 8192,
@@ -162,7 +162,7 @@ _ALEPH_PROD_BINDINGS = {
 
 def upgrade() -> None:
     # ---- extensions ----
-    op.execute("CREATE EXTENSION IF NOT EXISTS pgvector")
+    op.execute("CREATE EXTENSION IF NOT EXISTS vector")
     op.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
 
     # ---- users ----

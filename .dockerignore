@@ -1,0 +1,36 @@
+# Don't ship host node_modules into containers — they contain pnpm
+# symlinks pointing at host-side stores that don't exist in the image.
+**/node_modules
+**/.pnpm-store
+
+# Python caches
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+
+# Build outputs
+**/dist
+**/.vite
+**/.next
+**/build
+**/htmlcov
+
+# Local secrets — defensive (deploy/compose/.env is gitignored too)
+deploy/compose/.env
+API_keys.txt
+
+# Test outputs
+tests/playwright/test-results
+tests/playwright/playwright-report
+tests/playwright/node_modules
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea
+.vscode
+
+# Git itself
+.git

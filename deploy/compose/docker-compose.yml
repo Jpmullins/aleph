@@ -1,7 +1,9 @@
-version: "3.9"
-
 # Local Aleph stack. All services bind to localhost.
 # Secrets via .env (copy .env.example to .env first).
+#
+# Before first run on a fresh machine:
+#   docker login nvcr.io       # username: $oauthtoken, password: NGC_API_KEY
+# (required for the aiq-server image)
 
 services:
   postgres:
@@ -14,7 +16,9 @@ services:
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      # PG18+ wants the mount at /var/lib/postgresql (parent of the data
+      # dir) so it can manage major-version-specific subdirectories.
+      - postgres-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 2s
@@ -53,7 +57,10 @@ services:
       retries: 30
 
   langfuse:
-    image: langfuse/langfuse:3.175.0
+    # Pinned to v2 — v3 requires ClickHouse + S3 + Redis as separate
+    # services, which we don't run in the local stack. Upgrade path
+    # later when we decide to host ClickHouse.
+    image: langfuse/langfuse:2
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/langfuse
@@ -80,13 +87,46 @@ services:
       - ./otel-collector-config.yaml:/etc/otel/config.yaml:ro
     environment:
       LANGFUSE_HOST: http://langfuse:3000
-      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
-      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      # OTel collector forwards traces to Langfuse with Basic auth.
+      # LANGFUSE_AUTH = base64(public_key:secret_key); precomputed in .env.
+      LANGFUSE_AUTH: ${LANGFUSE_AUTH}
     ports:
       - "127.0.0.1:4317:4317"   # OTLP gRPC
       - "127.0.0.1:4318:4318"   # OTLP HTTP
     depends_on:
       - langfuse
+
+  aiq-server:
+    image: nvcr.io/nvidia/blueprint/aiq-agent:2.0.0
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${ALEPH_ENV}
+      LOG_LEVEL: INFO
+      HOST: 0.0.0.0
+      PORT: "8000"
+      CONFIG_FILE: /app/configs/config.yml
+      # AIQ persistence — three logical DBs on the shared Postgres,
+      # created by bootstrap-local.sh.
+      NAT_JOB_STORE_DB_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/aiq_jobs
+      AIQ_CHECKPOINT_DB: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/aiq_checkpoints
+      AIQ_SUMMARY_DB: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/aiq_jobs
+      AIQ_CHROMA_DIR: /app/data/chroma_data
+      # LLM transport — same Insights gateway the rest of Aleph uses.
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL}
+      INSIGHTS_LITELLM_API_KEY: ${INSIGHTS_LITELLM_API_KEY}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      DASK_NWORKERS: "1"
+      DASK_NTHREADS: "4"
+    volumes:
+      - ./aiq-config-default.yml:/app/configs/config.yml:ro
+      - aiq-data:/app/data
+    ports:
+      - "127.0.0.1:8001:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
 
   aleph-api:
     build:
@@ -108,10 +148,12 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       LITELLM_BASE_URL: ${LITELLM_BASE_URL}
       INSIGHTS_LITELLM_API_KEY: ${INSIGHTS_LITELLM_API_KEY}
-      ALEPH_AUTH_ISSUER: ${ALEPH_AUTH_ISSUER}
-      ALEPH_AUTH_AUDIENCE: ${ALEPH_AUTH_AUDIENCE}
-      ALEPH_AUTH_JWKS_URL: ${ALEPH_AUTH_JWKS_URL}
+      ALEPH_AUTH_MODE: ${ALEPH_AUTH_MODE}
+      ALEPH_AUTH_ISSUER: ${ALEPH_AUTH_ISSUER:-}
+      ALEPH_AUTH_AUDIENCE: ${ALEPH_AUTH_AUDIENCE:-aleph}
+      ALEPH_AUTH_JWKS_URL: ${ALEPH_AUTH_JWKS_URL:-}
       ALEPH_AGENT_TOKEN_SECRET: ${ALEPH_AGENT_TOKEN_SECRET}
+      AIQ_BASE_URL: http://aiq-server:8000
     depends_on:
       postgres:
         condition: service_healthy
@@ -131,6 +173,10 @@ services:
       ALEPH_ENV: ${ALEPH_ENV}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379/0
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      ALEPH_S3_BUCKET: ${ALEPH_S3_BUCKET}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       LANGFUSE_HOST: http://langfuse:3000
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
@@ -139,6 +185,7 @@ services:
       INSIGHTS_LITELLM_API_KEY: ${INSIGHTS_LITELLM_API_KEY}
       ALEPH_API_INTERNAL_URL: http://aleph-api:8000
       ALEPH_AGENT_TOKEN_SECRET: ${ALEPH_AGENT_TOKEN_SECRET}
+      AIQ_BASE_URL: http://aiq-server:8000
     depends_on:
       aleph-api:
         condition: service_started
@@ -152,9 +199,10 @@ services:
     restart: unless-stopped
     environment:
       VITE_API_BASE_URL: http://localhost:8000
-      VITE_AUTH_ISSUER: ${ALEPH_AUTH_ISSUER}
-      VITE_AUTH_CLIENT_ID: ${ALEPH_AUTH_CLIENT_ID}
-      VITE_AUTH_AUDIENCE: ${ALEPH_AUTH_AUDIENCE}
+      VITE_AUTH_MODE: ${VITE_AUTH_MODE:-local}
+      VITE_AUTH_ISSUER: ${ALEPH_AUTH_ISSUER:-}
+      VITE_AUTH_CLIENT_ID: ${ALEPH_AUTH_CLIENT_ID:-aleph-web}
+      VITE_AUTH_AUDIENCE: ${ALEPH_AUTH_AUDIENCE:-aleph}
     ports:
       - "127.0.0.1:5173:5173"
     depends_on:
@@ -164,3 +212,4 @@ volumes:
   postgres-data:
   minio-data:
   redis-data:
+  aiq-data:
