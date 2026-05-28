@@ -25,6 +25,7 @@ from aleph_db.models.identity import ProjectMember
 from aleph_db.models.project import Project
 from aleph_db.repos import model_profile as profile_repo
 from aleph_db.repos import project as project_repo
+from aleph_rks.models import Connector, ConnectorBinding
 from aleph_observability.tracing import current_trace_id
 from aleph_security.roles import ProjectRole, require_at_least
 
@@ -132,6 +133,49 @@ async def create_project(
         payload={"user_id": str(principal.user_id), "role": ProjectRole.OWNER.value},
         trace_id=trace_id,
     )
+
+    # Seed connector bindings so research works out of the box with no manual
+    # setup. Default no-auth connectors (arXiv, OpenAlex, Semantic Scholar,
+    # HuggingFace, RSS, upload) are enabled immediately; default auth-required
+    # connectors (Tavily, Exa, …) are bound but left disabled until the
+    # analyst supplies credentials. One seed event covers the whole set.
+    default_connectors = list(
+        (
+            await session.execute(
+                select(Connector).where(Connector.enabled_by_default.is_(True))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    seeded: list[dict[str, object]] = []
+    for connector in default_connectors:
+        enabled = not connector.requires_auth
+        session.add(
+            ConnectorBinding(
+                id=uuid7(),
+                project_id=project_id,
+                connector_id=connector.id,
+                enabled=enabled,
+                config_jsonb={},
+                created_by=principal.user_id,
+                access_scope="project",
+            )
+        )
+        seeded.append({"kind": connector.kind, "enabled": enabled})
+    if seeded:
+        await session.flush()
+        await ledger.append(
+            project_id=project_id,
+            actor_id=principal.user_id,
+            actor_kind=principal.actor_kind,
+            action_kind="connector_bindings.seed",
+            target_id=project_id,
+            target_kind="project",
+            payload={"bindings": seeded},
+            trace_id=trace_id,
+        )
+
     return ProjectOut.model_validate(project)
 
 

@@ -47,8 +47,9 @@ async def test_project_create_and_ledger(http_client, auth_bypass, asgi_app):
     Acceptance:
       * POST /v1/projects returns 201 with a UUID id
       * GET /v1/projects/{id} returns the project
-      * The ledger has 4 events: project.create, model_profile.copy_from_template,
-        budget.set, project_member.add (plus an earlier user.create event).
+      * The ledger has project.create, model_profile.copy_from_template,
+        budget.set, project_member.add, and connector_bindings.seed events
+        (plus an earlier user.create event).
       * chain_hash is continuous (each event's prev_event_id == previous id).
     """
     resp = await http_client.post(
