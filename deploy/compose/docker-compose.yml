@@ -97,7 +97,7 @@ services:
       - langfuse
 
   aiq-server:
-    image: nvcr.io/nvidia/blueprint/aiq-agent:2.0.0
+    image: nvcr.io/nvidia/blueprint/aiq-agent:2.1.0
     restart: unless-stopped
     environment:
       APP_ENV: ${ALEPH_ENV}
