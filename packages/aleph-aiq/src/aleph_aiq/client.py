@@ -37,7 +37,7 @@ class AIQJobStatus(StrEnum):
     CANCELLED = "cancelled"
 
     @classmethod
-    def _missing_(cls, value: object) -> "AIQJobStatus":
+    def _missing_(cls, value: object) -> AIQJobStatus:
         # AIQ may report statuses we don't model (e.g. "completed",
         # "in_progress"); fold unknowns into a coarse bucket rather than
         # raising, so polling never crashes on a new status string.
