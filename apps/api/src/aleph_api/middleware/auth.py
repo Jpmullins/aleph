@@ -54,7 +54,7 @@ _PUBLIC_PATHS = frozenset(
 # internal callbacks present `X-Aleph-Service-Token`, not a user bearer).
 # The middleware skips its bearer check for these prefixes; the route
 # handler is responsible for its own verification.
-_SELF_AUTH_PREFIXES: tuple[str, ...] = ("/internal/v1/aiq/",)
+_SELF_AUTH_PREFIXES: tuple[str, ...] = ("/internal/v1/aiq/", "/copilotkit")
 
 
 class AuthMiddleware(BaseHTTPMiddleware):

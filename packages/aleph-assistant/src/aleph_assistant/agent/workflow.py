@@ -10,6 +10,7 @@ re-compose inside `WikiFirstRetrievalRouter.retrieve`.)
 from __future__ import annotations
 
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, TypedDict
@@ -66,14 +67,35 @@ class _Ctx:
     profile: "ModelProfile"
 
 
-_active_ctx: _Ctx | None = None
+# Per-invocation context, scoped via ContextVar (not a module global) so
+# concurrent turns in the same process — e.g. the in-process CopilotKit
+# AG-UI runtime serving multiple users — never read each other's
+# session_maker / principal / profile. `set_active_ctx` returns a token
+# the caller resets in a finally.
+_active_ctx_var: ContextVar[_Ctx | None] = ContextVar(
+    "aleph_assistant_active_ctx", default=None
+)
+
+
+def set_active_ctx(ctx: _Ctx):
+    """Bind the per-invocation context for the current async context.
+
+    Returns the ContextVar token; pass it to `_active_ctx_var.reset(token)`
+    in a finally block.
+    """
+    return _active_ctx_var.set(ctx)
+
+
+def reset_active_ctx(token) -> None:
+    _active_ctx_var.reset(token)
 
 
 def _ctx() -> _Ctx:
-    if _active_ctx is None:
+    ctx = _active_ctx_var.get()
+    if ctx is None:
         msg = "AssistantTurnWorkflow context not initialized"
         raise RuntimeError(msg)
-    return _active_ctx
+    return ctx
 
 
 @with_phase("budget_gate", ctx_getter=lambda: _ctx())
@@ -250,8 +272,7 @@ class AssistantTurnWorkflow:
         self._compiled = graph.compile()
 
     async def run(self, initial: AssistantTurnState) -> AssistantTurnState:
-        global _active_ctx
-        _active_ctx = self._ctx
+        token = _active_ctx_var.set(self._ctx)
         with start_span(
             "assistant.turn",
             **{
@@ -274,4 +295,4 @@ class AssistantTurnWorkflow:
                 await _node_finalize(state)  # best-effort persistence
                 raise
             finally:
-                _active_ctx = None
+                _active_ctx_var.reset(token)

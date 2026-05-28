@@ -101,6 +101,12 @@ async def lifespan(app: "FastAPI") -> "AsyncIterator[None]":
     app.state.db_engine = engine
     app.state.session_maker = session_maker
     app.state.jwks_cache = jwks_cache
+
+    # Wave 2 — give the in-process assistant Deep Agent (mounted at
+    # /copilotkit/agent/assistant) access to the shared session_maker.
+    from aleph_api.copilot_agent import bind_runtime
+
+    bind_runtime(session_maker=session_maker)
     app.state.litellm = litellm
     app.state.redis = redis_client
     app.state.gateway_http = gateway_http
