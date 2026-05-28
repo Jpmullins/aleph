@@ -25,6 +25,7 @@ from langgraph.graph import END, START, StateGraph
 
 from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
+from aleph_db.repos.agent_events import with_phase
 from aleph_observability.tracing import start_span
 from aleph_wiki.alias_service import AliasService
 from aleph_wiki.citation_verification import (
@@ -105,6 +106,7 @@ class SynthesisState(TypedDict, total=False):
 WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 
 
+@with_phase("concept_normalize", ctx_getter=lambda: _ctx())
 async def _node_concept_normalize(state: SynthesisState) -> dict:
     with start_span(
         "synthesis.node.concept_normalize",
@@ -124,6 +126,7 @@ async def _node_concept_normalize(state: SynthesisState) -> dict:
         return {"normalized_topic": normalized}
 
 
+@with_phase("citation_verification", ctx_getter=lambda: _ctx())
 async def _node_citation_verification(state: SynthesisState) -> dict:
     """Verify every `[cN]` marker in the report body has a real source ref."""
     with start_span(
@@ -147,6 +150,7 @@ async def _node_citation_verification(state: SynthesisState) -> dict:
             }
 
 
+@with_phase("wikilink_resolve", ctx_getter=lambda: _ctx())
 async def _node_wikilink_resolve(state: SynthesisState) -> dict:
     """Resolve `[[wikilink]]` targets in the report body via the alias table."""
     with start_span(
@@ -179,6 +183,7 @@ async def _node_wikilink_resolve(state: SynthesisState) -> dict:
         return {"resolved_wikilinks": wikilinks}
 
 
+@with_phase("commit_revision", ctx_getter=lambda: _ctx())
 async def _node_commit_revision(state: SynthesisState) -> dict:
     """Commit a single synthesis page as a draft and record the SynthesisProposal."""
     with start_span(
@@ -291,6 +296,7 @@ async def _node_commit_revision(state: SynthesisState) -> dict:
             }
 
 
+@with_phase("wiki_index_update", ctx_getter=lambda: _ctx())
 async def _node_wiki_index_update(state: SynthesisState) -> dict:
     # IndexService.refresh_page was already called by commit_revision.
     return {}

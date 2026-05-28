@@ -65,10 +65,10 @@ export function ProjectWorkspace({ projectId, onBack }: Props) {
           <PanelResizeHandle className="w-1 cursor-col-resize bg-slate-200 transition-colors hover:bg-slate-400" />
           <Panel defaultSize={52} minSize={30} className="min-w-0">
             <main className="flex h-full min-w-0 flex-col bg-slate-50">
+              <ActivityCard projectId={projectId} />
               <div className="min-h-0 flex-1">
                 <ChatSurface projectId={projectId} threadId={threadId} />
               </div>
-              <ActivityCard projectId={projectId} />
             </main>
           </Panel>
           <PanelResizeHandle className="w-1 cursor-col-resize bg-slate-200 transition-colors hover:bg-slate-400" />

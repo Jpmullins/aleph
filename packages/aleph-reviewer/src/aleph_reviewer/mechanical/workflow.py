@@ -20,6 +20,7 @@ from langgraph.graph import END, START, StateGraph
 from sqlalchemy import func, select
 
 from aleph_core.time import utcnow
+from aleph_db.repos.agent_events import with_phase
 from aleph_observability.tracing import start_span
 from aleph_reviewer.review_service import add_finding, finalize_run, start_run
 from aleph_rks.models import Source, SourceAsset, SourceVersion
@@ -68,6 +69,7 @@ class MechanicalReviewState(TypedDict, total=False):
     finding_count: int
 
 
+@with_phase("citation_match", ctx_getter=lambda: _ctx())
 async def _node_citation_match(state: MechanicalReviewState) -> dict[str, int]:
     ctx = _ctx()
     n = 0
@@ -126,6 +128,7 @@ async def _node_citation_match(state: MechanicalReviewState) -> dict[str, int]:
     return {"n": n}
 
 
+@with_phase("broken_links", ctx_getter=lambda: _ctx())
 async def _node_broken_links(state: MechanicalReviewState) -> dict[str, int]:
     ctx = _ctx()
     n = 0
@@ -170,6 +173,7 @@ async def _node_broken_links(state: MechanicalReviewState) -> dict[str, int]:
     return {"n": n}
 
 
+@with_phase("stale_sources", ctx_getter=lambda: _ctx())
 async def _node_stale_sources(state: MechanicalReviewState) -> dict[str, int]:
     ctx = _ctx()
     n = 0
@@ -230,6 +234,7 @@ async def _node_stale_sources(state: MechanicalReviewState) -> dict[str, int]:
     return {"n": n}
 
 
+@with_phase("duplicate_sources", ctx_getter=lambda: _ctx())
 async def _node_duplicate_sources(state: MechanicalReviewState) -> dict[str, int]:
     ctx = _ctx()
     n = 0
@@ -262,6 +267,7 @@ async def _node_duplicate_sources(state: MechanicalReviewState) -> dict[str, int
     return {"n": n}
 
 
+@with_phase("finalize", ctx_getter=lambda: _ctx())
 async def _node_finalize(state: MechanicalReviewState) -> dict[str, int]:
     n = (
         (state.get("n_citation") or 0)  # type: ignore[arg-type]

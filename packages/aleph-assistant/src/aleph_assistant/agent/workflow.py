@@ -20,6 +20,7 @@ from sqlalchemy import select
 
 from aleph_core.errors import BudgetExceeded
 from aleph_core.time import utcnow
+from aleph_db.repos.agent_events import with_phase
 from aleph_db.repos.cost import get_budget
 from aleph_db.repos.ledger import LedgerWriter
 from aleph_observability.tracing import current_trace_id, start_span
@@ -75,6 +76,7 @@ def _ctx() -> _Ctx:
     return _active_ctx
 
 
+@with_phase("budget_gate", ctx_getter=lambda: _ctx())
 async def _node_budget_gate(state: AssistantTurnState) -> dict[str, Any]:
     ctx = _ctx()
     async with ctx.session_maker() as session:
@@ -94,6 +96,7 @@ async def _node_budget_gate(state: AssistantTurnState) -> dict[str, Any]:
     return {}
 
 
+@with_phase("query_rewrite", ctx_getter=lambda: _ctx())
 async def _node_query_rewrite(state: AssistantTurnState) -> dict[str, Any]:
     if state.get("final_status"):
         return {}
@@ -119,6 +122,7 @@ async def _node_query_rewrite(state: AssistantTurnState) -> dict[str, Any]:
     return {"rewritten_query": q}
 
 
+@with_phase("retrieve", ctx_getter=lambda: _ctx())
 async def _node_retrieve(state: AssistantTurnState) -> dict[str, Any]:
     if state.get("final_status"):
         return {}
@@ -138,6 +142,7 @@ async def _node_retrieve(state: AssistantTurnState) -> dict[str, Any]:
     return {"retrieval": result, "final_body": result.composed_body_md}
 
 
+@with_phase("finalize", ctx_getter=lambda: _ctx())
 async def _node_finalize(state: AssistantTurnState) -> dict[str, Any]:
     ctx = _ctx()
     started = state.get("started_monotonic") or time.monotonic()

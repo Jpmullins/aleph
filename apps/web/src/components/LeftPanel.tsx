@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { SourceUploadModal } from "@/components/SourceUploadModal";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { api } from "@/lib/api";
 
 export interface SessionInfo {
@@ -114,9 +115,10 @@ export function LeftPanel({
 
       <div className="flex justify-between border-t border-slate-200 px-4 py-3 text-slate-500">
         <IconButton title="Settings" onClick={() => onOpenDrawer("settings")} label="⚙" />
-        <IconButton title="Logs" onClick={() => onOpenDrawer("logs")} label="◐" />
+        <IconButton title="Logs" onClick={() => onOpenDrawer("logs")} label="🗒" />
         <IconButton title="Notifications" onClick={() => onOpenDrawer("notifications")} label="🔔" />
         <IconButton title="Profile" onClick={() => onOpenDrawer("profile")} label="●" />
+        <ThemeToggle />
       </div>
 
       {showUpload && (

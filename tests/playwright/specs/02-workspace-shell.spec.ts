@@ -88,7 +88,7 @@ test.describe("Workspace shell — panels, sessions, drawers, chat", () => {
 
   test("Logs drawer shows action ledger events", async ({ page }) => {
     await openProjectWorkspace(page, projectId);
-    await page.getByRole("button", { name: "◐" }).click();
+    await page.getByRole("button", { name: "🗒" }).click();
     await expect(page.getByRole("heading", { name: "Action ledger" })).toBeVisible();
     // We expect at least project.create from the beforeAll setup.
     await expect(page.getByText("project.create").first()).toBeVisible();

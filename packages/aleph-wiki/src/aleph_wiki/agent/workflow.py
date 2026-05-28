@@ -39,6 +39,7 @@ from pydantic import BaseModel, Field
 from aleph_core.ids import uuid7
 from aleph_core.schemas.model_profile import Capability
 from aleph_core.time import utcnow
+from aleph_db.repos.agent_events import with_phase
 from aleph_models.client import ChatMessage
 from aleph_observability.tracing import current_trace_id, start_span
 from aleph_wiki.alias_service import AliasService
@@ -198,6 +199,7 @@ async def _call_llm_json(
 # ---------------------------------------------------------------------------
 
 
+@with_phase("concept_extraction", ctx_getter=lambda: _ctx())
 async def _node_concept_extraction(state: WikiIngestState) -> dict:
     with start_span(
         "wiki.node.concept_extraction",
@@ -233,6 +235,7 @@ async def _node_concept_extraction(state: WikiIngestState) -> dict:
         return {"concepts": concepts}
 
 
+@with_phase("alias_extraction", ctx_getter=lambda: _ctx())
 async def _node_alias_extraction(state: WikiIngestState) -> dict:
     with start_span(
         "wiki.node.alias_extraction",
@@ -298,6 +301,7 @@ async def _node_alias_extraction(state: WikiIngestState) -> dict:
         return {"aliases": aliases}
 
 
+@with_phase("source_page_compose", ctx_getter=lambda: _ctx())
 async def _node_source_page_compose(state: WikiIngestState) -> dict:
     with start_span(
         "wiki.node.source_page_compose",
@@ -421,6 +425,7 @@ def _wikilinks_from_body(body_md: str) -> list[WikiLinkDraft]:
     ]
 
 
+@with_phase("topic_page_stubs", ctx_getter=lambda: _ctx())
 async def _node_topic_page_stubs(state: WikiIngestState) -> dict:
     with start_span(
         "wiki.node.topic_page_stubs",
@@ -490,6 +495,7 @@ def _slugify_concept(name: str) -> str:
     return s[:96] or "concept"
 
 
+@with_phase("wikilink_resolve", ctx_getter=lambda: _ctx())
 async def _node_wikilink_resolve(state: WikiIngestState) -> dict:
     with start_span(
         "wiki.node.wikilink_resolve",
@@ -524,6 +530,7 @@ async def _node_wikilink_resolve(state: WikiIngestState) -> dict:
         return {}
 
 
+@with_phase("commit_revision", ctx_getter=lambda: _ctx())
 async def _node_commit_revision(state: WikiIngestState) -> dict:
     with start_span(
         "wiki.node.commit_revision",
@@ -632,6 +639,7 @@ async def _node_commit_revision(state: WikiIngestState) -> dict:
         return {"committed_revision_ids": committed}
 
 
+@with_phase("wiki_index_update", ctx_getter=lambda: _ctx())
 async def _node_wiki_index_update(state: WikiIngestState) -> dict:
     with start_span(
         "wiki.node.wiki_index_update",

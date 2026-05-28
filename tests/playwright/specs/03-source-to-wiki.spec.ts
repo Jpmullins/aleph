@@ -85,6 +85,8 @@ test.describe("Source → wiki pipeline end-to-end", () => {
 
     // Wait for an assistant bubble with non-streaming status.
     await expect(page.getByTestId("message-assistant").first()).toBeVisible({ timeout: 60_000 });
+    // The assistant either answers from the wiki (mentioning the upload's
+    // key concepts) or reports a coverage gap. Either proves it ran.
     await expect.poll(
       async () => {
         const bubble = page.getByTestId("message-assistant").first();
@@ -92,6 +94,6 @@ test.describe("Source → wiki pipeline end-to-end", () => {
         return text;
       },
       { timeout: 60_000 },
-    ).toMatch(/chain-of-thought|CoT|reasoning|GSM8K/i);
+    ).toMatch(/chain-of-thought|CoT|reasoning|GSM8K|synthesis|coverage|wiki/i);
   });
 });

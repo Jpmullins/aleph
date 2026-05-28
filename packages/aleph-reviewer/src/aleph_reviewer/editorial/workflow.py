@@ -18,6 +18,7 @@ from langgraph.graph import END, START, StateGraph
 from sqlalchemy import select
 
 from aleph_core.schemas.model_profile import Capability
+from aleph_db.repos.agent_events import with_phase
 from aleph_models.client import ChatMessage
 from aleph_observability.tracing import start_span
 from aleph_reviewer.approval_service import create_request
@@ -210,6 +211,7 @@ async def _sample_payload(state: EditorialReviewState) -> dict[str, Any]:
         }
 
 
+@with_phase("contradiction", ctx_getter=lambda: _ctx())
 async def _node_contradiction(state: EditorialReviewState) -> dict[str, int]:
     n = await _run_subagent(
         state,
@@ -224,6 +226,7 @@ async def _node_contradiction(state: EditorialReviewState) -> dict[str, int]:
     return {"n": n}
 
 
+@with_phase("weak_source", ctx_getter=lambda: _ctx())
 async def _node_weak_source(state: EditorialReviewState) -> dict[str, int]:
     n = await _run_subagent(
         state,
@@ -237,6 +240,7 @@ async def _node_weak_source(state: EditorialReviewState) -> dict[str, int]:
     return {"n": n}
 
 
+@with_phase("narrative_gap", ctx_getter=lambda: _ctx())
 async def _node_narrative_gap(state: EditorialReviewState) -> dict[str, int]:
     n = await _run_subagent(
         state,
@@ -250,6 +254,7 @@ async def _node_narrative_gap(state: EditorialReviewState) -> dict[str, int]:
     return {"n": n}
 
 
+@with_phase("coverage_gap", ctx_getter=lambda: _ctx())
 async def _node_coverage_gap(state: EditorialReviewState) -> dict[str, int]:
     n = await _run_subagent(
         state,
@@ -263,6 +268,7 @@ async def _node_coverage_gap(state: EditorialReviewState) -> dict[str, int]:
     return {"n": n}
 
 
+@with_phase("factual_freshness", ctx_getter=lambda: _ctx())
 async def _node_factual_freshness(state: EditorialReviewState) -> dict[str, int]:
     n = await _run_subagent(
         state,
@@ -276,6 +282,7 @@ async def _node_factual_freshness(state: EditorialReviewState) -> dict[str, int]
     return {"n": n}
 
 
+@with_phase("finalize", ctx_getter=lambda: _ctx())
 async def _node_finalize(state: EditorialReviewState) -> dict[str, int]:
     total = (
         (state.get("n_c") or 0)  # type: ignore[arg-type]

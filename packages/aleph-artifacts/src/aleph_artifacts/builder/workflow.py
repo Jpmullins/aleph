@@ -28,6 +28,7 @@ from aleph_artifacts.exporters import (
 from aleph_artifacts.models import Artifact, ArtifactVersion
 from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
+from aleph_db.repos.agent_events import with_phase
 from aleph_observability.tracing import start_span
 from aleph_rks.models import Source, SourceAsset, SourceVersion
 from aleph_wiki.models import WikiPage, WikiRevision
@@ -76,6 +77,7 @@ class BuilderState(TypedDict, total=False):
     lineage: dict[str, Any]
 
 
+@with_phase("outline", ctx_getter=lambda: _ctx())
 async def _node_outline(state: BuilderState) -> dict[str, Any]:
     """Produce an outline from selected wiki pages."""
     ctx = _ctx()
@@ -108,6 +110,7 @@ async def _node_outline(state: BuilderState) -> dict[str, Any]:
             }
 
 
+@with_phase("section_compose", ctx_getter=lambda: _ctx())
 async def _node_section_compose(state: BuilderState) -> dict[str, Any]:
     """Compose each outlined page into a section, preserving wikilinks + citations."""
     ctx = _ctx()
@@ -127,6 +130,7 @@ async def _node_section_compose(state: BuilderState) -> dict[str, Any]:
         return {"composed_markdown": "\n\n".join(sections)}
 
 
+@with_phase("citation_resolve", ctx_getter=lambda: _ctx())
 async def _node_citation_resolve(state: BuilderState) -> dict[str, Any]:
     """Walk citation markers in `composed_markdown` and build a CSL-JSON list."""
     ctx = _ctx()
@@ -172,6 +176,7 @@ async def _node_citation_resolve(state: BuilderState) -> dict[str, Any]:
         return {"csl_items": items}
 
 
+@with_phase("chart_freeze", ctx_getter=lambda: _ctx())
 async def _node_chart_freeze(state: BuilderState) -> dict[str, Any]:
     """For each dataset_version referenced, ensure a RenderedAsset exists.
 
@@ -185,6 +190,7 @@ async def _node_chart_freeze(state: BuilderState) -> dict[str, Any]:
         return {"rendered_asset_ids": state.get("rendered_asset_ids") or []}
 
 
+@with_phase("bibliography", ctx_getter=lambda: _ctx())
 async def _node_bibliography(state: BuilderState) -> dict[str, Any]:
     with start_span("builder.bibliography"):
         items = state.get("csl_items") or []  # type: ignore[assignment]
@@ -198,6 +204,7 @@ async def _node_bibliography(state: BuilderState) -> dict[str, Any]:
         return {"bibliography_markdown": md}
 
 
+@with_phase("package", ctx_getter=lambda: _ctx())
 async def _node_package(state: BuilderState) -> dict[str, Any]:
     """Produce the final bytes per `artifact_kind`."""
     ctx = _ctx()
