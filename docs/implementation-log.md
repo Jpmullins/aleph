@@ -1,5 +1,49 @@
 # Implementation log
 
+## Increment 8: Eval suite + UserFeedback + regression gates
+
+**Completed:** 2026-05-28
+**Commit range:** (will be filled at merge time)
+
+### What was built
+
+- `aleph-evals` expanded from Inc 0 skeleton with full
+  `EvalDataset` / `EvalCase` / `EvalRun` / `EvalResult` models.
+- Manifest-driven dataset discovery: walks
+  `packages/aleph-evals/datasets/inc<N>_<area>/manifest.yaml` + JSONL
+  case files.
+- Scorer registry: retrieval, citation, coverage, permission,
+  synthesis, cost, metric_only.
+- CI gate composes report → exit code; per-profile baselines in
+  `ci/baselines.json`.
+- FreshQA + DeepResearch Bench adapters (lazily import AIQ; raise a
+  clear "vendor AIQ first" message when the submodule is absent).
+- `UserFeedback` model in `aleph-core` + `/projects/{id}/feedback`
+  endpoint with auto-promotion of `marked_wrong` /
+  `misleading` / `false_positive` rows into a per-project
+  `user_feedback:{project_id}` EvalDataset.
+- Alembic migration `inc8_evals_feedback`.
+- Cross-cutting `inc8_cross_cutting/` bundle: permissions, citations,
+  coverage, cost-drift.
+
+### Honest gaps
+
+- AIQ adapters require the vendored submodule; runner marks the
+  dataset errored when absent.
+- Per-card inline feedback buttons not yet wired; API accepts
+  feedback from any UI source.
+- Bundled JSONL cases are seed examples — operators expand per
+  `docs/evals/regression-suite.md`.
+
+### Codebase complete
+
+This is the final increment of the build sequence. Beyond Inc 8 the
+roadmap (top-level §16.2) is operator-action items: AIQ submodule
+vendoring, Playwright sandbox container, KMS for production
+credentials, and ongoing connector / catalog / ModelProfile additions.
+
+---
+
 ## Increment 7: Builder agent + RenderedAssets + Artifacts + exporters
 
 **Completed:** 2026-05-28
