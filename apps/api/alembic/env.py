@@ -57,6 +57,12 @@ try:
     import aleph_artifacts.models  # noqa: F401
 except ImportError:
     pass
+# Inc 8: evals + user feedback.
+try:
+    import aleph_core.feedback  # noqa: F401
+    import aleph_evals.models  # noqa: F401
+except ImportError:
+    pass
 
 config = context.config
 if config.config_file_name is not None:

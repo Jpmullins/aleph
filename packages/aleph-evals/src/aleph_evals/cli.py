@@ -1,13 +1,16 @@
-"""CLI entry point: `python -m aleph_evals.runner --datasets all --gate strict`."""
+"""aleph-evals CLI.
+
+`python -m aleph_evals --datasets all --gate strict --profile aleph-dev`.
+"""
 
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
 
+from aleph_evals.ci.gate import write_summary
 from aleph_evals.runner import Gate, run
 
 
@@ -16,26 +19,28 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--datasets",
         default="all",
-        help="'all', a comma list, or '@tag' (Inc 8). Default: all.",
+        help="'all', a comma list, or '@tag'. Default: all.",
     )
     p.add_argument(
         "--gate",
         choices=[g.value for g in Gate],
         default=Gate.STRICT.value,
-        help="Gate mode. 'strict' exits 1 on any failure.",
     )
     p.add_argument(
         "--datasets-root",
         type=Path,
-        default=Path(os.environ.get("ALEPH_EVAL_DATASETS_ROOT", "evals/datasets")),
-        help="Where to discover eval datasets.",
+        default=Path(
+            os.environ.get(
+                "ALEPH_EVAL_DATASETS_ROOT",
+                "packages/aleph-evals/datasets",
+            )
+        ),
     )
     p.add_argument(
-        "--report",
-        type=Path,
-        default=None,
-        help="Write report JSON to this path.",
+        "--profile",
+        default=os.environ.get("ALEPH_DEFAULT_MODEL_PROFILE", "aleph-dev"),
     )
+    p.add_argument("--report", type=Path, default=None)
     return p
 
 
@@ -45,19 +50,9 @@ def main(argv: list[str] | None = None) -> int:
         datasets_root=args.datasets_root,
         selected=args.datasets,
         gate=Gate(args.gate),
+        profile_name=args.profile,
     )
-
-    serialized = {
-        "selected_datasets": report.selected_datasets,
-        "gate": report.gate.value,
-        "results": [r.model_dump() for r in report.results],
-    }
-    if args.report:
-        args.report.parent.mkdir(parents=True, exist_ok=True)
-        args.report.write_text(json.dumps(serialized, indent=2))
-    else:
-        sys.stdout.write(json.dumps(serialized, indent=2) + "\n")
-    return report.exit_code()
+    return write_summary(report, path=str(args.report) if args.report else None)
 
 
 if __name__ == "__main__":

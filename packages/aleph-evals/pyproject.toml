@@ -1,11 +1,14 @@
 [project]
 name = "aleph-evals"
 version = "0.1.0"
-description = "Aleph eval runner. Skeleton in Inc 0; populated in Inc 8."
+description = "Aleph eval suite — datasets, scorers, AIQ benchmark adapters, CI gates."
 requires-python = ">=3.13"
 dependencies = [
+    "sqlalchemy[asyncio]==2.0.50",
     "pydantic==2.13.4",
+    "pyyaml==6.0.3",
     "aleph-core",
+    "aleph-db",
 ]
 
 [project.scripts]

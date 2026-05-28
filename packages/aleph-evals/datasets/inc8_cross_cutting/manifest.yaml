@@ -1,0 +1,40 @@
+datasets:
+  - name: aleph-permissions
+    file: aleph_permissions.jsonl
+    kind: permission
+    gate_kind: blocking
+    gate_thresholds:
+      default:
+        min_pass_rate: 1.0
+    introduced_in_increment: 8
+
+  - name: aleph-citations
+    file: aleph_citations.jsonl
+    kind: citation
+    gate_kind: blocking
+    gate_thresholds:
+      aleph-dev:
+        min_pass_rate: 0.90
+      aleph-production:
+        min_pass_rate: 0.95
+    introduced_in_increment: 8
+
+  - name: aleph-coverage
+    file: aleph_coverage.jsonl
+    kind: coverage
+    gate_kind: blocking
+    gate_thresholds:
+      aleph-dev:
+        min_pass_rate: 0.85
+      aleph-production:
+        min_pass_rate: 0.92
+    introduced_in_increment: 8
+
+  - name: aleph-cost-drift
+    file: aleph_cost_drift.jsonl
+    kind: cost
+    gate_kind: warning
+    gate_thresholds:
+      default:
+        min_pass_rate: 1.0
+    introduced_in_increment: 8

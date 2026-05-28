@@ -1,0 +1,2 @@
+{"id": "perm-001", "scenario": "Member A reads Project Y", "actual": {"leaked_targets": []}}
+{"id": "perm-002", "scenario": "Member B lists Project X ledger", "actual": {"leaked_targets": []}}

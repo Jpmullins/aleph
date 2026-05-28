@@ -1,9 +1,9 @@
-"""Aleph eval runner.
+"""Aleph eval suite.
 
-Inc 0 ships the runner skeleton: dataset discovery + CLI. No datasets
-exist yet — Inc 8 introduces them, plus the AIQ benchmark adapters.
-Until then, the runner exits 0 when given `--gate strict` with no
-datasets present.
+Datasets discovered from
+`packages/aleph-evals/datasets/<inc>_<area>/<name>.jsonl` plus a
+`manifest.yaml`. Scorers per `kind`. CI gate composes the run report
+into a pass/fail exit code.
 """
 
 from aleph_evals.runner import Gate, RunReport, RunResult, run

@@ -1,0 +1,2 @@
+{"id": "cite-001", "query": "What is X?", "expected_citation_markers": ["c1", "c2"], "actual": {"citation_markers": ["c1", "c2"], "broken_markers": []}}
+{"id": "cite-002", "query": "Define Y", "expected_citation_markers": ["c1"], "actual": {"citation_markers": ["c1"], "broken_markers": []}}
