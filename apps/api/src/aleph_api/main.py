@@ -29,11 +29,13 @@ from aleph_api.routes import (
     feedback,
     handedits,
     health,
+    hypotheses,
     ledger,
     me,
     model_profile,
     notes,
     projects,
+    reviews,
     smoketest,
     sources,
     surfaces,
@@ -93,6 +95,9 @@ def create_app() -> FastAPI:
     app.include_router(cards.router)
     app.include_router(briefs.router)
     app.include_router(surfaces.router)
+    # Inc 5
+    app.include_router(reviews.router)
+    app.include_router(hypotheses.router)
 
     instrument_fastapi(app)
 

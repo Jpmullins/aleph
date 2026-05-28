@@ -40,6 +40,13 @@ try:
     import aleph_notes.models  # noqa: F401
 except ImportError:
     pass
+# Inc 5: reviewer + hypotheses + agent memory.
+try:
+    import aleph_core.agent_memory  # noqa: F401
+    import aleph_hypotheses.models  # noqa: F401
+    import aleph_reviewer.models  # noqa: F401
+except ImportError:
+    pass
 
 config = context.config
 if config.config_file_name is not None:

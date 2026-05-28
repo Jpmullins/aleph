@@ -20,6 +20,7 @@ dependencies = [
     "aleph-rks",
     "aleph-wiki",
     "aleph-assistant",
+    "aleph-reviewer",
 ]
 
 [build-system]

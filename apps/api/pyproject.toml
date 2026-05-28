@@ -28,6 +28,8 @@ dependencies = [
     "aleph-aiq",
     "aleph-a2ui",
     "aleph-notes",
+    "aleph-reviewer",
+    "aleph-hypotheses",
 ]
 
 [project.scripts]

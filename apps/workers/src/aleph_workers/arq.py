@@ -25,6 +25,8 @@ from aleph_rks.asset_store import AssetStore
 from aleph_workers.jobs import (
     assistant_turn_job,
     chunk_embed_job,
+    editorial_review_job,
+    mechanical_review_job,
     normalize_job,
     smoke_llm_job,
     wiki_ingest_job,
@@ -98,6 +100,8 @@ class WorkerSettings:
         chunk_embed_job,
         wiki_ingest_job,
         assistant_turn_job,
+        mechanical_review_job,
+        editorial_review_job,
     ]
     on_startup = _startup
     on_shutdown = _shutdown

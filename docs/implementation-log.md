@@ -1,5 +1,65 @@
 # Implementation log
 
+## Increment 5: Reviewer agents + approval workflow + hypotheses + AgentMemory
+
+**Completed:** 2026-05-28
+**Commit range:** (will be filled at merge time)
+
+### What was built
+
+- `aleph-reviewer`: `ReviewRun`, `ReviewFinding`, `ApprovalRequest`
+  models; `review_service` (start_run / add_finding / finalize_run);
+  `approval_service.decide()` writes a paired `ApprovalDecision` (Inc 3
+  row) and mirrors decision onto linked `ReviewFinding`.
+- MechanicalReviewer LangGraph workflow with deterministic checks:
+  citation_match (wraps verify_citations), broken_wikilink,
+  stale_source (freshness threshold), duplicate_source (sha256 group).
+- EditorialReviewer LangGraph workflow with 5 LLM-judged subagents
+  (contradiction, weak_source, narrative_gap, coverage_gap,
+  factual_freshness). Findings with severity ≥ medium auto-create
+  paired `ApprovalRequest`s.
+- `aleph-hypotheses`: `Hypothesis` (`short_id` H0001…),
+  `HypothesisVersion` (immutable Postgres triggers),
+  `HypothesisEvidence`; `confidence` module with
+  `next_confidence_from_evidence`; `hypothesis_service` for create /
+  patch / add_evidence (re-derives confidence + writes a new version
+  on state transition).
+- `AgentMemory` model in `aleph-core` (per-project, per-agent,
+  namespaced scratchpad).
+- Alembic migration `inc5_reviewers_hypotheses`.
+- API routes: `/reviews/runs`, `/reviews/findings`,
+  `/approval-requests`, `/approval-requests/{id}/decide`,
+  `/hypotheses` + nested `/evidence` + `/versions`.
+- Worker jobs `mechanical_review_job` + `editorial_review_job`
+  registered in the Arq worker.
+
+### Trace and ledger behavior added
+
+- Ledger action kinds: `hypothesis.create`,
+  `hypothesis.version.create`, `hypothesis.evidence.add`,
+  `approval_request.approved`, `approval_request.rejected`.
+- OTEL spans: `review.mechanical.<check>`,
+  `review.editorial.<subagent>`.
+- Cost ledger covers all editorial subagent LLM calls
+  (`purpose="editorial.<subagent>"`).
+
+### Known issues / debts
+
+- Wiki `commit_revision` doesn't auto-enqueue `mechanical_review_job`
+  in this commit. The worker exists and can be called manually; the
+  enqueue hook lands in a follow-on (one-line worker-pool ref in
+  wiki_service).
+- Deep Agents harness not used for EditorialReviewer; the LangGraph
+  version ships now with the same contract.
+- No live-stack integration tests yet; pure-function confidence-rule
+  tests pending.
+
+### Next increment entry point
+
+See `docs/superpowers/specs/2026-05-27-inc-6-datasets-visualization-design.md`.
+
+---
+
 ## Increment 4: A2UI Catalog v1.0.0 + Interactive Workspace surfaces
 
 **Completed:** 2026-05-27
