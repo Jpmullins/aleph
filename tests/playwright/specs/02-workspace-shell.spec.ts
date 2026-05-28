@@ -32,7 +32,7 @@ test.describe("Workspace shell — panels, sessions, drawers, chat", () => {
     for (const tab of ["Wiki", "Artifacts", "Notes", "Hypotheses", "Briefs"]) {
       await expect(page.getByRole("button", { name: tab })).toBeVisible();
     }
-    await expect(page.getByText("Activity", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("activity-card-toggle")).toBeVisible();
 
     // Resize handles exist as ARIA separators.
     const separators = page.getByRole("separator");

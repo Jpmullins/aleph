@@ -17,9 +17,7 @@ from sqlalchemy import select
 from aleph_a2ui.catalog import validate_surface
 from aleph_a2ui.components.cards import (
     ClaimCardProps,
-    SourceCardProps,
     claim_card,
-    source_card,
 )
 from aleph_a2ui.components.surfaces import (
     artifacts_surface,
@@ -30,7 +28,6 @@ from aleph_a2ui.components.surfaces import (
 )
 from aleph_core.errors import NotFound, ValidationFailed
 from aleph_notes.models import Note, NoteSection
-from aleph_rks.models import Source
 from aleph_wiki.models import WikiClaim, WikiPage, WikiRevision
 
 from aleph_api.deps import SessionDep
@@ -121,32 +118,11 @@ async def _wiki_surface(
                             card_id=f"claim-{c.id}",
                         )
                     )
-    # Source-page chips: list the project's source pages as SourceCards.
-    source_rows = list(
-        (
-            await session.execute(
-                select(Source)
-                .where(Source.project_id == project_id)
-                .order_by(Source.created_at.desc())
-                .limit(15)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    for s in source_rows:
-        cards.append(
-            source_card(
-                SourceCardProps(
-                    source_id=s.id,
-                    short_id=s.short_id,
-                    title=s.title,
-                    url=s.url,
-                    status=s.status,
-                ),
-                card_id=f"source-{s.id}",
-            )
-        )
+    # NOTE: the frontend WikiSurface now fetches `/wiki/pages` directly and
+    # renders its own page browser (topic + source pages) plus a reader.
+    # We no longer emit SourceCards as surface children here — that would
+    # duplicate the browser's "Source pages" group. `children` is reserved
+    # for embedded viz cards (charts/tables/maps) placed on the surface.
     surface = wiki_surface(
         current_page_id=UUID(page_id) if page_id else None,
         view_mode="page",

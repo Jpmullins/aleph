@@ -36,7 +36,7 @@ test.describe("Source → wiki pipeline end-to-end", () => {
 
     // The activity card should show at least one of the three jobs running
     // or recently succeeded.
-    await expect(page.getByText("Activity", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("activity-card-toggle")).toBeVisible();
     const expected = ["Normalizing source", "Chunking + embedding", "Compiling wiki"];
     await expect.poll(async () => {
       const body = await page.locator("body").innerText();
@@ -62,11 +62,8 @@ test.describe("Source → wiki pipeline end-to-end", () => {
     });
   });
 
-  test("Wiki tab populates with pages after ingest", async ({ page, request }) => {
-    await openProjectWorkspace(page, projectId);
-    await page.getByRole("button", { name: "Wiki" }).click();
-
-    // Surface JSON should include a ClaimCard or SourceCard.
+  test("Wiki tab renders the page browser + reader after ingest", async ({ page, request }) => {
+    // Backend has compiled pages by now.
     await expect.poll(async () => {
       const resp = await request.get(
         `${API_URL}/v1/projects/${projectId}/wiki/pages`,
@@ -76,6 +73,23 @@ test.describe("Source → wiki pipeline end-to-end", () => {
       const pages = await resp.json();
       return Array.isArray(pages) ? pages.length : 0;
     }, { timeout: 30_000 }).toBeGreaterThan(0);
+
+    await openProjectWorkspace(page, projectId);
+    await page.getByRole("button", { name: "Wiki" }).click();
+
+    // The page browser groups topic + source pages.
+    await expect(page.getByRole("heading", { name: /Source pages/ })).toBeVisible({
+      timeout: 30_000,
+    });
+
+    // Click the compiled source page (has body + claims, unlike topic stubs).
+    const sourcePage = page.getByRole("button", { name: /Source: / }).first();
+    await expect(sourcePage).toBeVisible();
+    await sourcePage.click();
+
+    // Reader shows the back affordance, the rendered body, and claims.
+    await expect(page.getByRole("button", { name: "← Wiki" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Claims/ })).toBeVisible({ timeout: 10_000 });
   });
 
   test("Assistant can answer over the new wiki content", async ({ page }) => {
