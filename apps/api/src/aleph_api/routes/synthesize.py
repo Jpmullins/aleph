@@ -143,6 +143,7 @@ async def synthesize(
                 project_id=project_id,
                 topic=body.topic,
                 allowed_data_sources=enabled,
+                depth=body.depth,
             )
             dispatched = True
             await append_aiq_event(

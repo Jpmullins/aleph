@@ -50,6 +50,15 @@ ensure_db aiq_jobs
 ensure_db aiq_checkpoints
 ensure_db aiq_summary
 
+# AIQ's job-store + checkpoint tables are NOT auto-created by the
+# aiq-agent image (only job_events is). Without job_info, every research
+# job submission 500s. Apply the vendored schema idempotently.
+echo "→ Applying AIQ job-store + checkpoint schema"
+"${DC[@]}" exec -T postgres psql -U "${PG_USER}" -d aiq_jobs -v ON_ERROR_STOP=1 \
+  < "$ROOT/deploy/compose/aiq-init-jobs.sql"
+"${DC[@]}" exec -T postgres psql -U "${PG_USER}" -d aiq_checkpoints -v ON_ERROR_STOP=1 \
+  < "$ROOT/deploy/compose/aiq-init-checkpoints.sql"
+
 echo "→ Running Alembic migrations"
 (cd apps/api && DATABASE_URL="${DATABASE_URL_HOST}" uv run alembic upgrade head)
 
