@@ -2,17 +2,15 @@ FROM node:22-alpine
 
 WORKDIR /app/apps/web
 
-RUN corepack enable
-
 COPY apps/web/package.json ./package.json
 
-# Standalone install (ignore root pnpm-workspace.yaml so the web app
-# doesn't drag tests/playwright into its closure and so Vite is
-# installed into ./node_modules where `pnpm dev` can find it).
-RUN pnpm install --no-frozen-lockfile --ignore-workspace
+# Standalone npm install: avoids pnpm 10's build-script gating (CopilotKit
+# pulls @scarf/scarf whose postinstall pnpm refuses to run), and keeps the
+# web app out of the root pnpm workspace. Vite lands in ./node_modules.
+RUN npm install
 
 COPY apps/web ./
 
 EXPOSE 5173
 
-CMD ["pnpm", "dev", "--host", "0.0.0.0"]
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]

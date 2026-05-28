@@ -13,6 +13,9 @@
   "dependencies": {
     "@a2ui/react": "^0.10",
     "@a2ui/web_core": "^0.10",
+    "@copilotkit/a2ui-renderer": "^1.58",
+    "@copilotkit/react-core": "^1.58",
+    "@copilotkit/react-ui": "^1.58",
     "@tanstack/react-query": "5.100.14",
     "@tanstack/react-router": "1.170.8",
     "@xyflow/react": "^12.10",
@@ -25,6 +28,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@types/node": "^22.19",
     "@types/react": "^19.2",
     "@types/react-dom": "^19.2",
     "@vitejs/plugin-react": "6.0.2",

@@ -199,12 +199,30 @@ services:
     restart: unless-stopped
     environment:
       VITE_API_BASE_URL: http://localhost:8000
+      # Browser → Node CopilotRuntime (published on the host at :4000).
+      VITE_COPILOT_RUNTIME_URL: http://localhost:4000/api/copilotkit
       VITE_AUTH_MODE: ${VITE_AUTH_MODE:-local}
       VITE_AUTH_ISSUER: ${ALEPH_AUTH_ISSUER:-}
       VITE_AUTH_CLIENT_ID: ${ALEPH_AUTH_CLIENT_ID:-aleph-web}
       VITE_AUTH_AUDIENCE: ${ALEPH_AUTH_AUDIENCE:-aleph}
     ports:
       - "127.0.0.1:5173:5173"
+    depends_on:
+      - aleph-api
+
+  # Wave 2 — Node CopilotKit runtime. Bridges the React app to aleph-api's
+  # AG-UI endpoint; where A2UI tool injection lives.
+  aleph-copilot-runtime:
+    build:
+      context: ../..
+      dockerfile: apps/copilot-runtime/Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: "4000"
+      COPILOT_BASE_PATH: /api/copilotkit
+      ALEPH_AGENT_URL: http://aleph-api:8000/copilotkit/agent/assistant
+    ports:
+      - "127.0.0.1:4000:4000"
     depends_on:
       - aleph-api
 

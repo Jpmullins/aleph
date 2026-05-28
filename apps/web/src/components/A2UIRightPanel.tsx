@@ -1,12 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
 
 import type { A2UIComponent } from "@/a2ui/catalog";
 import { SurfaceProvider, renderA2UI } from "@/a2ui/register";
 import { api } from "@/lib/api";
+import { SURFACE_TABS, useWorkspaceUI } from "@/lib/workspace-ui";
 
-const TABS = ["Wiki", "Artifacts", "Notes", "Hypotheses", "Briefs"] as const;
-type Tab = (typeof TABS)[number];
+const TABS = SURFACE_TABS;
 
 interface Props {
   projectId: string;
@@ -14,7 +13,8 @@ interface Props {
 
 export function A2UIRightPanel({ projectId }: Props) {
   const qc = useQueryClient();
-  const [tab, setTab] = useState<Tab>("Wiki");
+  // Tab state is shared so the assistant agent can drive it (useFrontendTool).
+  const { activeSurface: tab, setActiveSurface: setTab } = useWorkspaceUI();
 
   const surfaceQuery = useQuery<{ tab: string; surface: A2UIComponent }>({
     queryKey: ["surface", projectId, tab],

@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { ApiError, api } from "@/lib/api";
+import { ApiError } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 
 interface Props {
