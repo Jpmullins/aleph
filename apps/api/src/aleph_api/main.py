@@ -19,6 +19,7 @@ from aleph_api.routes import (
     agent_tokens,
     aiq_internal,
     aliases,
+    artifacts,
     assistant,
     briefs,
     cards,
@@ -101,6 +102,8 @@ def create_app() -> FastAPI:
     app.include_router(hypotheses.router)
     # Inc 6
     app.include_router(datasets.router)
+    # Inc 7
+    app.include_router(artifacts.router)
 
     instrument_fastapi(app)
 

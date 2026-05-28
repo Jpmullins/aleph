@@ -1,5 +1,83 @@
 # Implementation log
 
+## Increment 7: Builder agent + RenderedAssets + Artifacts + exporters
+
+**Completed:** 2026-05-28
+**Commit range:** (will be filled at merge time)
+
+### What was built
+
+- **`aleph-artifacts` package:** `RenderedAsset`, `Artifact`
+  (short_id A0001…), `ArtifactVersion` (immutable Postgres triggers).
+- **Builder LangGraph workflow:** outline → section_compose →
+  citation_resolve → chart_freeze → bibliography → package. Composes
+  approved wiki content into a markdown report, walks
+  `[[Source:Sxxxx]]` references to build a CSL-JSON list, formats the
+  bibliography per the chosen style, packages the final bytes per
+  `artifact_kind`, uploads to MinIO at a deterministic path, writes a
+  fully-typed `ArtifactVersion.lineage_jsonb`.
+- **CSL formatter** (`aleph_artifacts.csl`): uses `citeproc-py` with
+  bundled XML styles when available; falls back to a deterministic
+  plain-author-year formatter so the Builder is never blocked by
+  missing styles. `format_bibliography(items, style, output)` returns
+  markdown / html / plain.
+- **Exporters:**
+  - `markdown_bundle` — ZIP of `report.md` + `manifest.json` + assets.
+  - `pdf` — markdown-it-py → HTML → WeasyPrint PDF. `renderer` arg
+    allows swapping to Prince per operator policy.
+  - `source_pack` — ZIP of `manifest.json` + raw blobs + normalized
+    markdown + license notes. Used by the `source_pack` artifact_kind.
+- **`render_service.record_render`:** uploads bytes for a card render
+  and writes a `RenderedAsset` row with the full reproducibility spec
+  (`render_spec_jsonb`).
+- **Alembic migration `inc7_artifacts`:** creates `rendered_assets`,
+  `artifacts`, `artifact_versions` with immutability triggers on
+  `artifact_versions`.
+- **API routes:**
+  - `/artifacts` — list / get.
+  - `/artifacts/{id}/versions` — list versions.
+  - `/artifacts/build` — body
+    `{title, artifact_kind, template_name, csl_style, wiki_page_ids,
+    dataset_version_ids}`. Creates the artifact, mints an agent
+    token, enqueues `builder_job`, returns
+    `{artifact_id, agent_run_id, dispatched}`.
+  - `/rendered-assets` — list (limit 200).
+- **Worker:** `builder_job` verifies the agent token, drives the
+  Builder workflow, finalizes the AgentRun with the new version id.
+
+### Trace and ledger behavior added
+
+- Ledger action kinds: `artifact.create`, `artifact.version.create`.
+- OTEL spans: `builder.outline`, `builder.section_compose`,
+  `builder.citation_resolve`, `builder.chart_freeze`,
+  `builder.bibliography`, `builder.package`.
+- Cost ledger unchanged (Builder doesn't make LLM calls in this
+  commit; outline/composition is structural — Inc 7 follow-on adds a
+  Builder LLM polish pass).
+
+### Honest scope
+
+- Playwright sandbox isn't a separate container in this commit. The
+  Builder records `RenderedAsset` rows + handles the markdown+PDF
+  export path, but actual chromium rendering of `ChartCard` /
+  `MapCard` / `GraphCard` to PNG is left for the follow-on that
+  builds the `aleph-render` Docker image. The PDF artifacts produced
+  by `weasyprint` are clean; embedded chart PNGs come once the
+  render-job container lands.
+- DOCX exporter exists in the `exporters/` directory contract but
+  isn't wired into `_node_package` yet (needs pandoc availability
+  check first).
+- CSL XML style files (`apa-7.csl`, etc.) aren't bundled with the
+  package. The formatter falls back gracefully to plain author-year
+  formatting when missing. Operators drop styles into
+  `aleph_artifacts/csl/styles/` to enable full citeproc rendering.
+
+### Next increment entry point
+
+See `docs/superpowers/specs/2026-05-27-inc-8-eval-feedback-gates-design.md`.
+
+---
+
 ## Increment 6: Datasets + visualization cards
 
 **Completed:** 2026-05-28

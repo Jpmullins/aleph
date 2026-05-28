@@ -52,6 +52,11 @@ try:
     import aleph_datasets.models  # noqa: F401
 except ImportError:
     pass
+# Inc 7: artifacts.
+try:
+    import aleph_artifacts.models  # noqa: F401
+except ImportError:
+    pass
 
 config = context.config
 if config.config_file_name is not None:

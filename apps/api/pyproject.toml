@@ -31,6 +31,7 @@ dependencies = [
     "aleph-reviewer",
     "aleph-hypotheses",
     "aleph-datasets",
+    "aleph-artifacts",
 ]
 
 [project.scripts]

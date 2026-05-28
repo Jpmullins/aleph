@@ -24,6 +24,7 @@ from aleph_rks.asset_store import AssetStore
 
 from aleph_workers.jobs import (
     assistant_turn_job,
+    builder_job,
     chunk_embed_job,
     editorial_review_job,
     mechanical_review_job,
@@ -102,6 +103,7 @@ class WorkerSettings:
         assistant_turn_job,
         mechanical_review_job,
         editorial_review_job,
+        builder_job,
     ]
     on_startup = _startup
     on_shutdown = _shutdown
