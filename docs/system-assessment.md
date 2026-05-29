@@ -110,10 +110,11 @@ All 8 hold. Highlights:
 7. **Dependabot vulnerabilities** — **mostly RESOLVED 2026-05-29**. Bumped: lxml→6.1.0
    (high), weasyprint→68.0 (high, + the Dockerfiles now install its glib/pango runtime
    libs — which also makes Builder PDF export work in-container for the first time),
-   jinja2→3.1.6, pynacl→1.6.2, pypdf→6.12.2, postcss→8.5.15, prismjs→1.30.0. **Still open:**
-   `ecdsa` (high) has **no patched version** — pulled by `python-jose`; the only real fix
-   is migrating `python-jose`→`PyJWT` (cryptography-backed ECDSA). Practical risk is low
-   (agent tokens are HS256; OIDC dormant). The langgraph alert was stale (resolved 1.2.2).
+   jinja2→3.1.6, pynacl→1.6.2, pypdf→6.12.2, postcss→8.5.15, prismjs→1.30.0. `ecdsa` (high, no patched version)
+   was **RESOLVED 2026-05-29** by migrating `python-jose`→`PyJWT` (cryptography-backed
+   RS256/ES256) — `ecdsa`/`python-jose`/`rsa` removed from the lock; verified HS256 +
+   RS256/JWKS paths + in-container. The langgraph alert was stale (resolved 1.2.2). **All
+   Dependabot high alerts are now cleared.**
 
 ### P2 — debt / robustness
 8. **New agent surface is largely browser-verified-only.** The 6 subagents, the SSE
