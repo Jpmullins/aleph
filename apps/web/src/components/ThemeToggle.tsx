@@ -11,6 +11,13 @@ function applyMode(mode: Mode) {
   } else {
     root.setAttribute("data-theme", mode);
   }
+  // CopilotKit v2 (the Live chat) keys its dark styles off a `.dark` class,
+  // so mirror Aleph's effective dark state onto it.
+  const prefersDark =
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(prefers-color-scheme: dark)").matches;
+  const isDark = mode === "dark" || (mode === "system" && !!prefersDark);
+  root.classList.toggle("dark", isDark);
 }
 
 function loadMode(): Mode {

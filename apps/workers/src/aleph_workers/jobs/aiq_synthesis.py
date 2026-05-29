@@ -9,7 +9,6 @@ Briefs for approval). The AgentRun status is updated throughout.
 
 from __future__ import annotations
 
-import asyncio
 import re
 from typing import Any
 from uuid import UUID
@@ -28,10 +27,14 @@ from aleph_wiki.synthesis_workflow import (
     SynthesisWorkflow,
 )
 
-# Poll cadence — shallow research ~30-60s, deep can run minutes. Bounded well
-# under the arq job_timeout (600s).
-_POLL_INTERVAL_S = 8
-_MAX_POLLS = 60
+# Long-job polling without tying up a worker: each invocation checks the AIQ
+# job once and, if it's still running, re-enqueues itself after a delay. Deep
+# research can run many minutes, so a sleep-loop bounded by arq's job_timeout
+# isn't enough — re-enqueue has no total-time ceiling (capped only by
+# _MAX_ATTEMPTS as a runaway backstop: 30 attempts x 20s ≈ 10 min default,
+# extended for deep below).
+_DEFER_S = 20
+_MAX_ATTEMPTS = 90  # 90 x 20s = 30 min hard ceiling
 _TERMINAL = {
     AIQJobStatus.SUCCEEDED,
     AIQJobStatus.FAILED,
@@ -116,6 +119,7 @@ async def aiq_synthesis_poll_job(
     project_id_str: str,
     topic: str,
     agent_token: str,
+    attempt: int = 0,
 ) -> dict[str, Any]:
     secret: str = ctx["agent_token_secret"]
     claims = verify_agent_token(agent_token, secret=secret)
@@ -139,19 +143,37 @@ async def aiq_synthesis_poll_job(
             "aleph.agent_run_id": str(agent_run_id),
             "aleph.project_id": str(project_id),
             "aleph.aiq_job_id": aiq_job_id,
+            "aleph.attempt": attempt,
         },
     ):
-        await _set_run_status(maker, agent_run_id, "running")
+        if attempt == 0:
+            await _set_run_status(maker, agent_run_id, "running")
         client = AIQClient(base_url=settings.aiq_base_url, service_token=agent_token)
 
-        # Poll to terminal status.
-        status = AIQJobStatus.PENDING
-        for _ in range(_MAX_POLLS):
-            job = await client.get_job(aiq_job_id)
-            status = job.status
-            if status in _TERMINAL:
-                break
-            await asyncio.sleep(_POLL_INTERVAL_S)
+        # One status check; re-enqueue ourselves if the job is still running so
+        # we never hold a worker through a multi-minute deep-research run.
+        job = await client.get_job(aiq_job_id)
+        status = job.status
+        if status not in _TERMINAL:
+            if attempt + 1 >= _MAX_ATTEMPTS:
+                await _set_run_status(
+                    maker,
+                    agent_run_id,
+                    "failed",
+                    error=f"AIQ job still {status} after {_MAX_ATTEMPTS} polls",
+                )
+                return {"status": "failed", "reason": "poll_timeout"}
+            await ctx["redis_pool"].enqueue_job(
+                "aiq_synthesis_poll_job",
+                agent_run_id_str,
+                aiq_job_id,
+                project_id_str,
+                topic,
+                agent_token,
+                attempt + 1,
+                _defer_by=_DEFER_S,
+            )
+            return {"status": "polling", "attempt": attempt, "aiq_status": str(status)}
 
         if status is not AIQJobStatus.SUCCEEDED:
             await _set_run_status(
@@ -181,7 +203,7 @@ async def aiq_synthesis_poll_job(
                     "aiq_report": report,
                 }
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             await _set_run_status(maker, agent_run_id, "failed", error=str(exc))
             raise
 
