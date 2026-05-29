@@ -330,8 +330,8 @@ async def _briefs_messages(session: Any, project_id: UUID) -> list[dict[str, Any
         cards.append(
             approval_card(
                 ApprovalCardProps(
-                    target_id=p.page_id,
-                    target_kind="wiki_page",
+                    target_id=p.id,
+                    target_kind="synthesis_proposal",
                     title=f"Synthesis: {p.topic}",
                     summary=f"Approve the proposed wiki revision for “{p.topic}”.",
                     severity="info",

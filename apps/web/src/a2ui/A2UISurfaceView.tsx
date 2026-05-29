@@ -44,10 +44,10 @@ interface Props {
   messages: unknown[];
   /**
    * Project + surface context for the rendered cards/surfaces. Aleph's existing
-   * views call `useSurface()` (from `register.tsx`) to fetch live data (wiki
-   * pages, dataset rows, hypotheses, …) and POST feedback, so the rendered tree
-   * must sit inside a `SurfaceProvider`. (Task 7 re-homes this context off
-   * `register.tsx`.)
+   * views call `useSurface()` (from `surface-context.tsx`) to fetch live data
+   * (wiki pages, dataset rows, hypotheses, …) and POST feedback, so the rendered
+   * tree must sit inside a `SurfaceProvider`. (Task 7 re-homed this context off
+   * `register.tsx` into `surface-context.tsx`.)
    */
   projectId: string;
   surface: string;
