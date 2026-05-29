@@ -22,15 +22,16 @@ const AGENT_URL =
  * Aleph's A2UI catalog, declared to the agent so its injected `render_a2ui`
  * tool knows which domain cards it can generate and with what props, and —
  * critically — which `catalogId` to stamp on `createSurface`. We use the v0.9
- * inline-catalog format with `catalogId: "aleph"` so the surfaces the agent
- * emits match the catalog the frontend registers (see
- * `apps/web/src/a2ui/copilot-catalog.tsx`, `catalogId: "aleph"`). The basic
+ * inline-catalog format with `catalogId: "aleph://v1"` so the surfaces the agent
+ * emits match the SHARED catalog the frontend registers (Wave 4 Task 4:
+ * `apps/web/src/a2ui/aleph-catalog-v09.tsx` → `buildAlephCatalog`, id
+ * `aleph://v1`). This is the same id the backend's server-emitted surfaces use
+ * (`aleph_a2ui` builders), so chat and right panel share one catalog. The basic
  * A2UI primitives (Text, Row, Column, Card, Button, …) are merged into that
- * catalog on the frontend (`includeBasicCatalog: true`); these are Aleph's
- * domain cards on top.
+ * catalog on the frontend; these are Aleph's domain cards on top.
  */
 const ALEPH_A2UI_CATALOG = {
-  catalogId: "aleph",
+  catalogId: "aleph://v1",
   components: {
     ChartCard: {
       description:

@@ -25,7 +25,19 @@
  *
  * 3. Catalog: `new Catalog(id, [impls], [funcs?])`. The basic-catalog primitives
  *    (`Text`/`Column`/`Row`/...) are merged in (see `A2UISurfaceView`) so agents
- *    can compose layout around Aleph's domain cards.
+ *    can compose layout around Aleph's domain cards. This single catalog is the
+ *    one source of truth for BOTH surfaces: the right panel feeds it server
+ *    surfaces via `A2UISurfaceView`, and the Live chat hands it to CopilotKit's
+ *    `createA2UIMessageRenderer` (`lib/copilot.tsx`) for agent-emitted cards.
+ *
+ * 4. Actions. A card's user action (`approve`/`reject`/`open`/`navigate_wiki`/
+ *    `submit_form`/...) is routed through Aleph's ActionRouter
+ *    (`POST /v1/projects/{id}/cards/actions`) — NOT dispatched back into the
+ *    agent's A2UI stream. The `adapt()` wrapper below reads `projectId`/`surface`
+ *    from the `SurfaceProvider` context that wraps the rendered tree (the right
+ *    panel via `A2UISurfaceView`, the chat via `CopilotChatSurface`), so a gated
+ *    ApprovalCard's "Approve" executes the proposed change and refreshes the live
+ *    surfaces. This is the Wave 6 chat behavior, now shared by both surfaces.
  *
  * ---------------------------------------------------------------------------
  * ZOD VERSION — the #1 Wave-4 failure mode (RESOLVED)
@@ -52,6 +64,10 @@
 import { z as z3 } from "zod3";
 import { createComponentImplementation } from "@a2ui/react/v0_9";
 import { CommonSchemas } from "@a2ui/web_core/v0_9";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+
+import { useSurface } from "./register";
+import { api } from "@/lib/api";
 
 import { ApprovalCard as ApprovalCardView } from "./components/ApprovalCard";
 import { ArtifactCard as ArtifactCardView } from "./components/ArtifactCard";
@@ -77,11 +93,11 @@ import type { A2UIComponent, ComponentName } from "./catalog";
 /**
  * Adapter: the v0_9 binder hands us a RESOLVED plain-value `props` object. Our
  * existing views take `{ component: { type, id, props }, onAction }`. This
- * helper wraps a view as a v0_9 React impl. Action wiring is a no-op here —
- * Wave 4 Task 5 unifies it through Aleph's ActionRouter (the panel currently
- * routes actions for the rich surface views via the `SurfaceProvider` + the
- * views' own mutations; the resolved cards re-acquire `projectId`/`surface`
- * from the `SurfaceProvider` `A2UISurfaceView` wraps around them).
+ * helper wraps a view as a v0_9 React impl and routes the view's `onAction`
+ * through Aleph's ActionRouter (`POST /v1/projects/{id}/cards/actions`) using
+ * the `projectId`/`surface` from the `SurfaceProvider` context — see the module
+ * doc (#4). On success it invalidates the live-surface queries so the executed
+ * action is reflected across the workspace, exactly as the Wave 6 chat path did.
  */
 type ViewProps = {
   component: A2UIComponent;
@@ -93,7 +109,34 @@ function adapt(
   View: (p: ViewProps) => React.ReactNode,
   idHint: string,
 ) {
-  return ({ props }: { props: Record<string, unknown> }) => {
+  return function AlephCardImpl({ props }: { props: Record<string, unknown> }) {
+    const { projectId, surface } = useSurface();
+    const qc = useQueryClient();
+
+    const action = useMutation({
+      mutationFn: async ({
+        actionName,
+        params,
+      }: {
+        actionName: string;
+        params: Record<string, unknown>;
+      }) =>
+        api.post(`/v1/projects/${projectId}/cards/actions`, {
+          surface_kind: surface,
+          action_kind: actionName,
+          target_id: (params.target_id as string | undefined) ?? null,
+          target_kind: (params.target_kind as string | undefined) ?? null,
+          params,
+        }),
+      onSuccess: () => {
+        // Mirror the right panel: refresh the live surfaces (Briefs/Artifacts/
+        // Hypotheses/Wiki/Notes) so the executed action is reflected there.
+        qc.invalidateQueries({ queryKey: ["surface", projectId] });
+        qc.invalidateQueries({ queryKey: ["artifacts", projectId] });
+        qc.invalidateQueries({ queryKey: ["hypotheses", projectId] });
+      },
+    });
+
     // Children, if present, ride on the resolved props (`children` is a
     // STRUCTURAL prop typed below). Aleph views read `component.children`.
     const { children, ...rest } = props as {
@@ -107,7 +150,7 @@ function adapt(
           props: rest,
           children: Array.isArray(children) ? children : undefined,
         }}
-        onAction={() => {}}
+        onAction={(actionName, params) => action.mutate({ actionName, params })}
       />
     );
   };
