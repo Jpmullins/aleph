@@ -38,9 +38,14 @@ wiki — the primary knowledge base.
 
 ALWAYS call `search_wiki` first to find relevant pages before answering. \
 Ground every claim in what the wiki actually says and cite pages with \
-[[Page Title]] wikilink markers. If the wiki does not cover the question, \
-say so plainly and suggest running `/synthesize` to research and grow the \
-wiki — never fabricate.
+[[Page Title]] wikilink markers. Never fabricate.
+
+If the wiki does not cover the question (search_wiki returns nothing relevant), \
+offer to research it and — when the analyst agrees, or when they explicitly ask \
+to research/look into/synthesize a topic — call `start_research` with a focused \
+query. Research runs in the background and lands a draft wiki page plus an \
+approval proposal in the Briefs tab. After starting research, briefly tell the \
+analyst what you kicked off and that the proposal will appear in Briefs.
 
 When the analyst would benefit from a structured view (a comparison \
 table, a chart of figures, a hypothesis matrix, a claim with its \
@@ -50,12 +55,16 @@ they are viewing, provided to you) when relevant.
 """
 
 # Runtime dependencies bound by lifespan (the graph is built before the
-# session_maker exists, so the tool reads it here at call time).
-_runtime: dict[str, Any] = {"session_maker": None}
+# session_maker exists, so the tools read them here at call time).
+_runtime: dict[str, Any] = {"session_maker": None, "settings": None}
 
 
-def bind_runtime(*, session_maker: "async_sessionmaker[AsyncSession]") -> None:
+def bind_runtime(
+    *, session_maker: "async_sessionmaker[AsyncSession]", settings: "Settings | None" = None
+) -> None:
     _runtime["session_maker"] = session_maker
+    if settings is not None:
+        _runtime["settings"] = settings
 
 
 def _project_id_from_config(config: RunnableConfig | None) -> UUID | None:
@@ -119,6 +128,52 @@ async def search_wiki(query: str, config: RunnableConfig, top_k: int = 6) -> str
     return "Relevant wiki pages:\n" + "\n".join(lines)
 
 
+@tool
+async def start_research(query: str, config: RunnableConfig, depth: str = "shallow") -> str:
+    """Kick off background research on a topic to grow the project's wiki.
+
+    Use this when the wiki does not yet cover what the analyst is asking about,
+    or when they explicitly ask to research/synthesize a topic. `depth` is
+    "shallow" (fast, single pass, ~1 min) or "deep" (thorough, multi-loop,
+    several minutes). Default to "shallow" for responsiveness; only use "deep"
+    when the analyst explicitly asks for a thorough/exhaustive/deep dive.
+    Research runs in the background via the AIQ researcher; when it finishes it
+    lands a draft wiki page and a proposal in the Briefs tab for approval.
+    """
+    import httpx
+
+    settings = _runtime.get("settings")
+    project_id = _project_id_from_config(config)
+    if settings is None or project_id is None:
+        return "Research is unavailable (no project scope on this run)."
+    depth = depth if depth in ("shallow", "deep") else "shallow"
+    # Self-call the synthesize endpoint so we reuse the full, tested dispatch
+    # path (connector resolution, AIQ dispatch, the result→wiki poll job).
+    base = getattr(settings, "aleph_self_url", None) or "http://localhost:8000"
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{base}/v1/projects/{project_id}/synthesize",
+                json={"topic": query, "depth": depth},
+                headers={"Authorization": "Bearer local-dev"},
+            )
+    except Exception as exc:  # noqa: BLE001
+        return f"Could not start research: {exc}"
+    if resp.status_code >= 400:
+        return f"Research could not start ({resp.status_code}): {resp.text[:200]}"
+    body = resp.json()
+    if not body.get("dispatched"):
+        return (
+            f"Queued {depth} research on '{query}', but the research service "
+            "did not accept the dispatch — it may be unavailable right now."
+        )
+    return (
+        f"Started {depth} research on '{query}'. It runs in the background "
+        "(~1 minute); when it finishes I'll have a draft wiki page and an "
+        "approval proposal waiting in the Briefs tab. Open Briefs to review it."
+    )
+
+
 def build_assistant_deep_agent(*, settings: "Settings"):
     """Compile the assistant Deep Agent (built once at app startup).
 
@@ -142,7 +197,7 @@ def build_assistant_deep_agent(*, settings: "Settings"):
     # the in-process single-replica dev/local runtime.)
     return create_deep_agent(
         model=model,
-        tools=[search_wiki],
+        tools=[search_wiki, start_research],
         system_prompt=SYSTEM_PROMPT,
         middleware=[CopilotKitMiddleware()],
         checkpointer=MemorySaver(),
