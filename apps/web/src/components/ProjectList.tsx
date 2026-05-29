@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { AlephLogo } from "@/components/AlephLogo";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { ApiError, api, type ProjectOut } from "@/lib/api";
 
 interface Props {
@@ -15,17 +17,30 @@ export function ProjectList({ onOpen }: Props) {
   });
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-12">
-      <header className="mb-8 flex items-center justify-between">
-        <h1 className="text-3xl font-semibold tracking-tight">Projects</h1>
+    <div className="mx-auto max-w-4xl px-6 py-10">
+      <header className="mb-10 flex items-center justify-between border-b border-[var(--border-muted,#e2e8f0)] pb-6">
+        <AlephLogo size={44} tagline="Multi-agent research environment" />
+        <ThemeToggle />
+      </header>
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-[var(--text-primary,#0f172a)]">
+            Projects
+          </h1>
+          <p className="mt-1 text-sm text-[var(--text-muted,#64748b)]">
+            Each project is a self-contained research workspace — sources, a
+            compiled wiki, and an assistant that can research and grow it.
+          </p>
+        </div>
         <button
           type="button"
           onClick={() => setShowCreate(true)}
-          className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow hover:bg-slate-700"
+          className="shrink-0 rounded-md px-4 py-2 text-sm font-medium text-white shadow hover:opacity-90"
+          style={{ background: "var(--accent, #f97316)" }}
         >
-          New project
+          + New project
         </button>
-      </header>
+      </div>
       {projectsQuery.isPending && <p className="text-slate-500">Loading projects…</p>}
       {projectsQuery.isError && (
         <p className="text-red-700">

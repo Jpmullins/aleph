@@ -75,3 +75,39 @@
     background: transparent;
   }
 }
+
+/* ── Live chat (CopilotKit v2) — themed to match Aleph ─────────────────────
+   The stock CopilotChat ships a generic gray look; map its scale variables
+   to Aleph's surfaces/accent and use the serif prose face so it reads like
+   the rest of the product. Scoped to the live-chat wrapper only. */
+.aleph-live-chat {
+  /* Accent (orange) — the chat uses amber/blue for buttons, links, focus. */
+  --cpk-color-amber-400: var(--accent);
+  --cpk-color-amber-500: var(--accent);
+  --cpk-color-amber-800: var(--accent-hover);
+  --cpk-color-blue-500: var(--accent);
+
+  /* Surfaces + text — fold the chat's gray/zinc ramps onto Aleph's slate
+     palette so light/dark themes stay consistent. */
+  --cpk-color-white: var(--surface-raised);
+  --cpk-color-gray-50: var(--surface-sunken);
+  --cpk-color-zinc-50: var(--surface-sunken);
+  --cpk-color-gray-100: var(--surface-sunken);
+  --cpk-color-zinc-100: var(--surface-sunken);
+  --cpk-color-gray-200: var(--border-muted);
+  --cpk-color-zinc-200: var(--border-muted);
+  --cpk-color-gray-900: var(--text-primary);
+  --cpk-color-zinc-900: var(--text-primary);
+  --cpk-color-gray-700: var(--text-secondary);
+  --cpk-color-zinc-700: var(--text-secondary);
+  --cpk-color-gray-500: var(--text-muted);
+  --cpk-color-zinc-500: var(--text-muted);
+
+  background: var(--surface-bg);
+}
+
+/* Assistant prose in the serif face (matches wiki/answer prose). */
+.aleph-live-chat [data-message-role="assistant"],
+.aleph-live-chat .copilotKitAssistantMessage {
+  font-family: "Source Serif 4", Georgia, Cambria, "Times New Roman", serif;
+}
