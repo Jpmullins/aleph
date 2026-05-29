@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import { useSurface } from "../register";
 import { api } from "@/lib/api";
+import { HypothesisMatrix } from "./HypothesisMatrix";
 import { CardShell, FeedbackButton, Pill, SurfaceHeader, type RendererProps } from "./_shared";
 
 interface HypothesisOut {
@@ -53,6 +54,7 @@ export function HypothesesSurface(_: RendererProps) {
         }
       />
       <div className="flex-1 space-y-2 overflow-y-auto p-3">
+        <HypothesisMatrix projectId={projectId} />
         {hypotheses.isPending && <p className="text-sm text-slate-400">Loading…</p>}
         {hypotheses.isSuccess && hypotheses.data.length === 0 && (
           <div className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">

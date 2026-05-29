@@ -83,6 +83,104 @@ async def get_hypotheses(
     return [HypothesisOut.model_validate(r) for r in rows]
 
 
+class AchHypothesis(BaseModel):
+    id: UUID
+    short_id: str
+    title: str
+    confidence: str
+    disconfirming_count: int
+
+
+class AchTarget(BaseModel):
+    target_id: UUID
+    evidence_kind: str
+    label: str
+
+
+class AchCell(BaseModel):
+    hypothesis_id: UUID
+    target_id: UUID
+    stance: str
+    weight: float
+    note: str
+
+
+class AchMatrixOut(BaseModel):
+    hypotheses: list[AchHypothesis]
+    targets: list[AchTarget]
+    cells: list[AchCell]
+    fewest_disconfirming_id: UUID | None
+
+
+@router.get("/{project_id}/hypotheses/ach", response_model=AchMatrixOut)
+async def get_ach_matrix(
+    project_id: ProjectScopeDep, session: SessionDep
+) -> AchMatrixOut:
+    """Analysis of Competing Hypotheses matrix.
+
+    Columns = hypotheses, rows = distinct evidence targets, cells = the stance
+    (supports/contradicts/contextualizes) + weight of each hypothesis's
+    evidence against that target. Per Heuer, the most likely hypothesis is the
+    one with the *fewest disconfirming* (contradicting) items, so we surface
+    that column.
+    """
+    hyps = await list_hypotheses(session, project_id=project_id)
+    ev_rows = list(
+        (
+            await session.execute(
+                select(HypothesisEvidence)
+                .where(HypothesisEvidence.project_id == project_id)
+                .order_by(HypothesisEvidence.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    targets: dict[UUID, AchTarget] = {}
+    cells: list[AchCell] = []
+    disconfirming: dict[UUID, int] = {h.id: 0 for h in hyps}
+    for e in ev_rows:
+        if e.target_id not in targets:
+            label = e.note.strip() if e.note else f"{e.evidence_kind} · {e.target_id.hex[:8]}"
+            targets[e.target_id] = AchTarget(
+                target_id=e.target_id, evidence_kind=e.evidence_kind, label=label[:160]
+            )
+        cells.append(
+            AchCell(
+                hypothesis_id=e.hypothesis_id,
+                target_id=e.target_id,
+                stance=e.stance,
+                weight=e.weight,
+                note=e.note[:512],
+            )
+        )
+        if e.stance == "contradicts" and e.hypothesis_id in disconfirming:
+            disconfirming[e.hypothesis_id] += 1
+
+    # Heuer: fewest disconfirming wins — only among hypotheses that actually
+    # have evidence (a hypothesis with zero evidence isn't "supported").
+    has_evidence = {e.hypothesis_id for e in ev_rows}
+    candidates = [h.id for h in hyps if h.id in has_evidence]
+    fewest = min(candidates, key=lambda hid: disconfirming[hid]) if candidates else None
+
+    return AchMatrixOut(
+        hypotheses=[
+            AchHypothesis(
+                id=h.id,
+                short_id=h.short_id,
+                title=h.title,
+                confidence=h.confidence,
+                disconfirming_count=disconfirming.get(h.id, 0),
+            )
+            for h in hyps
+        ],
+        targets=list(targets.values()),
+        cells=cells,
+        fewest_disconfirming_id=fewest,
+    )
+
+
 @router.post(
     "/{project_id}/hypotheses",
     status_code=status.HTTP_201_CREATED,
