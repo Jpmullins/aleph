@@ -1050,3 +1050,54 @@ A multi-step request → the orchestrator delegated via the `task` tool to **ret
 - **`write_todos` is LLM-discretionary** — the Activity Plan section is wired + crash-safe, but the agent only populates it when it chooses to plan with todos (it delegated directly for a simple 2-step task in testing). Correct behavior; the read path is verified.
 - **editorial reviewer is project-scoped** (the worker scans all pages); `reviewer`'s page title is carried as the review `trigger` label, not a per-page filter. A true single-page review would need a workflow change.
 - Pre-existing `aleph-evals/test_runner.py` unit failure persists (not Wave 3); `alembic check` clean (the new route added no model change).
+
+---
+
+## CI pipeline fix + agent-surface test coverage (2026-05-29)
+
+**Completed:** 2026-05-29. Pushed direct to `main` (`674d46c`, `aacb279`, `a5aa2e0`).
+Closes the "CI is red" reality from `system-assessment.md` and the P2 test-coverage
+gap. After this, **all five CI jobs are green on `main`** (lint-and-typecheck,
+unit-tests, integration-tests, evals, build-web).
+
+### CI pipeline — root causes + fixes
+- **`uv sync --all-extras` (all 4 jobs) → workspace members uninstalled** → pyright
+  `reportMissingImports`, import failures. Fixed to `uv sync --all-packages --all-extras`
+  everywhere (`674d46c`). This is the same gotcha CLAUDE.md already records for local setup;
+  CI had the wrong flag.
+- **`ALEPH_ENV: ci`** is not a valid `Settings.aleph_env` (`Literal["local","dev","staging","prod"]`)
+  → `ValidationError` at app construction. Set to `local`.
+- **integration-tests had no MinIO** → the lifespan couldn't build an `AssetStore`, so
+  `test_ingest_url_*` 422'd with "asset store is not configured". Start MinIO as a
+  `docker run` step (GH `services:` can't pass MinIO's `server /data` command), wait on
+  its health endpoint, and supply `MINIO_ENDPOINT`/`MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`/
+  `ALEPH_S3_BUCKET`. The `aleph-local` bucket auto-creates on first use (`aacb279`).
+- **`test_permission_leakage` asserted 404, got 200.** It monkeypatches `verify_user_jwt`,
+  which is only called in **oidc** mode; under CI's `local` auth mode the middleware
+  collapses every request to the single dev principal, so users A and B were the same and
+  the isolation check was vacuous. Gave the test a dedicated oidc-mode app/client fixture
+  (`ALEPH_AUTH_MODE=oidc` + `get_settings.cache_clear()`, restored on teardown) so it
+  exercises the real cross-principal isolation path; `verify_user_jwt` is patched
+  per-identity so the `JWKSCache` is never hit over the network (`aacb279`).
+
+### Agent-surface test coverage (P2 #8 — was browser-verified-only)
+- **SSE delta pipeline (pure, the brittle part):** `split_surface_messages` +
+  `data_model_patches_to_messages` (incl. the array-remove "re-set whole array" fallback),
+  plus a `diff_data_model`→messages round-trip for a real hypotheses delta.
+  (`packages/aleph-a2ui/tests/test_surface_streamer.py`)
+- **Subagent delegation wiring (deterministic, no LLM/DB):** builds all six subagents and
+  asserts `SubAgent` shape + per-subagent cost tag (`assistant.subagent.<name>`, rule #5)
+  + gateway `base_url` (rule #2). (`apps/api/tests/unit/test_subagents.py`)
+- **Card builders:** `ClaimCard`/`SourceCard`/`ApprovalCard` type/props/id behaviour.
+  (`packages/aleph-a2ui/tests/test_cards.py`)
+- **agent-events integration:** list-endpoint serialization (the same query the SSE
+  `/stream` poll runs) + cross-project scoping. (`tests/e2e/test_agent_events.py`)
+- Counts: unit **69 → 97**, integration **12 → 14**.
+
+### Honest scope / what's still uncovered
+- The SSE **timer-loop** itself (the 2.5s per-connection recompute that wires the pure
+  diff pieces over a live connection) is still only browser-verified; its pure components
+  — where the logic lives — are now unit-covered.
+- A **full orchestrator→subagent delegation** run (the LLM actually invoking the `task`
+  tool) is still browser-verified only; it's inherently non-deterministic and unsuitable
+  for CI. The wiring it depends on (subagents built + cost-tagged) is unit-covered.

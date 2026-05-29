@@ -1,5 +1,15 @@
 # Aleph — System Assessment (2026-05-29)
 
+> **UPDATE 2026-05-29 (post CI-fix + coverage):** **all five CI jobs are now green on
+> `main`** — `lint-and-typecheck`, `unit-tests`, `integration-tests`, `evals`, `build-web`.
+> The pipeline itself had been red (every job ran `uv sync --all-extras`, which leaves
+> workspace members uninstalled → pyright import failures; `ALEPH_ENV: ci` was invalid;
+> integration-tests had no MinIO; the permission test was vacuous under local auth) — all
+> fixed (see `implementation-log.md`). P2 #8 (agent-surface test coverage) is **addressed**:
+> unit 69→**97**, integration 12→**14**. The remaining open items are now just P1 #6
+> (SSE×OIDC — documented, implementation deferred until an OIDC deploy) and P2 #9/#10
+> (baked-image dev nits; carried external/op issues).
+>
 > **UPDATE 2026-05-29 (post green-the-gates):** the P0 hygiene gates below are now
 > **GREEN**. `ruff check` 0 errors (was 854), `ruff format` clean (was 125 files),
 > `pyright` 0 errors (was 337 — framework/untyped-lib fallout downgraded to *warnings*
@@ -7,9 +17,7 @@
 > warnings remain as tracked, visible debt), web **ESLint** now has a flat config and
 > lints clean (was broken/no-config), unit tests **69 pass / 0 fail** (the stale eval
 > test was fixed). web `tsc`, evals (`pass_rate 1.0`), and `alembic check` were already
-> green. **The remaining open items are now the P1/P2 list** (runtime agent-catalog
-> sync, SSE×OIDC, deps, test coverage). The original red-gate analysis is retained
-> below for the record.
+> green. The original red-gate analysis is retained below for the record.
 
 A full-system review after Waves 6, 4, and 3 (+ the alembic-drift fix) merged to
 `main` (`9eeb041`, pushed to origin). Method: four parallel subsystem reviews
@@ -25,9 +33,9 @@ config gaps, not functional bugs (since remediated — see the UPDATE banner abo
 |---|---|
 | Core product (research → wiki → conversational orchestrator + subagents + A2UI) | ✅ Works, verified live in-browser this session |
 | 8 load-bearing architecture rules | ✅ Strong adherence; the historical rule-#5 cost gap is **closed** |
-| Functional tests (unit pass-rate, evals gate, web tsc/build, alembic) | ✅ Green (1 pre-existing unit fail) |
-| Code hygiene gates (ruff, ruff-format, pyright, web ESLint) | ❌ Red — mostly cosmetic/untyped-framework + a missing ESLint config |
-| Production-readiness (OIDC/SSE, deps, test coverage of new agent surface) | ⚠️ Gaps; fine for local/dev, surprises await an OIDC/prod deploy |
+| Functional tests (unit pass-rate, evals gate, web tsc/build, alembic) | ✅ Green — all 5 CI jobs pass on `main` (unit 97, integration 14) |
+| Code hygiene gates (ruff, ruff-format, pyright, web ESLint) | ✅ Green — cleared in the green-the-gates pass (was red: cosmetic/untyped-framework + missing ESLint config) |
+| Production-readiness (OIDC/SSE, deps, test coverage of new agent surface) | ⚠️ One gap left: SSE×OIDC (documented, deferred to an OIDC deploy). Deps cleared; agent-surface coverage added |
 
 ## What works (verified this session, in a real browser)
 
@@ -75,7 +83,7 @@ All 8 hold. Highlights:
 | `pyright` (strict) | ❌ **400 errors / 1309 warnings** | dominated by `reportUnknown*` / missing-stub on untyped LangGraph/deepagents/CopilotKit integrations |
 | web ESLint (`pnpm lint`) | ❌ **broken** | ESLint 9 finds no `eslint.config.js` (flat-config migration never done) — exits 2 before linting anything |
 
-**Implication:** CI as written (`.github/workflows/ci.yml` runs ruff check + format + pyright + ESLint) is **red on `main`** and has been for a while — these gates were aspirational, never actually green. This is hygiene debt, not functional breakage.
+**Implication (at review time):** CI as written (`.github/workflows/ci.yml` runs ruff check + format + pyright + ESLint) was **red on `main`** and had been for a while — these gates were aspirational, never actually green. That was hygiene debt, not functional breakage. **Now resolved:** the green-the-gates pass cleared the hygiene gates and the CI-pipeline fix corrected the job config (`uv sync --all-packages`, valid `ALEPH_ENV`, MinIO in integration-tests). All five jobs are green on `main` — see the UPDATE banner at the top.
 
 ## Prioritized gaps
 
