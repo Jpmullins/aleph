@@ -12,8 +12,8 @@ from dataclasses import dataclass
 from typing import Literal
 from uuid import UUID
 
-from jose import jwt
-from jose.exceptions import JWTError
+import jwt
+from jwt import PyJWTError
 
 from aleph_core.errors import PermissionDenied
 
@@ -71,7 +71,7 @@ def verify_agent_token(token: str, *, secret: str) -> AgentTokenClaims:
             audience="aleph-agent",
             issuer="aleph-api",
         )
-    except JWTError as exc:
+    except PyJWTError as exc:
         msg = f"invalid agent token: {exc}"
         raise PermissionDenied(msg) from exc
 
