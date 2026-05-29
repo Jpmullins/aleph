@@ -166,7 +166,12 @@ _COMPONENTS = {
         {
             "target_id": _UUID,
             "target_kind": {
-                "enum": ["synthesis_proposal", "review_finding", "wiki_revision"]
+                "enum": [
+                    "synthesis_proposal",
+                    "review_finding",
+                    "wiki_revision",
+                    "agent_action",
+                ]
             },
             "title": {"type": "string", "maxLength": 200},
             "summary": {"type": "string", "maxLength": 1000},

@@ -65,13 +65,16 @@ When the analyst shares a URL or asks to add a source, call `ingest_source` \
 and render a SourceCard for the result.
 
 When the analyst asks to draft/build a report, deck, or export, call \
-`build_artifact`, render the ArtifactCard so they can track the build, and \
-call `open_surface` with tab='Artifacts' to bring the Artifacts panel into \
-view. The finished artifact lands in the Artifacts tab.
+`build_artifact`. Building is a consequential action, so the tool returns an \
+instruction to render an ApprovalCard instead of building immediately — render \
+that ApprovalCard exactly as instructed and tell the analyst the build will run \
+once they approve. The finished artifact lands in the Artifacts tab.
 
 You can list connectors and enable/disable them, and report or change the \
 project's model profile, when the analyst asks about data sources or model \
-settings.
+settings. Enabling/disabling a connector is also consequential: the \
+`set_connector_enabled` tool returns an ApprovalCard instruction — render it \
+and let the analyst approve before the change applies.
 """
 
 # Stable, deterministic dev user id so ledger rows (ModelCall /
@@ -452,6 +455,47 @@ async def ingest_source(url: str, config: RunnableConfig, title: str = "") -> st
     )
 
 
+async def _request_agent_action(
+    *,
+    settings: Any,
+    project_id: UUID,
+    tool: str,
+    args: dict[str, Any],
+    title: str,
+    summary: str,
+) -> str:
+    """Create a pending approval for a consequential agent action.
+
+    Self-calls the agent-actions/request route (which persists the tool + args
+    server-side as a pending ApprovalRequest) and returns an instruction for the
+    agent to render an ApprovalCard addressing that request. The effect only runs
+    when the analyst clicks Approve (→ /cards/actions → ActionRouter._approve).
+    """
+    import httpx
+
+    base = settings.aleph_self_url
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{base}/v1/projects/{project_id}/agent-actions/request",
+                json={"tool": tool, "args": args, "title": title, "summary": summary},
+                headers={"Authorization": "Bearer local-dev"},
+            )
+    except Exception as exc:  # noqa: BLE001
+        return f"Could not request approval for {tool}: {exc}"
+    if resp.status_code >= 400:
+        return f"Could not request approval ({resp.status_code}): {resp.text[:200]}"
+    request_id = resp.json()["request_id"]
+    return (
+        f"This is a consequential action, so it needs the analyst's approval "
+        f"before it runs. Render an ApprovalCard with target_id={request_id}, "
+        "target_kind='agent_action', "
+        f"title='{title}', summary='{summary}', approve_action='approve', "
+        "reject_action='reject', severity='medium'. The action will run only "
+        "when the analyst clicks Approve."
+    )
+
+
 @tool
 async def build_artifact(
     title: str,
@@ -462,18 +506,18 @@ async def build_artifact(
 ) -> str:
     """Build a product artifact (report/deck/source-pack) from approved wiki pages.
 
-    Renders an ArtifactCard so the analyst can track the build. `artifact_kind` is
-    one of report_pdf, report_docx, report_markdown_bundle, source_pack, deck_pdf.
-    Use when the analyst asks to draft/build a report, deck, or export.
+    This is a consequential action, so it is **approval-gated**: instead of
+    building immediately, it creates a pending approval and asks you to render an
+    ApprovalCard. The build only runs after the analyst clicks Approve.
+    `artifact_kind` is one of report_pdf, report_docx, report_markdown_bundle,
+    source_pack, deck_pdf. Use when the analyst asks to draft/build a report,
+    deck, or export.
     """
-    import httpx
-
     settings = _runtime.get("settings")
     project_id = _project_id_from_config(config)
     if settings is None or project_id is None:
         return "Cannot build (no project scope)."
-    base = settings.aleph_self_url
-    payload = {
+    args = {
         "title": title,
         "artifact_kind": artifact_kind,
         "template_name": artifact_kind,
@@ -481,24 +525,16 @@ async def build_artifact(
         "wiki_page_ids": wiki_page_ids or [],
         "dataset_version_ids": [],
     }
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{base}/v1/projects/{project_id}/artifacts/build",
-                json=payload,
-                headers={"Authorization": "Bearer local-dev"},
-            )
-    except Exception as exc:  # noqa: BLE001
-        return f"Could not start build: {exc}"
-    if resp.status_code >= 400:
-        return f"Build could not start ({resp.status_code}): {resp.text[:200]}"
-    b = resp.json()
-    return (
-        f"Started building '{title}'. Render an ArtifactCard with "
-        f"artifact_id={b['artifact_id']}, short_id='', title='{title}', "
-        f"artifact_kind='{artifact_kind}', status='building'. Then call "
-        "open_surface with tab='Artifacts' to bring the Artifacts panel into "
-        "view. The artifact will appear in the Artifacts tab when it finishes."
+    return await _request_agent_action(
+        settings=settings,
+        project_id=project_id,
+        tool="build_artifact",
+        args=args,
+        title=f"Build artifact: {title}",
+        summary=(
+            f"Build a {artifact_kind} artifact titled '{title}' from "
+            f"{len(wiki_page_ids or [])} selected wiki page(s)."
+        ),
     )
 
 
@@ -555,12 +591,12 @@ async def list_connectors(config: RunnableConfig) -> str:
 async def set_connector_enabled(connector_id: str, enabled: bool, config: RunnableConfig) -> str:
     """Enable or disable a data-source connector for the current project.
 
+    This is a consequential action, so it is **approval-gated**: instead of
+    toggling immediately, it creates a pending approval and asks you to render an
+    ApprovalCard. The connector only changes after the analyst clicks Approve.
     `connector_id` is the connector's UUID (call `list_connectors` first to get
-    it). `enabled` is true to turn it on, false to turn it off. Returns a
-    confirmation string.
+    it). `enabled` is true to turn it on, false to turn it off.
     """
-    import httpx
-
     settings = _runtime.get("settings")
     project_id = _project_id_from_config(config)
     if settings is None or project_id is None:
@@ -572,20 +608,15 @@ async def set_connector_enabled(connector_id: str, enabled: bool, config: Runnab
             f"connector_id must be a valid UUID (got '{connector_id}'). "
             "Call list_connectors to get ids."
         )
-    base = settings.aleph_self_url
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{base}/v1/projects/{project_id}/connectors/bindings",
-                json={"connector_id": str(cid), "enabled": enabled, "config_jsonb": {}},
-                headers={"Authorization": "Bearer local-dev"},
-            )
-    except Exception as exc:  # noqa: BLE001
-        return f"Could not set connector {connector_id}: {exc}"
-    if resp.status_code >= 400:
-        return f"Could not set connector ({resp.status_code}): {resp.text[:200]}"
-    b = resp.json()
-    return f"Connector {connector_id} is now {'enabled' if b.get('enabled') else 'disabled'}."
+    verb = "Enable" if enabled else "Disable"
+    return await _request_agent_action(
+        settings=settings,
+        project_id=project_id,
+        tool="set_connector_enabled",
+        args={"connector_id": str(cid), "enabled": enabled, "config_jsonb": {}},
+        title=f"{verb} connector",
+        summary=f"{verb} data-source connector {cid} for this project.",
+    )
 
 
 @tool

@@ -17,6 +17,7 @@ from aleph_api.middleware.auth import AuthMiddleware
 from aleph_api.middleware.errors import ErrorMiddleware
 from aleph_api.middleware.request_id import RequestIDMiddleware
 from aleph_api.routes import (
+    agent_actions,
     agent_events,
     agent_tokens,
     aiq_internal,
@@ -99,6 +100,7 @@ def create_app() -> FastAPI:
     # Inc 4
     app.include_router(notes.router)
     app.include_router(cards.router)
+    app.include_router(agent_actions.router)
     app.include_router(briefs.router)
     app.include_router(surfaces.router)
     # Inc 5
