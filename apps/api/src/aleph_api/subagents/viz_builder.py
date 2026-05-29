@@ -45,7 +45,6 @@ def build_viz_builder_subagent(*, settings: Any) -> dict[str, Any]:
         x_field: str,
         y_field: str,
         points: list[dict[str, Any]],
-        config: RunnableConfig,
     ) -> str:
         """Make a quick chart from inline data points (no approval needed).
 
