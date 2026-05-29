@@ -9,8 +9,12 @@ User: /synthesize "Transformer capacity in Region X"
 POST /v1/projects/{id}/synthesize
   body: { topic, depth, allowed_connectors? }
   ▼
-aleph-api creates AgentRun(kind="aiq_deep"), issues service token,
-dispatches to aiq-server. Returns { agent_run_id, aiq_job_id, dispatched }.
+aleph-api creates AgentRun(kind="aiq_{depth}"), issues service token,
+dispatches to aiq-server (POST /v1/jobs/async/submit), AND enqueues the
+`aiq_synthesis_poll_job` worker (re-enqueue-with-defer; survives long deep
+runs). Returns { agent_run_id, aiq_job_id, dispatched }.
+(The Live agent's `start_research` tool calls this same endpoint, so research
+can be kicked off conversationally.)
   ▼
 AIQ Orchestrator + ShallowResearcher + DeepResearcher run.
 For every connector call, AIQ POSTs /internal/v1/aiq/credentials/{kind}
@@ -22,7 +26,10 @@ For every LLM call, AIQ POSTs /internal/v1/aiq/model-calls
 AIQ returns a structured report:
   { body_md, sources, citations_by_marker, claims }
   ▼
-aleph-api hands the report to `aleph_wiki.synthesis_workflow.SynthesisWorkflow`:
+the `aiq_synthesis_poll_job` worker (aleph-workers) polls the job to
+completion, fetches /report + /state, parses them into an `AIQReport`
+(remapping AIQ's numeric [N] citation markers → [cN]), and runs
+`aleph_wiki.synthesis_workflow.SynthesisWorkflow`:
   concept_normalize → citation_verification → wikilink_resolve →
   commit_revision (status=draft + SynthesisProposal row) → wiki_index_update.
   ▼

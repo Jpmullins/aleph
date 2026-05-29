@@ -73,3 +73,19 @@ client is stateless modulo:
 - `session_maker` — per-process async sessionmaker
 
 The same client is reused across many calls and across many agent runs.
+
+## Gateway-side gotcha: `parallel_tool_calls` + Bedrock
+
+The Insights gateway routes every model to `bedrock/global.anthropic.*`.
+LangChain's `ChatOpenAI` (used by the agent path and by NVIDIA AIQ) sends
+`parallel_tool_calls` by default. LiteLLM treats it as "supported" for Bedrock
+and mis-folds it into a malformed `tool_choice`, so Bedrock 400s with
+`"tool_choice.type: Field required"` — breaking every tool-calling turn.
+
+Fix lives in the gateway repo (`~/code/ARLIS/insights-k8s-manifests`,
+`litellm/proxy-config.yaml`): each chat model's `litellm_params` carries
+`additional_drop_params: ["parallel_tool_calls"]`. Note: a global
+`litellm_settings.additional_drop_params` and bare `drop_params: true` do NOT
+drop it — it must be **per-model**. If you add a new model to the gateway,
+add that line too. (Aleph's own `LiteLLMClient` path doesn't hit this — it's
+specific to the LangChain/AIQ clients that emit `parallel_tool_calls`.)

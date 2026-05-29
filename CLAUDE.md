@@ -9,7 +9,7 @@ Aleph is a multi-agent research environment built around three layers:
 2. **Compiled Wiki** — the **primary retrieval surface** for both assistant and analyst. Wikilinked, revisioned, multi-agent-maintained.
 3. **A2UI workspace** — 3-panel UI; right panel is 5 A2UI surface tabs (Wiki / Artifacts / Notes / Hypotheses / Briefs).
 
-Authoritative spec: `docs/superpowers/specs/2026-05-26-aleph-design.md`. Per-increment specs: `docs/superpowers/specs/2026-05-27-inc-{0..8}-*-design.md`. Build is **complete through Increment 8**; see `docs/implementation-log.md`.
+Authoritative spec: `docs/superpowers/specs/2026-05-26-aleph-design.md`. Per-increment specs: `docs/superpowers/specs/2026-05-27-inc-{0..8}-*-design.md`. Build is **complete through Increment 8**, plus post-Inc-8 **Waves**: W1 (progress + tokens), W2 (CopilotKit + AG-UI + A2UI Live agent), W5 (ACH matrix, notes promote-to-wiki, readable sources), and the AIQ research→wiki pipeline + conversational research. W3 (Deep Agents harness) and W4 (A2UI v0.9) are designed but deferred — see `docs/superpowers/specs/2026-05-29-wave-{3,4}-*.md`. The canonical record (what shipped vs. honest gaps) is `docs/implementation-log.md`.
 
 ## Common commands
 
@@ -56,7 +56,7 @@ docker compose -f deploy/compose/docker-compose.yml down
 ./scripts/verify-gateway.sh
 ```
 
-Endpoints after bootstrap: web `:5173`, api `:8000`, Langfuse `:3000`, MinIO console `:9001`.
+Endpoints after bootstrap: web `:5173`, api `:8000`, copilot-runtime `:4000`, aiq-server `:8001`, Langfuse `:3000`, MinIO console `:9001`.
 
 ## Architecture
 
@@ -106,7 +106,8 @@ These are enforced by code review and the eval gates — not aspirational.
 
 - `aleph-api` — synchronous HTTP + SSE, holds user-identity boundary, owns Alembic, hosts the page-selector.
 - `aleph-workers` — long-running agent jobs (LangGraph / Deep Agents), reviewers, normalization, render. Holds short-lived agent tokens, not raw DB credentials.
-- `aiq-server` — separate compose service running NVIDIA AIQ as the **research** subsystem. Pulled from `nvcr.io/nvidia/blueprint/aiq-agent:2.0.0` (requires NGC login). Boot config at `deploy/compose/aiq-config-default.yml` routes all LLM traffic through the Insights LiteLLM gateway (we replace AIQ's stock `_type: nim` blocks with `_type: openai`). AIQ does not write directly to Postgres or S3; its tool calls re-enter through `aleph-api`. AIQ output is offered as a **synthesis proposal** through the wiki agent → reviewer → approval pipeline, never published directly.
+- `aiq-server` — separate compose service running NVIDIA AIQ as the **research** subsystem. Pulled from `nvcr.io/nvidia/blueprint/aiq-agent:2.1.0` (requires NGC login). Boot config at `deploy/compose/aiq-config-default.yml` routes all LLM traffic through the Insights LiteLLM gateway (`_type: openai`) and wires a `data_source_registry` web-search tool (Tavily) so research captures sources. AIQ does not write directly to Postgres or S3; its tool calls re-enter through `aleph-api`. Its real HTTP API: health `GET /health`, submit `POST /v1/jobs/async/submit {agent_type, input}` (`deep_researcher`|`shallow_researcher`), results at `/v1/jobs/async/job/{id}` + `/report`. AIQ's job-store schema (`job_info`, …) is **not** auto-created — `bootstrap-local.sh` applies `deploy/compose/aiq-init-{jobs,checkpoints}.sql`. AIQ output is consumed by the `aiq_synthesis_poll_job` worker → `synthesis_workflow` → a **synthesis proposal** in Briefs, never published directly.
+- `aleph-copilot-runtime` — Node `@copilotkit/runtime` v2 service (port :4000) bridging the React app to `aleph-api`'s AG-UI Deep Agent endpoint; where A2UI tool injection + the inline "aleph" catalog live (Wave 2). Dockerfile uses `npm` (pnpm 10 blocks esbuild/@scarf build scripts).
 
 ### Auth modes
 
@@ -153,4 +154,5 @@ External reference clones the design depends on:
 - `docs/domain/` — `wiki.md`, `rks.md`, `claims-and-provenance.md`, `ledger.md`
 - `docs/security/` — `auth.md`, `aiq-boundary.md`, `connector-credentials.md`
 - `docs/operations/` — `runbook.md`, `aiq-runbook.md`
-- `docs/implementation-log.md` — appended after every increment (the canonical record of what shipped vs. honest gaps)
+- `docs/superpowers/specs/2026-05-29-wave-{3,4}-*.md` — deferred-wave designs (Deep Agents harness; A2UI v0.9), each with a References section pinning the exact local repos / MCP servers / skills to consult
+- `docs/implementation-log.md` — appended after every increment/wave (the canonical record of what shipped vs. honest gaps); the 2026-05-28/29 session entry has the full reference map (local repos, a2ui.org, MCP servers, skills)

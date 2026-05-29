@@ -1,8 +1,11 @@
 # Research agent (AIQ subsystem)
 
-Aleph does not reimplement deep research. We vendor NVIDIA AIQ at
-`vendor/aiq` and run it as a separate worker process. The Aleph side
-talks to AIQ over HTTP via `aleph_aiq.client.AIQClient`.
+Aleph does not reimplement deep research. We run NVIDIA AIQ as a separate
+compose service (`aiq-server`) from the prebuilt image
+`nvcr.io/nvidia/blueprint/aiq-agent:2.1.0` (not a local `vendor/aiq` build).
+The Aleph side talks to AIQ over HTTP via `aleph_aiq.client.AIQClient`. The
+`~/code/aiq` clone (v2.1.0) is the source reference for AIQ's config schema
+and internals.
 
 ## What we use from AIQ
 
@@ -18,8 +21,13 @@ talks to AIQ over HTTP via `aleph_aiq.client.AIQClient`.
 - **`citation_verification`:** `verify_citations`, `sanitize_report`.
   Aleph imports the matching contract from
   `aleph_wiki.citation_verification` (which mirrors AIQ's API).
-- **Async job dispatch:** `POST /v1/jobs/async/agents` + SSE event
-  stream proxied through `/v1/projects/{id}/aiq/jobs/{run_id}/stream`.
+- **Async job dispatch:** `POST /v1/jobs/async/submit {agent_type, input}`
+  (`agent_type` = `deep_researcher` | `shallow_researcher`); status/results at
+  `GET /v1/jobs/async/job/{id}` + `/report` + `/state`; SSE at
+  `/v1/jobs/async/job/{id}/stream`. (The old `/v1/jobs/async/agents` path in
+  earlier drafts does not exist on the 2.1.0 image.) Aleph's `AIQClient`
+  (`aleph_aiq.client`) wraps these; the `aiq_synthesis_poll_job` worker polls
+  to completion and feeds the report into `synthesis_workflow`.
 
 ## What changes from AIQ defaults
 

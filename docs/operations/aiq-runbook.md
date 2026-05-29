@@ -2,28 +2,34 @@
 
 ## Bringing AIQ up
 
-The AIQ server is vendored as a git submodule at `vendor/aiq`. Until
-the submodule is checked out, the `aiq-server` compose service does
-not start.
+`aiq-server` runs the **prebuilt NVIDIA image**
+`nvcr.io/nvidia/blueprint/aiq-agent:2.1.0` (not a local build / submodule).
+It requires an NGC login once per host:
 
 ```bash
-# One-time: vendor AIQ at the current release tag.
-TAG=$(gh release list -R NVIDIA-AI-Blueprints/aiq --limit 1 | awk '{print $1}')
-git submodule add -b $TAG https://github.com/NVIDIA-AI-Blueprints/aiq vendor/aiq
-git submodule update --init --recursive
-
-# Bump to a newer release later:
-./scripts/update-aiq.sh   # follow-on script bumps the submodule + runs CI
+echo "$NGC_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin
+docker pull nvcr.io/nvidia/blueprint/aiq-agent:2.1.0
 ```
 
-After the submodule is in place, restart the compose stack — the
-`aiq-server` service picks up `vendor/aiq` as its build context.
+Boot config: `deploy/compose/aiq-config-default.yml` (LLM blocks `_type:
+openai` → Insights gateway; a `data_source_registry` web-search source backed
+by `tavily_web_search`, needs `TAVILY_API_KEY` on the service).
+
+**Job-store schema is NOT auto-created by the image** (only `job_events` is).
+`bootstrap-local.sh` applies `deploy/compose/aiq-init-{jobs,checkpoints}.sql`
+to create `job_info` / `job_access` / `summaries` + LangGraph checkpoint
+tables. Without `job_info`, every `/v1/jobs/async/submit` 500s with
+"relation job_info does not exist".
+
+> Upgrading the image: bump the tag in `docker-compose.yml`, `docker pull`,
+> recreate `aiq-server`. (2.0.0 → 2.1.0 fixed a `ShallowResearchAgentConfig`
+> `orchestrator_llm` crash.)
 
 ## Diagnostics
 
 ```bash
-# Health
-curl -H "Authorization: Bearer $AIQ_SERVICE_TOKEN" http://localhost:8001/v1/health
+# Health (note: /health, NOT /v1/health; no auth needed in local mode)
+curl http://localhost:8001/health
 
 # Logs
 docker compose -f deploy/compose/docker-compose.yml logs --tail 200 aiq-server

@@ -33,8 +33,9 @@ After bootstrap the following are up:
 | Service | URL | Notes |
 |---|---|---|
 | Web | http://localhost:5173 | Vite dev server |
-| API | http://localhost:8000 | FastAPI |
-| AIQ | http://localhost:8001 | NVIDIA AI-Q research subsystem |
+| API | http://localhost:8000 | FastAPI (+ in-process AG-UI Deep Agent) |
+| CopilotKit runtime | http://localhost:4000 | Node bridge for the Live chat (`/api/copilotkit`) |
+| AIQ | http://localhost:8001 | NVIDIA AI-Q research subsystem (health: `/health`) |
 | Langfuse | http://localhost:3000 | trace + eval UI |
 | MinIO console | http://localhost:9001 | login: see `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` in `.env` |
 

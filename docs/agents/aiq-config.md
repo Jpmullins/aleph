@@ -22,11 +22,11 @@ keyed by `project_id`.
 
 ```yaml
 general:
-  telemetry:
-    tracing:
-      otel:
-        _type: otlp
-        endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT}
+  use_uvloop: true
+  # Telemetry is intentionally omitted — the 2.1.0 image rejects unknown
+  # discriminator `_type`s (the old `otlp` value is invalid; the valid tag is
+  # `nat.plugins.opentelemetry/otelcollector`). Aleph already receives OTEL
+  # spans from aleph-api/aleph-workers, so AIQ tracing is left off for now.
 
 llms:
   intent_classifier:

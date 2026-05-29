@@ -58,7 +58,9 @@ attribute.
 1. Add a `packages/aleph-connectors/src/aleph_connectors/<name>/`
    directory with `register.py` implementing the Protocol.
 2. Add a seed row in the next Alembic migration.
-3. Add the `nat` registration in the AIQ data_source_registry once
-   AIQ exposes the registration hook (vendor/aiq imports trigger this
-   at AIQ startup).
+3. Wire the tool into the AIQ `data_source_registry` in
+   `deploy/compose/aiq-config-default.yml` (or the per-project config the
+   generator emits) so the research agents auto-inherit it — see
+   `~/code/aiq` for the available built-in tool `_type`s (e.g.
+   `tavily_web_search`, `paper_search`).
 4. Add unit tests + a doc page.
