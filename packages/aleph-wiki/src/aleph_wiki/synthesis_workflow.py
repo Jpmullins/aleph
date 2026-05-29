@@ -16,6 +16,7 @@ so the same `_active_ctx` pattern works.
 from __future__ import annotations
 
 import re
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, TypedDict
@@ -80,14 +81,19 @@ class _Ctx:
     principal: "Principal"
 
 
-_active_ctx: _Ctx | None = None
+# ContextVar (not a module global) so concurrent synthesis runs in the same
+# worker process (arq max_jobs > 1) don't clobber each other's context.
+_active_ctx_var: ContextVar[_Ctx | None] = ContextVar(
+    "aleph_synthesis_active_ctx", default=None
+)
 
 
 def _ctx() -> _Ctx:
-    if _active_ctx is None:
+    ctx = _active_ctx_var.get()
+    if ctx is None:
         msg = "SynthesisWorkflow context not initialized"
         raise RuntimeError(msg)
-    return _active_ctx
+    return ctx
 
 
 class SynthesisState(TypedDict, total=False):
@@ -328,10 +334,9 @@ class SynthesisWorkflow:
         self._compiled = graph.compile()
 
     async def run(self, initial: SynthesisState) -> SynthesisState:
-        global _active_ctx
-        _active_ctx = self._ctx
+        token = _active_ctx_var.set(self._ctx)
         try:
             out = await self._compiled.ainvoke(initial)
             return out  # type: ignore[return-value]
         finally:
-            _active_ctx = None
+            _active_ctx_var.reset(token)

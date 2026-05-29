@@ -24,6 +24,7 @@ from aleph_observability import (
 from aleph_rks.asset_store import AssetStore
 
 from aleph_workers.jobs import (
+    aiq_synthesis_poll_job,
     assistant_turn_job,
     builder_job,
     chunk_embed_job,
@@ -110,6 +111,7 @@ class WorkerSettings:
         mechanical_review_job,
         editorial_review_job,
         builder_job,
+        aiq_synthesis_poll_job,
     ]
     on_startup = _startup
     on_shutdown = _shutdown

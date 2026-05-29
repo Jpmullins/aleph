@@ -40,6 +40,8 @@ class WorkerSettings(BaseSettings):
     aleph_api_internal_url: str
     aleph_agent_token_secret: str
 
+    aiq_base_url: str = "http://aiq-server:8000"
+
 
 @lru_cache(maxsize=1)
 def get_worker_settings() -> WorkerSettings:

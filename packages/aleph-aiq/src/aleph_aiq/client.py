@@ -123,6 +123,28 @@ class AIQClient:
             error=body.get("error"),
         )
 
+    async def get_report(self, job_id: str) -> str | None:
+        """Fetch the completed research report markdown, or None if absent."""
+        resp = await self._http.get(
+            f"{self._base}/v1/jobs/async/job/{job_id}/report", headers=self._headers()
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        if not body.get("has_report"):
+            return None
+        report = body.get("report")
+        return str(report) if report else None
+
+    async def get_state(self, job_id: str) -> dict[str, Any]:
+        """Fetch the job's state + artifacts (citation sources, tool outputs)."""
+        resp = await self._http.get(
+            f"{self._base}/v1/jobs/async/job/{job_id}/state", headers=self._headers()
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        artifacts = body.get("artifacts")
+        return artifacts if isinstance(artifacts, dict) else {}
+
     async def cancel(self, job_id: str) -> None:
         resp = await self._http.post(
             f"{self._base}/v1/jobs/async/job/{job_id}/cancel", headers=self._headers()

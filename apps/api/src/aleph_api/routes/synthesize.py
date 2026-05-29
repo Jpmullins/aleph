@@ -28,6 +28,7 @@ from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
 from aleph_observability.tracing import current_trace_id
 from aleph_rks.models import Connector, ConnectorBinding
+from aleph_security.agent_token import mint_agent_token
 from aleph_security.roles import ProjectRole, require_at_least
 from aleph_wiki.feedback_service import write_feedback
 from aleph_wiki.models import WikiPage
@@ -130,6 +131,17 @@ async def synthesize(
         agent_run_id=started.agent_run_id,
         principal_user_id=principal.user_id,
     )
+    # Agent token for the poll worker's Principal (the AIQ service_token above
+    # is AIQ-scoped and won't pass verify_agent_token).
+    poll_agent_token = mint_agent_token(
+        secret=settings.aleph_agent_token_secret,
+        user_id=principal.user_id,
+        project_id=project_id,
+        agent_run_id=started.agent_run_id,
+        actor_kind="aleph_agent",
+        correlation_id=started.correlation_id,
+        ttl_seconds=3600,
+    )
 
     # Dispatch to the AIQ server. If AIQ is not yet vendored / not reachable,
     # the AgentRun stays in 'pending' and the caller can re-dispatch later.
@@ -152,6 +164,31 @@ async def synthesize(
                 event_kind="aiq.job.dispatched",
                 payload={"aiq_job_id": aiq_job_id},
             )
+            # Enqueue the poller that turns the finished AIQ report into a
+            # wiki synthesis proposal (research → wiki build).
+            try:
+                from arq import create_pool
+                from arq.connections import RedisSettings
+
+                pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+                try:
+                    await pool.enqueue_job(
+                        "aiq_synthesis_poll_job",
+                        str(started.agent_run_id),
+                        aiq_job_id,
+                        str(project_id),
+                        body.topic,
+                        poll_agent_token,
+                    )
+                finally:
+                    await pool.aclose()
+            except Exception as exc:  # noqa: BLE001
+                await append_aiq_event(
+                    session,
+                    agent_run_id=started.agent_run_id,
+                    event_kind="aiq.poll.enqueue_failed",
+                    payload={"error": str(exc)[:1024]},
+                )
     except Exception as exc:  # noqa: BLE001
         await append_aiq_event(
             session,
