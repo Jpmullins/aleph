@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import type { A2UIComponent } from "@/a2ui/catalog";
+import { SpikePanel } from "@/a2ui/_spike/SpikePanel";
 import { SurfaceProvider, renderA2UI } from "@/a2ui/register";
 import { api } from "@/lib/api";
 import { SURFACE_TABS, useWorkspaceUI } from "@/lib/workspace-ui";
@@ -12,6 +13,15 @@ interface Props {
 }
 
 export function A2UIRightPanel({ projectId }: Props) {
+  // Wave 4 Task 1 spike: behind `?spike=1`, render the v0_9 A2uiSurface spike
+  // instead of the normal panel (proves the shared-catalog -> A2uiSurface path).
+  if (new URLSearchParams(window.location.search).get("spike") === "1") {
+    return <SpikePanel />;
+  }
+  return <RealPanel projectId={projectId} />;
+}
+
+function RealPanel({ projectId }: Props) {
   const qc = useQueryClient();
   // Tab state is shared so the assistant agent can drive it (useFrontendTool).
   const { activeSurface: tab, setActiveSurface: setTab } = useWorkspaceUI();
