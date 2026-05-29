@@ -27,14 +27,14 @@ jobs:
       - name: Web typecheck + lint
         run: |
           pnpm -C apps/web typecheck
-          pnpm -C apps/web lint || true
+          pnpm -C apps/web lint
 
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.5.21"
 
       - name: Install Python deps
-        run: uv sync --all-extras
+        run: uv sync --all-packages --all-extras
 
       - name: Ruff lint
         run: uv run ruff check .
@@ -53,7 +53,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.5.21"
-      - run: uv sync --all-extras
+      - run: uv sync --all-packages --all-extras
       - run: uv run pytest -m "not integration" -q
 
   integration-tests:
@@ -96,13 +96,13 @@ jobs:
       ALEPH_AUTH_JWKS_URL: http://localhost:8080/jwks
       ALEPH_AGENT_TOKEN_SECRET: ci-agent-token-secret-do-not-use-elsewhere
       ALEPH_DEFAULT_MODEL_PROFILE: aleph-dev
-      ALEPH_ENV: ci
+      ALEPH_ENV: local  # Settings.aleph_env ∈ {local,dev,staging,prod}; "ci" is rejected
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.5.21"
-      - run: uv sync --all-extras
+      - run: uv sync --all-packages --all-extras
       - name: Run Alembic migrations
         run: cd apps/api && uv run alembic upgrade head
       - name: Alembic check (no drift vs models)
@@ -118,7 +118,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.5.21"
-      - run: uv sync --all-extras
+      - run: uv sync --all-packages --all-extras
       - run: uv run python -m aleph_evals --datasets all --gate strict
 
   build-web:

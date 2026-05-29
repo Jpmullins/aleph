@@ -20,7 +20,7 @@ echo "$NGC_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin  # 
 ./scripts/bootstrap-local.sh                          # boot full stack
 
 # Install deps
-uv sync --all-extras                                  # Python
+uv sync --all-packages --all-extras                   # Python (MUST be --all-packages: installs every workspace member; --all-extras alone leaves them uninstalled → import/pyright failures)
 pnpm -C apps/web install                              # JS (only apps/web is in pnpm workspace)
 
 # Lint / format / typecheck
