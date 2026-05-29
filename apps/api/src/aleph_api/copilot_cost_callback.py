@@ -1,0 +1,294 @@
+"""Agent LLM cost-attribution callback (Wave 6 C1).
+
+Closes the rule-#5 gap for the Live Deep Agent: its `ChatOpenAI` calls
+(in `copilot_agent.build_assistant_deep_agent`) bypass `LiteLLMClient`, so
+without this callback they write NO `ModelCall` + `CostLedgerEvent` rows.
+
+`AgentCostCallbackHandler` is a LangChain `AsyncCallbackHandler` attached
+**only** to the agent's `ChatOpenAI`. It mirrors `CostWriter.record_call`
+(the same write `LiteLLMClient._record_call` performs) for the agent's own
+turns. It is NEVER attached to `LiteLLMClient`, so the LiteLLMClient path
+(wiki compile, reviewers, page-selection, the `read_wiki` retrieval) is not
+double-counted.
+
+The handler must never crash the agent: every DB write is wrapped, and a
+failure (or an unresolvable project scope, or missing token usage) is logged
+and skipped — the agent turn proceeds regardless.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections import OrderedDict
+from typing import TYPE_CHECKING, Any
+from uuid import UUID
+
+from langchain_core.callbacks import AsyncCallbackHandler
+
+from aleph_core.time import utcnow
+
+if TYPE_CHECKING:
+    from langchain_core.outputs import LLMResult
+
+    from aleph_models.pricing import PricingTable
+
+logger = logging.getLogger(__name__)
+
+# Cap on in-flight run_id -> project_id entries. A CANCELLED run (client
+# disconnect -> asyncio.CancelledError, a BaseException) fires neither
+# on_llm_end nor on_llm_error, so its entry never gets popped. To prevent
+# unbounded growth under churn, _remember_project evicts oldest entries
+# (FIFO via OrderedDict) once this cap is exceeded.
+_MAX_PENDING = 2048
+
+
+def _project_id_from_metadata(metadata: dict[str, Any] | None) -> UUID | None:
+    """Resolve the project scope from a run's `metadata`.
+
+    LangChain forwards the run's `RunnableConfig.metadata` (which LangGraph
+    merges `configurable` into) to the callback's start hooks. The project
+    rides one of:
+      - an explicit `projectId` / `project_id` key, or
+      - the project-prefixed thread id `proj:<uuid>:<thread>` that the Node
+        CopilotRuntime formats (surfaced here as `thread_id`).
+    Mirrors `copilot_agent._project_id_from_config`'s parsing.
+    """
+    if not metadata:
+        return None
+    raw = metadata.get("projectId") or metadata.get("project_id")
+    if not raw:
+        thread_id = metadata.get("thread_id") or ""
+        if isinstance(thread_id, str) and thread_id.startswith("proj:"):
+            parts = thread_id.split(":", 2)
+            if len(parts) >= 2:
+                raw = parts[1]
+    if not raw:
+        return None
+    try:
+        return UUID(str(raw))
+    except (ValueError, TypeError):
+        return None
+
+
+def _as_int(value: Any) -> int:
+    """Coerce a possibly-None / non-int token count to a non-negative int."""
+    try:
+        return max(int(value or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _extract_usage(response: "LLMResult") -> tuple[int, int, int] | None:
+    """Pull (input_tokens, cached_tokens, completion_tokens) from an LLMResult.
+
+    Handles both shapes defensively:
+      1. `response.generations[0][0].message.usage_metadata` — the LangChain
+         standard shape (`input_tokens`, `output_tokens`,
+         `input_token_details.cache_read`). This is what ChatOpenAI populates
+         from the gateway's OpenAI-style `usage` block.
+      2. `response.llm_output["token_usage"]` — the legacy OpenAI shape
+         (`prompt_tokens`, `completion_tokens`).
+    Returns None when no usage is present (caller then skips the write).
+    """
+    # Shape 1: usage_metadata on the generation message.
+    try:
+        generations: Any = getattr(response, "generations", None) or []
+        for batch in generations:
+            for gen in batch:
+                message = getattr(gen, "message", None)
+                usage_raw = getattr(message, "usage_metadata", None)
+                if usage_raw:
+                    usage: dict[str, Any] = dict(usage_raw)
+                    input_tokens = _as_int(usage.get("input_tokens"))
+                    completion_tokens = _as_int(usage.get("output_tokens"))
+                    details: dict[str, Any] = dict(usage.get("input_token_details") or {})
+                    cached = _as_int(details.get("cache_read"))
+                    if input_tokens or completion_tokens:
+                        return input_tokens, cached, completion_tokens
+    except Exception:  # noqa: BLE001 — never let extraction crash the agent.
+        logger.debug("usage_metadata extraction failed", exc_info=True)
+
+    # Shape 2: llm_output.token_usage (legacy OpenAI).
+    try:
+        llm_output: dict[str, Any] = dict(getattr(response, "llm_output", None) or {})
+        token_usage: dict[str, Any] = dict(
+            llm_output.get("token_usage") or llm_output.get("usage") or {}
+        )
+        if token_usage:
+            input_tokens = _as_int(
+                token_usage.get("prompt_tokens", token_usage.get("input_tokens"))
+            )
+            completion_tokens = _as_int(
+                token_usage.get("completion_tokens", token_usage.get("output_tokens"))
+            )
+            details = dict(token_usage.get("prompt_tokens_details") or {})
+            cached = _as_int(details.get("cached_tokens"))
+            if input_tokens or completion_tokens:
+                return input_tokens, cached, completion_tokens
+    except Exception:  # noqa: BLE001
+        logger.debug("llm_output token_usage extraction failed", exc_info=True)
+
+    return None
+
+
+class AgentCostCallbackHandler(AsyncCallbackHandler):
+    """Writes a ModelCall + CostLedgerEvent for the agent model's own turns.
+
+    Constructed once (the agent model is built once at startup), but resolves
+    `project_id` per-run from the start hook's `metadata` and stores it keyed
+    by `run_id` so `on_llm_end` can use it. `session_maker` may be passed in or
+    read lazily from `copilot_agent._runtime` at call time (preferred, to match
+    the file's lazy-runtime pattern — the graph is built before `bind_runtime`).
+    """
+
+    def __init__(
+        self,
+        *,
+        session_maker: Any | None = None,
+        pricing: "PricingTable | None" = None,
+        model: str,
+        purpose: str = "assistant.turn",
+    ) -> None:
+        super().__init__()
+        self._session_maker = session_maker
+        self._pricing = pricing
+        self._model = model
+        self._purpose = purpose
+        # run_id -> project_id resolved at start, consumed at end. Ordered so
+        # the oldest entries can be evicted when the size cap is exceeded (a
+        # CANCELLED run never reaches on_llm_end/on_llm_error to pop itself).
+        self._pending: OrderedDict[UUID, UUID] = OrderedDict()
+
+    # ---- runtime resolution (lazy) ----------------------------------------
+
+    def _resolve_session_maker(self) -> Any | None:
+        if self._session_maker is not None:
+            return self._session_maker
+        # Lazy read from the bound runtime, mirroring the tools in copilot_agent.
+        try:
+            from aleph_api.copilot_agent import get_runtime
+
+            return get_runtime().get("session_maker")
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _resolve_pricing(self) -> "PricingTable":
+        if self._pricing is not None:
+            return self._pricing
+        from aleph_models.pricing import PricingTable
+
+        self._pricing = PricingTable()
+        return self._pricing
+
+    # ---- lifecycle hooks ---------------------------------------------------
+
+    async def on_chat_model_start(
+        self,
+        serialized: dict[str, Any],
+        messages: Any,
+        *,
+        run_id: UUID,
+        metadata: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        self._remember_project(run_id, metadata)
+
+    async def on_llm_start(
+        self,
+        serialized: dict[str, Any],
+        prompts: list[str],
+        *,
+        run_id: UUID,
+        metadata: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        self._remember_project(run_id, metadata)
+
+    def _remember_project(self, run_id: UUID, metadata: dict[str, Any] | None) -> None:
+        project_id = _project_id_from_metadata(metadata)
+        if project_id is not None:
+            self._pending[run_id] = project_id
+            # Evict oldest entries left behind by CANCELLED runs (which fire
+            # neither on_llm_end nor on_llm_error), keeping _pending bounded.
+            while len(self._pending) > _MAX_PENDING:
+                self._pending.popitem(last=False)
+
+    async def on_llm_end(self, response: "LLMResult", *, run_id: UUID, **kwargs: Any) -> None:
+        project_id = self._pending.pop(run_id, None)
+        if project_id is None:
+            # No resolvable project scope — skip writing (don't crash the agent).
+            logger.debug(
+                "agent cost attribution skipped: no project scope (run_id=%s)", run_id
+            )
+            return
+        usage = _extract_usage(response)
+        if usage is None:
+            return
+        input_tokens, cached_tokens, completion_tokens = usage
+        try:
+            await self._write(
+                project_id=project_id,
+                input_tokens=input_tokens,
+                cached_tokens=cached_tokens,
+                completion_tokens=completion_tokens,
+            )
+        except Exception:  # noqa: BLE001 — cost-logging must never fail a turn.
+            logger.warning(
+                "agent cost attribution write failed (run_id=%s)",
+                run_id,
+                exc_info=True,
+            )
+
+    async def on_llm_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
+        # Drop any pending scope for a failed call so it can't leak/double-write.
+        self._pending.pop(run_id, None)
+
+    # ---- the write ---------------------------------------------------------
+
+    async def _write(
+        self,
+        *,
+        project_id: UUID,
+        input_tokens: int,
+        cached_tokens: int,
+        completion_tokens: int,
+    ) -> None:
+        session_maker = self._resolve_session_maker()
+        if session_maker is None:
+            logger.debug("agent cost attribution skipped: no session_maker bound")
+            return
+        pricing = self._resolve_pricing()
+        cost, savings = pricing.cost_for(
+            model=self._model,
+            input_tokens=input_tokens,
+            cached_tokens=cached_tokens,
+            completion_tokens=completion_tokens,
+        )
+        trace_id: str | None
+        try:
+            from aleph_observability.tracing import current_trace_id
+
+            trace_id = current_trace_id()
+        except Exception:  # noqa: BLE001
+            trace_id = None
+
+        from aleph_db.repos.cost import CostWriter
+
+        async with session_maker() as session:
+            writer = CostWriter(session)
+            await writer.record_call(
+                project_id=project_id,
+                agent_run_id=None,
+                capability="chat",
+                model=self._model,
+                purpose=self._purpose,
+                input_tokens=input_tokens,
+                cached_tokens=cached_tokens,
+                completion_tokens=completion_tokens,
+                cost_usd=cost,
+                cache_savings_usd=savings,
+                latency_ms=0,
+                trace_id=trace_id,
+                timestamp=utcnow(),
+            )
+            await session.commit()

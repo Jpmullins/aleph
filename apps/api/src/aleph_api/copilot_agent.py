@@ -117,6 +117,15 @@ def bind_runtime(
         _runtime["litellm"] = litellm
 
 
+def get_runtime() -> dict[str, Any]:
+    """Public accessor for the lifespan-bound runtime (session_maker/settings/litellm).
+
+    The cost-attribution callback reads `session_maker` from here lazily, the
+    same way the tools below read it (the graph is built before `bind_runtime`).
+    """
+    return _runtime
+
+
 def _project_id_from_config(config: RunnableConfig | None) -> UUID | None:
     """Resolve the project scope for this agent run.
 
@@ -675,13 +684,29 @@ def build_assistant_deep_agent(*, settings: "Settings"):
     from deepagents import create_deep_agent
     from langgraph.checkpoint.memory import MemorySaver
 
+    from aleph_api.copilot_cost_callback import AgentCostCallbackHandler
+
+    _AGENT_MODEL = "claude-sonnet-4-6"
+    # Attribute the agent's OWN ChatOpenAI calls to the cost ledger (rule #5).
+    # This callback is attached ONLY to the agent model — never to LiteLLMClient
+    # — so the LiteLLMClient retrieval path is not double-counted. It reads
+    # session_maker + pricing lazily from the bound runtime at call time, and is
+    # built to never crash the agent turn if cost-logging fails.
+    cost_callback = AgentCostCallbackHandler(model=_AGENT_MODEL)
     model = ChatOpenAI(
-        model="claude-sonnet-4-6",
+        model=_AGENT_MODEL,
         base_url=settings.litellm_base_url,
         api_key=settings.insights_litellm_api_key,
         temperature=0.2,
         timeout=60,
         max_retries=2,
+        callbacks=[cost_callback],
+        # The agent streams, and a streaming OpenAI-compatible response omits the
+        # `usage` block unless `stream_options.include_usage` is set. Without this
+        # the on_llm_end AIMessage has `usage_metadata=None` and the cost callback
+        # has nothing to record (rule #5 gap stays open). `stream_usage=True` makes
+        # ChatOpenAI request + aggregate the usage into the final chunk.
+        stream_usage=True,
     )
     # In-memory checkpointer keeps per-thread state for the AG-UI runtime.
     # (A Postgres checkpointer is the production upgrade; memory is fine for
