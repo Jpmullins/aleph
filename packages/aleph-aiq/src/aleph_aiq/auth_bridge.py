@@ -16,8 +16,8 @@ from dataclasses import dataclass
 from typing import Final
 from uuid import UUID
 
-from jose import jwt
-from jose.exceptions import JWTError
+import jwt
+from jwt import PyJWTError
 
 from aleph_core.errors import PermissionDenied
 
@@ -66,7 +66,7 @@ def issue_service_token(
 def verify_service_token(token: str, *, secret: str) -> AIQServiceToken:
     try:
         claims = jwt.decode(token, secret, algorithms=["HS256"], audience=_AUD, issuer=_ISS)
-    except JWTError as exc:
+    except PyJWTError as exc:
         msg = f"invalid aiq service token: {exc}"
         raise PermissionDenied(msg) from exc
     return AIQServiceToken(

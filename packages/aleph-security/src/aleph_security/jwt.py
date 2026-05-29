@@ -12,8 +12,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from jose import jwt
-from jose.exceptions import JWTError
+import jwt
+from jwt import PyJWK, PyJWTError
 
 from aleph_core.errors import PermissionDenied
 
@@ -79,7 +79,7 @@ async def verify_user_jwt(
     """Verify an OIDC bearer JWT and return its claims."""
     try:
         header = jwt.get_unverified_header(token)
-    except JWTError as exc:
+    except PyJWTError as exc:
         msg = f"invalid jwt header: {exc}"
         raise PermissionDenied(msg) from exc
 
@@ -88,17 +88,20 @@ async def verify_user_jwt(
         msg = "jwt missing kid header"
         raise PermissionDenied(msg)
 
-    key = await jwks_cache.get(kid)
+    jwk_dict = await jwks_cache.get(kid)
     try:
+        # PyJWT needs a key object, not a raw JWK dict; PyJWK builds the right
+        # algorithm-specific key (RSA/EC) from the JWKS entry.
+        signing_key = PyJWK.from_dict(jwk_dict).key
         claims = jwt.decode(
             token,
-            key,
+            signing_key,
             algorithms=[header.get("alg", "RS256")],
             audience=audience,
             issuer=issuer,
-            options={"verify_at_hash": False},
+            leeway=leeway_seconds,
         )
-    except JWTError as exc:
+    except PyJWTError as exc:
         msg = f"invalid jwt: {exc}"
         raise PermissionDenied(msg) from exc
 
