@@ -1,8 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-
-import type { A2UIComponent } from "@/a2ui/catalog";
-import { SurfaceProvider, renderA2UI } from "@/a2ui/register";
-import { api } from "@/lib/api";
+import { A2UIStreamSurfaceView } from "@/a2ui/A2UISurfaceView";
 import { SURFACE_TABS, useWorkspaceUI } from "@/lib/workspace-ui";
 
 const TABS = SURFACE_TABS;
@@ -12,38 +8,26 @@ interface Props {
 }
 
 export function A2UIRightPanel({ projectId }: Props) {
-  const qc = useQueryClient();
+  return <RealPanel projectId={projectId} />;
+}
+
+function RealPanel({ projectId }: Props) {
   // Tab state is shared so the assistant agent can drive it (useFrontendTool).
   const { activeSurface: tab, setActiveSurface: setTab } = useWorkspaceUI();
 
-  const surfaceQuery = useQuery<{ tab: string; surface: A2UIComponent }>({
-    queryKey: ["surface", projectId, tab],
-    queryFn: () =>
-      api.get<{ tab: string; surface: A2UIComponent }>(
-        `/v1/projects/${projectId}/surfaces/${tab.toLowerCase()}`,
-      ),
-    refetchInterval: tab === "Briefs" ? 10_000 : false,
-  });
-
-  const action = useMutation({
-    mutationFn: async ({
-      actionName,
-      params,
-    }: {
-      actionName: string;
-      params: Record<string, unknown>;
-    }) =>
-      api.post(`/v1/projects/${projectId}/cards/actions`, {
-        surface_kind: `${tab}Surface`,
-        action_kind: actionName,
-        target_id: (params.target_id as string | undefined) ?? null,
-        target_kind: (params.target_kind as string | undefined) ?? null,
-        params,
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["surface", projectId, tab] });
-    },
-  });
+  // Wave 4 T6: every tab is rendered through the delta SurfaceStreamer. The
+  // `…/surfaces/{tab}/stream` SSE endpoint emits the full v0.9 surface on
+  // connect (createSurface + updateComponents + root updateDataModel), then
+  // incremental `updateDataModel` deltas as the underlying data changes. A
+  // persistent MessageProcessor (one per connection, keyed by `tab`) applies
+  // those deltas in place — so e.g. a new hypothesis appears via an
+  // `add`/`updateComponents` delta without re-mounting existing card DOM. The
+  // four self-fetching tabs (Wiki/Artifacts/Notes/Briefs) carry no bound data
+  // model, so their stream emits the structural surface once and then idles;
+  // they self-refresh via react-query inside their own surface views.
+  const baseUrl =
+    (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8000";
+  const streamUrl = `${baseUrl}/v1/projects/${projectId}/surfaces/${tab.toLowerCase()}/stream`;
 
   return (
     <aside className="flex w-[28rem] flex-col border-l border-slate-200 bg-white">
@@ -65,16 +49,12 @@ export function A2UIRightPanel({ projectId }: Props) {
         ))}
       </nav>
       <div className="flex-1 overflow-y-auto">
-        {surfaceQuery.isPending && (
-          <div className="p-6 text-sm text-slate-500">Loading surface…</div>
-        )}
-        {surfaceQuery.data && (
-          <SurfaceProvider projectId={projectId} surface={`${tab}Surface`}>
-            {renderA2UI(surfaceQuery.data.surface, (actionName, params) =>
-              action.mutate({ actionName, params }),
-            )}
-          </SurfaceProvider>
-        )}
+        <A2UIStreamSurfaceView
+          key={tab}
+          streamUrl={streamUrl}
+          projectId={projectId}
+          surface={`${tab}Surface`}
+        />
       </div>
     </aside>
   );

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
-import { renderA2UI, useSurface } from "../register";
+import { renderChildCard, useSurface } from "../surface-context";
 import { WikiBodyMarkdown } from "@/components/WikiBodyMarkdown";
 import { api } from "@/lib/api";
 import { CardShell, FeedbackButton, Pill, SurfaceHeader, type RendererProps } from "./_shared";
@@ -93,7 +93,7 @@ export function WikiSurface({ component, onAction }: RendererProps) {
         {embeds.length > 0 && (
           <section className="space-y-2" data-testid="wiki-embeds">
             {embeds.map((c) => (
-              <div key={c.id}>{renderA2UI(c, onAction)}</div>
+              <div key={c.id}>{renderChildCard(c, onAction)}</div>
             ))}
           </section>
         )}

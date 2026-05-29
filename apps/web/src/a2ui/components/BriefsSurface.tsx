@@ -1,4 +1,4 @@
-import { renderA2UI } from "../register";
+import { renderChildCard } from "../surface-context";
 
 import type { RendererProps } from "./_shared";
 
@@ -22,7 +22,7 @@ export function BriefsSurface({ component, onAction }: RendererProps) {
       ) : (
         <div className="flex-1 space-y-2 overflow-y-auto">
           {children.map((c) => (
-            <div key={c.id}>{renderA2UI(c, onAction)}</div>
+            <div key={c.id}>{renderChildCard(c, onAction)}</div>
           ))}
         </div>
       )}

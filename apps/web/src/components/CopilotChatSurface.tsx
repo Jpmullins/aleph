@@ -11,13 +11,16 @@
  *   - Project scope rides on the thread id (`proj:<projectId>:<thread>`), the
  *     only channel `ag-ui-langgraph` threads into the graph config.
  *
- * `SurfaceProvider` supplies `projectId` to any Aleph cards the agent emits
- * inline (see `a2ui/copilot-catalog.tsx`).
+ * `SurfaceProvider` supplies `projectId`/`surface` to any Aleph cards the agent
+ * emits inline, so their actions route through Aleph's ActionRouter
+ * (`POST /cards/actions`). The cards come from the shared v0_9 catalog
+ * (`a2ui/aleph-catalog-v09.tsx` via `buildAlephCatalog`) — the same one the
+ * right panel renders.
  */
 import { CopilotChat, useAgentContext, useFrontendTool } from "@copilotkit/react-core/v2";
 import { z } from "zod";
 
-import { SurfaceProvider } from "@/a2ui/register";
+import { SurfaceProvider } from "@/a2ui/surface-context";
 import { SURFACE_TABS, useWorkspaceUI } from "@/lib/workspace-ui";
 
 interface Props {

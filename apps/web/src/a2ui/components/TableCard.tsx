@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
-import { useSurface } from "../register";
+import { useSurface } from "../surface-context";
 import { api } from "@/lib/api";
 import { CardShell, Pill, type RendererProps } from "./_shared";
 

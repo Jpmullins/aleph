@@ -1,4 +1,4 @@
-import { useSurface } from "../register";
+import { useSurface } from "../surface-context";
 import { CardShell, Pill, type RendererProps } from "./_shared";
 
 const KIND_TONE: Record<string, "sky" | "emerald" | "amber" | "slate"> = {

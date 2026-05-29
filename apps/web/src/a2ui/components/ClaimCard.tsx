@@ -1,4 +1,4 @@
-import { useSurface } from "../register";
+import { useSurface } from "../surface-context";
 import { CardShell, FeedbackButton, Pill, type RendererProps } from "./_shared";
 
 export function ClaimCard({ component, onAction }: RendererProps) {
