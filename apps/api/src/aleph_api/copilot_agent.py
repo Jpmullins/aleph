@@ -72,11 +72,14 @@ subagent via the `task` tool — it ingests a URL into the knowledge store (fold
 it into the wiki) and can promote an analyst note to a draft wiki page. After it \
 returns, render a SourceCard for an ingested source.
 
-When the analyst asks to draft/build a report, deck, or export, call \
-`build_artifact`. Building is a consequential action, so the tool returns an \
-instruction to render an ApprovalCard instead of building immediately — render \
-that ApprovalCard exactly as instructed and tell the analyst the build will run \
-once they approve. The finished artifact lands in the Artifacts tab.
+For charts, reports, exports, or visualizations, delegate to the `viz_builder` \
+subagent via the `task` tool. It makes quick charts (returns a ChartCard render \
+instruction — render it) and builds full reports/decks/exports. Building an \
+artifact is a consequential action, so for a report/deck/export the subagent \
+returns an instruction to render an ApprovalCard instead of building \
+immediately — render that ApprovalCard exactly as instructed and tell the \
+analyst the build will run once they approve. The finished artifact lands in \
+the Artifacts tab.
 
 You can list connectors and enable/disable them, and report or change the \
 project's model profile, when the analyst asks about data sources or model \
@@ -536,22 +539,21 @@ async def _request_agent_action(
     )
 
 
-@tool
-async def build_artifact(
+async def _build_artifact_impl(
     title: str,
     config: RunnableConfig,
     artifact_kind: str = "report_markdown_bundle",
     wiki_page_ids: list[str] | None = None,
     csl_style: str = "apa-7",
 ) -> str:
-    """Build a product artifact (report/deck/source-pack) from approved wiki pages.
+    """Shared body of artifact building (report/deck/source-pack).
 
-    This is a consequential action, so it is **approval-gated**: instead of
-    building immediately, it creates a pending approval and asks you to render an
-    ApprovalCard. The build only runs after the analyst clicks Approve.
-    `artifact_kind` is one of report_pdf, report_docx, report_markdown_bundle,
-    source_pack, deck_pdf. Use when the analyst asks to draft/build a report,
-    deck, or export.
+    Approval-gated (Wave 6): rather than building immediately, it self-calls the
+    agent-actions/request route to create a pending ApprovalRequest (rule #3 —
+    never touches the DB directly) and returns an ApprovalCard render
+    instruction. The build only runs after the analyst clicks Approve. Reused by
+    the `viz_builder` subagent's `build_artifact` tool (Wave 3 T5) so the
+    orchestrator delegates artifact building rather than self-calling it inline.
     """
     settings = _runtime.get("settings")
     project_id = _project_id_from_config(config)
@@ -817,6 +819,7 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
 
     from aleph_api.subagents.researcher import build_researcher_subagent
     from aleph_api.subagents.retriever import build_retriever_subagent
+    from aleph_api.subagents.viz_builder import build_viz_builder_subagent
     from aleph_api.subagents.wiki_builder import build_wiki_builder_subagent
 
     def _memory_namespace(_rt: object) -> tuple[str, ...]:
@@ -887,7 +890,6 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
             list_hypotheses_tool,
             create_hypothesis_tool,
             add_hypothesis_evidence_tool,
-            build_artifact,
             list_connectors,
             set_connector_enabled,
             set_model_profile,
@@ -898,6 +900,7 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
             build_retriever_subagent(settings=settings),
             build_researcher_subagent(settings=settings),
             build_wiki_builder_subagent(settings=settings),
+            build_viz_builder_subagent(settings=settings),
         ],
         middleware=[CopilotKitMiddleware()],
         backend=_memory_backend,
