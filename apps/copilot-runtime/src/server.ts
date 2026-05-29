@@ -128,6 +128,21 @@ const ALEPH_A2UI_CATALOG = {
         required: ["source_id", "short_id", "title", "status"],
       },
     },
+    ArtifactCard: {
+      description:
+        "A built product artifact (report/deck/source-pack) with its status.",
+      props: {
+        type: "object",
+        properties: {
+          artifact_id: { type: "string" },
+          short_id: { type: "string" },
+          title: { type: "string" },
+          artifact_kind: { type: "string" },
+          status: { type: "string" },
+        },
+        required: ["artifact_id", "title", "artifact_kind", "status"],
+      },
+    },
   },
 };
 

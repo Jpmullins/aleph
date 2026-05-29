@@ -24,6 +24,7 @@ import { z } from "zod";
 import type { ComponentType } from "react";
 
 import { ApprovalCard } from "./components/ApprovalCard";
+import { ArtifactCard } from "./components/ArtifactCard";
 import { ChartCard } from "./components/ChartCard";
 import { ClaimCard } from "./components/ClaimCard";
 import { DiffCard } from "./components/DiffCard";
@@ -126,6 +127,18 @@ export const alephCatalogDefinitions = {
       status: z.string(),
     }),
   },
+  ArtifactCard: {
+    description:
+      "A built product artifact (report/deck/source-pack) with its status. " +
+      "Use after kicking off a build to show the analyst what is being produced.",
+    props: z.object({
+      artifact_id: z.string(),
+      short_id: z.string().optional(),
+      title: z.string(),
+      artifact_kind: z.string(),
+      status: z.string(),
+    }),
+  },
   ApprovalCard: {
     description:
       "A human-in-the-loop approval prompt for a proposed change (e.g. a " +
@@ -170,6 +183,7 @@ const CARD_COMPONENTS: Record<keyof typeof alephCatalogDefinitions, AlephCardCom
   HypothesisCard,
   FindingCard,
   SourceCard,
+  ArtifactCard,
   ApprovalCard,
   DiffCard,
   GraphCard,

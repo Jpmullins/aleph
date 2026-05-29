@@ -13,6 +13,7 @@ export const COMPONENT_NAMES = [
   "BriefsSurface",
   "ClaimCard",
   "SourceCard",
+  "ArtifactCard",
   "ChartCard",
   "TableCard",
   "MapCard",

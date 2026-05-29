@@ -63,6 +63,11 @@ creating one.
 
 When the analyst shares a URL or asks to add a source, call `ingest_source` \
 and render a SourceCard for the result.
+
+When the analyst asks to draft/build a report, deck, or export, call \
+`build_artifact`, render the ArtifactCard so they can track the build, and \
+call `open_surface` with tab='Artifacts' to bring the Artifacts panel into \
+view. The finished artifact lands in the Artifacts tab.
 """
 
 # Stable, deterministic dev user id so ledger rows (ModelCall /
@@ -193,9 +198,7 @@ async def read_wiki(query: str, config: RunnableConfig) -> str:
     principal = _dev_principal(settings)
     async with session_maker() as session:  # type: AsyncSession
         profile = (
-            await session.execute(
-                select(ModelProfile).where(ModelProfile.project_id == project_id)
-            )
+            await session.execute(select(ModelProfile).where(ModelProfile.project_id == project_id))
         ).scalar_one_or_none()
     if profile is None:
         return "No model profile bound to this project; cannot read the wiki."
@@ -445,6 +448,56 @@ async def ingest_source(url: str, config: RunnableConfig, title: str = "") -> st
     )
 
 
+@tool
+async def build_artifact(
+    title: str,
+    config: RunnableConfig,
+    artifact_kind: str = "report_markdown_bundle",
+    wiki_page_ids: list[str] | None = None,
+    csl_style: str = "apa-7",
+) -> str:
+    """Build a product artifact (report/deck/source-pack) from approved wiki pages.
+
+    Renders an ArtifactCard so the analyst can track the build. `artifact_kind` is
+    one of report_pdf, report_docx, report_markdown_bundle, source_pack, deck_pdf.
+    Use when the analyst asks to draft/build a report, deck, or export.
+    """
+    import httpx
+
+    settings = _runtime.get("settings")
+    project_id = _project_id_from_config(config)
+    if settings is None or project_id is None:
+        return "Cannot build (no project scope)."
+    base = settings.aleph_self_url
+    payload = {
+        "title": title,
+        "artifact_kind": artifact_kind,
+        "template_name": artifact_kind,
+        "csl_style": csl_style,
+        "wiki_page_ids": wiki_page_ids or [],
+        "dataset_version_ids": [],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{base}/v1/projects/{project_id}/artifacts/build",
+                json=payload,
+                headers={"Authorization": "Bearer local-dev"},
+            )
+    except Exception as exc:  # noqa: BLE001
+        return f"Could not start build: {exc}"
+    if resp.status_code >= 400:
+        return f"Build could not start ({resp.status_code}): {resp.text[:200]}"
+    b = resp.json()
+    return (
+        f"Started building '{title}'. Render an ArtifactCard with "
+        f"artifact_id={b['artifact_id']}, short_id='', title='{title}', "
+        f"artifact_kind='{artifact_kind}', status='building'. Then call "
+        "open_surface with tab='Artifacts' to bring the Artifacts panel into "
+        "view. The artifact will appear in the Artifacts tab when it finishes."
+    )
+
+
 def build_assistant_deep_agent(*, settings: "Settings"):
     """Compile the assistant Deep Agent (built once at app startup).
 
@@ -476,6 +529,7 @@ def build_assistant_deep_agent(*, settings: "Settings"):
             add_hypothesis_evidence_tool,
             start_research,
             ingest_source,
+            build_artifact,
         ],
         system_prompt=SYSTEM_PROMPT,
         middleware=[CopilotKitMiddleware()],

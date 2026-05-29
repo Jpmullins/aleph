@@ -114,6 +114,17 @@ _COMPONENTS = {
         },
         required=["source_id", "short_id", "title"],
     ),
+    "ArtifactCard": _comp(
+        {
+            "artifact_id": _UUID,
+            "short_id": {"type": "string"},
+            "title": {"type": "string"},
+            "artifact_kind": {"type": "string"},
+            "status": {"type": "string"},
+            "open_action": {"const": "open"},
+        },
+        required=["artifact_id", "title", "artifact_kind", "status"],
+    ),
     "ChartCard": _comp(
         {
             "dataset_version_id": {"type": ["string", "null"]},
