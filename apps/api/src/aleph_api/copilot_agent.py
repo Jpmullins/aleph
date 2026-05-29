@@ -17,6 +17,7 @@ by lifespan through `bind_runtime()`.
 
 from __future__ import annotations
 
+import uuid
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -30,13 +31,15 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from aleph_api.settings import Settings
+    from aleph_models.client import LiteLLMClient
 
 
 SYSTEM_PROMPT = """\
 You are Aleph's research assistant, operating over a project's compiled \
 wiki — the primary knowledge base.
 
-ALWAYS call `search_wiki` first to find relevant pages before answering. \
+Use `search_wiki` for a quick scan of what pages exist; use `read_wiki` to \
+actually answer a question with a cited, composed answer. \
 Ground every claim in what the wiki actually says and cite pages with \
 [[Page Title]] wikilink markers. Never fabricate.
 
@@ -54,17 +57,27 @@ in prose. Prefer the analyst's current context (the page or hypothesis \
 they are viewing, provided to you) when relevant.
 """
 
+# Stable, deterministic dev user id so ledger rows (ModelCall /
+# CostLedgerEvent) written by retrieval LiteLLM calls reference a single,
+# resolvable principal rather than a fresh random uuid per call.
+_DEV_USER_UUID = uuid.uuid5(uuid.NAMESPACE_DNS, "dev@aleph.local")
+
 # Runtime dependencies bound by lifespan (the graph is built before the
 # session_maker exists, so the tools read them here at call time).
-_runtime: dict[str, Any] = {"session_maker": None, "settings": None}
+_runtime: dict[str, Any] = {"session_maker": None, "settings": None, "litellm": None}
 
 
 def bind_runtime(
-    *, session_maker: "async_sessionmaker[AsyncSession]", settings: "Settings | None" = None
+    *,
+    session_maker: "async_sessionmaker[AsyncSession]",
+    settings: "Settings | None" = None,
+    litellm: "LiteLLMClient | None" = None,
 ) -> None:
     _runtime["session_maker"] = session_maker
     if settings is not None:
         _runtime["settings"] = settings
+    if litellm is not None:
+        _runtime["litellm"] = litellm
 
 
 def _project_id_from_config(config: RunnableConfig | None) -> UUID | None:
@@ -126,6 +139,60 @@ async def search_wiki(query: str, config: RunnableConfig, top_k: int = 6) -> str
             f"  {h.summary or '(no summary)'}"
         )
     return "Relevant wiki pages:\n" + "\n".join(lines)
+
+
+@tool
+async def read_wiki(query: str, config: RunnableConfig) -> str:
+    """Read the wiki in depth to answer a question with citations.
+
+    Use this (not search_wiki) when the analyst asks a substantive question
+    that needs a composed, cited answer. Runs the full wiki-first retrieval
+    pipeline: page selection, 1-hop wikilink expansion, answer composition,
+    and intra-source descent. Returns a cited markdown answer + coverage note.
+    """
+    from uuid import uuid4
+
+    from sqlalchemy import select
+
+    from aleph_assistant.retrieval.router import WikiFirstRetrievalRouter
+    from aleph_db.models.model_profile import ModelProfile
+    from aleph_security.principal import Principal
+
+    session_maker = _runtime.get("session_maker")
+    litellm = _runtime.get("litellm")
+    settings = _runtime.get("settings")
+    project_id = _project_id_from_config(config)
+    if session_maker is None or project_id is None:
+        return "Deep wiki reading is unavailable (no project scope on this run)."
+    if litellm is None:
+        return "Deep wiki reading is unavailable (LiteLLM client not bound)."
+    principal = Principal(
+        user_id=_DEV_USER_UUID,
+        subject=settings.local_dev_subject if settings is not None else "local-dev",
+        email=settings.local_dev_email if settings is not None else "dev@aleph.local",
+        actor_kind="user",
+    )
+    async with session_maker() as session:  # type: AsyncSession
+        profile = (
+            await session.execute(
+                select(ModelProfile).where(ModelProfile.project_id == project_id)
+            )
+        ).scalar_one_or_none()
+    if profile is None:
+        return "No model profile bound to this project; cannot read the wiki."
+    router = WikiFirstRetrievalRouter(session_maker=session_maker, litellm=litellm)
+    result = await router.retrieve(
+        principal=principal,
+        project_id=project_id,
+        thread_id=uuid4(),
+        query=query,
+        prior_messages=[],
+        profile=profile,
+        agent_run_id=None,
+    )
+    coverage = getattr(result, "coverage_judgment", "ok")
+    body = getattr(result, "composed_body_md", "") or "(the composer returned no body)"
+    return f"{body}\n\n_(coverage: {coverage})_"
 
 
 @tool
@@ -197,7 +264,7 @@ def build_assistant_deep_agent(*, settings: "Settings"):
     # the in-process single-replica dev/local runtime.)
     return create_deep_agent(
         model=model,
-        tools=[search_wiki, start_research],
+        tools=[search_wiki, read_wiki, start_research],
         system_prompt=SYSTEM_PROMPT,
         middleware=[CopilotKitMiddleware()],
         checkpointer=MemorySaver(),
