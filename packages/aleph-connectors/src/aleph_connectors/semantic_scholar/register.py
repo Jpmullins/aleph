@@ -42,9 +42,7 @@ class SemanticScholarConnector:
     def __init__(self, *, http_client: httpx.AsyncClient | None = None) -> None:
         self._http = http_client or httpx.AsyncClient(timeout=20.0)
 
-    async def search(
-        self, ctx: ConnectorContext, query: SearchQuery
-    ) -> list[ConnectorResult]:
+    async def search(self, ctx: ConnectorContext, query: SearchQuery) -> list[ConnectorResult]:
         headers = {}
         if ctx.credential_value:
             headers["x-api-key"] = ctx.credential_value
@@ -68,11 +66,13 @@ class SemanticScholarConnector:
             pdf = (r.get("openAccessPdf") or {}).get("url")
             ext_ids = r.get("externalIds") or {}
             doi = ext_ids.get("DOI")
-            url = pdf or (f"https://doi.org/{doi}" if doi else f"https://www.semanticscholar.org/paper/{paper_id}")
+            url = pdf or (
+                f"https://doi.org/{doi}"
+                if doi
+                else f"https://www.semanticscholar.org/paper/{paper_id}"
+            )
             refs = [
-                ref.get("paperId")
-                for ref in (r.get("references") or [])
-                if ref.get("paperId")
+                ref.get("paperId") for ref in (r.get("references") or []) if ref.get("paperId")
             ][:50]
             out.append(
                 ConnectorResult(
@@ -92,9 +92,7 @@ class SemanticScholarConnector:
             )
         return out
 
-    async def fetch(
-        self, ctx: ConnectorContext, result: ConnectorResult
-    ) -> RawPayload:
+    async def fetch(self, ctx: ConnectorContext, result: ConnectorResult) -> RawPayload:
         if not result.url:
             msg = "semantic_scholar fetch requires a url"
             raise NotSupported(msg)

@@ -14,9 +14,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
-async def get_template(
-    session: "AsyncSession", name: str
-) -> ModelProfile | None:
+async def get_template(session: AsyncSession, name: str) -> ModelProfile | None:
     stmt = select(ModelProfile).where(
         ModelProfile.name == name,
         ModelProfile.is_template.is_(True),
@@ -25,7 +23,7 @@ async def get_template(
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
-async def list_templates(session: "AsyncSession") -> list[ModelProfile]:
+async def list_templates(session: AsyncSession) -> list[ModelProfile]:
     stmt = (
         select(ModelProfile)
         .where(
@@ -37,20 +35,14 @@ async def list_templates(session: "AsyncSession") -> list[ModelProfile]:
     return list((await session.execute(stmt)).scalars().all())
 
 
-async def get_project_profile(
-    session: "AsyncSession", project_id: UUID
-) -> ModelProfile | None:
+async def get_project_profile(session: AsyncSession, project_id: UUID) -> ModelProfile | None:
     stmt = select(ModelProfile).where(ModelProfile.project_id == project_id)
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
-async def get_profile_by_id(
-    session: "AsyncSession", profile_id: UUID
-) -> ModelProfile | None:
+async def get_profile_by_id(session: AsyncSession, profile_id: UUID) -> ModelProfile | None:
     return (
-        await session.execute(
-            select(ModelProfile).where(ModelProfile.id == profile_id)
-        )
+        await session.execute(select(ModelProfile).where(ModelProfile.id == profile_id))
     ).scalar_one_or_none()
 
 

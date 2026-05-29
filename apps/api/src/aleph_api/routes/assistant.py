@@ -11,9 +11,10 @@ from uuid import UUID
 from fastapi import APIRouter, Body, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
 
-from aleph_assistant.models import AssistantMessage, AssistantSession, AssistantThread
+from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
+from aleph_api.middleware.project_scope import ProjectScopeDep
+from aleph_assistant.models import AssistantMessage, AssistantSession
 from aleph_assistant.thread_service import (
     append_message,
     create_session,
@@ -31,9 +32,6 @@ from aleph_db.repos import model_profile as profile_repo
 from aleph_observability.tracing import current_trace_id
 from aleph_security.agent_token import mint_agent_token
 from aleph_security.roles import ProjectRole, require_at_least
-
-from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
-from aleph_api.middleware.project_scope import ProjectScopeDep
 
 router = APIRouter(prefix="/v1/projects", tags=["assistant"])
 
@@ -145,9 +143,7 @@ async def post_session(
 
 
 @router.get("/{project_id}/sessions", response_model=list[SessionOut])
-async def get_sessions(
-    project_id: ProjectScopeDep, session: SessionDep
-) -> list[SessionOut]:
+async def get_sessions(project_id: ProjectScopeDep, session: SessionDep) -> list[SessionOut]:
     rows = await list_sessions(session, project_id=project_id)
     return [SessionOut.model_validate(r) for r in rows]
 
@@ -186,9 +182,7 @@ async def rename_session(
 # ---------------------------------------------------------------------------
 
 
-@router.get(
-    "/{project_id}/sessions/{session_id}/threads", response_model=list[ThreadOut]
-)
+@router.get("/{project_id}/sessions/{session_id}/threads", response_model=list[ThreadOut])
 async def get_threads(
     project_id: ProjectScopeDep, session_id: UUID, session: SessionDep
 ) -> list[ThreadOut]:
@@ -251,9 +245,7 @@ async def post_fork(
 # ---------------------------------------------------------------------------
 
 
-@router.get(
-    "/{project_id}/threads/{thread_id}/messages", response_model=list[MessageOut]
-)
+@router.get("/{project_id}/threads/{thread_id}/messages", response_model=list[MessageOut])
 async def get_thread_messages(
     project_id: ProjectScopeDep, thread_id: UUID, session: SessionDep
 ) -> list[MessageOut]:
@@ -350,9 +342,7 @@ async def post_message(
         from arq import create_pool
         from arq.connections import RedisSettings
 
-        pool = await create_pool(
-            RedisSettings.from_dsn(request.app.state.settings.redis_url)
-        )
+        pool = await create_pool(RedisSettings.from_dsn(request.app.state.settings.redis_url))
         try:
             await pool.enqueue_job(
                 "assistant_turn_job",
@@ -364,7 +354,7 @@ async def post_message(
             )
         finally:
             await pool.aclose()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         # Mark assistant message failed so the UI sees consistent state.
         assistant_msg.status = "failed"
         assistant_msg.error_text = f"failed to enqueue assistant turn: {exc}"[:4096]
@@ -375,9 +365,7 @@ async def post_message(
     )
 
 
-@router.get(
-    "/{project_id}/messages/{message_id}", response_model=MessageOut
-)
+@router.get("/{project_id}/messages/{message_id}", response_model=MessageOut)
 async def get_one_message(
     project_id: ProjectScopeDep, message_id: UUID, session: SessionDep
 ) -> MessageOut:
@@ -414,15 +402,9 @@ async def stream_message(
                     last_len = len(msg.body_md)
                     import json as _json
 
-                    yield (
-                        "data: "
-                        + _json.dumps({"event": "token", "delta": delta})
-                        + "\n\n"
-                    )
+                    yield ("data: " + _json.dumps({"event": "token", "delta": delta}) + "\n\n")
                 if msg.status in ("complete", "failed", "budget_blocked"):
-                    yield (
-                        'data: {"event":"done","status":"' + msg.status + '"}\n\n'
-                    )
+                    yield ('data: {"event":"done","status":"' + msg.status + '"}\n\n')
                     return
             await asyncio.sleep(0.5)
         yield 'data: {"event":"timeout"}\n\n'
@@ -494,7 +476,6 @@ async def retrieval_debug(
             for c in result.descent_chunks
         ],
         "synthesis_requests": [
-            {"concept": s.concept, "missing": s.missing}
-            for s in result.synthesis_requests
+            {"concept": s.concept, "missing": s.missing} for s in result.synthesis_requests
         ],
     }

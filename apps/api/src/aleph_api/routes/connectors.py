@@ -10,14 +10,13 @@ from fastapi import APIRouter, Body, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
+from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
+from aleph_api.middleware.project_scope import ProjectScopeDep
 from aleph_core.errors import NotFound
 from aleph_core.ids import uuid7
 from aleph_observability.tracing import current_trace_id
 from aleph_rks.models import Connector, ConnectorBinding
 from aleph_security.roles import ProjectRole, require_at_least
-
-from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
-from aleph_api.middleware.project_scope import ProjectScopeDep
 
 router = APIRouter(prefix="/v1", tags=["connectors"])
 
@@ -52,9 +51,7 @@ class ConnectorBindingIn(BaseModel):
 
 @router.get("/connectors", response_model=list[ConnectorOut])
 async def list_connectors(session: SessionDep) -> list[ConnectorOut]:
-    rows = list(
-        (await session.execute(select(Connector).order_by(Connector.kind))).scalars().all()
-    )
+    rows = list((await session.execute(select(Connector).order_by(Connector.kind))).scalars().all())
     return [ConnectorOut.model_validate(r) for r in rows]
 
 
@@ -88,9 +85,7 @@ async def set_binding(
 ) -> ConnectorBindingOut:
     require_at_least(principal, project_id, at_least=ProjectRole.OWNER)
     connector = (
-        await session.execute(
-            select(Connector).where(Connector.id == body.connector_id)
-        )
+        await session.execute(select(Connector).where(Connector.id == body.connector_id))
     ).scalar_one_or_none()
     if connector is None:
         msg = f"connector not found: {body.connector_id}"

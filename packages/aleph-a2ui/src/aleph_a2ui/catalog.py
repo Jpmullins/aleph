@@ -84,9 +84,7 @@ _COMPONENTS = {
         {
             "claim_id": _UUID,
             "text": {"type": "string", "maxLength": 2048},
-            "confidence": {
-                "enum": ["well-supported", "weakly-supported", "contested", "uncited"]
-            },
+            "confidence": {"enum": ["well-supported", "weakly-supported", "contested", "uncited"]},
             "citations": {
                 "type": "array",
                 "items": {
@@ -218,9 +216,7 @@ _COMPONENTS = {
         {
             "hypothesis_id": _UUID,
             "title": {"type": "string"},
-            "confidence": {
-                "enum": ["initial", "weakly-supported", "well-supported", "rejected"]
-            },
+            "confidence": {"enum": ["initial", "weakly-supported", "well-supported", "rejected"]},
             "evidence_count": {"type": "integer"},
             "open_action": {"const": "open"},
         },
@@ -246,9 +242,7 @@ _COMPONENTS = {
                     "properties": {
                         "name": {"type": "string"},
                         "label": {"type": "string"},
-                        "type": {
-                            "enum": ["text", "textarea", "select", "boolean"]
-                        },
+                        "type": {"enum": ["text", "textarea", "select", "boolean"]},
                         "options": {"type": "array"},
                         "required": {"type": "boolean"},
                     },

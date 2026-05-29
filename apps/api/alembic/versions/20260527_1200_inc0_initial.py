@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from decimal import Decimal
 from uuid import uuid4
 
 import sqlalchemy as sa
@@ -234,9 +233,7 @@ def upgrade() -> None:
             nullable=False,
             server_default="active",
         ),
-        sa.Column(
-            "model_profile_id", postgresql.UUID(as_uuid=True), nullable=False
-        ),
+        sa.Column("model_profile_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("budget_id", postgresql.UUID(as_uuid=True), nullable=True),
     )
 
@@ -265,16 +262,10 @@ def upgrade() -> None:
         ),
         sa.Column("trace_id", sa.String(128), nullable=True),
         sa.Column("ledger_event_id", postgresql.UUID(as_uuid=True), nullable=True),
-        sa.Column(
-            "project_id", postgresql.UUID(as_uuid=True), nullable=False, index=True
-        ),
-        sa.Column(
-            "user_id", postgresql.UUID(as_uuid=True), nullable=False, index=True
-        ),
+        sa.Column("project_id", postgresql.UUID(as_uuid=True), nullable=False, index=True),
+        sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False, index=True),
         sa.Column("role", sa.String(16), nullable=False),
-        sa.UniqueConstraint(
-            "project_id", "user_id", name="uq_project_members_proj_user"
-        ),
+        sa.UniqueConstraint("project_id", "user_id", name="uq_project_members_proj_user"),
     )
 
     # ---- model_profiles ----
@@ -303,9 +294,7 @@ def upgrade() -> None:
         sa.Column("trace_id", sa.String(128), nullable=True),
         sa.Column("ledger_event_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("name", sa.String(64), nullable=False),
-        sa.Column(
-            "project_id", postgresql.UUID(as_uuid=True), nullable=True, index=True
-        ),
+        sa.Column("project_id", postgresql.UUID(as_uuid=True), nullable=True, index=True),
         sa.Column(
             "is_template",
             sa.Boolean(),
@@ -313,9 +302,7 @@ def upgrade() -> None:
             server_default=sa.text("false"),
         ),
         sa.Column("bindings_jsonb", postgresql.JSONB(), nullable=False),
-        sa.UniqueConstraint(
-            "project_id", "name", name="uq_profile_project_name"
-        ),
+        sa.UniqueConstraint("project_id", "name", name="uq_profile_project_name"),
     )
 
     # ---- budgets ----
@@ -351,24 +338,16 @@ def upgrade() -> None:
             unique=True,
         ),
         sa.Column("cap_usd", sa.Numeric(12, 2), nullable=False),
-        sa.Column(
-            "soft_pct", sa.Numeric(5, 2), nullable=False, server_default="80"
-        ),
-        sa.Column(
-            "hard_pct", sa.Numeric(5, 2), nullable=False, server_default="100"
-        ),
-        sa.Column(
-            "spent_usd", sa.Numeric(12, 6), nullable=False, server_default="0"
-        ),
+        sa.Column("soft_pct", sa.Numeric(5, 2), nullable=False, server_default="80"),
+        sa.Column("hard_pct", sa.Numeric(5, 2), nullable=False, server_default="100"),
+        sa.Column("spent_usd", sa.Numeric(12, 6), nullable=False, server_default="0"),
     )
 
     # ---- action_ledger_events ----
     op.create_table(
         "action_ledger_events",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column(
-            "project_id", postgresql.UUID(as_uuid=True), nullable=True, index=True
-        ),
+        sa.Column("project_id", postgresql.UUID(as_uuid=True), nullable=True, index=True),
         sa.Column("actor_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("actor_kind", sa.String(16), nullable=False),
         sa.Column("action_kind", sa.String(64), nullable=False),
@@ -395,9 +374,7 @@ def upgrade() -> None:
         "action_ledger_events",
         ["project_id", "timestamp"],
     )
-    op.create_index(
-        "ix_ledger_action_kind", "action_ledger_events", ["action_kind"]
-    )
+    op.create_index("ix_ledger_action_kind", "action_ledger_events", ["action_kind"])
     op.create_index(
         "ix_action_ledger_events_timestamp",
         "action_ledger_events",
@@ -486,9 +463,7 @@ def upgrade() -> None:
         ),
         sa.Column("trace_id", sa.String(128), nullable=True),
         sa.Column("ledger_event_id", postgresql.UUID(as_uuid=True), nullable=True),
-        sa.Column(
-            "project_id", postgresql.UUID(as_uuid=True), nullable=False, index=True
-        ),
+        sa.Column("project_id", postgresql.UUID(as_uuid=True), nullable=False, index=True),
         sa.Column("agent_kind", sa.String(64), nullable=False, index=True),
         sa.Column("correlation_id", sa.String(64), nullable=False),
         sa.Column(
@@ -507,9 +482,7 @@ def upgrade() -> None:
         ),
         sa.Column("result_payload", postgresql.JSONB(), nullable=True),
         sa.Column("error_text", sa.String(4096), nullable=True),
-        sa.UniqueConstraint(
-            "correlation_id", name="uq_agent_runs_correlation_id"
-        ),
+        sa.UniqueConstraint("correlation_id", name="uq_agent_runs_correlation_id"),
     )
 
     # ---- agent_events ----
@@ -542,12 +515,8 @@ def upgrade() -> None:
     op.create_table(
         "model_calls",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column(
-            "project_id", postgresql.UUID(as_uuid=True), nullable=False, index=True
-        ),
-        sa.Column(
-            "agent_run_id", postgresql.UUID(as_uuid=True), nullable=True, index=True
-        ),
+        sa.Column("project_id", postgresql.UUID(as_uuid=True), nullable=False, index=True),
+        sa.Column("agent_run_id", postgresql.UUID(as_uuid=True), nullable=True, index=True),
         sa.Column("capability", sa.String(32), nullable=False),
         sa.Column("model", sa.String(128), nullable=False),
         sa.Column("purpose", sa.String(128), nullable=False, index=True),
@@ -559,9 +528,7 @@ def upgrade() -> None:
             nullable=False,
             server_default="0",
         ),
-        sa.Column(
-            "cost_usd", sa.Numeric(12, 6), nullable=False, server_default="0"
-        ),
+        sa.Column("cost_usd", sa.Numeric(12, 6), nullable=False, server_default="0"),
         sa.Column(
             "cache_savings_usd",
             sa.Numeric(12, 6),
@@ -583,12 +550,8 @@ def upgrade() -> None:
     op.create_table(
         "cost_ledger_events",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column(
-            "project_id", postgresql.UUID(as_uuid=True), nullable=False, index=True
-        ),
-        sa.Column(
-            "agent_run_id", postgresql.UUID(as_uuid=True), nullable=True, index=True
-        ),
+        sa.Column("project_id", postgresql.UUID(as_uuid=True), nullable=False, index=True),
+        sa.Column("agent_run_id", postgresql.UUID(as_uuid=True), nullable=True, index=True),
         sa.Column(
             "model_call_id",
             postgresql.UUID(as_uuid=True),

@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 
 async def mark_section(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
     project_id: UUID,
     page_id: UUID,
@@ -63,7 +63,7 @@ async def mark_section(
 
 
 async def clear_section(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
     project_id: UUID,
     page_id: UUID,
@@ -88,7 +88,7 @@ async def clear_section(
 
 
 async def list_active_for_page(
-    session: "AsyncSession", *, project_id: UUID, page_id: UUID
+    session: AsyncSession, *, project_id: UUID, page_id: UUID
 ) -> list[HandEditMark]:
     stmt = select(HandEditMark).where(
         HandEditMark.project_id == project_id,

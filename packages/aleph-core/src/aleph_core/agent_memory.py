@@ -22,7 +22,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 # We avoid importing aleph_db here so aleph_core stays leaf-level. The
 # model is registered into aleph_db.Base by importing this module from
 # the alembic env / the workers / api startup.
-
 # Import is intentional and lazy.
 from aleph_db.base import Base, CommonColumns
 
@@ -50,6 +49,4 @@ class AgentMemory(CommonColumns, Base):
     namespace: Mapped[str] = mapped_column(String(128), nullable=False)
     key: Mapped[str] = mapped_column(String(255), nullable=False)
     value_jsonb: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

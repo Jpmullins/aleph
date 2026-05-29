@@ -31,9 +31,7 @@ async def test_update_raises(asgi_app):
     async with maker() as session:
         with pytest.raises(Exception) as exc:
             await session.execute(
-                text(
-                    "UPDATE action_ledger_events SET payload_jsonb = '{}'::jsonb WHERE id = :id"
-                ),
+                text("UPDATE action_ledger_events SET payload_jsonb = '{}'::jsonb WHERE id = :id"),
                 {"id": str(evt.id)},
             )
             await session.commit()
@@ -62,7 +60,8 @@ async def test_delete_raises(asgi_app):
         with pytest.raises(Exception) as exc:
             await session.execute(
                 text(
-                    "DELETE FROM action_ledger_events WHERE action_kind = 'system.test_delete_marker'"
+                    "DELETE FROM action_ledger_events "
+                    "WHERE action_kind = 'system.test_delete_marker'"
                 )
             )
             await session.commit()

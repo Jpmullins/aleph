@@ -43,9 +43,7 @@ _TERMINAL = {
 _NUMERIC_MARKER_RE = re.compile(r"\[(\d+)\]")
 
 
-def _parse_report(
-    *, topic: str, report_md: str, artifacts: dict[str, Any]
-) -> AIQReport:
+def _parse_report(*, topic: str, report_md: str, artifacts: dict[str, Any]) -> AIQReport:
     """Build an AIQReport from AIQ's report markdown + citation artifacts.
 
     AIQ emits numeric `[1]` citation markers and a list of `citation_source`
@@ -176,24 +174,18 @@ async def aiq_synthesis_poll_job(
             return {"status": "polling", "attempt": attempt, "aiq_status": str(status)}
 
         if status is not AIQJobStatus.SUCCEEDED:
-            await _set_run_status(
-                maker, agent_run_id, "failed", error=f"AIQ job {status}"
-            )
+            await _set_run_status(maker, agent_run_id, "failed", error=f"AIQ job {status}")
             return {"status": "failed", "aiq_status": str(status)}
 
         report_md = await client.get_report(aiq_job_id)
         if not report_md:
-            await _set_run_status(
-                maker, agent_run_id, "failed", error="AIQ job produced no report"
-            )
+            await _set_run_status(maker, agent_run_id, "failed", error="AIQ job produced no report")
             return {"status": "failed", "reason": "no_report"}
         artifacts = await client.get_state(aiq_job_id)
 
         report = _parse_report(topic=topic, report_md=report_md, artifacts=artifacts)
 
-        workflow = SynthesisWorkflow(
-            session_maker=maker, litellm=litellm, principal=principal
-        )
+        workflow = SynthesisWorkflow(session_maker=maker, litellm=litellm, principal=principal)
         try:
             out = await workflow.run(
                 {

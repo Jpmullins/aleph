@@ -10,6 +10,8 @@ from fastapi import APIRouter, Body, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
+from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
+from aleph_api.middleware.project_scope import ProjectScopeDep
 from aleph_core.errors import NotFound
 from aleph_datasets.dataset_service import (
     commit_version,
@@ -18,16 +20,13 @@ from aleph_datasets.dataset_service import (
     list_datasets,
     list_observations,
 )
-from aleph_datasets.models import DatasetVersion, Observation
+from aleph_datasets.models import DatasetVersion
 from aleph_datasets.vega_compile import (
     bar_chart_spec,
     line_chart_spec,
     scatter_chart_spec,
 )
 from aleph_security.roles import ProjectRole, require_at_least
-
-from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
-from aleph_api.middleware.project_scope import ProjectScopeDep
 
 router = APIRouter(prefix="/v1/projects", tags=["datasets"])
 
@@ -90,9 +89,7 @@ class ChartSpecIn(BaseModel):
 
 
 @router.get("/{project_id}/datasets", response_model=list[DatasetOut])
-async def get_datasets(
-    project_id: ProjectScopeDep, session: SessionDep
-) -> list[DatasetOut]:
+async def get_datasets(project_id: ProjectScopeDep, session: SessionDep) -> list[DatasetOut]:
     rows = await list_datasets(session, project_id=project_id)
     return [DatasetOut.model_validate(r) for r in rows]
 
@@ -194,15 +191,11 @@ async def get_observations(
     version_id: UUID,
     session: SessionDep,
 ) -> list[ObservationOut]:
-    rows = await list_observations(
-        session, project_id=project_id, dataset_version_id=version_id
-    )
+    rows = await list_observations(session, project_id=project_id, dataset_version_id=version_id)
     return [ObservationOut.model_validate(r) for r in rows]
 
 
-@router.post(
-    "/{project_id}/dataset-versions/{version_id}/chart-spec"
-)
+@router.post("/{project_id}/dataset-versions/{version_id}/chart-spec")
 async def chart_spec(
     project_id: ProjectScopeDep,
     version_id: UUID,
@@ -221,9 +214,7 @@ async def chart_spec(
         raise NotFound(msg)
     rows: list[dict[str, Any]] = []
     if version.rows_inline:
-        obs = await list_observations(
-            session, project_id=project_id, dataset_version_id=version_id
-        )
+        obs = await list_observations(session, project_id=project_id, dataset_version_id=version_id)
         rows = [o.payload_jsonb for o in obs]
     if body.mark == "line":
         spec = line_chart_spec(

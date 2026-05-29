@@ -80,9 +80,7 @@ def upgrade() -> None:
             sa.Column("short_id", sa.String(16), nullable=False, unique=True),
             sa.Column("title", sa.String(512), nullable=False),
             sa.Column("artifact_kind", sa.String(32), nullable=False),
-            sa.Column(
-                "description", sa.Text(), nullable=False, server_default=""
-            ),
+            sa.Column("description", sa.Text(), nullable=False, server_default=""),
             sa.Column("current_version_id", postgresql.UUID(as_uuid=True), nullable=True),
         ),
     )
@@ -112,9 +110,7 @@ def upgrade() -> None:
         sa.Column("author_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("trace_id", sa.String(128), nullable=True),
         sa.Column("ledger_event_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.UniqueConstraint(
-            "artifact_id", "version_no", name="uq_artifact_version_no"
-        ),
+        sa.UniqueConstraint("artifact_id", "version_no", name="uq_artifact_version_no"),
     )
     op.execute(
         """

@@ -5,9 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 
-def score_retrieval(
-    case: dict[str, Any], *, profile_name: str
-) -> tuple[bool, float | None]:
+def score_retrieval(case: dict[str, Any], *, profile_name: str) -> tuple[bool, float | None]:
     expected = set(case.get("expected_page_slugs") or [])
     actual = set((case.get("actual") or {}).get("page_slugs") or [])
     if not expected:

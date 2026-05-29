@@ -8,6 +8,8 @@ from uuid import UUID
 from fastapi import APIRouter, Body, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
+from aleph_api.middleware.project_scope import ProjectScopeDep
 from aleph_connectors.models import SynthesisProposal
 from aleph_core.errors import NotFound, ValidationFailed
 from aleph_core.ids import uuid7
@@ -23,9 +25,6 @@ from aleph_notes.note_service import (
 from aleph_observability.tracing import current_trace_id
 from aleph_security.roles import ProjectRole, require_at_least
 from aleph_wiki.wiki_service import WikiService
-
-from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
-from aleph_api.middleware.project_scope import ProjectScopeDep
 
 router = APIRouter(prefix="/v1/projects", tags=["notes"])
 
@@ -64,9 +63,7 @@ class SectionUpdateIn(BaseModel):
 
 
 @router.get("/{project_id}/notes", response_model=list[NoteOut])
-async def get_notes(
-    project_id: ProjectScopeDep, session: SessionDep
-) -> list[NoteOut]:
+async def get_notes(project_id: ProjectScopeDep, session: SessionDep) -> list[NoteOut]:
     rows = await list_notes(session, project_id=project_id)
     return [NoteOut.model_validate(r) for r in rows]
 
@@ -103,9 +100,7 @@ async def post_note(
     return NoteOut.model_validate(n)
 
 
-@router.get(
-    "/{project_id}/notes/{note_id}", response_model=NoteDetailOut
-)
+@router.get("/{project_id}/notes/{note_id}", response_model=NoteDetailOut)
 async def get_one_note(
     project_id: ProjectScopeDep, note_id: UUID, session: SessionDep
 ) -> NoteDetailOut:

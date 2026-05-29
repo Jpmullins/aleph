@@ -11,9 +11,7 @@ class DeepResearchBenchAdapter:
 
     kind = "deepresearch"
 
-    def run_cases(
-        self, cases: Iterable[dict[str, Any]]
-    ) -> Iterable[dict[str, Any]]:
+    def run_cases(self, cases: Iterable[dict[str, Any]]) -> Iterable[dict[str, Any]]:
         try:
             import aiq_agent.evals.deepresearch_bench as dr_mod  # type: ignore[import-not-found]
         except ImportError as exc:

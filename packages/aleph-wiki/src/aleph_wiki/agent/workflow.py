@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 from uuid import UUID
@@ -41,22 +40,20 @@ from aleph_core.schemas.model_profile import Capability
 from aleph_core.time import utcnow
 from aleph_db.repos.agent_events import with_phase
 from aleph_models.client import ChatMessage
-from aleph_observability.tracing import current_trace_id, start_span
+from aleph_observability.tracing import start_span
 from aleph_wiki.alias_service import AliasService
 from aleph_wiki.feedback_service import mark_addressed, pending_for_concept
-from aleph_wiki.index_service import IndexService
-from aleph_wiki.models import RejectionFeedback, SourcePage, WikiPage
+from aleph_wiki.models import RejectionFeedback, SourcePage
 from aleph_wiki.wiki_service import (
-    ClaimDraft,
     CitationDraft,
+    ClaimDraft,
     WikiLinkDraft,
     WikiService,
 )
 
 if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from aleph_db.repos.ledger import LedgerWriter
     from aleph_models.client import LiteLLMClient
     from aleph_security.principal import Principal
 
@@ -128,9 +125,9 @@ class WorkflowContext:
     """Carries the per-run side-channel dependencies — these don't fit cleanly
     into LangGraph state because they're not JSON-serializable."""
 
-    session_maker: "async_sessionmaker[AsyncSession]"
-    litellm: "LiteLLMClient"
-    principal: "Principal"
+    session_maker: async_sessionmaker[AsyncSession]
+    litellm: LiteLLMClient
+    principal: Principal
 
 
 # Mutable singletons holding the per-invocation context. LangGraph nodes are
@@ -212,9 +209,7 @@ async def _node_concept_extraction(state: WikiIngestState) -> dict:
     ):
         body = state["normalized_markdown"]
         user_payload = (
-            f"Source title: {state['source_title']}\n\n"
-            "Document body (markdown):\n\n"
-            f"{body[:60000]}"
+            f"Source title: {state['source_title']}\n\nDocument body (markdown):\n\n{body[:60000]}"
         )
         out = await _call_llm_json(
             project_id=state["project_id"],
@@ -230,7 +225,7 @@ async def _node_concept_extraction(state: WikiIngestState) -> dict:
         for item in raw_list:
             try:
                 concepts.append(ExtractedConcept.model_validate(item))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
         return {"concepts": concepts}
 
@@ -269,7 +264,7 @@ async def _node_alias_extraction(state: WikiIngestState) -> dict:
         for item in raw:
             try:
                 aliases.append(ExtractedAlias.model_validate(item))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
 
         # Persist via AliasService.
@@ -328,8 +323,9 @@ async def _node_source_page_compose(state: WikiIngestState) -> dict:
         )
         rejection_block = ""
         if rejections:
-            rejection_block = "\n\nRejection feedback for this source (address these):\n" + "\n".join(
-                f"- {r.reason}" for r in rejections
+            rejection_block = (
+                "\n\nRejection feedback for this source (address these):\n"
+                + "\n".join(f"- {r.reason}" for r in rejections)
             )
 
         payload = (
@@ -350,15 +346,13 @@ async def _node_source_page_compose(state: WikiIngestState) -> dict:
             capability=Capability.SYNTHESIS,
             profile_bindings=state["profile_bindings"],
             system_prompt=_prompt("source_page_compose")
-            + "\n\nReturn JSON: {\"body_md\": \"...\", \"summary\": \"...\", \"claims\": [{\"text\": \"...\", \"citation_marker\": \"[c1]\"}]}",
+            + '\n\nReturn JSON: {"body_md": "...", "summary": "...", '
+            + '"claims": [{"text": "...", "citation_marker": "[c1]"}]}',
             user_payload=payload,
             purpose="wiki.source_page_compose",
         )
         body_md = ctx_chat.get("body_md") or _fallback_source_page(state)
-        summary = (
-            ctx_chat.get("summary")
-            or f"Source page for {state['source_title']}."
-        )
+        summary = ctx_chat.get("summary") or f"Source page for {state['source_title']}."
         raw_claims = ctx_chat.get("claims") or []
         claims: list[ClaimDraft] = []
         for c in raw_claims:
@@ -419,10 +413,7 @@ def _wikilinks_from_body(body_md: str) -> list[WikiLinkDraft]:
     for m in re.finditer(r"\[\[([^\]]+)\]\]", body_md):
         title = m.group(1).split("|", 1)[0].strip()
         counts[title] = counts.get(title, 0) + 1
-    return [
-        WikiLinkDraft(dst_title=t, dst_page_id=None, occurrences=n)
-        for t, n in counts.items()
-    ]
+    return [WikiLinkDraft(dst_title=t, dst_page_id=None, occurrences=n) for t, n in counts.items()]
 
 
 @with_phase("topic_page_stubs", ctx_getter=lambda: _ctx())
@@ -454,7 +445,7 @@ async def _node_topic_page_stubs(state: WikiIngestState) -> dict:
                 capability=Capability.EXTRACTION,
                 profile_bindings=state["profile_bindings"],
                 system_prompt=_prompt("topic_page_stub")
-                + "\n\nReturn JSON: {\"body_md\": \"...\", \"summary\": \"...\"}",
+                + '\n\nReturn JSON: {"body_md": "...", "summary": "..."}',
                 user_payload=payload,
                 purpose="wiki.topic_page_stub",
             )
@@ -470,9 +461,7 @@ async def _node_topic_page_stubs(state: WikiIngestState) -> dict:
                     summary=summary,
                     claims=[],
                     wikilinks=_wikilinks_from_body(body_md),
-                    commit_message=(
-                        f"Stub from source {state['source_short_id']}"
-                    ),
+                    commit_message=(f"Stub from source {state['source_short_id']}"),
                 )
             )
         return {"topic_page_drafts": drafts}
@@ -576,9 +565,7 @@ async def _node_commit_revision(state: WikiIngestState) -> dict:
 
                 existing = (
                     await session.execute(
-                        _select(SourcePage).where(
-                            SourcePage.source_id == state["source_id"]
-                        )
+                        _select(SourcePage).where(SourcePage.source_id == state["source_id"])
                     )
                 ).scalar_one_or_none()
                 if existing is None:
@@ -592,9 +579,7 @@ async def _node_commit_revision(state: WikiIngestState) -> dict:
                                 {
                                     "text": c.text,
                                     "marker": (
-                                        c.citations[0].citation_marker
-                                        if c.citations
-                                        else ""
+                                        c.citations[0].citation_marker if c.citations else ""
                                     ),
                                 }
                                 for c in sd.claims
@@ -623,9 +608,7 @@ async def _node_commit_revision(state: WikiIngestState) -> dict:
                 committed.append(r.revision_id)
 
             # Repair any broken links now that the new pages exist.
-            await AliasService(session).repair_broken_links(
-                project_id=state["project_id"]
-            )
+            await AliasService(session).repair_broken_links(project_id=state["project_id"])
 
             # Mark addressed rejection feedback.
             if sd.addressed_feedback_ids:
@@ -667,9 +650,9 @@ class WikiIngestWorkflow:
     def __init__(
         self,
         *,
-        session_maker: "async_sessionmaker[AsyncSession]",
-        litellm: "LiteLLMClient",
-        principal: "Principal",
+        session_maker: async_sessionmaker[AsyncSession],
+        litellm: LiteLLMClient,
+        principal: Principal,
     ) -> None:
         self._ctx = WorkflowContext(
             session_maker=session_maker, litellm=litellm, principal=principal

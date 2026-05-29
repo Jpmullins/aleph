@@ -8,11 +8,10 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 from sqlalchemy import select
 
-from aleph_core.schemas.ledger import LedgerEventOut
-from aleph_db.models.ledger import ActionLedgerEvent
-
 from aleph_api.deps import SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
+from aleph_core.schemas.ledger import LedgerEventOut
+from aleph_db.models.ledger import ActionLedgerEvent
 
 router = APIRouter(prefix="/v1/projects", tags=["ledger"])
 
@@ -27,9 +26,7 @@ async def get_ledger(
     action_kind: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
 ) -> list[LedgerEventOut]:
-    stmt = select(ActionLedgerEvent).where(
-        ActionLedgerEvent.project_id == project_id
-    )
+    stmt = select(ActionLedgerEvent).where(ActionLedgerEvent.project_id == project_id)
     if since:
         stmt = stmt.where(ActionLedgerEvent.timestamp >= since)
     if until:

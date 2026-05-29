@@ -10,20 +10,17 @@ from fastapi import APIRouter, Body, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
-from aleph_core.errors import NotFound
+from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
+from aleph_api.middleware.project_scope import ProjectScopeDep
 from aleph_core.feedback import UserFeedback
 from aleph_core.ids import uuid7
 from aleph_evals.models import (
     EvalCase,
     EvalDataset,
-    EvalResult,
     EvalRun,
 )
 from aleph_observability.tracing import current_trace_id
 from aleph_security.roles import ProjectRole, require_at_least
-
-from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
-from aleph_api.middleware.project_scope import ProjectScopeDep
 
 router = APIRouter(prefix="/v1", tags=["evals"])
 
@@ -56,9 +53,7 @@ class EvalRunOut(BaseModel):
 
 class FeedbackIn(BaseModel):
     target_kind: str = Field(
-        pattern=(
-            r"^(claim|source|chart|finding|hypothesis|assistant_message|wiki_page)$"
-        )
+        pattern=(r"^(claim|source|chart|finding|hypothesis|assistant_message|wiki_page)$")
     )
     target_id: UUID
     signal: str = Field(
@@ -86,9 +81,7 @@ class FeedbackOut(BaseModel):
 @router.get("/eval-datasets", response_model=list[EvalDatasetOut])
 async def list_datasets(session: SessionDep) -> list[EvalDatasetOut]:
     rows = list(
-        (await session.execute(select(EvalDataset).order_by(EvalDataset.name)))
-        .scalars()
-        .all()
+        (await session.execute(select(EvalDataset).order_by(EvalDataset.name))).scalars().all()
     )
     return [EvalDatasetOut.model_validate(r) for r in rows]
 
@@ -159,9 +152,7 @@ async def post_feedback(
 async def _promote_to_eval_case(session, fb: UserFeedback) -> None:
     dataset_name = f"user_feedback:{fb.project_id}"
     existing = (
-        await session.execute(
-            select(EvalDataset).where(EvalDataset.name == dataset_name)
-        )
+        await session.execute(select(EvalDataset).where(EvalDataset.name == dataset_name))
     ).scalar_one_or_none()
     if existing is None:
         existing = EvalDataset(

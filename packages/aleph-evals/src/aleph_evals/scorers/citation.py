@@ -5,9 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 
-def score_citation(
-    case: dict[str, Any], *, profile_name: str
-) -> tuple[bool, float | None]:
+def score_citation(case: dict[str, Any], *, profile_name: str) -> tuple[bool, float | None]:
     expected_markers = set(case.get("expected_citation_markers") or [])
     actual_markers = set((case.get("actual") or {}).get("citation_markers") or [])
     broken_markers = set((case.get("actual") or {}).get("broken_markers") or [])

@@ -83,9 +83,9 @@ async def _execute_agent_action(
 
 async def _approve(
     *,
-    session: "AsyncSession",
-    ledger: "LedgerWriter",
-    principal: "Principal",
+    session: AsyncSession,
+    ledger: LedgerWriter,
+    principal: Principal,
     project_id: UUID,
     request: CardActionRequest,
 ) -> dict[str, Any]:
@@ -199,9 +199,9 @@ async def _approve(
 
 async def _reject(
     *,
-    session: "AsyncSession",
-    ledger: "LedgerWriter",
-    principal: "Principal",
+    session: AsyncSession,
+    ledger: LedgerWriter,
+    principal: Principal,
     project_id: UUID,
     request: CardActionRequest,
 ) -> dict[str, Any]:
@@ -323,7 +323,7 @@ async def _navigate_wiki(*, request: CardActionRequest, **_: Any) -> dict[str, A
 
 async def _edit_note(
     *,
-    session: "AsyncSession",
+    session: AsyncSession,
     project_id: UUID,
     request: CardActionRequest,
     **_: Any,
@@ -341,8 +341,8 @@ async def _edit_note(
 
 async def _mark_handedit(
     *,
-    session: "AsyncSession",
-    principal: "Principal",
+    session: AsyncSession,
+    principal: Principal,
     project_id: UUID,
     request: CardActionRequest,
     **_: Any,
@@ -361,8 +361,8 @@ async def _mark_handedit(
 
 async def _clear_handedit(
     *,
-    session: "AsyncSession",
-    principal: "Principal",
+    session: AsyncSession,
+    principal: Principal,
     project_id: UUID,
     request: CardActionRequest,
     **_: Any,

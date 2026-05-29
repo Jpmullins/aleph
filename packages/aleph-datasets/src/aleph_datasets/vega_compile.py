@@ -19,7 +19,10 @@ def line_chart_spec(
     title: str = "",
 ) -> dict[str, Any]:
     encoding: dict[str, Any] = {
-        "x": {"field": x_field, "type": "temporal" if x_field.lower().endswith("date") else "ordinal"},
+        "x": {
+            "field": x_field,
+            "type": "temporal" if x_field.lower().endswith("date") else "ordinal",
+        },
         "y": {"field": y_field, "type": "quantitative"},
     }
     if color_field:

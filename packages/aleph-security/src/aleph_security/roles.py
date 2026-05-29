@@ -26,9 +26,7 @@ def rank(role: str) -> int:
     return _RANK.get(role, 0)
 
 
-def require_at_least(
-    principal: Principal, project_id: UUID, *, at_least: ProjectRole
-) -> None:
+def require_at_least(principal: Principal, project_id: UUID, *, at_least: ProjectRole) -> None:
     """Raise PermissionDenied unless the principal's role in `project_id`
     is at least `at_least`. The middleware caches the role on the
     Principal; if absent the principal is not a member."""

@@ -1,26 +1,22 @@
 """chunk_embed_job: NormalizedDocument → DocumentChunk rows.
 
-  1. Load markdown (verify nothing; the put_normalized writer is trusted source).
-  2. Chunk per aleph_rks.chunking algorithm.
-  3. Batch-embed via LiteLLMClient.embed.
-  4. Insert DocumentChunk rows.
-  5. Upsert RetrievalIndexRecord.
-  6. Update Source.status="indexed".
-  7. Ledger chunks.created, embeddings.completed.
+1. Load markdown (verify nothing; the put_normalized writer is trusted source).
+2. Chunk per aleph_rks.chunking algorithm.
+3. Batch-embed via LiteLLMClient.embed.
+4. Insert DocumentChunk rows.
+5. Upsert RetrievalIndexRecord.
+6. Update Source.status="indexed".
+7. Ledger chunks.created, embeddings.completed.
 """
 
 from __future__ import annotations
 
-import hashlib
-from datetime import datetime
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert
 
 from aleph_core.ids import uuid7
-from aleph_core.schemas.model_profile import Capability
 from aleph_core.time import utcnow
 from aleph_db.models.agent import AgentRun
 from aleph_db.models.model_profile import ModelProfile
@@ -76,7 +72,9 @@ async def chunk_embed_job(
         )
         await session.commit()
 
-    async def _finalize(status: str, result_payload: dict[str, Any] | None = None, error_text: str | None = None) -> None:
+    async def _finalize(
+        status: str, result_payload: dict[str, Any] | None = None, error_text: str | None = None
+    ) -> None:
         async with maker() as session:
             run = (
                 await session.execute(select(AgentRun).where(AgentRun.id == chunk_run_id))
@@ -109,18 +107,14 @@ async def chunk_embed_job(
                 msg = f"normalized document {normalized_id} not found"
                 raise RuntimeError(msg)
             source = (
-                await session.execute(
-                    select(Source).where(Source.id == normalized.source_id)
-                )
+                await session.execute(select(Source).where(Source.id == normalized.source_id))
             ).scalar_one_or_none()
             if source is None:
                 msg = f"source {normalized.source_id} not found"
                 raise RuntimeError(msg)
             profile = (
                 await session.execute(
-                    select(ModelProfile).where(
-                        ModelProfile.project_id == normalized.project_id
-                    )
+                    select(ModelProfile).where(ModelProfile.project_id == normalized.project_id)
                 )
             ).scalar_one_or_none()
             if profile is None:
@@ -196,9 +190,7 @@ async def chunk_embed_job(
 
             # Mark Source.status.
             src = (
-                await session.execute(
-                    select(Source).where(Source.id == normalized.source_id)
-                )
+                await session.execute(select(Source).where(Source.id == normalized.source_id))
             ).scalar_one_or_none()
             if src is not None:
                 src.status = "indexed"

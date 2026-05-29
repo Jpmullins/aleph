@@ -17,22 +17,19 @@ from typing import TYPE_CHECKING, Any, TypedDict
 from uuid import UUID
 
 from langgraph.graph import END, START, StateGraph
-from sqlalchemy import select
 
-from aleph_core.errors import BudgetExceeded
-from aleph_core.time import utcnow
-from aleph_db.repos.agent_events import with_phase
-from aleph_db.repos.cost import get_budget
-from aleph_db.repos.ledger import LedgerWriter
-from aleph_observability.tracing import current_trace_id, start_span
 from aleph_assistant.models import AssistantMessage
 from aleph_assistant.retrieval.router import (
     RetrievalResult,
     WikiFirstRetrievalRouter,
 )
+from aleph_db.repos.agent_events import with_phase
+from aleph_db.repos.cost import get_budget
+from aleph_db.repos.ledger import LedgerWriter
+from aleph_observability.tracing import current_trace_id, start_span
 
 if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from aleph_db.models.model_profile import ModelProfile
     from aleph_models.client import LiteLLMClient
@@ -61,10 +58,10 @@ class AssistantTurnState(TypedDict, total=False):
 
 @dataclass
 class _Ctx:
-    session_maker: "async_sessionmaker[AsyncSession]"
-    litellm: "LiteLLMClient"
-    principal: "Principal"
-    profile: "ModelProfile"
+    session_maker: async_sessionmaker[AsyncSession]
+    litellm: LiteLLMClient
+    principal: Principal
+    profile: ModelProfile
 
 
 # Per-invocation context, scoped via ContextVar (not a module global) so
@@ -72,9 +69,7 @@ class _Ctx:
 # AG-UI runtime serving multiple users — never read each other's
 # session_maker / principal / profile. `set_active_ctx` returns a token
 # the caller resets in a finally.
-_active_ctx_var: ContextVar[_Ctx | None] = ContextVar(
-    "aleph_assistant_active_ctx", default=None
-)
+_active_ctx_var: ContextVar[_Ctx | None] = ContextVar("aleph_assistant_active_ctx", default=None)
 
 
 def set_active_ctx(ctx: _Ctx):
@@ -131,9 +126,7 @@ async def _node_query_rewrite(state: AssistantTurnState) -> dict[str, Any]:
     # call. (Full LLM rewrite is a follow-on per the spec note.)
     q = state["user_query"].strip()
     if len(q) < 24 and any(p in q.lower() for p in (" it ", " that ", " them ")):
-        last_assistant = next(
-            (m for m in reversed(prior) if m.role == "assistant"), None
-        )
+        last_assistant = next((m for m in reversed(prior) if m.role == "assistant"), None)
         if last_assistant:
             import re
 
@@ -149,9 +142,7 @@ async def _node_retrieve(state: AssistantTurnState) -> dict[str, Any]:
     if state.get("final_status"):
         return {}
     ctx = _ctx()
-    router = WikiFirstRetrievalRouter(
-        session_maker=ctx.session_maker, litellm=ctx.litellm
-    )
+    router = WikiFirstRetrievalRouter(session_maker=ctx.session_maker, litellm=ctx.litellm)
     result = await router.retrieve(
         principal=ctx.principal,
         project_id=state["project_id"],
@@ -232,9 +223,7 @@ async def _node_finalize(state: AssistantTurnState) -> dict[str, Any]:
             target_kind="assistant_message",
             payload={
                 "thread_id": str(state["thread_id"]),
-                "coverage_judgment": (
-                    retrieval.coverage_judgment if retrieval else None
-                ),
+                "coverage_judgment": (retrieval.coverage_judgment if retrieval else None),
                 "latency_ms": latency_ms,
             },
             trace_id=current_trace_id(),
@@ -248,10 +237,10 @@ class AssistantTurnWorkflow:
     def __init__(
         self,
         *,
-        session_maker: "async_sessionmaker[AsyncSession]",
-        litellm: "LiteLLMClient",
-        principal: "Principal",
-        profile: "ModelProfile",
+        session_maker: async_sessionmaker[AsyncSession],
+        litellm: LiteLLMClient,
+        principal: Principal,
+        profile: ModelProfile,
     ) -> None:
         self._ctx = _Ctx(
             session_maker=session_maker,
@@ -284,14 +273,12 @@ class AssistantTurnWorkflow:
             try:
                 out = await self._compiled.ainvoke(initial)
                 return out  # type: ignore[return-value]
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 # Finalize with failure so the message lands in a clean state.
                 state = dict(initial)
                 state["final_status"] = "failed"
                 state["error_text"] = str(exc)[:4096]
-                state["final_body"] = (
-                    "I hit an error mid-turn. The full trace is in Langfuse."
-                )
+                state["final_body"] = "I hit an error mid-turn. The full trace is in Langfuse."
                 await _node_finalize(state)  # best-effort persistence
                 raise
             finally:

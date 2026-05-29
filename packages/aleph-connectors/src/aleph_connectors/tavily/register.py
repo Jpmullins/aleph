@@ -15,7 +15,7 @@ import hashlib
 from typing import ClassVar, Literal
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from aleph_connectors.base import (
     ConnectorContext,
@@ -50,9 +50,7 @@ class TavilyConnector:
         self._base = base_url
         self._http = http_client or httpx.AsyncClient(timeout=20.0)
 
-    async def search(
-        self, ctx: ConnectorContext, query: SearchQuery
-    ) -> list[ConnectorResult]:
+    async def search(self, ctx: ConnectorContext, query: SearchQuery) -> list[ConnectorResult]:
         if not ctx.credential_value:
             msg = "Tavily requires an API key"
             raise NotSupported(msg)
@@ -63,9 +61,7 @@ class TavilyConnector:
                 "query": query.text,
                 "max_results": query.max_results,
                 "include_raw_content": False,
-                "search_depth": "advanced"
-                if (query.extra or {}).get("advanced")
-                else "basic",
+                "search_depth": "advanced" if (query.extra or {}).get("advanced") else "basic",
             },
         )
         if resp.status_code != 200:
@@ -91,9 +87,7 @@ class TavilyConnector:
             )
         return out
 
-    async def fetch(
-        self, ctx: ConnectorContext, result: ConnectorResult
-    ) -> RawPayload:
+    async def fetch(self, ctx: ConnectorContext, result: ConnectorResult) -> RawPayload:
         if not result.url:
             msg = "Tavily fetch requires a url"
             raise NotSupported(msg)

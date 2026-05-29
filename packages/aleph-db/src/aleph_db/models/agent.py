@@ -14,16 +14,12 @@ from aleph_db.base import Base, CommonColumns
 
 class AgentRun(CommonColumns, Base):
     __tablename__ = "agent_runs"
-    __table_args__ = (
-        UniqueConstraint("correlation_id", name="uq_agent_runs_correlation_id"),
-    )
+    __table_args__ = (UniqueConstraint("correlation_id", name="uq_agent_runs_correlation_id"),)
 
     project_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     agent_kind: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(16), nullable=False, server_default="pending"
-    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     input_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")

@@ -27,21 +27,15 @@ class Dataset(CommonColumns, Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     dataset_kind: Mapped[str] = mapped_column(String(32), nullable=False)
-    source_connector_kind: Mapped[str | None] = mapped_column(
-        String(64), nullable=True
-    )
+    source_connector_kind: Mapped[str | None] = mapped_column(String(64), nullable=True)
     short_id: Mapped[str] = mapped_column(String(16), nullable=False, unique=True)
     current_version_id: Mapped[UUID | None] = mapped_column(nullable=True)
-    column_schema_jsonb: Mapped[list] = mapped_column(
-        JSONB, nullable=False, server_default="[]"
-    )
+    column_schema_jsonb: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
 
 
 class DatasetVersion(Base):
     __tablename__ = "dataset_versions"
-    __table_args__ = (
-        UniqueConstraint("dataset_id", "version_no", name="uq_dataset_version_no"),
-    )
+    __table_args__ = (UniqueConstraint("dataset_id", "version_no", name="uq_dataset_version_no"),)
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
     project_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
@@ -50,14 +44,10 @@ class DatasetVersion(Base):
     row_count: Mapped[int] = mapped_column(Integer, nullable=False)
     column_schema_jsonb: Mapped[list] = mapped_column(JSONB, nullable=False)
     parquet_uri: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    rows_inline: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default="false"
-    )
+    rows_inline: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     data_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     parent_version_id: Mapped[UUID | None] = mapped_column(nullable=True)
-    diff_summary_jsonb: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, server_default="{}"
-    )
+    diff_summary_jsonb: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -76,6 +66,4 @@ class Observation(Base):
     dataset_version_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
     payload_jsonb: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    source_refs_jsonb: Mapped[list] = mapped_column(
-        JSONB, nullable=False, server_default="[]"
-    )
+    source_refs_jsonb: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")

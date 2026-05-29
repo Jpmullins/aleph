@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -16,9 +15,9 @@ from sqlalchemy import func, select
 
 from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
+from aleph_observability.tracing import current_trace_id
 from aleph_rks.asset_store import AssetStore
 from aleph_rks.models import Source, SourceAsset, SourceVersion
-from aleph_observability.tracing import current_trace_id
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,17 +33,17 @@ class SourceCreated:
     asset: SourceAsset
 
 
-async def _next_short_id(session: "AsyncSession") -> str:
+async def _next_short_id(session: AsyncSession) -> str:
     """Allocate the next `S0001`-style id by counting existing sources."""
     n = (await session.execute(select(func.count()).select_from(Source))).scalar_one()
     return f"S{int(n) + 1:04d}"
 
 
 async def register_uploaded_source(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
-    ledger: "LedgerWriter",
-    principal: "Principal",
+    ledger: LedgerWriter,
+    principal: Principal,
     asset_store: AssetStore,
     project_id: UUID,
     title: str,
@@ -59,9 +58,7 @@ async def register_uploaded_source(
     short_id = await _next_short_id(session)
 
     # Store bytes. Upload connector stores by (project_id, source_id, sha256, ext).
-    extension = (filename.rsplit(".", 1)[-1] if "." in filename else "bin").lower()[
-        :16
-    ]
+    extension = (filename.rsplit(".", 1)[-1] if "." in filename else "bin").lower()[:16]
     stored = asset_store.put_source_asset(
         project_id=project_id,
         source_id=source_id,
@@ -156,18 +153,16 @@ async def register_uploaded_source(
 
 
 async def mark_status(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
-    ledger: "LedgerWriter",
-    principal: "Principal",
+    ledger: LedgerWriter,
+    principal: Principal,
     project_id: UUID,
     source_id: UUID,
     status: str,
     failure_reason: str | None = None,
 ) -> None:
-    src = (
-        await session.execute(select(Source).where(Source.id == source_id))
-    ).scalar_one_or_none()
+    src = (await session.execute(select(Source).where(Source.id == source_id))).scalar_one_or_none()
     if src is None:
         msg = f"source {source_id} not found"
         raise ValueError(msg)

@@ -6,20 +6,17 @@ from decimal import Decimal
 
 from fastapi import APIRouter
 
+from aleph_api.deps import SessionDep
+from aleph_api.middleware.project_scope import ProjectScopeDep
 from aleph_core.errors import NotFound
 from aleph_core.schemas.cost import CostBucket, CostRollup, ModelCallRecord
 from aleph_db.repos import cost as cost_repo
-
-from aleph_api.deps import SessionDep
-from aleph_api.middleware.project_scope import ProjectScopeDep
 
 router = APIRouter(prefix="/v1/projects", tags=["cost"])
 
 
 @router.get("/{project_id}/cost", response_model=CostRollup)
-async def get_cost(
-    project_id: ProjectScopeDep, session: SessionDep
-) -> CostRollup:
+async def get_cost(project_id: ProjectScopeDep, session: SessionDep) -> CostRollup:
     budget = await cost_repo.get_budget(session, project_id)
     if budget is None:
         msg = f"project {project_id} has no budget"

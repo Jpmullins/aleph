@@ -17,7 +17,6 @@ from sqlalchemy import func, select
 
 from aleph_core.errors import NotFound, ValidationFailed
 from aleph_core.ids import uuid7
-from aleph_core.time import utcnow
 from aleph_datasets.models import Dataset, DatasetVersion, Observation
 from aleph_datasets.schema_inference import infer_column_schema
 from aleph_observability.tracing import current_trace_id
@@ -33,16 +32,16 @@ _INLINE_ROW_LIMIT = 1000
 _INLINE_BYTE_LIMIT = 100 * 1024
 
 
-async def _next_short_id(session: "AsyncSession") -> str:
+async def _next_short_id(session: AsyncSession) -> str:
     n = (await session.execute(select(func.count()).select_from(Dataset))).scalar_one()
     return f"D{int(n) + 1:04d}"
 
 
 async def create_dataset(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
-    ledger: "LedgerWriter",
-    principal: "Principal",
+    ledger: LedgerWriter,
+    principal: Principal,
     project_id: UUID,
     name: str,
     description: str,
@@ -82,30 +81,24 @@ async def create_dataset(
 
 
 async def get_dataset(
-    session: "AsyncSession", *, project_id: UUID, dataset_id: UUID
+    session: AsyncSession, *, project_id: UUID, dataset_id: UUID
 ) -> Dataset | None:
     return (
         await session.execute(
-            select(Dataset).where(
-                Dataset.id == dataset_id, Dataset.project_id == project_id
-            )
+            select(Dataset).where(Dataset.id == dataset_id, Dataset.project_id == project_id)
         )
     ).scalar_one_or_none()
 
 
-async def list_datasets(
-    session: "AsyncSession", *, project_id: UUID
-) -> list[Dataset]:
+async def list_datasets(session: AsyncSession, *, project_id: UUID) -> list[Dataset]:
     stmt = (
-        select(Dataset)
-        .where(Dataset.project_id == project_id)
-        .order_by(Dataset.created_at.desc())
+        select(Dataset).where(Dataset.project_id == project_id).order_by(Dataset.created_at.desc())
     )
     return list((await session.execute(stmt)).scalars().all())
 
 
 async def list_observations(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
     project_id: UUID,
     dataset_version_id: UUID,
@@ -132,10 +125,10 @@ def _diff_summary(prior_rows: list[dict] | None, new_rows: list[dict]) -> dict:
 
 
 async def commit_version(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
-    ledger: "LedgerWriter",
-    principal: "Principal",
+    ledger: LedgerWriter,
+    principal: Principal,
     project_id: UUID,
     dataset_id: UUID,
     rows: Iterable[dict[str, Any]],
@@ -173,8 +166,9 @@ async def commit_version(
 
     max_no = (
         await session.execute(
-            select(func.coalesce(func.max(DatasetVersion.version_no), 0))
-            .where(DatasetVersion.dataset_id == dataset_id)
+            select(func.coalesce(func.max(DatasetVersion.version_no), 0)).where(
+                DatasetVersion.dataset_id == dataset_id
+            )
         )
     ).scalar_one()
     new_no = int(max_no) + 1
@@ -199,8 +193,7 @@ async def commit_version(
     )
 
     rows_inline = parquet_uri is None and (
-        len(rows_list) <= _INLINE_ROW_LIMIT
-        and len(serialized) <= _INLINE_BYTE_LIMIT
+        len(rows_list) <= _INLINE_ROW_LIMIT and len(serialized) <= _INLINE_BYTE_LIMIT
     )
 
     version = DatasetVersion(

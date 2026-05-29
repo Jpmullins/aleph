@@ -23,10 +23,10 @@ if TYPE_CHECKING:
 
 
 async def record_render(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
-    asset_store: "AssetStore",
-    principal: "Principal",
+    asset_store: AssetStore,
+    principal: Principal,
     project_id: UUID,
     source_kind: str,
     source_id: UUID,
@@ -44,8 +44,8 @@ async def record_render(
     key = f"projects/{project_id}/renders/{source_id}/{sha[:12]}.{ext}"
     from io import BytesIO
 
-    asset_store._client.put_object(  # noqa: SLF001
-        asset_store._bucket,  # noqa: SLF001
+    asset_store._client.put_object(
+        asset_store._bucket,
         key,
         data=BytesIO(data),
         length=len(data),
@@ -55,7 +55,7 @@ async def record_render(
             "pdf": "application/pdf",
         }.get(ext, "application/octet-stream"),
     )
-    storage_uri = f"s3://{asset_store._bucket}/{key}"  # noqa: SLF001
+    storage_uri = f"s3://{asset_store._bucket}/{key}"
     asset = RenderedAsset(
         id=uuid7(),
         project_id=project_id,

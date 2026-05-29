@@ -78,7 +78,7 @@ def _as_int(value: Any) -> int:
         return 0
 
 
-def _extract_usage(response: "LLMResult") -> tuple[int, int, int] | None:
+def _extract_usage(response: LLMResult) -> tuple[int, int, int] | None:
     """Pull (input_tokens, cached_tokens, completion_tokens) from an LLMResult.
 
     Handles both shapes defensively:
@@ -105,7 +105,7 @@ def _extract_usage(response: "LLMResult") -> tuple[int, int, int] | None:
                     cached = _as_int(details.get("cache_read"))
                     if input_tokens or completion_tokens:
                         return input_tokens, cached, completion_tokens
-    except Exception:  # noqa: BLE001 — never let extraction crash the agent.
+    except Exception:
         logger.debug("usage_metadata extraction failed", exc_info=True)
 
     # Shape 2: llm_output.token_usage (legacy OpenAI).
@@ -125,7 +125,7 @@ def _extract_usage(response: "LLMResult") -> tuple[int, int, int] | None:
             cached = _as_int(details.get("cached_tokens"))
             if input_tokens or completion_tokens:
                 return input_tokens, cached, completion_tokens
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.debug("llm_output token_usage extraction failed", exc_info=True)
 
     return None
@@ -145,7 +145,7 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
         self,
         *,
         session_maker: Any | None = None,
-        pricing: "PricingTable | None" = None,
+        pricing: PricingTable | None = None,
         model: str,
         purpose: str = "assistant.turn",
     ) -> None:
@@ -169,10 +169,10 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
             from aleph_api.copilot_agent import get_runtime
 
             return get_runtime().get("session_maker")
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
 
-    def _resolve_pricing(self) -> "PricingTable":
+    def _resolve_pricing(self) -> PricingTable:
         if self._pricing is not None:
             return self._pricing
         from aleph_models.pricing import PricingTable
@@ -213,13 +213,11 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
             while len(self._pending) > _MAX_PENDING:
                 self._pending.popitem(last=False)
 
-    async def on_llm_end(self, response: "LLMResult", *, run_id: UUID, **kwargs: Any) -> None:
+    async def on_llm_end(self, response: LLMResult, *, run_id: UUID, **kwargs: Any) -> None:
         project_id = self._pending.pop(run_id, None)
         if project_id is None:
             # No resolvable project scope — skip writing (don't crash the agent).
-            logger.debug(
-                "agent cost attribution skipped: no project scope (run_id=%s)", run_id
-            )
+            logger.debug("agent cost attribution skipped: no project scope (run_id=%s)", run_id)
             return
         usage = _extract_usage(response)
         if usage is None:
@@ -232,7 +230,7 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
                 cached_tokens=cached_tokens,
                 completion_tokens=completion_tokens,
             )
-        except Exception:  # noqa: BLE001 — cost-logging must never fail a turn.
+        except Exception:
             logger.warning(
                 "agent cost attribution write failed (run_id=%s)",
                 run_id,
@@ -269,7 +267,7 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
             from aleph_observability.tracing import current_trace_id
 
             trace_id = current_trace_id()
-        except Exception:  # noqa: BLE001
+        except Exception:
             trace_id = None
 
         from aleph_db.repos.cost import CostWriter

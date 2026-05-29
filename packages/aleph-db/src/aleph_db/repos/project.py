@@ -17,14 +17,14 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
-async def get_project(session: "AsyncSession", project_id: UUID) -> Project | None:
+async def get_project(session: AsyncSession, project_id: UUID) -> Project | None:
     return (
         await session.execute(select(Project).where(Project.id == project_id))
     ).scalar_one_or_none()
 
 
 async def get_member(
-    session: "AsyncSession", *, project_id: UUID, user_id: UUID
+    session: AsyncSession, *, project_id: UUID, user_id: UUID
 ) -> ProjectMember | None:
     return (
         await session.execute(
@@ -36,9 +36,7 @@ async def get_member(
     ).scalar_one_or_none()
 
 
-async def list_member_projects(
-    session: "AsyncSession", *, user_id: UUID
-) -> list[Project]:
+async def list_member_projects(session: AsyncSession, *, user_id: UUID) -> list[Project]:
     stmt = (
         select(Project)
         .join(ProjectMember, ProjectMember.project_id == Project.id)

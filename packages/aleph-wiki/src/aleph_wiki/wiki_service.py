@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select
 
 from aleph_core.errors import NotFound
 from aleph_core.ids import uuid7
@@ -24,7 +24,6 @@ from aleph_wiki.handedit_service import list_active_for_page
 from aleph_wiki.index_service import IndexService
 from aleph_wiki.models import (
     Citation,
-    HandEditMark,
     WikiClaim,
     WikiLink,
     WikiPage,
@@ -47,7 +46,7 @@ class ClaimDraft:
     text: str
     confidence: str = "cited"
     section_anchor: str | None = None
-    citations: list["CitationDraft"] = field(default_factory=list)
+    citations: list[CitationDraft] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -151,7 +150,7 @@ def _splice_protected_sections(
 class WikiService:
     def __init__(
         self,
-        session: "AsyncSession",
+        session: AsyncSession,
         *,
         index_service: IndexService | None = None,
     ) -> None:
@@ -161,8 +160,8 @@ class WikiService:
     async def commit_revision(
         self,
         *,
-        principal: "Principal",
-        ledger: "LedgerWriter",
+        principal: Principal,
+        ledger: LedgerWriter,
         project_id: UUID,
         page_id: UUID | None,
         title: str | None,
@@ -214,9 +213,7 @@ class WikiService:
             if page.current_revision_id is not None:
                 cur_rev = (
                     await self._session.execute(
-                        select(WikiRevision).where(
-                            WikiRevision.id == page.current_revision_id
-                        )
+                        select(WikiRevision).where(WikiRevision.id == page.current_revision_id)
                     )
                 ).scalar_one_or_none()
                 if cur_rev is not None and cur_rev.body_sha256 == body_hash:
@@ -345,9 +342,7 @@ class WikiService:
             await self._session.flush()
 
             # Refresh WikiIndex row.
-            await self._index.refresh_page(
-                project_id=project_id, page_id=page.id, summary=summary
-            )
+            await self._index.refresh_page(project_id=project_id, page_id=page.id, summary=summary)
 
             return CommitResult(
                 page_id=page.id,
@@ -364,9 +359,7 @@ class WikiService:
     ) -> tuple[WikiPage, WikiRevision] | None:
         page = (
             await self._session.execute(
-                select(WikiPage).where(
-                    WikiPage.id == page_id, WikiPage.project_id == project_id
-                )
+                select(WikiPage).where(WikiPage.id == page_id, WikiPage.project_id == project_id)
             )
         ).scalar_one_or_none()
         if page is None:
@@ -375,15 +368,11 @@ class WikiService:
         if rev_id is None:
             return (page, None)  # type: ignore[return-value]
         rev = (
-            await self._session.execute(
-                select(WikiRevision).where(WikiRevision.id == rev_id)
-            )
+            await self._session.execute(select(WikiRevision).where(WikiRevision.id == rev_id))
         ).scalar_one_or_none()
         return (page, rev) if rev is not None else None
 
-    async def list_pages(
-        self, *, project_id: UUID, kind: str | None = None
-    ) -> list[WikiPage]:
+    async def list_pages(self, *, project_id: UUID, kind: str | None = None) -> list[WikiPage]:
         stmt = (
             select(WikiPage)
             .where(WikiPage.project_id == project_id)
@@ -393,14 +382,10 @@ class WikiService:
             stmt = stmt.where(WikiPage.page_kind == kind)
         return list((await self._session.execute(stmt)).scalars().all())
 
-    async def page_by_slug(
-        self, *, project_id: UUID, slug: str
-    ) -> WikiPage | None:
+    async def page_by_slug(self, *, project_id: UUID, slug: str) -> WikiPage | None:
         return (
             await self._session.execute(
-                select(WikiPage).where(
-                    WikiPage.project_id == project_id, WikiPage.slug == slug
-                )
+                select(WikiPage).where(WikiPage.project_id == project_id, WikiPage.slug == slug)
             )
         ).scalar_one_or_none()
 

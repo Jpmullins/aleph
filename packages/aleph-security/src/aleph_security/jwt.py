@@ -45,9 +45,12 @@ class JWKSCache:
         self._entry: _CacheEntry | None = None
 
     async def get(self, kid: str) -> dict[str, Any]:
-        if self._entry and kid in self._entry.keys_by_kid:
-            if time.monotonic() - self._entry.fetched_at < self._max_age:
-                return self._entry.keys_by_kid[kid]
+        if (
+            self._entry
+            and kid in self._entry.keys_by_kid
+            and time.monotonic() - self._entry.fetched_at < self._max_age
+        ):
+            return self._entry.keys_by_kid[kid]
         await self._refresh()
         if self._entry and kid in self._entry.keys_by_kid:
             return self._entry.keys_by_kid[kid]

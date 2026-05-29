@@ -56,18 +56,14 @@ async def wiki_ingest_job(
                 msg = f"normalized document {normalized_id} not found"
                 raise RuntimeError(msg)
             source = (
-                await session.execute(
-                    select(Source).where(Source.id == normalized.source_id)
-                )
+                await session.execute(select(Source).where(Source.id == normalized.source_id))
             ).scalar_one_or_none()
             if source is None:
                 msg = f"source {normalized.source_id} not found"
                 raise RuntimeError(msg)
             profile = (
                 await session.execute(
-                    select(ModelProfile).where(
-                        ModelProfile.project_id == normalized.project_id
-                    )
+                    select(ModelProfile).where(ModelProfile.project_id == normalized.project_id)
                 )
             ).scalar_one_or_none()
             if profile is None:
@@ -102,9 +98,7 @@ async def wiki_ingest_job(
         # Fetch markdown for the workflow.
         markdown = asset_store.get(normalized.markdown_uri).decode("utf-8")
 
-        workflow = WikiIngestWorkflow(
-            session_maker=maker, litellm=litellm, principal=principal
-        )
+        workflow = WikiIngestWorkflow(session_maker=maker, litellm=litellm, principal=principal)
         initial: WikiIngestState = {
             "agent_run_id": agent_run_id,
             "project_id": normalized.project_id,
@@ -123,7 +117,7 @@ async def wiki_ingest_job(
             status = "succeeded"
             error_text: str | None = None
             committed = result.get("committed_revision_ids") or []
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             result = {}
             status = "failed"
             error_text = str(exc)[:4096]
@@ -132,9 +126,7 @@ async def wiki_ingest_job(
         async with maker() as session:
             ledger = LedgerWriter(session)
             run = (
-                await session.execute(
-                    select(AgentRun).where(AgentRun.id == agent_run_id)
-                )
+                await session.execute(select(AgentRun).where(AgentRun.id == agent_run_id))
             ).scalar_one_or_none()
             if run is not None:
                 run.status = status
@@ -144,9 +136,7 @@ async def wiki_ingest_job(
                 }
                 run.error_text = error_text
             src = (
-                await session.execute(
-                    select(Source).where(Source.id == source.id)
-                )
+                await session.execute(select(Source).where(Source.id == source.id))
             ).scalar_one_or_none()
             if src is not None:
                 if status == "succeeded":
@@ -181,9 +171,7 @@ async def wiki_ingest_job(
             async with maker() as session:
                 for rev_id in committed:
                     rev = (
-                        await session.execute(
-                            select(WikiRevision).where(WikiRevision.id == rev_id)
-                        )
+                        await session.execute(select(WikiRevision).where(WikiRevision.id == rev_id))
                     ).scalar_one_or_none()
                     if rev is None:
                         continue
@@ -211,23 +199,26 @@ async def wiki_ingest_job(
                 await session.commit()
                 for rev_id in committed:
                     rev = (
-                        await session.execute(
-                            select(WikiRevision).where(WikiRevision.id == rev_id)
-                        )
+                        await session.execute(select(WikiRevision).where(WikiRevision.id == rev_id))
                     ).scalar_one_or_none()
                     if rev is None:
                         continue
                     pending = (
-                        await session.execute(
-                            select(AgentRun).where(
-                                AgentRun.project_id == normalized.project_id,
-                                AgentRun.agent_kind == "mechanical_reviewer",
-                                AgentRun.input_payload["revision_id"].astext == str(rev_id),
-                                AgentRun.status == "pending",
+                        (
+                            await session.execute(
+                                select(AgentRun)
+                                .where(
+                                    AgentRun.project_id == normalized.project_id,
+                                    AgentRun.agent_kind == "mechanical_reviewer",
+                                    AgentRun.input_payload["revision_id"].astext == str(rev_id),
+                                    AgentRun.status == "pending",
+                                )
+                                .order_by(AgentRun.created_at.desc())
                             )
-                            .order_by(AgentRun.created_at.desc())
                         )
-                    ).scalars().first()
+                        .scalars()
+                        .first()
+                    )
                     if pending is None:
                         continue
                     review_token = mint_agent_token(

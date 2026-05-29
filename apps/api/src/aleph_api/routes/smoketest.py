@@ -12,15 +12,14 @@ from typing import Annotated
 from fastapi import APIRouter, Body
 from pydantic import BaseModel
 
+from aleph_api.deps import LiteLLMDep, PrincipalDep, SessionDep
+from aleph_api.middleware.project_scope import ProjectScopeDep
 from aleph_core.errors import BudgetExceeded, NotFound
 from aleph_core.schemas.model_profile import Capability
 from aleph_db.repos import cost as cost_repo
 from aleph_db.repos import model_profile as profile_repo
 from aleph_models.client import ChatMessage
 from aleph_security.roles import ProjectRole, require_at_least
-
-from aleph_api.deps import LiteLLMDep, PrincipalDep, SessionDep
-from aleph_api.middleware.project_scope import ProjectScopeDep
 
 router = APIRouter(prefix="/v1/projects", tags=["smoke"])
 
@@ -58,9 +57,7 @@ async def smoke_llm(
         raise NotFound(msg)
     hard_cap = budget.cap_usd * (budget.hard_pct / Decimal("100"))
     if budget.spent_usd >= hard_cap:
-        msg = (
-            f"budget hard cap reached: spent ${budget.spent_usd} / cap ${budget.cap_usd}"
-        )
+        msg = f"budget hard cap reached: spent ${budget.spent_usd} / cap ${budget.cap_usd}"
         raise BudgetExceeded(msg)
 
     resp = await litellm.chat(

@@ -68,9 +68,9 @@ class ActionRouter:
     async def dispatch(
         self,
         *,
-        session: "AsyncSession",
-        ledger: "LedgerWriter",
-        principal: "Principal",
+        session: AsyncSession,
+        ledger: LedgerWriter,
+        principal: Principal,
         project_id: UUID,
         request: CardActionRequest,
     ) -> CardActionResult:
@@ -113,10 +113,7 @@ class ActionRouter:
                 k: v
                 for k, v in kwargs.items()
                 if k in sig.parameters
-                or any(
-                    p.kind is inspect.Parameter.VAR_KEYWORD
-                    for p in sig.parameters.values()
-                )
+                or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
             }
             result = await handler(**accepted)
 

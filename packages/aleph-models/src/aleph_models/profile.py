@@ -23,7 +23,7 @@ class ResolvedBinding:
     cost_per_input_token_usd: Decimal
     cost_per_output_token_usd: Decimal
     cache_discount_pct: Decimal
-    fallback: "ResolvedBinding | None" = None
+    fallback: ResolvedBinding | None = None
 
 
 def _decimal(v: Any) -> Decimal:
@@ -47,9 +47,7 @@ def _build(b: dict[str, Any]) -> ResolvedBinding:
     )
 
 
-def resolve_binding(
-    bindings: dict[str, Any], capability: Capability | str
-) -> ResolvedBinding:
+def resolve_binding(bindings: dict[str, Any], capability: Capability | str) -> ResolvedBinding:
     key = capability.value if isinstance(capability, Capability) else capability
     raw = bindings.get(key)
     if raw is None:

@@ -17,6 +17,8 @@ from fastapi import APIRouter, Body, File, Form, Request, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 from sqlalchemy import select
 
+from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
+from aleph_api.middleware.project_scope import ProjectScopeDep
 from aleph_core.errors import NotFound, ValidationFailed
 from aleph_core.ids import uuid7
 from aleph_db.models.agent import AgentRun
@@ -30,9 +32,6 @@ from aleph_rks.models import (
 from aleph_rks.source_service import register_uploaded_source
 from aleph_security.agent_token import mint_agent_token
 from aleph_security.roles import ProjectRole, require_at_least
-
-from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
-from aleph_api.middleware.project_scope import ProjectScopeDep
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -183,7 +182,7 @@ async def _kick_off_normalize(
             await pool.enqueue_job("normalize_job", str(created.version.id), token)
         finally:
             await pool.aclose()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         # Job enqueue failed — mark source as failed so the UI surfaces it.
         created.source.status = "failed"
         created.source.failure_reason = f"failed to enqueue normalize job: {exc}"[:2048]

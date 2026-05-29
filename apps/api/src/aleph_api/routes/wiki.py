@@ -10,12 +10,11 @@ from fastapi import APIRouter, Body, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
+from aleph_api.deps import SessionDep
+from aleph_api.middleware.project_scope import ProjectScopeDep
 from aleph_core.errors import NotFound
 from aleph_wiki.index_service import IndexService
 from aleph_wiki.models import WikiClaim, WikiLink, WikiPage, WikiRevision
-
-from aleph_api.deps import SessionDep
-from aleph_api.middleware.project_scope import ProjectScopeDep
 
 router = APIRouter(prefix="/v1/projects", tags=["wiki"])
 
@@ -79,9 +78,7 @@ async def list_pages(
     return [WikiPageSummaryOut.model_validate(p) for p in rows]
 
 
-@router.get(
-    "/{project_id}/wiki/pages/{page_id}", response_model=WikiPageDetailOut
-)
+@router.get("/{project_id}/wiki/pages/{page_id}", response_model=WikiPageDetailOut)
 async def get_page(
     project_id: ProjectScopeDep,
     page_id: UUID,
@@ -90,9 +87,7 @@ async def get_page(
 ) -> WikiPageDetailOut:
     page = (
         await session.execute(
-            select(WikiPage).where(
-                WikiPage.id == page_id, WikiPage.project_id == project_id
-            )
+            select(WikiPage).where(WikiPage.id == page_id, WikiPage.project_id == project_id)
         )
     ).scalar_one_or_none()
     if page is None:
@@ -107,11 +102,7 @@ async def get_page(
         ).scalar_one_or_none()
         if rev is not None:
             claim_rows = list(
-                (
-                    await session.execute(
-                        select(WikiClaim).where(WikiClaim.revision_id == rev.id)
-                    )
-                )
+                (await session.execute(select(WikiClaim).where(WikiClaim.revision_id == rev.id)))
                 .scalars()
                 .all()
             )
@@ -129,9 +120,7 @@ async def get_page(
         link_rows = list(
             (
                 await session.execute(
-                    select(WikiLink).where(
-                        WikiLink.src_revision_id == page.current_revision_id
-                    )
+                    select(WikiLink).where(WikiLink.src_revision_id == page.current_revision_id)
                 )
             )
             .scalars()
@@ -139,11 +128,11 @@ async def get_page(
         )
         links = [
             {
-                "dst_title": l.dst_title,
-                "dst_page_id": str(l.dst_page_id) if l.dst_page_id else None,
-                "occurrences": l.occurrences,
+                "dst_title": lk.dst_title,
+                "dst_page_id": str(lk.dst_page_id) if lk.dst_page_id else None,
+                "occurrences": lk.occurrences,
             }
-            for l in link_rows
+            for lk in link_rows
         ]
     return WikiPageDetailOut(
         page=WikiPageSummaryOut.model_validate(page),
@@ -153,17 +142,13 @@ async def get_page(
     )
 
 
-@router.get(
-    "/{project_id}/wiki/pages/by-slug/{slug}", response_model=WikiPageDetailOut
-)
+@router.get("/{project_id}/wiki/pages/by-slug/{slug}", response_model=WikiPageDetailOut)
 async def get_page_by_slug(
     project_id: ProjectScopeDep, slug: str, session: SessionDep
 ) -> WikiPageDetailOut:
     page = (
         await session.execute(
-            select(WikiPage).where(
-                WikiPage.project_id == project_id, WikiPage.slug == slug
-            )
+            select(WikiPage).where(WikiPage.project_id == project_id, WikiPage.slug == slug)
         )
     ).scalar_one_or_none()
     if page is None:
@@ -204,18 +189,14 @@ class WikiSearchHitOut(BaseModel):
     wikilinks_out: list[dict[str, Any]]
 
 
-@router.post(
-    "/{project_id}/wiki/search", response_model=list[WikiSearchHitOut]
-)
+@router.post("/{project_id}/wiki/search", response_model=list[WikiSearchHitOut])
 async def wiki_search(
     project_id: ProjectScopeDep,
     body: Annotated[WikiSearchIn, Body()],
     session: SessionDep,
 ) -> list[WikiSearchHitOut]:
     svc = IndexService(session)
-    hits = await svc.select_pages(
-        project_id=project_id, query=body.query, top_k=body.top_k
-    )
+    hits = await svc.select_pages(project_id=project_id, query=body.query, top_k=body.top_k)
     return [
         WikiSearchHitOut(
             page_id=h.page_id,

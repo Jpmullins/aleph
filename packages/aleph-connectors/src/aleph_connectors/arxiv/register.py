@@ -46,9 +46,7 @@ class ArxivConnector:
     def __init__(self, *, http_client: httpx.AsyncClient | None = None) -> None:
         self._http = http_client or httpx.AsyncClient(timeout=30.0)
 
-    async def search(
-        self, ctx: ConnectorContext, query: SearchQuery
-    ) -> list[ConnectorResult]:
+    async def search(self, ctx: ConnectorContext, query: SearchQuery) -> list[ConnectorResult]:
         resp = await self._http.get(
             _ARXIV_API,
             params={
@@ -69,8 +67,7 @@ class ArxivConnector:
             title = (_text(entry.find(f"{_ATOM_NS}title")) or "").strip()
             summary = (_text(entry.find(f"{_ATOM_NS}summary")) or "").strip()
             authors = [
-                _text(a.find(f"{_ATOM_NS}name")) or ""
-                for a in entry.findall(f"{_ATOM_NS}author")
+                _text(a.find(f"{_ATOM_NS}name")) or "" for a in entry.findall(f"{_ATOM_NS}author")
             ]
             pdf_url = None
             for link in entry.findall(f"{_ATOM_NS}link"):
@@ -100,9 +97,7 @@ class ArxivConnector:
             )
         return out
 
-    async def fetch(
-        self, ctx: ConnectorContext, result: ConnectorResult
-    ) -> RawPayload:
+    async def fetch(self, ctx: ConnectorContext, result: ConnectorResult) -> RawPayload:
         url = result.url
         if not url:
             msg = "arxiv fetch requires a url"

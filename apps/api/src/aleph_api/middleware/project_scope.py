@@ -11,11 +11,9 @@ from uuid import UUID
 
 from fastapi import Depends, Path
 
+from aleph_api.deps import PrincipalDep, SessionDep
 from aleph_core.errors import NotFound
 from aleph_db.repos.project import get_member
-from aleph_security.principal import Principal
-
-from aleph_api.deps import PrincipalDep, SessionDep
 
 
 async def project_scope_dep(
@@ -28,9 +26,7 @@ async def project_scope_dep(
     Returns 404 (NotFound) if the principal is not a member of the
     project — never leak existence across project scopes.
     """
-    member = await get_member(
-        session, project_id=project_id, user_id=principal.user_id
-    )
+    member = await get_member(session, project_id=project_id, user_id=principal.user_id)
     if member is None:
         msg = f"project not found: {project_id}"
         raise NotFound(msg)

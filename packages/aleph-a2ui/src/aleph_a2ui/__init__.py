@@ -17,9 +17,9 @@ from aleph_a2ui.catalog import (
 from aleph_a2ui.models import CardAction, InteractiveCard, InteractiveCardVersion
 
 __all__ = [
-    "ActionRouter",
     "CATALOG",
     "CATALOG_VERSION",
+    "ActionRouter",
     "CardAction",
     "CardActionRequest",
     "CardActionResult",

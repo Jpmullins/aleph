@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
 
 async def create_request(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
     project_id: UUID,
     target_kind: str,
@@ -38,7 +38,7 @@ async def create_request(
     severity: str,
     proposed_patch: dict[str, Any] | None,
     evidence_refs: list[dict[str, Any]],
-    requested_by: "Principal",
+    requested_by: Principal,
 ) -> ApprovalRequest:
     req = ApprovalRequest(
         id=uuid7(),
@@ -62,10 +62,10 @@ async def create_request(
 
 
 async def decide(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
-    ledger: "LedgerWriter",
-    principal: "Principal",
+    ledger: LedgerWriter,
+    principal: Principal,
     project_id: UUID,
     request_id: UUID,
     decision: str,

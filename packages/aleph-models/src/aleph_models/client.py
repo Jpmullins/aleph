@@ -34,9 +34,8 @@ from aleph_observability.tracing import current_trace_id, start_span
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
-    from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from aleph_db.repos.cost import CostWriter
     from aleph_security.principal import Principal
 
 
@@ -103,7 +102,7 @@ class EmbedResponse(BaseModel):
 
 @dataclass
 class _IdemCache:
-    redis: "Redis | None"
+    redis: Redis | None
 
     async def get(self, key: str) -> str | None:
         if self.redis is None:
@@ -134,8 +133,8 @@ class LiteLLMClient:
         api_key: str,
         http_client: httpx.AsyncClient,
         pricing: PricingTable,
-        session_maker: "async_sessionmaker[AsyncSession]",
-        redis_client: "Redis | None" = None,
+        session_maker: async_sessionmaker[AsyncSession],
+        redis_client: Redis | None = None,
         idempotency_ttl_seconds: int = 86_400,
     ) -> None:
         if not base_url:
@@ -181,7 +180,7 @@ class LiteLLMClient:
     async def chat(
         self,
         *,
-        principal: "Principal",
+        principal: Principal,
         project_id: UUID,
         agent_run_id: UUID | None,
         capability: Capability,
@@ -200,7 +199,6 @@ class LiteLLMClient:
         if idempotency_key:
             cached = await self._idem.get(idempotency_key)
             if cached is not None:
-                msg = f"idempotent replay: {idempotency_key} → {cached}"
                 # Replay path returns a stub-shaped response; callers usually
                 # fetch the original ModelCall row out-of-band. We surface
                 # the original model_call_id for them to inspect.
@@ -317,7 +315,7 @@ class LiteLLMClient:
     async def embed(
         self,
         *,
-        principal: "Principal",
+        principal: Principal,
         project_id: UUID,
         agent_run_id: UUID | None,
         profile_bindings: dict[str, Any],
@@ -383,9 +381,7 @@ class LiteLLMClient:
 
     # ---- internals ---------------------------------------------------------
 
-    async def _post_with_retry(
-        self, path: str, payload: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _post_with_retry(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
@@ -395,9 +391,7 @@ class LiteLLMClient:
 
         async for attempt in gateway_retry():
             with attempt:
-                resp = await self._http.post(
-                    url, json=payload, headers=headers, timeout=120.0
-                )
+                resp = await self._http.post(url, json=payload, headers=headers, timeout=120.0)
                 if resp.status_code >= 400:
                     resp.raise_for_status()
                 return resp.json()

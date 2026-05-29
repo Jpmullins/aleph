@@ -36,18 +36,14 @@ class InteractiveCard(CommonColumns, Base):
 
 class InteractiveCardVersion(Base):
     __tablename__ = "interactive_card_versions"
-    __table_args__ = (
-        UniqueConstraint("card_id", "version_no", name="uq_card_version_no"),
-    )
+    __table_args__ = (UniqueConstraint("card_id", "version_no", name="uq_card_version_no"),)
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
     project_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     card_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     version_no: Mapped[int] = mapped_column(Integer, nullable=False)
     a2ui_payload_jsonb: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    data_model_jsonb: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, server_default="{}"
-    )
+    data_model_jsonb: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
     parent_version_id: Mapped[UUID | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -71,12 +67,8 @@ class CardAction(Base):
     action_kind: Mapped[str] = mapped_column(String(64), nullable=False)
     target_id: Mapped[UUID | None] = mapped_column(nullable=True)
     target_kind: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    params_jsonb: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, server_default="{}"
-    )
-    result_jsonb: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, server_default="{}"
-    )
+    params_jsonb: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
+    result_jsonb: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
     actor_id: Mapped[UUID] = mapped_column(nullable=False)
     actor_kind: Mapped[str] = mapped_column(String(16), nullable=False)
     ledger_event_id: Mapped[UUID | None] = mapped_column(nullable=True)

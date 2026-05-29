@@ -22,14 +22,10 @@ class UploadConnectorAdapter:
     requires_auth: ClassVar[bool] = False
     metadata_schema: ClassVar[type[BaseModel]] = UploadMetadata
 
-    async def search(
-        self, ctx: ConnectorContext, query: SearchQuery
-    ) -> list[ConnectorResult]:
+    async def search(self, ctx: ConnectorContext, query: SearchQuery) -> list[ConnectorResult]:
         msg = "upload connector does not support search"
         raise NotSupported(msg)
 
-    async def fetch(
-        self, ctx: ConnectorContext, result: ConnectorResult
-    ) -> RawPayload:
+    async def fetch(self, ctx: ConnectorContext, result: ConnectorResult) -> RawPayload:
         msg = "upload fetch is handled in-process by POST /sources/upload"
         raise NotSupported(msg)

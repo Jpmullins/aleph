@@ -9,8 +9,6 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from aleph_observability.tracing import instrument_fastapi
-
 from aleph_api.lifespan import lifespan
 from aleph_api.middleware.auth import AuthMiddleware
 from aleph_api.middleware.errors import ErrorMiddleware
@@ -47,6 +45,7 @@ from aleph_api.routes import (
     synthesize,
     wiki,
 )
+from aleph_observability.tracing import instrument_fastapi
 
 
 def create_app() -> FastAPI:

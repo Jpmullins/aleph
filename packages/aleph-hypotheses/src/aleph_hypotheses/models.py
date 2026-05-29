@@ -29,9 +29,7 @@ class Hypothesis(CommonColumns, Base):
     confidence: Mapped[str] = mapped_column(
         String(24), nullable=False, server_default="under_investigation"
     )
-    status: Mapped[str] = mapped_column(
-        String(16), nullable=False, server_default="active"
-    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="active")
     current_version_id: Mapped[UUID | None] = mapped_column(nullable=True)
     last_evidence_change_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -41,9 +39,7 @@ class Hypothesis(CommonColumns, Base):
 class HypothesisVersion(Base):
     __tablename__ = "hypothesis_versions"
     __table_args__ = (
-        UniqueConstraint(
-            "hypothesis_id", "version_no", name="uq_hypothesis_version_no"
-        ),
+        UniqueConstraint("hypothesis_id", "version_no", name="uq_hypothesis_version_no"),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True)

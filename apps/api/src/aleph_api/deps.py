@@ -13,12 +13,12 @@ from aleph_models.client import LiteLLMClient
 from aleph_security.principal import Principal
 
 
-def get_session_maker(request: Request) -> "async_sessionmaker[AsyncSession]":
+def get_session_maker(request: Request) -> async_sessionmaker[AsyncSession]:
     return request.app.state.session_maker
 
 
 async def session_dep(
-    maker: "async_sessionmaker[AsyncSession]" = Depends(get_session_maker),
+    maker: Annotated[async_sessionmaker[AsyncSession], Depends(get_session_maker)],
 ) -> AsyncIterator[AsyncSession]:
     async with maker() as session:
         try:

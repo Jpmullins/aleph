@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 
 async def write_feedback(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
     project_id: UUID,
     page_id: UUID | None,
@@ -50,7 +50,7 @@ async def write_feedback(
 
 
 async def pending_for_concept(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
     project_id: UUID,
     concept_name: str,
@@ -68,7 +68,7 @@ async def pending_for_concept(
 
 
 async def mark_addressed(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
     feedback_ids: list[UUID],
     revision_id: UUID,

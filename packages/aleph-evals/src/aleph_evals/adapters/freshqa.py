@@ -27,9 +27,7 @@ class FreshQAAdapter:
     def __init__(self, *, aiq_base_url: str | None = None) -> None:
         self._aiq_base_url = aiq_base_url
 
-    def run_cases(
-        self, cases: Iterable[dict[str, Any]]
-    ) -> Iterable[dict[str, Any]]:
+    def run_cases(self, cases: Iterable[dict[str, Any]]) -> Iterable[dict[str, Any]]:
         try:
             import aiq_agent.evals.freshqa as freshqa_mod  # type: ignore[import-not-found]
         except ImportError as exc:

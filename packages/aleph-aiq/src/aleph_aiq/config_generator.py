@@ -107,9 +107,7 @@ def emit_config(
     if feed_tools:
         sources.append({"id": "feed", "name": "RSS Feeds", "tools": feed_tools})
     if model_repo_tools:
-        sources.append(
-            {"id": "model_repo", "name": "Model Repos", "tools": model_repo_tools}
-        )
+        sources.append({"id": "model_repo", "name": "Model Repos", "tools": model_repo_tools})
 
     config = {
         "general": {

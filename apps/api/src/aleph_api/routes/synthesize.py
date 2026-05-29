@@ -22,6 +22,8 @@ from sqlalchemy import select
 from aleph_aiq.auth_bridge import issue_service_token
 from aleph_aiq.client import AIQClient
 from aleph_aiq.job_service import append_aiq_event, create_aiq_agent_run
+from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
+from aleph_api.middleware.project_scope import ProjectScopeDep
 from aleph_connectors.models import ApprovalDecision, SynthesisProposal
 from aleph_core.errors import NotFound, ValidationFailed
 from aleph_core.ids import uuid7
@@ -32,9 +34,6 @@ from aleph_security.agent_token import mint_agent_token
 from aleph_security.roles import ProjectRole, require_at_least
 from aleph_wiki.feedback_service import write_feedback
 from aleph_wiki.models import WikiPage
-
-from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
-from aleph_api.middleware.project_scope import ProjectScopeDep
 
 router = APIRouter(prefix="/v1/projects", tags=["synthesize"])
 
@@ -182,14 +181,14 @@ async def synthesize(
                     )
                 finally:
                     await pool.aclose()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 await append_aiq_event(
                     session,
                     agent_run_id=started.agent_run_id,
                     event_kind="aiq.poll.enqueue_failed",
                     payload={"error": str(exc)[:1024]},
                 )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         await append_aiq_event(
             session,
             agent_run_id=started.agent_run_id,
@@ -205,9 +204,7 @@ async def synthesize(
     )
 
 
-@router.get(
-    "/{project_id}/synthesis-proposals", response_model=list[ProposalOut]
-)
+@router.get("/{project_id}/synthesis-proposals", response_model=list[ProposalOut])
 async def list_proposals(
     project_id: ProjectScopeDep,
     session: SessionDep,

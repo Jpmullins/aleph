@@ -15,16 +15,15 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Query, Request
 from sqlalchemy import select
 from starlette.responses import StreamingResponse
 
-from aleph_db.models.agent import AgentEvent, AgentRun
-
 from aleph_api.middleware.project_scope import ProjectScopeDep
+from aleph_db.models.agent import AgentEvent, AgentRun
 
 router = APIRouter(prefix="/v1/projects", tags=["agent-events"])
 
@@ -56,6 +55,7 @@ async def list_agent_events(
             stmt = stmt.where(AgentEvent.timestamp > since)
         if agent_run_id is not None:
             from uuid import UUID
+
             stmt = stmt.where(AgentEvent.agent_run_id == UUID(agent_run_id))
         stmt = stmt.order_by(AgentEvent.timestamp.desc()).limit(limit)
         rows = (await session.execute(stmt)).all()
@@ -71,11 +71,7 @@ async def list_agent_events(
                 "event_kind": event.event_kind,
                 "phase": payload.get("phase"),
                 "duration_ms": payload.get("duration_ms"),
-                "payload": {
-                    k: v
-                    for k, v in payload.items()
-                    if k not in ("phase", "duration_ms")
-                },
+                "payload": {k: v for k, v in payload.items() if k not in ("phase", "duration_ms")},
                 "timestamp": event.timestamp.isoformat(),
             }
         )
@@ -106,7 +102,7 @@ async def stream_agent_events(
         }
     """
     maker = request.app.state.session_maker
-    cursor: datetime = since or datetime.now(tz=timezone.utc)
+    cursor: datetime = since or datetime.now(tz=UTC)
 
     async def _gen() -> AsyncIterator[bytes]:
         nonlocal cursor
@@ -137,13 +133,11 @@ async def stream_agent_events(
                     "phase": payload.get("phase"),
                     "duration_ms": payload.get("duration_ms"),
                     "payload": {
-                        k: v
-                        for k, v in payload.items()
-                        if k not in ("phase", "duration_ms")
+                        k: v for k, v in payload.items() if k not in ("phase", "duration_ms")
                     },
                     "timestamp": event.timestamp.isoformat(),
                 }
-                yield f"event: phase\ndata: {json.dumps(body)}\n\n".encode("utf-8")
+                yield f"event: phase\ndata: {json.dumps(body)}\n\n".encode()
                 cursor = event.timestamp
 
             # Heartbeat so proxies don't close idle connections.

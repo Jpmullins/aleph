@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 from langchain_core.runnables import (
-    RunnableConfig,  # noqa: TC002 — runtime import: @tool introspects this annotation to build the args schema
+    RunnableConfig,
 )
 from langchain_core.tools import tool
 
@@ -31,7 +31,7 @@ def build_reviewer_subagent(*, settings: Any) -> dict[str, Any]:
     circular import (copilot_agent does not import this module at top level; the
     orchestrator builder calls this function at startup).
     """
-    from aleph_api.copilot_agent import (  # noqa: PLC0415 — function-local to break the copilot_agent ↔ subagents import cycle
+    from aleph_api.copilot_agent import (
         _project_id_from_config,  # pyright: ignore[reportPrivateUsage] — shared scope resolver reused (DRY); module-private to the api
         subagent_model,
     )
@@ -46,9 +46,9 @@ def build_reviewer_subagent(*, settings: Any) -> dict[str, Any]:
         background — findings appear as approval requests / findings in the
         Reviews flow. Don't wait.
         """
-        import httpx  # noqa: PLC0415 — local import mirrors wiki_builder's self-call pattern
+        import httpx
 
-        from aleph_api.copilot_agent import (  # noqa: PLC0415 — function-local to break the import cycle
+        from aleph_api.copilot_agent import (
             _runtime,  # pyright: ignore[reportPrivateUsage] — shared runtime accessor (DRY); module-private to the api
         )
 

@@ -27,12 +27,11 @@ from aleph_reviewer.review_service import (
     finalize_run,
     start_run,
 )
-from aleph_wiki.models import WikiClaim, WikiPage, WikiRevision
+from aleph_wiki.models import WikiPage, WikiRevision
 
 if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from aleph_db.repos.ledger import LedgerWriter
     from aleph_db.models.model_profile import ModelProfile
     from aleph_models.client import LiteLLMClient
     from aleph_security.principal import Principal
@@ -40,10 +39,10 @@ if TYPE_CHECKING:
 
 @dataclass
 class _Ctx:
-    session_maker: "async_sessionmaker[AsyncSession]"
-    litellm: "LiteLLMClient"
-    principal: "Principal"
-    profile: "ModelProfile"
+    session_maker: async_sessionmaker[AsyncSession]
+    litellm: LiteLLMClient
+    principal: Principal
+    profile: ModelProfile
 
 
 _active_ctx: _Ctx | None = None
@@ -63,8 +62,7 @@ class EditorialReviewState(TypedDict, total=False):
     finding_count: int
 
 
-_FINDING_SCHEMA = (
-    """Return JSON:
+_FINDING_SCHEMA = """Return JSON:
 {
   "findings": [
     {
@@ -77,7 +75,6 @@ _FINDING_SCHEMA = (
     }
   ]
 }"""
-)
 
 
 async def _run_subagent(
@@ -179,11 +176,9 @@ async def _sample_payload(state: EditorialReviewState) -> dict[str, Any]:
         rev_ids = [p.current_revision_id for p in pages if p.current_revision_id]
         revisions = (
             list(
-                (
-                    await session.execute(
-                        select(WikiRevision).where(WikiRevision.id.in_(rev_ids))
-                    )
-                ).scalars().all()
+                (await session.execute(select(WikiRevision).where(WikiRevision.id.in_(rev_ids))))
+                .scalars()
+                .all()
             )
             if rev_ids
             else []
@@ -315,10 +310,10 @@ class EditorialReviewerWorkflow:
     def __init__(
         self,
         *,
-        session_maker: "async_sessionmaker[AsyncSession]",
-        litellm: "LiteLLMClient",
-        principal: "Principal",
-        profile: "ModelProfile",
+        session_maker: async_sessionmaker[AsyncSession],
+        litellm: LiteLLMClient,
+        principal: Principal,
+        profile: ModelProfile,
     ) -> None:
         self._ctx = _Ctx(
             session_maker=session_maker,

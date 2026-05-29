@@ -8,7 +8,7 @@ Inc 3 re-registers this as a `nat` function inside AIQ's data_source_registry.
 from __future__ import annotations
 
 import hashlib
-from typing import Any, ClassVar, Literal
+from typing import ClassVar, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -60,9 +60,7 @@ class UploadConnector:
     def __init__(self, asset_store: AssetStore) -> None:
         self._assets = asset_store
 
-    async def search(
-        self, query: SearchQuery, project: ProjectScope
-    ) -> list[ConnectorResult]:
+    async def search(self, query: SearchQuery, project: ProjectScope) -> list[ConnectorResult]:
         msg = "upload connector does not support search"
         raise NotSupported(msg)
 
@@ -76,7 +74,7 @@ class UploadConnector:
         mime_type: str,
     ) -> RawPayload:
         """Direct upload path. Stores the bytes and returns the canonical payload."""
-        sha = hashlib.sha256(data).hexdigest()
+        hashlib.sha256(data).hexdigest()
         ext = extension_for_mime(mime_type, filename)
         stored = self._assets.put_source_asset(
             project_id=project.project_id,
@@ -98,9 +96,7 @@ class UploadConnector:
             },
         )
 
-    async def fetch(
-        self, result: ConnectorResult, project: ProjectScope
-    ) -> RawPayload:
+    async def fetch(self, result: ConnectorResult, project: ProjectScope) -> RawPayload:
         storage_uri = result.metadata.get("storage_uri")
         expected_sha = result.metadata.get("sha256")
         if not isinstance(storage_uri, str):
@@ -115,5 +111,5 @@ class UploadConnector:
             mime_type=mime_type,
             sha256=sha,
             extension=ext,
-            declared_metadata={k: v for k, v in result.metadata.items()},
+            declared_metadata=dict(result.metadata.items()),
         )

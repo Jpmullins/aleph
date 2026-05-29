@@ -28,13 +28,13 @@ class _FakeSession:
     def add(self, obj: Any) -> None:
         self.added.append(obj)
 
-    async def flush(self) -> None:  # noqa: D401
+    async def flush(self) -> None:
         return None
 
     async def commit(self) -> None:
         return None
 
-    async def __aenter__(self) -> "_FakeSession":
+    async def __aenter__(self) -> _FakeSession:
         return self
 
     async def __aexit__(self, *exc: object) -> bool:

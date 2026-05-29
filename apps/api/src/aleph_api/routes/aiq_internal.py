@@ -11,7 +11,6 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Any
-from uuid import UUID
 
 from fastapi import APIRouter, Body, Header, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -28,7 +27,6 @@ from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
 from aleph_db.models.agent import AgentEvent
 from aleph_db.repos.ledger import LedgerWriter
-from aleph_observability.tracing import current_trace_id
 from aleph_rks.models import Connector, ConnectorBinding
 from aleph_rks.source_service import register_uploaded_source
 
@@ -71,9 +69,7 @@ async def get_credential(
     maker = request.app.state.session_maker
     async with maker() as session:
         connector = (
-            await session.execute(
-                select(Connector).where(Connector.kind == connector_kind)
-            )
+            await session.execute(select(Connector).where(Connector.kind == connector_kind))
         ).scalar_one_or_none()
         if connector is None:
             msg = f"unknown connector: {connector_kind}"
@@ -104,9 +100,7 @@ async def get_credential(
             "huggingface_hub": os.environ.get("HUGGINGFACE_API_KEY", "") or "",
             "lens": os.environ.get("LENS_API_KEY", "") or "",
         }
-        svc = ConnectorCredentialService(
-            session, cipher=cipher, dev_default_for=defaults
-        )
+        svc = ConnectorCredentialService(session, cipher=cipher, dev_default_for=defaults)
         plaintext = await svc.decrypt_for_callback(
             project_id=claims.project_id,
             connector_id=connector.id,

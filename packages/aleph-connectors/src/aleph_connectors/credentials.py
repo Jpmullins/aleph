@@ -23,7 +23,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
-from nacl import public, secret
+from nacl import secret
 from sqlalchemy import (
     DateTime,
     LargeBinary,
@@ -32,7 +32,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from aleph_core.errors import NotFound, PermissionDenied, ValidationFailed
+from aleph_core.errors import NotFound, ValidationFailed
 from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
 from aleph_db.base import Base, CommonColumns
@@ -47,9 +47,7 @@ if TYPE_CHECKING:
 class ConnectorCredential(CommonColumns, Base):
     __tablename__ = "connector_credentials"
     __table_args__ = (
-        UniqueConstraint(
-            "project_id", "connector_id", name="uq_cred_project_connector"
-        ),
+        UniqueConstraint("project_id", "connector_id", name="uq_cred_project_connector"),
     )
 
     project_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
@@ -106,7 +104,7 @@ class LibsodiumSealedBoxCipher:
 class ConnectorCredentialService:
     def __init__(
         self,
-        session: "AsyncSession",
+        session: AsyncSession,
         *,
         cipher: CredentialCipher,
         dev_default_for: dict[str, str] | None = None,
@@ -118,8 +116,8 @@ class ConnectorCredentialService:
     async def upsert(
         self,
         *,
-        ledger: "LedgerWriter",
-        principal: "Principal",
+        ledger: LedgerWriter,
+        principal: Principal,
         project_id: UUID,
         connector_id: UUID,
         connector_kind: str,
@@ -176,8 +174,8 @@ class ConnectorCredentialService:
     async def delete(
         self,
         *,
-        ledger: "LedgerWriter",
-        principal: "Principal",
+        ledger: LedgerWriter,
+        principal: Principal,
         project_id: UUID,
         connector_id: UUID,
         connector_kind: str,
@@ -213,8 +211,8 @@ class ConnectorCredentialService:
     async def rotate(
         self,
         *,
-        ledger: "LedgerWriter",
-        principal: "Principal",
+        ledger: LedgerWriter,
+        principal: Principal,
         project_id: UUID,
         connector_id: UUID,
         connector_kind: str,
@@ -254,9 +252,7 @@ class ConnectorCredentialService:
             )
         ).scalar_one_or_none()
         if existing is not None:
-            return self._cipher.decrypt(
-                project_id=project_id, cipher_blob=existing.cipher_blob
-            )
+            return self._cipher.decrypt(project_id=project_id, cipher_blob=existing.cipher_blob)
         fallback = self._defaults.get(connector_kind, "").strip()
         if not fallback:
             msg = f"no credential available for {connector_kind}"

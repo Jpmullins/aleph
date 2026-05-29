@@ -16,9 +16,9 @@ if TYPE_CHECKING:
 class ConnectorRegistry:
     def __init__(self) -> None:
         self._lock = RLock()
-        self._by_kind: dict[str, "ConnectorBase"] = {}
+        self._by_kind: dict[str, ConnectorBase] = {}
 
-    def register(self, connector: "ConnectorBase") -> None:
+    def register(self, connector: ConnectorBase) -> None:
         with self._lock:
             kind = getattr(connector, "kind", None)
             if not isinstance(kind, str) or not kind:
@@ -26,10 +26,10 @@ class ConnectorRegistry:
                 raise ValueError(msg)
             self._by_kind[kind] = connector
 
-    def get(self, kind: str) -> "ConnectorBase | None":
+    def get(self, kind: str) -> ConnectorBase | None:
         return self._by_kind.get(kind)
 
-    def all(self) -> dict[str, "ConnectorBase"]:
+    def all(self) -> dict[str, ConnectorBase]:
         return dict(self._by_kind)
 
     def kinds(self) -> list[str]:

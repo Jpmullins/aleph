@@ -17,15 +17,13 @@ from __future__ import annotations
 
 import re
 from contextvars import ContextVar
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypedDict
 from uuid import UUID
 
 from langgraph.graph import END, START, StateGraph
 
 from aleph_core.ids import uuid7
-from aleph_core.time import utcnow
 from aleph_db.repos.agent_events import with_phase
 from aleph_observability.tracing import start_span
 from aleph_wiki.alias_service import AliasService
@@ -34,14 +32,14 @@ from aleph_wiki.citation_verification import (
     verify_citations,
 )
 from aleph_wiki.wiki_service import (
-    ClaimDraft,
     CitationDraft,
+    ClaimDraft,
     WikiLinkDraft,
     WikiService,
 )
 
 if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from aleph_models.client import LiteLLMClient
     from aleph_security.principal import Principal
@@ -76,16 +74,14 @@ class AIQReport:
 
 @dataclass
 class _Ctx:
-    session_maker: "async_sessionmaker[AsyncSession]"
-    litellm: "LiteLLMClient"
-    principal: "Principal"
+    session_maker: async_sessionmaker[AsyncSession]
+    litellm: LiteLLMClient
+    principal: Principal
 
 
 # ContextVar (not a module global) so concurrent synthesis runs in the same
 # worker process (arq max_jobs > 1) don't clobber each other's context.
-_active_ctx_var: ContextVar[_Ctx | None] = ContextVar(
-    "aleph_synthesis_active_ctx", default=None
-)
+_active_ctx_var: ContextVar[_Ctx | None] = ContextVar("aleph_synthesis_active_ctx", default=None)
 
 
 def _ctx() -> _Ctx:
@@ -125,9 +121,7 @@ async def _node_concept_normalize(state: SynthesisState) -> dict:
         topic = state["topic"].strip()
         async with ctx.session_maker() as session:
             svc = AliasService(session)
-            resolution = await svc.resolve(
-                project_id=state["project_id"], surface_form=topic
-            )
+            resolution = await svc.resolve(project_id=state["project_id"], surface_form=topic)
             normalized = resolution.canonical_name if resolution else topic
         return {"normalized_topic": normalized}
 
@@ -176,9 +170,7 @@ async def _node_wikilink_resolve(state: SynthesisState) -> dict:
             async with ctx.session_maker() as session:
                 svc = AliasService(session)
                 for title, occ in counts.items():
-                    r = await svc.resolve(
-                        project_id=state["project_id"], surface_form=title
-                    )
+                    r = await svc.resolve(project_id=state["project_id"], surface_form=title)
                     wikilinks.append(
                         WikiLinkDraft(
                             dst_title=title,
@@ -203,9 +195,8 @@ async def _node_commit_revision(state: SynthesisState) -> dict:
         # Verification failures block commit per spec §3.9.
         failures = state.get("verification_failures") or []
         if failures:
-            msg = (
-                "synthesis commit blocked: citations failed verification: "
-                + ", ".join(failures[:8])
+            msg = "synthesis commit blocked: citations failed verification: " + ", ".join(
+                failures[:8]
             )
             raise CitationVerificationFailure(
                 msg, verified=state.get("verified_markers") or {}, missing_markers=failures
@@ -218,9 +209,7 @@ async def _node_commit_revision(state: SynthesisState) -> dict:
         for c in report.claims:
             citations = []
             for marker_raw in c.citation_markers:
-                marker = (
-                    marker_raw if marker_raw.startswith("[") else f"[{marker_raw}]"
-                )
+                marker = marker_raw if marker_raw.startswith("[") else f"[{marker_raw}]"
                 ref = report.citations_by_marker.get(marker.strip("[]"))
                 if ref is None:
                     continue
@@ -312,13 +301,11 @@ class SynthesisWorkflow:
     def __init__(
         self,
         *,
-        session_maker: "async_sessionmaker[AsyncSession]",
-        litellm: "LiteLLMClient",
-        principal: "Principal",
+        session_maker: async_sessionmaker[AsyncSession],
+        litellm: LiteLLMClient,
+        principal: Principal,
     ) -> None:
-        self._ctx = _Ctx(
-            session_maker=session_maker, litellm=litellm, principal=principal
-        )
+        self._ctx = _Ctx(session_maker=session_maker, litellm=litellm, principal=principal)
         graph: StateGraph = StateGraph(SynthesisState)
         graph.add_node("concept_normalize", _node_concept_normalize)
         graph.add_node("citation_verification", _node_citation_verification)

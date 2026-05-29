@@ -28,9 +28,7 @@ class UserFeedback(CommonColumns, Base):
     # excellent | note_only
     note: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     severity: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    context_jsonb: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, server_default="{}"
-    )
+    context_jsonb: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
     # surface-specific extras: e.g. which claim citation was wrong, which
     # source seemed misattributed, the message_id when target_kind=claim
     promoted_to_eval_case_id: Mapped[UUID | None] = mapped_column(nullable=True)

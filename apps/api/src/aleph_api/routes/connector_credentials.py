@@ -8,12 +8,13 @@ KMS-AES-GCM (prod) — see `aleph_connectors.credentials`.
 from __future__ import annotations
 
 from typing import Annotated
-from uuid import UUID
 
 from fastapi import APIRouter, Body, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
+from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
+from aleph_api.middleware.project_scope import ProjectScopeDep
 from aleph_connectors.credentials import (
     ConnectorCredential,
     ConnectorCredentialService,
@@ -22,9 +23,6 @@ from aleph_connectors.credentials import (
 from aleph_core.errors import NotFound
 from aleph_rks.models import Connector
 from aleph_security.roles import ProjectRole, require_at_least
-
-from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
-from aleph_api.middleware.project_scope import ProjectScopeDep
 
 router = APIRouter(prefix="/v1/projects", tags=["connector-credentials"])
 
@@ -61,9 +59,7 @@ def _service(request: Request, session) -> ConnectorCredentialService:
         "huggingface_hub": os.environ.get("HUGGINGFACE_API_KEY", "") or "",
         "lens": os.environ.get("LENS_API_KEY", "") or "",
     }
-    return ConnectorCredentialService(
-        session, cipher=cipher, dev_default_for=defaults
-    )
+    return ConnectorCredentialService(session, cipher=cipher, dev_default_for=defaults)
 
 
 async def _connector_by_kind(session, kind: str) -> Connector:
@@ -93,9 +89,7 @@ async def list_creds(
         c.connector_id: c
         for c in (
             await session.execute(
-                select(ConnectorCredential).where(
-                    ConnectorCredential.project_id == project_id
-                )
+                select(ConnectorCredential).where(ConnectorCredential.project_id == project_id)
             )
         )
         .scalars()
@@ -108,7 +102,9 @@ async def list_creds(
             CredentialOut(
                 connector_kind=c.kind,
                 has_project_specific=has,
-                rotated_at=cred_rows[c.id].rotated_at.isoformat() if has and cred_rows[c.id].rotated_at else None,
+                rotated_at=cred_rows[c.id].rotated_at.isoformat()
+                if has and cred_rows[c.id].rotated_at
+                else None,
             )
         )
     return out

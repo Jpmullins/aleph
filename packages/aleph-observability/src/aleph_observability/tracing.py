@@ -69,7 +69,7 @@ def _tracer() -> trace.Tracer:
 
 
 @contextmanager
-def start_span(name: str, **attrs: Any) -> "Iterator[Span]":
+def start_span(name: str, **attrs: Any) -> Iterator[Span]:
     """Open a span with the given name and attributes.
 
     On exception, the span is marked ERROR and the exception is recorded.
@@ -95,7 +95,7 @@ def current_trace_id() -> str | None:
     return format(ctx.trace_id, "032x")
 
 
-def instrument_fastapi(app: "FastAPI") -> None:
+def instrument_fastapi(app: FastAPI) -> None:
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
     FastAPIInstrumentor.instrument_app(app)

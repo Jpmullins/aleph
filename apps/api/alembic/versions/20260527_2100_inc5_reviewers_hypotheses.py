@@ -55,7 +55,9 @@ def upgrade() -> None:
             sa.Column("project_id", postgresql.UUID(as_uuid=True), nullable=False, index=True),
             sa.Column("kind", sa.String(16), nullable=False),
             sa.Column("trigger", sa.String(32), nullable=False),
-            sa.Column("target_revision_id", postgresql.UUID(as_uuid=True), nullable=True, index=True),
+            sa.Column(
+                "target_revision_id", postgresql.UUID(as_uuid=True), nullable=True, index=True
+            ),
             sa.Column(
                 "target_scope",
                 sa.String(16),
@@ -69,9 +71,7 @@ def upgrade() -> None:
                 nullable=False,
                 server_default="running",
             ),
-            sa.Column(
-                "finding_count", sa.Integer(), nullable=False, server_default="0"
-            ),
+            sa.Column("finding_count", sa.Integer(), nullable=False, server_default="0"),
             sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         ),
@@ -182,9 +182,7 @@ def upgrade() -> None:
         sa.Column("version_no", sa.Integer(), nullable=False),
         sa.Column("statement", sa.Text(), nullable=False),
         sa.Column("confidence", sa.String(24), nullable=False),
-        sa.Column(
-            "rationale", sa.Text(), nullable=False, server_default=""
-        ),
+        sa.Column("rationale", sa.Text(), nullable=False, server_default=""),
         sa.Column("author_kind", sa.String(16), nullable=False),
         sa.Column("author_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("parent_version_id", postgresql.UUID(as_uuid=True), nullable=True),
@@ -196,9 +194,7 @@ def upgrade() -> None:
         ),
         sa.Column("trace_id", sa.String(128), nullable=True),
         sa.Column("ledger_event_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.UniqueConstraint(
-            "hypothesis_id", "version_no", name="uq_hypothesis_version_no"
-        ),
+        sa.UniqueConstraint("hypothesis_id", "version_no", name="uq_hypothesis_version_no"),
     )
     # Same immutability pattern as wiki_revisions.
     op.execute(
@@ -234,9 +230,7 @@ def upgrade() -> None:
             sa.Column("stance", sa.String(16), nullable=False),
             sa.Column("evidence_kind", sa.String(32), nullable=False),
             sa.Column("target_id", postgresql.UUID(as_uuid=True), nullable=False),
-            sa.Column(
-                "weight", sa.Float(), nullable=False, server_default="1.0"
-            ),
+            sa.Column("weight", sa.Float(), nullable=False, server_default="1.0"),
             sa.Column("note", sa.Text(), nullable=False, server_default=""),
         ),
     )
@@ -253,7 +247,10 @@ def upgrade() -> None:
             sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
         ),
         sa.UniqueConstraint(
-            "project_id", "agent_kind", "namespace", "key",
+            "project_id",
+            "agent_kind",
+            "namespace",
+            "key",
             name="uq_agent_memory_lookup",
         ),
     )

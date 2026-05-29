@@ -26,9 +26,7 @@ _FENCE_RE = re.compile(r"```[\s\S]*?```", re.MULTILINE)
 # Sentence end: ., !, ?, followed by whitespace and an uppercase / digit;
 # allow trailing quotation. Conservative — better to under-split than
 # over-merge an entire paragraph.
-_SENTENCE_END = re.compile(
-    r"(?<=[.!?])[\"')\]]?\s+(?=[A-Z0-9])"
-)
+_SENTENCE_END = re.compile(r"(?<=[.!?])[\"')\]]?\s+(?=[A-Z0-9])")
 
 
 @dataclass(frozen=True)
@@ -183,9 +181,7 @@ def chunk_markdown(
     return out
 
 
-def _carry_overlap(
-    buf: list[str], overlap_tokens: int, enc: tiktoken.Encoding
-) -> list[str]:
+def _carry_overlap(buf: list[str], overlap_tokens: int, enc: tiktoken.Encoding) -> list[str]:
     """Pick the trailing sentences whose combined token count <= overlap_tokens."""
     tail: list[str] = []
     tokens = 0

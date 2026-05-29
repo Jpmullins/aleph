@@ -96,9 +96,7 @@ def upgrade() -> None:
                 server_default="{}",
             ),
         ),
-        sa.UniqueConstraint(
-            "project_id", "connector_id", name="uq_binding_project_connector"
-        ),
+        sa.UniqueConstraint("project_id", "connector_id", name="uq_binding_project_connector"),
     )
 
     # ---- sources / versions / assets ---------------------------------------
@@ -293,9 +291,7 @@ def upgrade() -> None:
         ),
         sa.UniqueConstraint("project_id", "slug", name="uq_wiki_pages_project_slug"),
     )
-    op.create_index(
-        "ix_wiki_pages_project_title", "wiki_pages", ["project_id", "title"]
-    )
+    op.create_index("ix_wiki_pages_project_title", "wiki_pages", ["project_id", "title"])
 
     op.create_table(
         "wiki_revisions",
@@ -309,9 +305,7 @@ def upgrade() -> None:
         sa.Column("author_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("parent_revision_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("body_sha256", sa.String(64), nullable=False),
-        sa.Column(
-            "commit_message", sa.String(2048), nullable=False, server_default=""
-        ),
+        sa.Column("commit_message", sa.String(2048), nullable=False, server_default=""),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -357,13 +351,9 @@ def upgrade() -> None:
         sa.Column("char_end", sa.Integer(), nullable=False),
         sa.Column("body_sha256", sa.String(64), nullable=False),
         sa.Column("ordinal", sa.Integer(), nullable=False),
-        sa.UniqueConstraint(
-            "revision_id", "anchor", name="uq_wiki_sections_rev_anchor"
-        ),
+        sa.UniqueConstraint("revision_id", "anchor", name="uq_wiki_sections_rev_anchor"),
     )
-    op.create_index(
-        "ix_sections_page_rev", "wiki_sections", ["page_id", "revision_id"]
-    )
+    op.create_index("ix_sections_page_rev", "wiki_sections", ["page_id", "revision_id"])
 
     op.create_table(
         "wiki_links",
@@ -391,9 +381,7 @@ def upgrade() -> None:
                 nullable=False,
                 server_default="cited",
             ),
-            sa.Column(
-                "status", sa.String(16), nullable=False, server_default="active"
-            ),
+            sa.Column("status", sa.String(16), nullable=False, server_default="active"),
         ),
     )
 
@@ -402,9 +390,7 @@ def upgrade() -> None:
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("project_id", postgresql.UUID(as_uuid=True), nullable=False, index=True),
         sa.Column("claim_id", postgresql.UUID(as_uuid=True), nullable=False, index=True),
-        sa.Column(
-            "chunk_ids", postgresql.JSONB(), nullable=False, server_default="[]"
-        ),
+        sa.Column("chunk_ids", postgresql.JSONB(), nullable=False, server_default="[]"),
         sa.Column("source_page_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("citation_marker", sa.String(16), nullable=False),
         sa.Column(
@@ -419,12 +405,8 @@ def upgrade() -> None:
         "source_pages",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("project_id", postgresql.UUID(as_uuid=True), nullable=False, index=True),
-        sa.Column(
-            "source_id", postgresql.UUID(as_uuid=True), nullable=False, unique=True
-        ),
-        sa.Column(
-            "page_id", postgresql.UUID(as_uuid=True), nullable=False, unique=True
-        ),
+        sa.Column("source_id", postgresql.UUID(as_uuid=True), nullable=False, unique=True),
+        sa.Column("page_id", postgresql.UUID(as_uuid=True), nullable=False, unique=True),
         sa.Column(
             "extracted_claims_jsonb",
             postgresql.JSONB(),
@@ -441,17 +423,11 @@ def upgrade() -> None:
             sa.Column("surface_form", sa.String(512), nullable=False),
             sa.Column("canonical_name", sa.String(512), nullable=False),
             sa.Column("canonical_page_id", postgresql.UUID(as_uuid=True), nullable=True),
-            sa.Column(
-                "confidence", sa.Float(), nullable=False, server_default="1.0"
-            ),
+            sa.Column("confidence", sa.Float(), nullable=False, server_default="1.0"),
         ),
-        sa.UniqueConstraint(
-            "project_id", "surface_form", name="uq_aliases_project_surface"
-        ),
+        sa.UniqueConstraint("project_id", "surface_form", name="uq_aliases_project_surface"),
     )
-    op.create_index(
-        "ix_aliases_project_canonical", "aliases", ["project_id", "canonical_name"]
-    )
+    op.create_index("ix_aliases_project_canonical", "aliases", ["project_id", "canonical_name"])
 
     op.create_table(
         "hand_edit_marks",
@@ -467,8 +443,7 @@ def upgrade() -> None:
         ),
     )
     op.execute(
-        "CREATE INDEX ix_handedits_active ON hand_edit_marks (page_id) "
-        "WHERE cleared_at IS NULL"
+        "CREATE INDEX ix_handedits_active ON hand_edit_marks (page_id) WHERE cleared_at IS NULL"
     )
 
     op.create_table(
@@ -476,9 +451,7 @@ def upgrade() -> None:
         *_common(
             sa.Column("project_id", postgresql.UUID(as_uuid=True), nullable=False, index=True),
             sa.Column("page_id", postgresql.UUID(as_uuid=True), nullable=True, index=True),
-            sa.Column(
-                "concept_name", sa.String(512), nullable=False, index=True
-            ),
+            sa.Column("concept_name", sa.String(512), nullable=False, index=True),
             sa.Column("rejected_revision_id", postgresql.UUID(as_uuid=True), nullable=True),
             sa.Column("reason", sa.String(4096), nullable=False),
             sa.Column("rejected_by", postgresql.UUID(as_uuid=True), nullable=False),
@@ -498,12 +471,8 @@ def upgrade() -> None:
         sa.Column("project_id", postgresql.UUID(as_uuid=True), nullable=False, index=True),
         sa.Column("title", sa.String(512), nullable=False),
         sa.Column("slug", sa.String(512), nullable=False),
-        sa.Column(
-            "aliases_jsonb", postgresql.JSONB(), nullable=False, server_default="[]"
-        ),
-        sa.Column(
-            "summary", sa.String(2048), nullable=False, server_default=""
-        ),
+        sa.Column("aliases_jsonb", postgresql.JSONB(), nullable=False, server_default="[]"),
+        sa.Column("summary", sa.String(2048), nullable=False, server_default=""),
         sa.Column(
             "wikilinks_out_jsonb",
             postgresql.JSONB(),
@@ -516,12 +485,8 @@ def upgrade() -> None:
         sa.Column("indexed_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("index_tsv", postgresql.TSVECTOR(), nullable=False),
     )
-    op.create_index(
-        "ix_wiki_index_tsv", "wiki_index", ["index_tsv"], postgresql_using="gin"
-    )
-    op.create_index(
-        "ix_wiki_index_project_title", "wiki_index", ["project_id", "title"]
-    )
+    op.create_index("ix_wiki_index_tsv", "wiki_index", ["index_tsv"], postgresql_using="gin")
+    op.create_index("ix_wiki_index_project_title", "wiki_index", ["project_id", "title"])
     op.execute(
         """
         CREATE OR REPLACE FUNCTION wiki_index_tsv_update() RETURNS TRIGGER AS $$

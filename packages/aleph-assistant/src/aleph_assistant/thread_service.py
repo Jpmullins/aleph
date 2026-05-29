@@ -7,21 +7,21 @@ from uuid import UUID
 
 from sqlalchemy import func, select
 
-from aleph_core.errors import NotFound
-from aleph_core.ids import uuid7
-from aleph_core.time import utcnow
 from aleph_assistant.models import (
     AssistantMessage,
     AssistantSession,
     AssistantThread,
 )
+from aleph_core.errors import NotFound
+from aleph_core.ids import uuid7
+from aleph_core.time import utcnow
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def create_session(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
     project_id: UUID,
     title: str,
@@ -51,9 +51,7 @@ async def create_session(
     return s, t
 
 
-async def list_sessions(
-    session: "AsyncSession", *, project_id: UUID
-) -> list[AssistantSession]:
+async def list_sessions(session: AsyncSession, *, project_id: UUID) -> list[AssistantSession]:
     stmt = (
         select(AssistantSession)
         .where(AssistantSession.project_id == project_id)
@@ -62,9 +60,7 @@ async def list_sessions(
     return list((await session.execute(stmt)).scalars().all())
 
 
-async def list_threads(
-    session: "AsyncSession", *, session_id: UUID
-) -> list[AssistantThread]:
+async def list_threads(session: AsyncSession, *, session_id: UUID) -> list[AssistantThread]:
     stmt = (
         select(AssistantThread)
         .where(AssistantThread.session_id == session_id)
@@ -74,7 +70,7 @@ async def list_threads(
 
 
 async def get_thread(
-    session: "AsyncSession", *, project_id: UUID, thread_id: UUID
+    session: AsyncSession, *, project_id: UUID, thread_id: UUID
 ) -> AssistantThread | None:
     return (
         await session.execute(
@@ -87,7 +83,7 @@ async def get_thread(
 
 
 async def list_messages(
-    session: "AsyncSession", *, thread_id: UUID, limit: int = 200
+    session: AsyncSession, *, thread_id: UUID, limit: int = 200
 ) -> list[AssistantMessage]:
     stmt = (
         select(AssistantMessage)
@@ -99,7 +95,7 @@ async def list_messages(
 
 
 async def get_message(
-    session: "AsyncSession", *, project_id: UUID, message_id: UUID
+    session: AsyncSession, *, project_id: UUID, message_id: UUID
 ) -> AssistantMessage | None:
     return (
         await session.execute(
@@ -112,7 +108,7 @@ async def get_message(
 
 
 async def append_message(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
     project_id: UUID,
     thread_id: UUID,
@@ -125,8 +121,9 @@ async def append_message(
 ) -> AssistantMessage:
     next_ord = (
         await session.execute(
-            select(func.coalesce(func.max(AssistantMessage.ordinal), -1))
-            .where(AssistantMessage.thread_id == thread_id)
+            select(func.coalesce(func.max(AssistantMessage.ordinal), -1)).where(
+                AssistantMessage.thread_id == thread_id
+            )
         )
     ).scalar_one() + 1
     msg = AssistantMessage(
@@ -146,9 +143,7 @@ async def append_message(
     session.add(msg)
     await session.flush()
     # Bump session activity.
-    thread = await get_thread(
-        session, project_id=project_id, thread_id=thread_id
-    )
+    thread = await get_thread(session, project_id=project_id, thread_id=thread_id)
     if thread:
         s = await session.get(AssistantSession, thread.session_id)
         if s:
@@ -157,16 +152,14 @@ async def append_message(
 
 
 async def fork_thread(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
     project_id: UUID,
     parent_thread_id: UUID,
     from_ordinal: int,
     created_by: UUID,
 ) -> AssistantThread:
-    parent = await get_thread(
-        session, project_id=project_id, thread_id=parent_thread_id
-    )
+    parent = await get_thread(session, project_id=project_id, thread_id=parent_thread_id)
     if parent is None:
         msg = f"thread {parent_thread_id} not found"
         raise NotFound(msg)

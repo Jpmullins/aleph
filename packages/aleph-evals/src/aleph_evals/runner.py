@@ -114,8 +114,8 @@ def _select(selected: str, available: list[DatasetSpec]) -> list[DatasetSpec]:
 
 def _load_cases(fixture: Path) -> list[dict[str, Any]]:
     cases: list[dict[str, Any]] = []
-    for line in fixture.read_text().splitlines():
-        line = line.strip()
+    for raw in fixture.read_text().splitlines():
+        line = raw.strip()
         if not line:
             continue
         try:
@@ -146,7 +146,7 @@ def _run_dataset(
                 failed += 1
             if sc is not None:
                 score_total += sc
-        except Exception:  # noqa: BLE001
+        except Exception:
             errored += 1
     metrics: dict[str, float] = {
         "pass_rate": (passed / len(cases)) if cases else 1.0,
@@ -168,9 +168,7 @@ def _run_dataset(
 def _apply_gate(spec: DatasetSpec, result: RunResult, profile_name: str) -> RunResult:
     if spec.gate_kind != "blocking":
         return result
-    thresholds = spec.gate_thresholds.get(profile_name) or spec.gate_thresholds.get(
-        "default", {}
-    )
+    thresholds = spec.gate_thresholds.get(profile_name) or spec.gate_thresholds.get("default", {})
     min_pass = float(thresholds.get("min_pass_rate", 1.0))
     if result.metrics.get("pass_rate", 0.0) < min_pass:
         # Convert remaining "passed" into fails so the gate trips.
