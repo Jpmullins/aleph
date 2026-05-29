@@ -20,9 +20,18 @@ def test_missing_root_passes_strict(tmp_path: Path) -> None:
 
 
 def test_discovers_dataset_dirs_with_manifest(tmp_path: Path) -> None:
-    d = tmp_path / "demo"
+    # Inc-8 runner is manifest-driven: a `manifest.yaml` lists `datasets:` with
+    # `name`/`file`, and the named dataset is discovered when its file exists.
+    d = tmp_path / "inc0_demo"
     d.mkdir()
-    (d / "manifest.yaml").write_text("name: demo\n")
+    (d / "cases.jsonl").write_text('{"input": {}, "expected": {}}\n')
+    (d / "manifest.yaml").write_text(
+        "datasets:\n"
+        "  - name: demo\n"
+        "    file: cases.jsonl\n"
+        "    kind: metric_only\n"
+        "    gate_kind: metric_only\n"
+    )
     other = tmp_path / "not-a-dataset"
     other.mkdir()
     report = run(datasets_root=tmp_path, gate=Gate.STRICT)
