@@ -60,6 +60,9 @@ they are viewing, provided to you) when relevant.
 When the analyst discusses competing explanations, list or create hypotheses \
 and render a HypothesisCard. Confirm the statement with the analyst before \
 creating one.
+
+When the analyst shares a URL or asks to add a source, call `ingest_source` \
+and render a SourceCard for the result.
 """
 
 # Stable, deterministic dev user id so ledger rows (ModelCall /
@@ -383,7 +386,7 @@ async def start_research(query: str, config: RunnableConfig, depth: str = "shall
     depth = depth if depth in ("shallow", "deep") else "shallow"
     # Self-call the synthesize endpoint so we reuse the full, tested dispatch
     # path (connector resolution, AIQ dispatch, the result→wiki poll job).
-    base = getattr(settings, "aleph_self_url", None) or "http://localhost:8000"
+    base = settings.aleph_self_url
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
@@ -405,6 +408,40 @@ async def start_research(query: str, config: RunnableConfig, depth: str = "shall
         f"Started {depth} research on '{query}'. It runs in the background "
         "(~1 minute); when it finishes I'll have a draft wiki page and an "
         "approval proposal waiting in the Briefs tab. Open Briefs to review it."
+    )
+
+
+@tool
+async def ingest_source(url: str, config: RunnableConfig, title: str = "") -> str:
+    """Ingest a web page or document URL into the project's knowledge store.
+
+    Fetches the URL, normalizes, chunks+embeds, folds into the wiki. Render a
+    SourceCard for the result. Use when the analyst shares a link or asks to add
+    a source.
+    """
+    import httpx
+
+    settings = _runtime.get("settings")
+    project_id = _project_id_from_config(config)
+    if settings is None or project_id is None:
+        return "Cannot ingest (no project scope)."
+    base = settings.aleph_self_url
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{base}/v1/projects/{project_id}/sources/ingest-url",
+                json={"url": url, "title": title},
+                headers={"Authorization": "Bearer local-dev"},
+            )
+    except Exception as exc:  # noqa: BLE001
+        return f"Could not ingest {url}: {exc}"
+    if resp.status_code >= 400:
+        return f"Could not ingest {url} ({resp.status_code}): {resp.text[:200]}"
+    b = resp.json()
+    return (
+        f"Ingesting {url} (source {b['source_id']}, status {b['status']}). "
+        f"Render a SourceCard with source_id={b['source_id']}, short_id='', "
+        f"title='{title or url}', url='{url}', status='{b['status']}'."
     )
 
 
@@ -438,6 +475,7 @@ def build_assistant_deep_agent(*, settings: "Settings"):
             create_hypothesis_tool,
             add_hypothesis_evidence_tool,
             start_research,
+            ingest_source,
         ],
         system_prompt=SYSTEM_PROMPT,
         middleware=[CopilotKitMiddleware()],

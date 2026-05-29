@@ -8,11 +8,13 @@ by the worker to call back into the API via the agent's authority.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
+from urllib.parse import urlparse
 from uuid import UUID
 
-from fastapi import APIRouter, File, Form, Request, UploadFile, status
-from pydantic import BaseModel, ConfigDict
+import httpx
+from fastapi import APIRouter, Body, File, Form, Request, UploadFile, status
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 from sqlalchemy import select
 
 from aleph_core.errors import NotFound, ValidationFailed
@@ -31,6 +33,13 @@ from aleph_security.roles import ProjectRole, require_at_least
 
 from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from aleph_db.repos.ledger import LedgerWriter
+    from aleph_rks.source_service import SourceCreated
+    from aleph_security.principal import Principal
 
 router = APIRouter(prefix="/v1/projects", tags=["sources"])
 
@@ -83,6 +92,36 @@ async def upload_source(
         mime_type=mime_type,
     )
 
+    await _kick_off_normalize(
+        request,
+        session=session,
+        project_id=project_id,
+        principal=principal,
+        ledger=ledger,
+        created=created,
+    )
+
+    # Refresh so Pydantic doesn't trigger a lazy reload outside the
+    # async greenlet context (server_default-bumped updated_at).
+    await session.refresh(created.source)
+    return SourceOut.model_validate(created.source)
+
+
+async def _kick_off_normalize(
+    request: Request,
+    *,
+    session: AsyncSession,
+    project_id: UUID,
+    principal: Principal,
+    ledger: LedgerWriter,
+    created: SourceCreated,
+) -> None:
+    """Mint an agent token, ledger an AgentRun, and enqueue `normalize_job`.
+
+    Shared by the upload and ingest-url routes so both kick the normalize
+    pipeline off the same way. On enqueue failure the source is marked
+    `failed` so the UI surfaces it (the row is committed by the caller).
+    """
     # Mint an agent token + create an AgentRun so the worker can authenticate.
     agent_run_id = uuid7()
     correlation_id = f"normalize-{created.source.id.hex[:8]}"
@@ -135,9 +174,7 @@ async def upload_source(
             RedisSettings.from_dsn(request.app.state.settings.redis_url)
         )
         try:
-            await pool.enqueue_job(
-                "normalize_job", str(created.version.id), token
-            )
+            await pool.enqueue_job("normalize_job", str(created.version.id), token)
         finally:
             await pool.aclose()
     except Exception as exc:  # noqa: BLE001
@@ -145,10 +182,83 @@ async def upload_source(
         created.source.status = "failed"
         created.source.failure_reason = f"failed to enqueue normalize job: {exc}"[:2048]
 
-    # Refresh so Pydantic doesn't trigger a lazy reload outside the
-    # async greenlet context (server_default-bumped updated_at).
+
+class IngestUrlIn(BaseModel):
+    url: HttpUrl
+    title: str = Field("", max_length=512)
+
+
+class IngestUrlOut(BaseModel):
+    source_id: str
+    status: str
+
+
+@router.post(
+    "/{project_id}/sources/ingest-url",
+    status_code=status.HTTP_201_CREATED,
+    response_model=IngestUrlOut,
+)
+async def ingest_url(
+    request: Request,
+    project_id: ProjectScopeDep,
+    body: Annotated[IngestUrlIn, Body()],
+    session: SessionDep,
+    ledger: LedgerDep,
+    principal: PrincipalDep,
+) -> dict[str, Any]:
+    """Fetch a remote URL server-side and register it as a Source.
+
+    Thin counterpart to the file-upload route: it pulls the bytes, then runs
+    the identical `register_uploaded_source` + normalize-enqueue path. The
+    `ingest_source` agent tool self-calls this so the agent never touches the
+    DB or asset store directly (architecture rule #3).
+
+    SSRF note: this fetches an arbitrary, caller-supplied URL from the server.
+    That is intentional and consistent with the connectors, which already
+    fetch remote URLs; this is a local research tool, not a public service.
+    """
+    require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
+
+    if request.app.state.asset_store is None:
+        msg = "asset store is not configured"
+        raise ValidationFailed(msg)
+
+    url = str(body.url)
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as c:
+            resp = await c.get(url)
+            resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        msg = f"could not fetch {url}: {exc}"
+        raise ValidationFailed(msg) from exc
+
+    mime_type = resp.headers.get("content-type", "text/html").split(";")[0].strip()
+    _path = urlparse(url).path
+    filename = _path.rstrip("/").rsplit("/", 1)[-1] or "page.html"
+
+    created = await register_uploaded_source(
+        session,
+        ledger=ledger,
+        principal=principal,
+        asset_store=request.app.state.asset_store,
+        project_id=project_id,
+        title=body.title or filename,
+        data=resp.content,
+        filename=filename,
+        mime_type=mime_type,
+    )
+
+    await _kick_off_normalize(
+        request,
+        session=session,
+        project_id=project_id,
+        principal=principal,
+        ledger=ledger,
+        created=created,
+    )
+
     await session.refresh(created.source)
-    return SourceOut.model_validate(created.source)
+    return {"source_id": str(created.source.id), "status": created.source.status}
 
 
 @router.get("/{project_id}/sources", response_model=list[SourceOut])
