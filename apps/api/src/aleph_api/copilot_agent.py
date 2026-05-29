@@ -67,8 +67,10 @@ When the analyst discusses competing explanations, list or create hypotheses \
 and render a HypothesisCard. Confirm the statement with the analyst before \
 creating one.
 
-When the analyst shares a URL or asks to add a source, call `ingest_source` \
-and render a SourceCard for the result.
+To add a source or build/revise wiki content, delegate to the `wiki_builder` \
+subagent via the `task` tool — it ingests a URL into the knowledge store (folds \
+it into the wiki) and can promote an analyst note to a draft wiki page. After it \
+returns, render a SourceCard for an ingested source.
 
 When the analyst asks to draft/build a report, deck, or export, call \
 `build_artifact`. Building is a consequential action, so the tool returns an \
@@ -458,13 +460,14 @@ async def _start_research_impl(query: str, config: RunnableConfig, depth: str = 
     )
 
 
-@tool
-async def ingest_source(url: str, config: RunnableConfig, title: str = "") -> str:
+async def _ingest_source_impl(url: str, config: RunnableConfig, title: str = "") -> str:
     """Ingest a web page or document URL into the project's knowledge store.
 
-    Fetches the URL, normalizes, chunks+embeds, folds into the wiki. Render a
-    SourceCard for the result. Use when the analyst shares a link or asks to add
-    a source.
+    Shared body of source ingestion: self-calls the tested `/sources/ingest-url`
+    route (fetch, normalize, chunk+embed, fold into the wiki; rule #3 — never
+    touches the DB directly) and returns a SourceCard render instruction. Reused
+    by the `wiki_builder` subagent's `ingest_source` tool (Wave 3 T4) so the
+    orchestrator delegates ingestion rather than self-calling it inline.
     """
     import httpx
 
@@ -814,6 +817,7 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
 
     from aleph_api.subagents.researcher import build_researcher_subagent
     from aleph_api.subagents.retriever import build_retriever_subagent
+    from aleph_api.subagents.wiki_builder import build_wiki_builder_subagent
 
     def _memory_namespace(_rt: object) -> tuple[str, ...]:
         """Scope persistent memory per-project so projects never share memory.
@@ -883,7 +887,6 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
             list_hypotheses_tool,
             create_hypothesis_tool,
             add_hypothesis_evidence_tool,
-            ingest_source,
             build_artifact,
             list_connectors,
             set_connector_enabled,
@@ -894,6 +897,7 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
             echo_subagent,
             build_retriever_subagent(settings=settings),
             build_researcher_subagent(settings=settings),
+            build_wiki_builder_subagent(settings=settings),
         ],
         middleware=[CopilotKitMiddleware()],
         backend=_memory_backend,
