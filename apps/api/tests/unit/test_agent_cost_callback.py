@@ -160,6 +160,30 @@ async def test_skips_when_no_project_id() -> None:
     assert session.added == []
 
 
+def _settings_for_test() -> Any:
+    """Minimal stand-in carrying only what `subagent_model` reads.
+
+    `subagent_model` -> `_gateway_chat_model` only touches `.litellm_base_url`
+    and `.insights_litellm_api_key`, so a SimpleNamespace suffices (no env /
+    full Settings construction needed for this unit test).
+    """
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        litellm_base_url="http://gateway.invalid/v1",
+        insights_litellm_api_key="test-key",
+    )
+
+
+def test_subagent_model_tags_purpose() -> None:
+    from aleph_api.copilot_agent import subagent_model
+
+    m = subagent_model(_settings_for_test(), "retriever")
+    cbs = list(m.callbacks or [])
+    purposes = [getattr(c, "_purpose", None) for c in cbs]
+    assert "assistant.subagent.retriever" in purposes
+
+
 async def test_skips_when_no_usage() -> None:
     session = _FakeSession()
     handler = AgentCostCallbackHandler(

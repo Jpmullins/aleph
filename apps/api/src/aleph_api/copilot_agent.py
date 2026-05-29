@@ -80,6 +80,9 @@ settings. Enabling/disabling a connector is also consequential: the \
 `set_connector_enabled` tool returns an ApprovalCard instruction — render it \
 and let the analyst approve before the change applies.
 
+A test subagent named `echo` exists. When (and only when) the analyst asks \
+to test delegation, delegate to it via the `task` tool and relay its reply.
+
 You have long-term memory at `/memories/`. At the start of substantive work, \
 check `/memories/` (ls/read_file) for durable facts about this project or the \
 analyst's preferences. When you learn something durable (a preference, a key \
@@ -740,6 +743,50 @@ def build_agent_store(
     return pool, store
 
 
+# The single agent model id, shared by the orchestrator and its subagents.
+_AGENT_MODEL = "claude-sonnet-4-6"
+
+
+def _gateway_chat_model(settings: Settings, *, purpose: str) -> ChatOpenAI:
+    """Build a gateway-pointed `ChatOpenAI` with cost attribution (rules #2, #5).
+
+    All agent LLM traffic (orchestrator + every subagent) is constructed here so
+    it is configured identically — same model, gateway `base_url`/`api_key`,
+    temperature, and `stream_usage=True` — and so each gets its own
+    `AgentCostCallbackHandler` tagged with a `purpose`. The callback is attached
+    ONLY to the agent model (never to `LiteLLMClient`), so the LiteLLMClient
+    retrieval path is not double-counted; it writes a `ModelCall` +
+    `CostLedgerEvent` per turn (rule #5) and never crashes the turn on failure.
+    """
+    from aleph_api.copilot_cost_callback import AgentCostCallbackHandler
+
+    return ChatOpenAI(
+        model=_AGENT_MODEL,
+        base_url=settings.litellm_base_url,
+        api_key=settings.insights_litellm_api_key,
+        temperature=0.2,
+        timeout=60,
+        max_retries=2,
+        callbacks=[AgentCostCallbackHandler(model=_AGENT_MODEL, purpose=purpose)],
+        # A streaming OpenAI-compatible response omits the `usage` block unless
+        # `stream_options.include_usage` is set. Without this the on_llm_end
+        # AIMessage has `usage_metadata=None` and the cost callback has nothing
+        # to record (rule #5 gap). `stream_usage=True` makes ChatOpenAI request +
+        # aggregate the usage into the final chunk.
+        stream_usage=True,
+    )
+
+
+def subagent_model(settings: Settings, name: str) -> ChatOpenAI:
+    """Build a subagent's gateway `ChatOpenAI`, cost-tagged per subagent.
+
+    Identical to the orchestrator's model but the cost callback's `purpose` is
+    `assistant.subagent.<name>`, so each subagent's LLM calls write a
+    `ModelCall` + `CostLedgerEvent` attributed to that subagent (rule #5).
+    """
+    return _gateway_chat_model(settings, purpose=f"assistant.subagent.{name}")
+
+
 def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore):
     """Compile the assistant Deep Agent (built once at app startup).
 
@@ -751,7 +798,7 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
     persistence) while all other agent files stay ephemeral per-thread.
     """
     from copilotkit import CopilotKitMiddleware
-    from deepagents import create_deep_agent
+    from deepagents import SubAgent, create_deep_agent
     from deepagents.backends import (
         BackendProtocol,
         CompositeBackend,
@@ -761,8 +808,6 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
     from langgraph.checkpoint.memory import MemorySaver
     from langgraph.config import get_config
     from langgraph.prebuilt.tool_node import ToolRuntime
-
-    from aleph_api.copilot_cost_callback import AgentCostCallbackHandler
 
     def _memory_namespace(_rt: object) -> tuple[str, ...]:
         """Scope persistent memory per-project so projects never share memory.
@@ -802,28 +847,24 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
             routes={"/memories/": StoreBackend(namespace=_memory_namespace)},
         )
 
-    _AGENT_MODEL = "claude-sonnet-4-6"
-    # Attribute the agent's OWN ChatOpenAI calls to the cost ledger (rule #5).
-    # This callback is attached ONLY to the agent model — never to LiteLLMClient
-    # — so the LiteLLMClient retrieval path is not double-counted. It reads
-    # session_maker + pricing lazily from the bound runtime at call time, and is
-    # built to never crash the agent turn if cost-logging fails.
-    cost_callback = AgentCostCallbackHandler(model=_AGENT_MODEL)
-    model = ChatOpenAI(
-        model=_AGENT_MODEL,
-        base_url=settings.litellm_base_url,
-        api_key=settings.insights_litellm_api_key,
-        temperature=0.2,
-        timeout=60,
-        max_retries=2,
-        callbacks=[cost_callback],
-        # The agent streams, and a streaming OpenAI-compatible response omits the
-        # `usage` block unless `stream_options.include_usage` is set. Without this
-        # the on_llm_end AIMessage has `usage_metadata=None` and the cost callback
-        # has nothing to record (rule #5 gap stays open). `stream_usage=True` makes
-        # ChatOpenAI request + aggregate the usage into the final chunk.
-        stream_usage=True,
-    )
+    # The orchestrator's OWN model. Cost is attributed to `assistant.turn` via
+    # the AgentCostCallbackHandler that `_gateway_chat_model` attaches (rule #5).
+    model = _gateway_chat_model(settings, purpose="assistant.turn")
+
+    # Trivial exemplar subagent proving the in-process sync-subagent (`task`
+    # tool) delegation path. Its LLM calls are cost-attributed to
+    # `assistant.subagent.echo` via `subagent_model` (rule #5).
+    echo_subagent: SubAgent = {
+        "name": "echo",
+        "description": (
+            "Test subagent: echoes back a one-line confirmation. "
+            "Use only when asked to test delegation."
+        ),
+        "system_prompt": (
+            "Return a single short line confirming you ran as the echo subagent. Nothing else."
+        ),
+        "model": subagent_model(settings, "echo"),
+    }
     # In-memory checkpointer keeps per-thread conversation state for the AG-UI
     # runtime. Cross-SESSION durability rides the `store` instead: the
     # CompositeBackend routes `/memories/` to a StoreBackend over the
@@ -845,6 +886,7 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
             set_model_profile,
         ],
         system_prompt=SYSTEM_PROMPT,
+        subagents=[echo_subagent],
         middleware=[CopilotKitMiddleware()],
         backend=_memory_backend,
         store=store,
