@@ -12,23 +12,24 @@ import { useEffect, useMemo, useState } from "react";
 import { MessageProcessor, Catalog, SurfaceModel } from "@a2ui/web_core/v0_9";
 import { A2uiSurface, basicCatalog } from "@a2ui/react/v0_9";
 
-import { HypothesisCardImpl } from "./aleph-catalog-v09";
+import { ALEPH_CARD_IMPLS } from "./aleph-catalog-v09";
+import { SurfaceProvider } from "./register";
 
 /** Catalog id the backend's `createSurface.catalogId` references. */
 export const ALEPH_V09_CATALOG_ID = "aleph://v1";
 
 /**
- * One shared catalog: Aleph's domain card impls + every basic-catalog primitive
- * (Column/Row/Text/...) so agents/builders can compose layout around the cards.
- * (Task 3 registers the remaining 16 Aleph cards here.)
+ * One shared catalog: ALL of Aleph's domain impls (13 cards + 5 surfaces, from
+ * `ALEPH_CARD_IMPLS`) + every basic-catalog primitive (Column/Row/Text/...) so
+ * agents/builders can compose layout around the cards.
  *
  * Built once per mount via `useMemo`. The catalog is pure config (no per-surface
  * state), so it's safe to reuse across the throwaway processors below.
  */
-function buildAlephCatalog() {
+export function buildAlephCatalog() {
   return new Catalog(
     ALEPH_V09_CATALOG_ID,
-    [HypothesisCardImpl, ...basicCatalog.components.values()],
+    [...ALEPH_CARD_IMPLS, ...basicCatalog.components.values()],
     [],
   );
 }
@@ -41,6 +42,15 @@ type AlephSurface = SurfaceModel<AlephComponentApi>;
 interface Props {
   /** Ordered v0.9 message list (createSurface, updateComponents, updateDataModel…). */
   messages: unknown[];
+  /**
+   * Project + surface context for the rendered cards/surfaces. Aleph's existing
+   * views call `useSurface()` (from `register.tsx`) to fetch live data (wiki
+   * pages, dataset rows, hypotheses, …) and POST feedback, so the rendered tree
+   * must sit inside a `SurfaceProvider`. (Task 7 re-homes this context off
+   * `register.tsx`.)
+   */
+  projectId: string;
+  surface: string;
 }
 
 /**
@@ -58,7 +68,7 @@ interface Props {
  * first processor and rebuilds, and a same-`messages` re-run is harmless because
  * it starts from an empty processor again.
  */
-export function A2UISurfaceView({ messages }: Props) {
+export function A2UISurfaceView({ messages, projectId, surface }: Props) {
   const catalog = useMemo(() => buildAlephCatalog(), []);
   const [surfaces, setSurfaces] = useState<AlephSurface[]>([]);
 
@@ -90,10 +100,10 @@ export function A2UISurfaceView({ messages }: Props) {
     return <div className="p-6 text-sm text-slate-500">No surface.</div>;
   }
   return (
-    <div className="p-3">
-      {surfaces.map((surface) => (
-        <A2uiSurface key={surface.id} surface={surface} />
+    <SurfaceProvider projectId={projectId} surface={surface}>
+      {surfaces.map((s) => (
+        <A2uiSurface key={s.id} surface={s} />
       ))}
-    </div>
+    </SurfaceProvider>
   );
 }

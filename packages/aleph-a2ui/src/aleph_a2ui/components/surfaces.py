@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID, uuid4
 
-from aleph_a2ui.messages import full_surface
+from aleph_a2ui.messages import create_surface, full_surface, update_components
 
 # Catalog id of the shared v0.9 frontend catalog
 # (`apps/web/src/a2ui/aleph-catalog-v09.tsx`). `createSurface.catalogId` must
@@ -162,4 +162,109 @@ def briefs_surface(
             "filters": filters or {},
         },
         children=children,
+    )
+
+
+# ---------------------------------------------------------------------------
+# v0.9 message-list builders (Wave 4 T3)
+# ---------------------------------------------------------------------------
+#
+# Each right-panel tab is rendered through the upstream `@a2ui` v0_9
+# `MessageProcessor` + `<A2uiSurface>` against the shared catalog (`aleph://v1`).
+# The rich Aleph surface views (`WikiSurface`/`ArtifactsSurface`/`NotesSurface`/
+# `HypothesesSurface`/`BriefsSurface`) are registered as single v0_9 components
+# and fetch their own data client-side, so each builder emits exactly ONE
+# top-level surface component plus an (optional) child card list. `children`
+# rides INLINE on the component object as a structural prop (the frontend
+# `adapt` helper forwards it to `component.children`).
+
+
+def _surface_messages(
+    *,
+    surface_id: str,
+    component_name: str,
+    props: dict[str, Any] | None = None,
+    children: list[dict[str, Any]] | None = None,
+    catalog_id: str = ALEPH_V09_CATALOG_ID,
+) -> list[dict[str, Any]]:
+    """Wrap a single Aleph surface view as a v0.9 message list.
+
+    The component carries its props inline. Legacy card children (Briefs
+    `ApprovalCard`s, Wiki embeds) are forwarded as a structural `children` prop;
+    the existing views render them via their own renderer.
+
+    The single surface component MUST carry `id="root"`: the upstream
+    `@a2ui/react` `<A2uiSurface>` renders exactly the component whose id is
+    `"root"` (`DeferredChild id="root"`), falling back to `[Loading root...]`
+    when no such component exists. (`hypotheses_surface_v09` satisfies this via
+    its root `Column`; these single-component surfaces satisfy it by naming the
+    surface view itself `root`.) `surface_id` remains the surface-level id used
+    by `createSurface`/`updateComponents` and as the React key.
+    """
+    component: dict[str, Any] = {"id": "root", "component": component_name}
+    if props:
+        component.update(props)
+    if children is not None:
+        component["children"] = children
+    return [
+        create_surface(surface_id=surface_id, catalog_id=catalog_id),
+        update_components(surface_id=surface_id, components=[component]),
+    ]
+
+
+def wiki_surface_v09(
+    *,
+    current_page_id: UUID | None = None,
+    view_mode: str = "page",
+    children: list[dict[str, Any]] | None = None,
+    surface_id: str = "wiki",
+) -> list[dict[str, Any]]:
+    return _surface_messages(
+        surface_id=surface_id,
+        component_name="WikiSurface",
+        props={
+            "current_page_id": str(current_page_id) if current_page_id else "",
+            "view_mode": view_mode,
+        },
+        children=children or [],
+    )
+
+
+def artifacts_surface_v09(
+    *,
+    current_artifact_id: UUID | None = None,
+    surface_id: str = "artifacts",
+) -> list[dict[str, Any]]:
+    return _surface_messages(
+        surface_id=surface_id,
+        component_name="ArtifactsSurface",
+        props={
+            "current_artifact_id": str(current_artifact_id) if current_artifact_id else "",
+        },
+    )
+
+
+def notes_surface_v09(
+    *,
+    children: list[dict[str, Any]] | None = None,
+    surface_id: str = "notes",
+) -> list[dict[str, Any]]:
+    return _surface_messages(
+        surface_id=surface_id,
+        component_name="NotesSurface",
+        children=children or [],
+    )
+
+
+def briefs_surface_v09(
+    *,
+    badge_count: int = 0,
+    children: list[dict[str, Any]] | None = None,
+    surface_id: str = "briefs",
+) -> list[dict[str, Any]]:
+    return _surface_messages(
+        surface_id=surface_id,
+        component_name="BriefsSurface",
+        props={"badge_count": badge_count},
+        children=children or [],
     )
