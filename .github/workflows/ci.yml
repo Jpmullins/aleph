@@ -97,12 +97,34 @@ jobs:
       ALEPH_AGENT_TOKEN_SECRET: ci-agent-token-secret-do-not-use-elsewhere
       ALEPH_DEFAULT_MODEL_PROFILE: aleph-dev
       ALEPH_ENV: local  # Settings.aleph_env ∈ {local,dev,staging,prod}; "ci" is rejected
+      # MinIO/asset store — the ingest-url + upload routes 422 ("asset store is
+      # not configured") unless the lifespan can build an AssetStore. Started as
+      # a `docker run` step below (GH `services:` can't pass MinIO's `server`
+      # command). The `aleph-local` bucket is auto-created by AssetStore on first use.
+      MINIO_ENDPOINT: http://localhost:9000
+      MINIO_ROOT_USER: aleph
+      MINIO_ROOT_PASSWORD: changeme-ci
+      ALEPH_S3_BUCKET: aleph-local
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.5.21"
       - run: uv sync --all-packages --all-extras
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=aleph -e MINIO_ROOT_PASSWORD=changeme-ci \
+            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+      - name: Wait for MinIO
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:9000/minio/health/live; then echo "minio up"; exit 0; fi
+            sleep 2
+          done
+          echo "minio did not become healthy" >&2
+          docker logs minio || true
+          exit 1
       - name: Run Alembic migrations
         run: cd apps/api && uv run alembic upgrade head
       - name: Alembic check (no drift vs models)
