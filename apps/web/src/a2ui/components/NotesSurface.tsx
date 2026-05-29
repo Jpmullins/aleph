@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
-import { useSurface } from "../register";
+import { useSurface } from "../surface-context";
 import { WikiBodyMarkdown } from "@/components/WikiBodyMarkdown";
 import { api } from "@/lib/api";
 import { SurfaceHeader, type RendererProps } from "./_shared";

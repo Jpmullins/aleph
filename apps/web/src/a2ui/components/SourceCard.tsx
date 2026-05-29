@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { useSurface } from "../register";
+import { useSurface } from "../surface-context";
 import { WikiBodyMarkdown } from "@/components/WikiBodyMarkdown";
 import { api } from "@/lib/api";
 import { CardShell, FeedbackButton, Pill, type RendererProps } from "./_shared";

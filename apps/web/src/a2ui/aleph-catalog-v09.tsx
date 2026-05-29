@@ -66,7 +66,7 @@ import { createComponentImplementation } from "@a2ui/react/v0_9";
 import { CommonSchemas } from "@a2ui/web_core/v0_9";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { useSurface } from "./register";
+import { useSurface } from "./surface-context";
 import { api } from "@/lib/api";
 
 import { ApprovalCard as ApprovalCardView } from "./components/ApprovalCard";

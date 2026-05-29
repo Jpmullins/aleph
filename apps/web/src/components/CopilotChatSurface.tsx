@@ -20,7 +20,7 @@
 import { CopilotChat, useAgentContext, useFrontendTool } from "@copilotkit/react-core/v2";
 import { z } from "zod";
 
-import { SurfaceProvider } from "@/a2ui/register";
+import { SurfaceProvider } from "@/a2ui/surface-context";
 import { SURFACE_TABS, useWorkspaceUI } from "@/lib/workspace-ui";
 
 interface Props {

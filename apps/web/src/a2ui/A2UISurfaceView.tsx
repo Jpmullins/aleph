@@ -13,7 +13,7 @@ import { MessageProcessor, Catalog, SurfaceModel } from "@a2ui/web_core/v0_9";
 import { A2uiSurface, basicCatalog } from "@a2ui/react/v0_9";
 
 import { ALEPH_CARD_IMPLS } from "./aleph-catalog-v09";
-import { SurfaceProvider } from "./register";
+import { SurfaceProvider } from "./surface-context";
 
 /** Catalog id the backend's `createSurface.catalogId` references. */
 export const ALEPH_V09_CATALOG_ID = "aleph://v1";
