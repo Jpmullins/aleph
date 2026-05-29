@@ -68,6 +68,10 @@ When the analyst asks to draft/build a report, deck, or export, call \
 `build_artifact`, render the ArtifactCard so they can track the build, and \
 call `open_surface` with tab='Artifacts' to bring the Artifacts panel into \
 view. The finished artifact lands in the Artifacts tab.
+
+You can list connectors and enable/disable them, and report or change the \
+project's model profile, when the analyst asks about data sources or model \
+settings.
 """
 
 # Stable, deterministic dev user id so ledger rows (ModelCall /
@@ -498,6 +502,138 @@ async def build_artifact(
     )
 
 
+@tool
+async def list_connectors(config: RunnableConfig) -> str:
+    """List the available data-source connectors and their enabled state.
+
+    Use this when the analyst asks what data sources / connectors are
+    configured, or before enabling/disabling one (to get its connector id).
+    Read-only.
+    """
+    import httpx
+
+    settings = _runtime.get("settings")
+    project_id = _project_id_from_config(config)
+    if settings is None or project_id is None:
+        return "Connectors are unavailable (no project scope on this run)."
+    base = settings.aleph_self_url
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            connectors_resp = await client.get(
+                f"{base}/v1/connectors",
+                headers={"Authorization": "Bearer local-dev"},
+            )
+            bindings_resp = await client.get(
+                f"{base}/v1/projects/{project_id}/connectors/bindings",
+                headers={"Authorization": "Bearer local-dev"},
+            )
+    except Exception as exc:  # noqa: BLE001
+        return f"Could not list connectors: {exc}"
+    if connectors_resp.status_code >= 400:
+        return (
+            f"Could not list connectors ({connectors_resp.status_code}): "
+            f"{connectors_resp.text[:200]}"
+        )
+    connectors = connectors_resp.json()
+    if not connectors:
+        return "No connectors are registered."
+    # Map connector_id -> enabled from the project's bindings (a connector with
+    # no binding falls back to its enabled_by_default).
+    bindings = bindings_resp.json() if bindings_resp.status_code < 400 else []
+    enabled_by_id: dict[str, bool] = {str(b["connector_id"]): bool(b["enabled"]) for b in bindings}
+    lines = []
+    for c in connectors:
+        state = enabled_by_id.get(str(c["id"]), bool(c.get("enabled_by_default", False)))
+        lines.append(
+            f"- {c['name']} ({'enabled' if state else 'disabled'}) "
+            f"· kind={c['kind']} · id={c['id']}"
+        )
+    return "Connectors:\n" + "\n".join(lines)
+
+
+@tool
+async def set_connector_enabled(connector_id: str, enabled: bool, config: RunnableConfig) -> str:
+    """Enable or disable a data-source connector for the current project.
+
+    `connector_id` is the connector's UUID (call `list_connectors` first to get
+    it). `enabled` is true to turn it on, false to turn it off. Returns a
+    confirmation string.
+    """
+    import httpx
+
+    settings = _runtime.get("settings")
+    project_id = _project_id_from_config(config)
+    if settings is None or project_id is None:
+        return "Setting a connector is unavailable (no project scope on this run)."
+    try:
+        cid = UUID(connector_id)
+    except ValueError:
+        return (
+            f"connector_id must be a valid UUID (got '{connector_id}'). "
+            "Call list_connectors to get ids."
+        )
+    base = settings.aleph_self_url
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{base}/v1/projects/{project_id}/connectors/bindings",
+                json={"connector_id": str(cid), "enabled": enabled, "config_jsonb": {}},
+                headers={"Authorization": "Bearer local-dev"},
+            )
+    except Exception as exc:  # noqa: BLE001
+        return f"Could not set connector {connector_id}: {exc}"
+    if resp.status_code >= 400:
+        return f"Could not set connector ({resp.status_code}): {resp.text[:200]}"
+    b = resp.json()
+    return f"Connector {connector_id} is now {'enabled' if b.get('enabled') else 'disabled'}."
+
+
+@tool
+async def set_model_profile(profile_name: str, config: RunnableConfig) -> str:
+    """Report or change the project's model profile by name.
+
+    `profile_name` is one of "aleph-dev" or "aleph-production". Reads the
+    project's current profile and the available named templates. Switching the
+    project's profile by name is not yet exposed as an endpoint, so this reports
+    the current and available profiles rather than performing a switch.
+    """
+    import httpx
+
+    settings = _runtime.get("settings")
+    project_id = _project_id_from_config(config)
+    if settings is None or project_id is None:
+        return "Model profile is unavailable (no project scope on this run)."
+    base = settings.aleph_self_url
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            current_resp = await client.get(
+                f"{base}/v1/projects/{project_id}/model-profile",
+                headers={"Authorization": "Bearer local-dev"},
+            )
+            templates_resp = await client.get(
+                f"{base}/v1/model-profile-templates",
+                headers={"Authorization": "Bearer local-dev"},
+            )
+    except Exception as exc:  # noqa: BLE001
+        return f"Could not read the model profile: {exc}"
+    current_name = "unknown"
+    if current_resp.status_code < 400:
+        current_name = current_resp.json().get("name", "unknown")
+    available = ["aleph-dev", "aleph-production"]
+    if templates_resp.status_code < 400:
+        names = [t.get("name") for t in templates_resp.json() if t.get("name")]
+        if names:
+            available = names
+    return (
+        f"The project's current model profile is '{current_name}'. "
+        f"Available profiles: {', '.join(available)}. "
+        f"Switching the profile by name (you asked for '{profile_name}') is not "
+        "yet exposed as an endpoint, so I can't change it from here yet. Per-"
+        "capability binding edits go through the model-profile PATCH route, but "
+        "there is no named-template switch route to call."
+    )
+
+
 def build_assistant_deep_agent(*, settings: "Settings"):
     """Compile the assistant Deep Agent (built once at app startup).
 
@@ -530,6 +666,9 @@ def build_assistant_deep_agent(*, settings: "Settings"):
             start_research,
             ingest_source,
             build_artifact,
+            list_connectors,
+            set_connector_enabled,
+            set_model_profile,
         ],
         system_prompt=SYSTEM_PROMPT,
         middleware=[CopilotKitMiddleware()],
