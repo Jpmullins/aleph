@@ -1029,3 +1029,24 @@ commits `5c93dbf`→`e2891f1` + chat-routing fix `d75b69b`). Spec/plan:
 
 ### Operational note
 `aleph-web` / `aleph-api` are baked images (no bind mount) — every change needs `docker compose up -d --build <svc>`. A transient npm-registry hiccup once made a web rebuild fail (`@copilotkit/web-inspector`); it resolved on retry. `Dockerfile.dev` does a lockfile-free `npm install` (non-reproducible) — a latent fragility worth a lockfile.
+
+---
+
+## Wave 3 (reconsidered) — Orchestrator + purpose-built subagents
+
+**Completed:** 2026-05-29. Merged to main (`410e0d8`); branch `wave-3-orchestrator-subagents` (T1–T8 + final-review fix). Refreshed spec `2026-05-29-wave-3-orchestrator-subagents-refresh-design.md` (supersedes the stale `2026-05-29-wave-3-deep-agents-design.md`); plan `2026-05-29-wave-3-orchestrator-subagents.md`. NOTE: the original W3 spec ("migrate editorial/wiki LangGraph agents to the harness") was correctly rejected as low-value framework-churn; this reconsidered wave unlocks the harness's REAL value — context isolation + planning + delegation.
+
+### What shipped (each subagent verified following the live-verified exemplar)
+- **Orchestrator** (`apps/api/src/aleph_api/copilot_agent.py`): the Live assistant is now a thin Deep-Agents orchestrator. Heavy inline tools DRY-extracted into module-level `_read_wiki_impl`/`_start_research_impl`/`_ingest_source_impl`/`_build_artifact_impl`/`_{list,create,add_evidence}_hypothesis*_impl`; inline tools removed. `_gateway_chat_model(settings,*,purpose)` + `subagent_model(settings,name)` give each subagent a gateway model with a per-subagent cost callback (`assistant.subagent.<name>` — rule #5, verified: retriever rows in `model_calls`). Lean orchestrator `tools=` (search_wiki + connectors/profile). SYSTEM_PROMPT rewritten to plan-and-delegate.
+- **6 subagents** (`apps/api/src/aleph_api/subagents/*.py`), each `build_<name>_subagent(*, settings) -> SubAgent` WRAPPING existing services (function-local imports break the cycle): **retriever** (deep `WikiFirstRetrievalRouter` read — isolates the large body), **researcher** (delegates the AIQ `/synthesize` arc), **wiki_builder** (ingest_source + note-promote), **viz_builder** (`make_chart`→ChartCard + approval-gated build_artifact), **analyst** (hypotheses + ACH), **reviewer** (new `POST /reviews/editorial` → enqueues the existing project-scoped `editorial_review_job`).
+- **Skills** (`apps/api/src/aleph_api/skills/{research,ach,report-authoring,wiki-style}/SKILL.md`): progressive disclosure. Wired via a `FilesystemBackend(virtual_mode=True)` routed at `/skills/` in the CompositeBackend (key finding: SkillsMiddleware reads through the agent's BACKEND, not the host FS).
+- **Plan legibility** (`ActivityCard.tsx`): reads `useAgent("assistant").state.todos` (CopilotKit v2 `useAgent` + `UseAgentUpdate.OnStateChanged`) and renders the orchestrator's live `write_todos` plan with per-item status. Hides when empty.
+
+### Verified live (browser)
+A multi-step request → the orchestrator delegated via the `task` tool to **retriever** (returned a distilled cited answer; the composed body stayed out of the main thread) and **analyst** (created hypothesis "Example Domain is reserved…" with 4 evidence, rendered in the Hypotheses tab via the Wave-4 v0_9 surface); the agent explicitly **"checked memories" and "read the research skill"** (memory + skills engaged); subagent cost rows confirmed in `model_calls`.
+
+### Honest scope / findings
+- **deepagents `AsyncSubAgent` = a remote hosted LangGraph graph** (`{name, graph_id, url}`), NOT in-process — out of scope (would need a LangGraph Server deployment). Long-running work (research, big ingest) uses the EXISTING arq job pipeline, which already gives "kick off, keep talking, progress in Activity." In-process **sync `SubAgent`s via the `task` tool deliver the core value** (context isolation).
+- **`write_todos` is LLM-discretionary** — the Activity Plan section is wired + crash-safe, but the agent only populates it when it chooses to plan with todos (it delegated directly for a simple 2-step task in testing). Correct behavior; the read path is verified.
+- **editorial reviewer is project-scoped** (the worker scans all pages); `reviewer`'s page title is carried as the review `trigger` label, not a per-page filter. A true single-page review would need a workflow change.
+- Pre-existing `aleph-evals/test_runner.py` unit failure persists (not Wave 3); `alembic check` clean (the new route added no model change).
