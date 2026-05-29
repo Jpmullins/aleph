@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 
     from aleph_api.settings import Settings
     from aleph_models.client import LiteLLMClient
+    from aleph_security.principal import Principal
 
 
 SYSTEM_PROMPT = """\
@@ -55,12 +56,33 @@ table, a chart of figures, a hypothesis matrix, a claim with its \
 confidence), render it as an interactive card rather than describing it \
 in prose. Prefer the analyst's current context (the page or hypothesis \
 they are viewing, provided to you) when relevant.
+
+When the analyst discusses competing explanations, list or create hypotheses \
+and render a HypothesisCard. Confirm the statement with the analyst before \
+creating one.
 """
 
 # Stable, deterministic dev user id so ledger rows (ModelCall /
 # CostLedgerEvent) written by retrieval LiteLLM calls reference a single,
 # resolvable principal rather than a fresh random uuid per call.
 _DEV_USER_UUID = uuid.uuid5(uuid.NAMESPACE_DNS, "dev@aleph.local")
+
+
+def _dev_principal(settings: "Any") -> "Principal":
+    """Build the fixed local-dev principal for service calls from agent tools.
+
+    Mirrors `local` auth mode: a single resolvable principal (rather than a
+    fresh random uuid per call) so ledger rows reference a stable actor.
+    """
+    from aleph_security.principal import Principal
+
+    return Principal(
+        user_id=_DEV_USER_UUID,
+        subject=getattr(settings, "local_dev_subject", "local-dev"),
+        email=getattr(settings, "local_dev_email", "dev@aleph.local"),
+        actor_kind="user",
+    )
+
 
 # Runtime dependencies bound by lifespan (the graph is built before the
 # session_maker exists, so the tools read them here at call time).
@@ -156,7 +178,6 @@ async def read_wiki(query: str, config: RunnableConfig) -> str:
 
     from aleph_assistant.retrieval.router import WikiFirstRetrievalRouter
     from aleph_db.models.model_profile import ModelProfile
-    from aleph_security.principal import Principal
 
     session_maker = _runtime.get("session_maker")
     litellm = _runtime.get("litellm")
@@ -166,12 +187,7 @@ async def read_wiki(query: str, config: RunnableConfig) -> str:
         return "Deep wiki reading is unavailable (no project scope on this run)."
     if litellm is None:
         return "Deep wiki reading is unavailable (LiteLLM client not bound)."
-    principal = Principal(
-        user_id=_DEV_USER_UUID,
-        subject=settings.local_dev_subject if settings is not None else "local-dev",
-        email=settings.local_dev_email if settings is not None else "dev@aleph.local",
-        actor_kind="user",
-    )
+    principal = _dev_principal(settings)
     async with session_maker() as session:  # type: AsyncSession
         profile = (
             await session.execute(
@@ -193,6 +209,157 @@ async def read_wiki(query: str, config: RunnableConfig) -> str:
     coverage = getattr(result, "coverage_judgment", "ok")
     body = getattr(result, "composed_body_md", "") or "(the composer returned no body)"
     return f"{body}\n\n_(coverage: {coverage})_"
+
+
+@tool
+async def list_hypotheses_tool(config: RunnableConfig) -> str:
+    """List the current project's hypotheses with their confidence.
+
+    Use this to recall what competing explanations the analyst is already
+    tracking before proposing or creating a new one.
+    """
+    from aleph_hypotheses.hypothesis_service import list_hypotheses
+
+    session_maker = _runtime.get("session_maker")
+    project_id = _project_id_from_config(config)
+    if session_maker is None or project_id is None:
+        return "Hypotheses are unavailable (no project scope on this run)."
+    async with session_maker() as session:  # type: AsyncSession
+        rows = await list_hypotheses(session, project_id=project_id)
+    if not rows:
+        return "No hypotheses recorded yet for this project."
+    lines = [
+        f"- [{h.short_id}] {h.title} — confidence {getattr(h, 'confidence', 'initial')}"
+        for h in rows
+    ]
+    return "Hypotheses:\n" + "\n".join(lines)
+
+
+@tool
+async def create_hypothesis_tool(title: str, statement: str, config: RunnableConfig) -> str:
+    """Create a new hypothesis (a competing explanation) for the project.
+
+    Confirm the statement with the analyst before calling this. `title` is a
+    short label; `statement` is the falsifiable claim. After creating, render a
+    HypothesisCard so the analyst can track and weigh evidence against it.
+    """
+    from aleph_db.repos.ledger import LedgerWriter
+    from aleph_hypotheses.hypothesis_service import create_hypothesis
+
+    session_maker = _runtime.get("session_maker")
+    settings = _runtime.get("settings")
+    project_id = _project_id_from_config(config)
+    if session_maker is None or project_id is None:
+        return "Creating a hypothesis is unavailable (no project scope on this run)."
+    try:
+        async with session_maker() as session:  # type: AsyncSession
+            ledger = LedgerWriter(session)
+            principal = _dev_principal(settings)
+            h = await create_hypothesis(
+                session,
+                ledger=ledger,
+                principal=principal,
+                project_id=project_id,
+                title=title,
+                statement=statement,
+            )
+            # Capture everything we need as plain values BEFORE commit expires
+            # the ORM attributes on `h` (no `h.<attr>` access after the block).
+            conf = getattr(h, "confidence", "initial")
+            hyp_id = str(h.id)
+            hyp_title = h.title
+            hyp_short_id = h.short_id
+            await session.commit()
+    except Exception as exc:  # noqa: BLE001
+        return f"Could not create hypothesis: {exc}"
+    return (
+        f"Created hypothesis [{hyp_short_id}] '{hyp_title}'.\n"
+        f"Render a HypothesisCard with hypothesis_id={hyp_id}, "
+        f"title='{hyp_title}', confidence='{conf}', evidence_count=0."
+    )
+
+
+@tool
+async def add_hypothesis_evidence_tool(
+    hypothesis_id: str,
+    stance: str,
+    evidence_kind: str,
+    target_id: str,
+    config: RunnableConfig,
+    note: str = "",
+    weight: float = 1.0,
+) -> str:
+    """Attach a piece of evidence to a hypothesis.
+
+    `stance` is one of supports / contradicts / contextualizes. `evidence_kind`
+    is one of claim / source_page / chunk / finding / other_hypothesis.
+    `target_id` is the UUID of the referenced entity. Adding evidence may shift
+    the hypothesis's confidence; re-render its HypothesisCard afterward.
+    """
+    from sqlalchemy import func, select
+
+    from aleph_db.repos.ledger import LedgerWriter
+    from aleph_hypotheses.hypothesis_service import add_evidence, get_hypothesis
+    from aleph_hypotheses.models import HypothesisEvidence
+
+    session_maker = _runtime.get("session_maker")
+    settings = _runtime.get("settings")
+    project_id = _project_id_from_config(config)
+    if session_maker is None or project_id is None:
+        return "Adding evidence is unavailable (no project scope on this run)."
+    try:
+        hyp_uuid = UUID(hypothesis_id)
+        tgt_uuid = UUID(target_id)
+    except ValueError:
+        return "hypothesis_id and target_id must be valid UUIDs."
+    try:
+        async with session_maker() as session:  # type: AsyncSession
+            ledger = LedgerWriter(session)
+            principal = _dev_principal(settings)
+            await add_evidence(
+                session,
+                ledger=ledger,
+                principal=principal,
+                hypothesis_id=hyp_uuid,
+                stance=stance,
+                evidence_kind=evidence_kind,
+                target_id=tgt_uuid,
+                weight=weight,
+                note=note,
+            )
+            # Read the (flushed, in-transaction) hypothesis + evidence count
+            # BEFORE commit, and capture everything as plain values so no
+            # expired ORM attribute is touched after the block closes.
+            h = await get_hypothesis(session, project_id=project_id, hypothesis_id=hyp_uuid)
+            evidence_count = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(HypothesisEvidence)
+                    .where(HypothesisEvidence.hypothesis_id == hyp_uuid)
+                )
+            ).scalar_one()
+            if h is None:
+                hyp_short_id = hyp_title = hyp_id = None
+                conf = "initial"
+            else:
+                hyp_short_id = h.short_id
+                hyp_title = h.title
+                hyp_id = str(h.id)
+                conf = getattr(h, "confidence", "initial")
+            await session.commit()
+    except Exception as exc:  # noqa: BLE001
+        return f"Could not add evidence: {exc}"
+    if hyp_id is None:
+        return (
+            f"Recorded {stance} evidence, but could not re-load hypothesis "
+            f"{hypothesis_id} to report its updated state."
+        )
+    return (
+        f"Recorded {stance} evidence on [{hyp_short_id}] '{hyp_title}' "
+        f"(confidence now '{conf}').\n"
+        f"Re-render the HypothesisCard with hypothesis_id={hyp_id}, "
+        f"title='{hyp_title}', confidence='{conf}', evidence_count={evidence_count}."
+    )
 
 
 @tool
@@ -264,7 +431,14 @@ def build_assistant_deep_agent(*, settings: "Settings"):
     # the in-process single-replica dev/local runtime.)
     return create_deep_agent(
         model=model,
-        tools=[search_wiki, read_wiki, start_research],
+        tools=[
+            search_wiki,
+            read_wiki,
+            list_hypotheses_tool,
+            create_hypothesis_tool,
+            add_hypothesis_evidence_tool,
+            start_research,
+        ],
         system_prompt=SYSTEM_PROMPT,
         middleware=[CopilotKitMiddleware()],
         checkpointer=MemorySaver(),
