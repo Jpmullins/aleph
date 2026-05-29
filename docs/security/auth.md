@@ -96,3 +96,36 @@ Token theft requires the gateway secret — rotate per the runbook if leaked.
 - AIQ (Inc 3+) is identical: no Postgres, no S3, just an agent token.
 - Connector fetches run in egress-restricted worker pods (Inc 3+).
 - Playwright render workers (Inc 7+) run with no DB or object-store credentials.
+
+## Known limitation — SSE + agent self-calls under OIDC (2026-05-29)
+
+Two paths added in post-Inc-8 waves work under `ALEPH_AUTH_MODE=local` but
+would **fail under `oidc`**, and must be addressed before an OIDC/production deploy:
+
+1. **Server-Sent Events** (the right-panel surface stream
+   `GET /v1/projects/{id}/surfaces/{tab}/stream` from Wave 4, and the
+   `GET .../agent-events/stream` activity stream). The browser `EventSource` API
+   **cannot set an `Authorization` header**, so under `oidc` these requests reach
+   the project-scope dependency with no bearer token → 401. In `local` mode every
+   request maps to the fixed dev principal, so they work today.
+   - **Fix (deploy-ready design):** have the auth middleware ALSO accept the access
+     token from a query parameter (e.g. `?access_token=<jwt>`) for the SSE routes,
+     verified through the same `verify_user_jwt` path; the frontend appends its
+     OIDC access token when constructing the `EventSource`. (Alternatively, an
+     HttpOnly auth cookie that the browser sends automatically — preferred if the
+     IdP/ALB issues one.) Backward-compatible: the `Authorization` header path is
+     unchanged.
+
+2. **Agent tool self-calls.** The Live agent's tools (`ingest_source`,
+   `start_research`, `build_artifact`, the subagents, the `agent-actions/request`
+   path) re-enter the API over HTTP with `Authorization: Bearer local-dev`, which
+   `local` mode accepts as the dev principal. Under `oidc` that string is not a
+   valid JWT → 401.
+   - **Fix:** mint a short-lived **agent token** (`mint_agent_token`, HS256, the
+     internal token type the middleware already verifies) for each self-call
+     instead of the `local-dev` literal, scoped to the project + acting user.
+
+Neither is implemented yet (the stack runs `local`-only; an untested OIDC auth
+change would be riskier than this documented gap). Both are tracked in
+`docs/system-assessment.md` (P1). The OIDC verification code path itself is intact
+(`verify_user_jwt` / JWKS) — these are the two spots that bypass it.

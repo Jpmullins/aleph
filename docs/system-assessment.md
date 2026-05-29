@@ -100,12 +100,20 @@ All 8 hold. Highlights:
    the surface stream, not agent-emitted chat cards). Verified in-browser: `build_artifact`
    now reliably renders an ApprovalCard and Approve executes (artifact built + request
    approved).
-6. **SSE × OIDC incompatibility (undocumented).** The surface-stream + agent-events SSE
-   and the `Bearer local-dev` self-call tools work only in `local` auth mode (EventSource
-   can't send auth headers; self-calls aren't real agent tokens). Under `oidc` they 401.
-   Document in `docs/security/auth.md`; the real fix is a cookie/query-token SSE path +
-   minted agent tokens for self-calls.
-7. **27 Dependabot vulnerabilities** (1 high, 23 moderate, 3 low) on `main` — review/bump.
+6. **SSE × OIDC incompatibility** — **DOCUMENTED 2026-05-29** in `docs/security/auth.md`
+   (the surface-stream + agent-events SSE + `Bearer local-dev` self-call tools work only
+   in `local` mode; EventSource can't send auth headers; self-calls aren't real agent
+   tokens — they 401 under `oidc`). The fix design is recorded (query-token/cookie for SSE
+   + minted agent tokens for self-calls); **implementation is tracked** (not done — the
+   stack is `local`-only, and shipping untested OIDC auth code would be riskier than the
+   documented gap). Address before any OIDC/production deploy.
+7. **Dependabot vulnerabilities** — **mostly RESOLVED 2026-05-29**. Bumped: lxml→6.1.0
+   (high), weasyprint→68.0 (high, + the Dockerfiles now install its glib/pango runtime
+   libs — which also makes Builder PDF export work in-container for the first time),
+   jinja2→3.1.6, pynacl→1.6.2, pypdf→6.12.2, postcss→8.5.15, prismjs→1.30.0. **Still open:**
+   `ecdsa` (high) has **no patched version** — pulled by `python-jose`; the only real fix
+   is migrating `python-jose`→`PyJWT` (cryptography-backed ECDSA). Practical risk is low
+   (agent tokens are HS256; OIDC dormant). The langgraph alert was stale (resolved 1.2.2).
 
 ### P2 — debt / robustness
 8. **New agent surface is largely browser-verified-only.** The 6 subagents, the SSE
