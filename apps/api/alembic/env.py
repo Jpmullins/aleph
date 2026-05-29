@@ -5,15 +5,22 @@ from __future__ import annotations
 import asyncio
 import os
 from logging.config import fileConfig
+from typing import TYPE_CHECKING, Literal
 
 from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+if TYPE_CHECKING:
+    from collections.abc import MutableMapping
+
+    from sqlalchemy.sql.schema import SchemaItem
+
 # Import every model package so Base.metadata is populated.
 from aleph_db.base import Base
 import aleph_db.models  # noqa: F401  (registers tables with metadata)
+
 # Inc 1: register the RKS and Wiki model trees.
 try:
     import aleph_rks.models  # noqa: F401
@@ -77,6 +84,38 @@ config.set_main_option("sqlalchemy.url", db_url)
 
 target_metadata = Base.metadata
 
+# Tables created at runtime by langgraph's AsyncPostgresStore.setup() (Wave 6
+# cross-session memory). They are not Aleph ORM models, so they are absent from
+# Base.metadata; without this guard autogenerate would propose dropping them.
+_IGNORED_TABLES = {"store", "store_migrations"}
+
+# Expression / partial indexes that alembic cannot reflect-compare and would
+# therefore re-flag on every run. `uq_chain_head_global` is a partial unique
+# index on the expression `((1)) WHERE project_id IS NULL`, created by raw SQL
+# in the initial migration; it has no ORM-metadata counterpart.
+_IGNORED_INDEXES = {"uq_chain_head_global"}
+
+
+def include_name(
+    name: str | None,
+    type_: str,
+    parent_names: MutableMapping[
+        Literal["schema_name", "table_name", "schema_qualified_table_name"],
+        str | None,
+    ],
+) -> bool:
+    return not (type_ == "table" and name in _IGNORED_TABLES)
+
+
+def include_object(
+    obj: SchemaItem,
+    name: str | None,
+    type_: str,
+    reflected: bool,
+    compare_to: SchemaItem | None,
+) -> bool:
+    return not (type_ == "index" and name in _IGNORED_INDEXES)
+
 
 def run_migrations_offline() -> None:
     url = config.get_main_option("sqlalchemy.url")
@@ -86,6 +125,8 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        include_name=include_name,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -96,6 +137,8 @@ def do_run_migrations(connection: Connection) -> None:
         connection=connection,
         target_metadata=target_metadata,
         compare_type=True,
+        include_name=include_name,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
