@@ -809,3 +809,119 @@ Increment 1 adds: RKS entities (`Source`, `SourceVersion`, `SourceAsset`,
 normalization + chunking + embedding workers, the wiki entity skeleton
 and the wiki ingest agent. Inc 1 introduces a new Alembic migration —
 never edit `inc0_initial`.
+
+---
+
+## Session 2026-05-28/29 — get-it-running, research pipeline, conversational UX, Waves 1/2/5
+
+This session took the stack from "boots but severely broken" to a coherent,
+working product. Not increment-numbered; tracked as Waves (one commit each).
+Commits are on `main` (`adcca40` → `84d58f1`). Full source/MCP references at
+the end so future sessions know where to look.
+
+### What shipped (by commit)
+
+- **Wave 1** (`dd6ebd6`, `11fa913`) — progress visibility (`AgentEvent` per
+  workflow node + SSE stream + Activity card at top of chat), design tokens +
+  dark/light theme, real Wiki page browser/reader, working theme toggle.
+- **Wave 2 backend** (`226f123`) — assistant **Deep Agent** over AG-UI:
+  `apps/api/src/aleph_api/copilot_agent.py` (`create_deep_agent` +
+  `search_wiki` tool + `CopilotKitMiddleware`), mounted via
+  `ag_ui_langgraph.add_langgraph_fastapi_endpoint` (the v1
+  `CopilotKitRemoteEndpoint` path is broken against current `ag-ui-langgraph` —
+  `dict_repr` AttributeError — so we use the v2 path). Project scope rides the
+  `proj:<uuid>:<thread>` thread-id (the only channel `ag-ui-langgraph` threads
+  into `config.configurable`; `forwarded_props` go into graph *state*, not
+  config — verified in the installed package). `_active_ctx` module globals →
+  `ContextVar` (W2.1).
+- **Wave 2 runtime + frontend** (`1723da4`) — new **`aleph-copilot-runtime`**
+  Node service (`apps/copilot-runtime/`, compose service on :4000):
+  `@copilotkit/runtime` v2 `CopilotRuntime` + `HttpAgent` → the FastAPI AG-UI
+  endpoint, with `a2ui.injectA2UITool` + an **inline "aleph" catalog**
+  (so the agent stamps `catalogId:"aleph"` and emits Aleph cards). Frontend:
+  `CopilotKitProvider` (`lib/copilot.tsx`) + `createA2UIMessageRenderer({catalog})`
+  adapting the 17 Aleph cards (`a2ui/copilot-catalog.tsx`), `CopilotChatSurface`
+  with `useAgentContext` (agent reads active tab) + `useFrontendTool`
+  (`open_surface` drives the right panel), Live/Classic toggle. Verified
+  in-browser: shared state both directions + agent renders a real ChartCard
+  (Vega) inline. **Both Dockerfiles use `npm` not `pnpm`** (pnpm 10 hard-fails
+  on blocked esbuild/@scarf build scripts).
+- **Connector seeding** (`49a3384`) — project creation seeds `ConnectorBinding`
+  rows (no-auth defaults enabled, auth ones bound-disabled) so research works
+  with zero manual setup. Fixed `/synthesize` 422 "no connectors enabled".
+- **AIQ dispatch** (`8f783c6`, `0eddb35`, `38b27a4`) — see the dedicated memory
+  `project_aiq_research_pipeline.md`. Job-store schema vendored
+  (`deploy/compose/aiq-init-{jobs,checkpoints}.sql`) + applied in
+  `bootstrap-local.sh`; `AIQClient` rewritten to the real API; image bumped
+  `2.0.0 → 2.1.0` (2.0.0 had an `orchestrator_llm` crash). Web search wired
+  (`aiq-config-default.yml` data_source_registry + tavily; `TAVILY_API_KEY`).
+- **Research → wiki** (`4735cb8`, `e8d9f3e`) — `aiq_synthesis_poll_job`
+  (aleph-workers) polls the AIQ job, parses the report into the `AIQReport`
+  the orphaned `synthesis_workflow` expects (remaps `[N]`→`[cN]` citation
+  markers), runs it → draft wiki page + Briefs proposal. `/synthesize` enqueues
+  it. Poller refactored to **re-enqueue-with-defer** (no worker held through
+  long deep research; 30-min ceiling).
+- **Conversational research** (`17b75a8`) — Live agent gains a `start_research`
+  tool (self-calls `/synthesize`); "research X" kicks off research as a
+  background card.
+- **Branding + theme** (`f3e2e3b`, `e8d9f3e`) — Aleph/א wordmark
+  (`components/AlephLogo.tsx`) on the landing page + theme toggle; Live chat
+  themed dark (CopilotKit `.dark` class mirrored from `data-theme`, serif
+  prose, inline-style light boxes repainted).
+- **Wave 5** (`0bdde5f`, `84d58f1`) — analyst UX: ACH matrix
+  (`GET /hypotheses/ach` + `HypothesisMatrix.tsx`, Heuer's fewest-disconfirming),
+  Notes editor + `POST /notes/{id}/promote` (→ draft page + Briefs proposal),
+  readable sources (SourceCard "Read" expander → `/sources/{id}/normalized`).
+
+### Infrastructure touched OUTSIDE this repo
+- **`~/code/ARLIS/insights-k8s-manifests`** (the Insights LiteLLM gateway,
+  GitOps via ArgoCD): added per-model `additional_drop_params:
+  ["parallel_tool_calls"]` to `litellm/proxy-config.yaml` (commits `05342ac`,
+  `0c4cf46` on `main`). Root cause: LangChain/AIQ send `parallel_tool_calls`,
+  LiteLLM mis-folds it into a malformed Bedrock `tool_choice` → 400
+  "tool_choice.type: Field required". `drop_params` alone and the global
+  `litellm_settings` form do NOT drop it — must be per-model `litellm_params`.
+  Verified live. **Known issue:** that app's ArgoCD sync is wedged on a broken
+  `PostSync` hook (`bootstrap-teams` can't pull `ghcr.io/curlimages/curl` —
+  403); applied the fix live via `kubectl patch configmap` + `rollout restart`.
+  Future pushes won't auto-deploy until the hook image is fixed.
+
+### Deferred
+- **Wave 3** (Deep Agents harness) — `2026-05-29-wave-3-deep-agents-design.md`.
+  Lower value than planned (agents already decompose work).
+- **Wave 4** (A2UI v0.9 protocol) — `2026-05-29-wave-4-a2ui-v09-design.md`.
+- **Cost-attribution gap:** ChatOpenAI (agent path) bypasses `LiteLLMClient`
+  so doesn't write `ModelCall`/`CostLedgerEvent` (rule #5). Langchain callback
+  handler is the planned fix.
+- **Deep research duration** can exceed snappy expectations; agent defaults to
+  shallow. The poller now survives long runs (re-enqueue) up to 30 min.
+
+### Reference map — where to look for correct docs/planning
+- **Local repos:** `~/code/aiq` (NVIDIA AI-Q Blueprint **v2.1.0** source —
+  matches the deployed image; the source of truth for AIQ config `_type`
+  values, agent tool auto-inheritance, job-store schema `init-db.sql`, and the
+  real HTTP API). `~/code/A2UI` (A2UI core + React renderer + Python SDK —
+  W4 reference). `~/code/obsidian-llm-wiki-local` (retrieval / hand-edit /
+  rejection-feedback / alias patterns). `~/code/ARLIS/open-analyst`
+  (supervisor+subagent / WriteAuthorityMiddleware patterns for W3; ActivityCard
+  / HypothesisMatrix / NotesTab UI patterns). `~/code/ARLIS/insights-k8s-manifests`
+  (the gateway deployment — LiteLLM `proxy-config.yaml`, model list, all
+  `bedrock/global.anthropic.*`, LiteLLM `main-v1.83.14-stable`).
+- **A2UI website:** `a2ui.org` + the v0.9 spec/catalog JSON it links — protocol
+  source for W4.
+- **MCP servers used this session:**
+  - `copilotkit-mcp` (`search-docs`/`explore-docs`/`search-ag-ui-docs`) —
+    CopilotKit + AG-UI docs. **Caveat:** docs were ahead of the published 1.58
+    package; always cross-check against `npm pack` `dist/*.d.mts`.
+  - `context7` (`resolve-library-id` → `query-docs`) — used to confirm LiteLLM
+    `additional_drop_params` belongs in per-model `litellm_params`.
+  - `plugin_playwright_playwright` — drove the live UI for in-browser
+    verification (the standing per-wave requirement).
+- **Skills available for the deferred waves:** `framework-selection`,
+  `deep-agents-core`, `deep-agents-orchestration`, `deep-agents-memory`,
+  `langgraph-*`, `langchain-middleware` (W3); these document the installed
+  `deepagents 0.6.6` / `langgraph >=1.2,<2` APIs authoritatively.
+- **Key API-probe technique** (reused throughout): for any moving dep, don't
+  trust memory or even the MCP docs — `npm pack <pkg>@<ver>` then read
+  `dist/*.d.mts`, or `uv run python -c "import x; print(dir(x))"`. This is how
+  the CopilotKit v2, a2ui-renderer, ag-ui-langgraph, and AIQ APIs were pinned.
