@@ -107,3 +107,83 @@ export function A2UISurfaceView({ messages, projectId, surface }: Props) {
     </SurfaceProvider>
   );
 }
+
+interface StreamProps {
+  /** SSE endpoint emitting the full v0.9 surface on connect + `updateDataModel` deltas. */
+  streamUrl: string;
+  projectId: string;
+  surface: string;
+}
+
+/**
+ * Wave 4 T6 — delta-consuming surface view.
+ *
+ * Opens the `…/surfaces/{tab}/stream` SSE endpoint and feeds EVERY message
+ * (the full `createSurface`/`updateComponents`/root-`updateDataModel` on
+ * connect, then incremental `updateDataModel` deltas) into ONE persistent
+ * `MessageProcessor` for the life of the connection. Because the processor
+ * persists, a leaf delta like `{updateDataModel, path:"/items/0/confidence"}`
+ * patches the existing surface's data model in place — the upstream binder
+ * re-renders only the bound prop, NOT the whole tree (existing card DOM nodes
+ * are preserved). A new card arrives as an `updateComponents` (adds the new
+ * component id; existing ids are updated in place, never torn down) followed by
+ * an `add` data delta seeding its `/items/N`.
+ *
+ * The StrictMode-safe pattern from the one-shot view still applies, but the
+ * unit of "process once" is now the whole CONNECTION: we create the processor
+ * once per effect run, attach it to a fresh EventSource, and tear both down on
+ * cleanup (tab switch / unmount / StrictMode re-run). A re-run opens a fresh
+ * connection whose first messages rebuild the surface from scratch into a
+ * pristine processor, so `createSurface` can never collide.
+ */
+export function A2UIStreamSurfaceView({ streamUrl, projectId, surface }: StreamProps) {
+  const catalog = useMemo(() => buildAlephCatalog(), []);
+  const [surfaces, setSurfaces] = useState<AlephSurface[]>([]);
+
+  useEffect(() => {
+    const processor = new MessageProcessor([catalog]);
+    let live = true;
+    const sync = () => {
+      if (live) setSurfaces(Array.from(processor.model.surfacesMap.values()));
+    };
+    const createdSub = processor.onSurfaceCreated(sync);
+    const deletedSub = processor.onSurfaceDeleted(sync);
+
+    const es = new EventSource(streamUrl, { withCredentials: false });
+    es.onmessage = (ev) => {
+      if (!live || !ev.data) return; // heartbeats are SSE comments → never onmessage
+      try {
+        const msg = JSON.parse(ev.data) as unknown;
+        processor.processMessages([msg] as never);
+        sync();
+      } catch {
+        /* ignore malformed frame */
+      }
+    };
+    es.onerror = () => {
+      // EventSource auto-reconnects with backoff. On reconnect the server
+      // resends the full surface; the duplicate `createSurface` throws inside
+      // `processMessages` and is swallowed by the per-message try/catch, while
+      // the resent `updateComponents`/`updateDataModel` re-apply harmlessly to
+      // the already-registered surface. So a transient blip self-heals.
+    };
+
+    return () => {
+      live = false;
+      es.close();
+      createdSub.unsubscribe();
+      deletedSub.unsubscribe();
+    };
+  }, [catalog, streamUrl]);
+
+  if (surfaces.length === 0) {
+    return <div className="p-6 text-sm text-slate-500">Loading surface…</div>;
+  }
+  return (
+    <SurfaceProvider projectId={projectId} surface={surface}>
+      {surfaces.map((s) => (
+        <A2uiSurface key={s.id} surface={s} />
+      ))}
+    </SurfaceProvider>
+  );
+}

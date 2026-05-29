@@ -1,7 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
-
-import { A2UISurfaceView } from "@/a2ui/A2UISurfaceView";
-import { api } from "@/lib/api";
+import { A2UIStreamSurfaceView } from "@/a2ui/A2UISurfaceView";
 import { SURFACE_TABS, useWorkspaceUI } from "@/lib/workspace-ui";
 
 const TABS = SURFACE_TABS;
@@ -18,21 +15,19 @@ function RealPanel({ projectId }: Props) {
   // Tab state is shared so the assistant agent can drive it (useFrontendTool).
   const { activeSurface: tab, setActiveSurface: setTab } = useWorkspaceUI();
 
-  // Wave 4 T3: EVERY tab is rendered through the upstream v0.9
-  // MessageProcessor + <A2uiSurface> against the shared `aleph://v1` catalog.
-  // The endpoint returns `{ tab, messages: [...] }` (a `createSurface` +
-  // `updateComponents` for that tab's single surface component). The legacy
-  // `renderA2UI` path is retired from the panel; `register.tsx` remains only
-  // to host the `SurfaceProvider` context (Task 7 re-homes it).
-  const messagesQuery = useQuery<{ tab: string; messages: unknown[] }>({
-    queryKey: ["surface-v09", projectId, tab],
-    queryFn: () =>
-      api.get<{ tab: string; messages: unknown[] }>(
-        `/v1/projects/${projectId}/surfaces/${tab.toLowerCase()}`,
-      ),
-    // Briefs polls so freshly-promoted notes / synthesis proposals appear.
-    refetchInterval: tab === "Briefs" ? 10_000 : false,
-  });
+  // Wave 4 T6: every tab is rendered through the delta SurfaceStreamer. The
+  // `…/surfaces/{tab}/stream` SSE endpoint emits the full v0.9 surface on
+  // connect (createSurface + updateComponents + root updateDataModel), then
+  // incremental `updateDataModel` deltas as the underlying data changes. A
+  // persistent MessageProcessor (one per connection, keyed by `tab`) applies
+  // those deltas in place — so e.g. a new hypothesis appears via an
+  // `add`/`updateComponents` delta without re-mounting existing card DOM. The
+  // four self-fetching tabs (Wiki/Artifacts/Notes/Briefs) carry no bound data
+  // model, so their stream emits the structural surface once and then idles;
+  // they self-refresh via react-query inside their own surface views.
+  const baseUrl =
+    (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8000";
+  const streamUrl = `${baseUrl}/v1/projects/${projectId}/surfaces/${tab.toLowerCase()}/stream`;
 
   return (
     <aside className="flex w-[28rem] flex-col border-l border-slate-200 bg-white">
@@ -54,17 +49,12 @@ function RealPanel({ projectId }: Props) {
         ))}
       </nav>
       <div className="flex-1 overflow-y-auto">
-        {messagesQuery.isPending && (
-          <div className="p-6 text-sm text-slate-500">Loading surface…</div>
-        )}
-        {messagesQuery.data && (
-          <A2UISurfaceView
-            key={tab}
-            messages={messagesQuery.data.messages}
-            projectId={projectId}
-            surface={`${tab}Surface`}
-          />
-        )}
+        <A2UIStreamSurfaceView
+          key={tab}
+          streamUrl={streamUrl}
+          projectId={projectId}
+          surface={`${tab}Surface`}
+        />
       </div>
     </aside>
   );
