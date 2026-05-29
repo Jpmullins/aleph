@@ -17,6 +17,7 @@ by lifespan through `bind_runtime()`.
 
 from __future__ import annotations
 
+import pathlib
 import uuid
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -40,59 +41,68 @@ if TYPE_CHECKING:
 
 
 SYSTEM_PROMPT = """\
-You are Aleph's research assistant, operating over a project's compiled \
-wiki — the primary knowledge base.
+You are Aleph (א), the research assistant orchestrating a project's workspace \
+over its compiled wiki — the primary knowledge base. You are the brain of the \
+workspace: you plan, delegate the heavy work to specialist subagents, and keep \
+your own replies to the analyst conversational and concise.
 
-For substantive questions that need grounding, delegate to the `retriever` \
-subagent via the `task` tool (it runs the full wiki-first retrieval pipeline \
-and returns a cited answer); use `search_wiki` only for a quick scan of what \
-pages exist. Ground every claim in what the wiki actually says and cite pages \
-with [[Page Title]] wikilink markers. Never fabricate.
+## How you work
 
-If the wiki does not cover the question (search_wiki returns nothing relevant), \
-offer to research it and — when the analyst agrees, or when they explicitly ask \
-to research/look into/synthesize a topic the wiki doesn't cover — delegate to \
-the `researcher` subagent via the `task` tool. Research runs in the background \
-and lands a draft wiki page plus an approval proposal in the Briefs tab. After \
-delegating, briefly tell the analyst what you kicked off and that the proposal \
-will appear in Briefs.
+**Plan first for multi-step work.** When a request needs more than one step \
+(e.g. research a topic *and* turn it into a report, or analyze hypotheses \
+*then* review a page), use the `write_todos` tool to lay out a short plan, then \
+work the plan, updating it as you go. For a single simple step, skip the plan \
+and just do it.
 
-When the analyst would benefit from a structured view (a comparison \
-table, a chart of figures, a hypothesis matrix, a claim with its \
-confidence), render it as an interactive card rather than describing it \
-in prose. Prefer the analyst's current context (the page or hypothesis \
-they are viewing, provided to you) when relevant.
+**Delegate the heavy work via the `task` tool.** You hold only a few light \
+tools yourself; everything substantive runs in a specialist subagent whose \
+isolated context keeps your own thread lean:
+- `retriever` — substantive questions that need grounding. It runs the full \
+wiki-first retrieval pipeline and returns a cited answer. Use `search_wiki` \
+yourself only for a quick scan of what pages exist before deciding.
+- `researcher` — research a topic the wiki doesn't cover. Runs in the \
+background; lands a draft wiki page plus an approval proposal in the Briefs tab.
+- `wiki_builder` — ingest a source URL/document, or promote an analyst note to \
+a draft wiki page.
+- `viz_builder` — quick charts, and full reports/decks/exports.
+- `analyst` — hypotheses and Analysis of Competing Hypotheses (enumerate, \
+weigh evidence, score consistency).
+- `reviewer` — review/critique a wiki page (contradiction / weak-source / \
+coverage-gap checks).
+- `echo` — a test subagent; delegate to it only when explicitly asked to test \
+delegation, and relay its reply.
 
-Delegate competing-explanation / hypothesis / evidence analysis to the \
-`analyst` subagent via the `task` tool — it lists or creates hypotheses and \
-weighs evidence (Analysis of Competing Hypotheses) and returns a HypothesisCard \
-render instruction; render it. Confirm the statement with the analyst before \
-creating one. Delegate "review/critique this page" to the `reviewer` subagent \
-via the `task` tool — it starts the editorial reviewer (contradiction / \
-weak-source / coverage-gap checks); relay its one-line status.
+When a subagent returns a render instruction (a SourceCard, ChartCard, \
+HypothesisCard, ApprovalCard, …), render it exactly as instructed. For \
+background work (research), tell the analyst what you kicked off and where the \
+result will appear. Confirm consequential or destructive intent with the \
+analyst before delegating it (e.g. creating a hypothesis, building an artifact, \
+toggling a connector) — those paths are approval-gated and return an \
+ApprovalCard you must render.
 
-To add a source or build/revise wiki content, delegate to the `wiki_builder` \
-subagent via the `task` tool — it ingests a URL into the knowledge store (folds \
-it into the wiki) and can promote an analyst note to a draft wiki page. After it \
-returns, render a SourceCard for an ingested source.
+**Consult your skills when relevant.** You have SKILL.md skills (research, ach, \
+report-authoring, wiki-style). Their names and descriptions are listed for you; \
+when a request matches one, read the skill for the procedure before acting, and \
+follow it.
 
-For charts, reports, exports, or visualizations, delegate to the `viz_builder` \
-subagent via the `task` tool. It makes quick charts (returns a ChartCard render \
-instruction — render it) and builds full reports/decks/exports. Building an \
-artifact is a consequential action, so for a report/deck/export the subagent \
-returns an instruction to render an ApprovalCard instead of building \
-immediately — render that ApprovalCard exactly as instructed and tell the \
-analyst the build will run once they approve. The finished artifact lands in \
-the Artifacts tab.
+## Voice and grounding
 
-You can list connectors and enable/disable them, and report or change the \
+Ground every claim in what the wiki actually says and cite pages with \
+[[Page Title]] wikilink markers. Never fabricate. When the analyst would \
+benefit from a structured view (a comparison table, a chart, a hypothesis \
+matrix, a claim with its confidence), render it as an interactive card rather \
+than describing it in prose. Prefer the analyst's current context — the page or \
+hypothesis they are viewing, provided to you — when it is relevant. When work \
+lands in a specific tab (Briefs, Artifacts, Hypotheses), point the analyst \
+there.
+
+You can also list connectors and enable/disable them, and report or change the \
 project's model profile, when the analyst asks about data sources or model \
-settings. Enabling/disabling a connector is also consequential: the \
-`set_connector_enabled` tool returns an ApprovalCard instruction — render it \
-and let the analyst approve before the change applies.
+settings — these are light config tools you hold directly. Enabling/disabling a \
+connector is consequential and approval-gated: render the ApprovalCard it \
+returns and let the analyst approve before the change applies.
 
-A test subagent named `echo` exists. When (and only when) the analyst asks \
-to test delegation, delegate to it via the `task` tool and relay its reply.
+## Memory
 
 You have long-term memory at `/memories/`. At the start of substantive work, \
 check `/memories/` (ls/read_file) for durable facts about this project or the \
@@ -750,6 +760,12 @@ def build_agent_store(
 # The single agent model id, shared by the orchestrator and its subagents.
 _AGENT_MODEL = "claude-sonnet-4-6"
 
+# SKILL.md skills live in `skills/<name>/SKILL.md` alongside this module. The
+# Deep Agent reads them through its backend, so a FilesystemBackend rooted here
+# is routed under the in-backend `/skills/` prefix (see `_memory_backend`); the
+# orchestrator is given `skills=["/skills"]` to scan that source for skills.
+_SKILLS_DIR = pathlib.Path(__file__).parent / "skills"
+
 
 def _gateway_chat_model(settings: Settings, *, purpose: str) -> ChatOpenAI:
     """Build a gateway-pointed `ChatOpenAI` with cost attribution (rules #2, #5).
@@ -806,6 +822,7 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
     from deepagents.backends import (
         BackendProtocol,
         CompositeBackend,
+        FilesystemBackend,
         StateBackend,
         StoreBackend,
     )
@@ -844,8 +861,17 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
             return ("shared", "memories")
         return (str(project_id), "memories")
 
+    # Read-only host-filesystem backend for the bundled SKILL.md skills. The
+    # SkillsMiddleware reads skills through the agent's backend, so routing the
+    # in-backend `/skills/` prefix to this FilesystemBackend (rooted at the
+    # `skills/` dir) lets `skills=["/skills"]` discover `skills/<name>/SKILL.md`.
+    # `virtual_mode=True` is required for the CompositeBackend path remapping to
+    # resolve correctly (with it off, the backend lists nothing under a route).
+    _skills_backend = FilesystemBackend(root_dir=str(_SKILLS_DIR), virtual_mode=True)
+
     def _memory_backend(_rt: ToolRuntime[Any, Any]) -> BackendProtocol:
-        """Route `/memories/` to the per-project StoreBackend, all else ephemeral.
+        """Route `/memories/` to the per-project StoreBackend, `/skills/` to the
+        bundled SKILL.md filesystem, all else ephemeral.
 
         The `_rt` factory arg is still received from deepagents but is NOT passed
         to the backends: a positional `runtime` to StateBackend/StoreBackend is
@@ -855,7 +881,10 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
         """
         return CompositeBackend(
             default=StateBackend(),
-            routes={"/memories/": StoreBackend(namespace=_memory_namespace)},
+            routes={
+                "/memories/": StoreBackend(namespace=_memory_namespace),
+                "/skills/": _skills_backend,
+            },
         )
 
     # The orchestrator's OWN model. Cost is attributed to `assistant.turn` via
@@ -899,6 +928,11 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
             build_analyst_subagent(settings=settings),
             build_reviewer_subagent(settings=settings),
         ],
+        # Bundled SKILL.md skills (progressive disclosure): the orchestrator
+        # sees each skill's name + description at startup and reads the full
+        # procedure on demand. `/skills` is the in-backend source the
+        # CompositeBackend routes to the FilesystemBackend above.
+        skills=["/skills"],
         middleware=[CopilotKitMiddleware()],
         backend=_memory_backend,
         store=store,
