@@ -144,6 +144,98 @@ const ALEPH_A2UI_CATALOG = {
         required: ["artifact_id", "title", "artifact_kind", "status"],
       },
     },
+    ApprovalCard: {
+      description:
+        "An approve/reject gate for a consequential action (an agent_action " +
+        "build/connector change, a synthesis proposal, a review finding). Render " +
+        "this when a tool result asks you to surface an approval — the analyst " +
+        "clicks Approve/Reject and the ActionRouter executes. `target_id` + " +
+        "`target_kind` come from the tool result; do not fabricate them.",
+      props: {
+        type: "object",
+        properties: {
+          target_id: { type: "string" },
+          target_kind: { type: "string" },
+          title: { type: "string" },
+          summary: { type: "string" },
+          severity: { type: "string", description: "info | low | medium | high" },
+          evidence_refs: { type: "array", items: { type: "object" } },
+          diff_card_id: { type: "string" },
+        },
+        required: ["target_id", "target_kind", "title", "summary"],
+      },
+    },
+    FormCard: {
+      description:
+        "A dynamic input form. Use to collect structured input conversationally " +
+        "(parameters, choices) instead of free text. `fields` is an array of field " +
+        "specs ([{name,label,type,options?}]).",
+      props: {
+        type: "object",
+        properties: {
+          form_id: { type: "string" },
+          title: { type: "string" },
+          fields: { type: "array", items: { type: "object" } },
+        },
+        required: ["form_id", "title", "fields"],
+      },
+    },
+    MapCard: {
+      description:
+        "A geographic map of point features. Provide `points` (array of " +
+        "{lat,lng,label?} objects), optional `center` ({lat,lng}) and `zoom`.",
+      props: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          points: { type: "array", items: { type: "object" } },
+          center: { type: "object" },
+          zoom: { type: "number" },
+          style_url: { type: "string" },
+        },
+      },
+    },
+    GraphCard: {
+      description:
+        "A node-link graph (entities + relationships). Provide `nodes` " +
+        "([{id,label?}]) and `edges` ([{source,target,label?}]).",
+      props: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          nodes: { type: "array", items: { type: "object" } },
+          edges: { type: "array", items: { type: "object" } },
+        },
+      },
+    },
+    NotebookCellCard: {
+      description:
+        "An editable analyst-note cell (markdown). Render when surfacing or " +
+        "drafting a note section the analyst can edit in place.",
+      props: {
+        type: "object",
+        properties: {
+          section_id: { type: "string" },
+          body_md: { type: "string" },
+          ordinal: { type: "number" },
+        },
+        required: ["section_id", "body_md", "ordinal"],
+      },
+    },
+    DiffCard: {
+      description:
+        "A revision diff for a wiki page (from_revision_id → to_revision_id). " +
+        "Render when showing what changed between two wiki revisions.",
+      props: {
+        type: "object",
+        properties: {
+          from_revision_id: { type: "string" },
+          to_revision_id: { type: "string" },
+          page_id: { type: "string" },
+        },
+        required: ["from_revision_id", "to_revision_id", "page_id"],
+      },
+    },
   },
 };
 
