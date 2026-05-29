@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import type { A2UIComponent } from "@/a2ui/catalog";
-import { SpikePanel } from "@/a2ui/_spike/SpikePanel";
+import { A2UISurfaceView } from "@/a2ui/A2UISurfaceView";
 import { SurfaceProvider, renderA2UI } from "@/a2ui/register";
 import { api } from "@/lib/api";
 import { SURFACE_TABS, useWorkspaceUI } from "@/lib/workspace-ui";
@@ -13,11 +13,6 @@ interface Props {
 }
 
 export function A2UIRightPanel({ projectId }: Props) {
-  // Wave 4 Task 1 spike: behind `?spike=1`, render the v0_9 A2uiSurface spike
-  // instead of the normal panel (proves the shared-catalog -> A2uiSurface path).
-  if (new URLSearchParams(window.location.search).get("spike") === "1") {
-    return <SpikePanel />;
-  }
   return <RealPanel projectId={projectId} />;
 }
 
@@ -26,8 +21,24 @@ function RealPanel({ projectId }: Props) {
   // Tab state is shared so the assistant agent can drive it (useFrontendTool).
   const { activeSurface: tab, setActiveSurface: setTab } = useWorkspaceUI();
 
+  // Wave 4 T2: the Hypotheses tab is rendered through the upstream v0.9
+  // MessageProcessor + <A2uiSurface> against the shared catalog. Its endpoint
+  // returns `{ tab, messages: [...] }`; the other tabs still use the legacy
+  // `{ tab, surface }` renderer until they migrate.
+  const isV09 = tab === "Hypotheses";
+
+  const messagesQuery = useQuery<{ tab: string; messages: unknown[] }>({
+    queryKey: ["surface-v09", projectId, tab],
+    enabled: isV09,
+    queryFn: () =>
+      api.get<{ tab: string; messages: unknown[] }>(
+        `/v1/projects/${projectId}/surfaces/${tab.toLowerCase()}`,
+      ),
+  });
+
   const surfaceQuery = useQuery<{ tab: string; surface: A2UIComponent }>({
     queryKey: ["surface", projectId, tab],
+    enabled: !isV09,
     queryFn: () =>
       api.get<{ tab: string; surface: A2UIComponent }>(
         `/v1/projects/${projectId}/surfaces/${tab.toLowerCase()}`,
@@ -75,15 +86,28 @@ function RealPanel({ projectId }: Props) {
         ))}
       </nav>
       <div className="flex-1 overflow-y-auto">
-        {surfaceQuery.isPending && (
-          <div className="p-6 text-sm text-slate-500">Loading surface…</div>
-        )}
-        {surfaceQuery.data && (
-          <SurfaceProvider projectId={projectId} surface={`${tab}Surface`}>
-            {renderA2UI(surfaceQuery.data.surface, (actionName, params) =>
-              action.mutate({ actionName, params }),
+        {isV09 ? (
+          <>
+            {messagesQuery.isPending && (
+              <div className="p-6 text-sm text-slate-500">Loading surface…</div>
             )}
-          </SurfaceProvider>
+            {messagesQuery.data && (
+              <A2UISurfaceView messages={messagesQuery.data.messages} />
+            )}
+          </>
+        ) : (
+          <>
+            {surfaceQuery.isPending && (
+              <div className="p-6 text-sm text-slate-500">Loading surface…</div>
+            )}
+            {surfaceQuery.data && (
+              <SurfaceProvider projectId={projectId} surface={`${tab}Surface`}>
+                {renderA2UI(surfaceQuery.data.surface, (actionName, params) =>
+                  action.mutate({ actionName, params }),
+                )}
+              </SurfaceProvider>
+            )}
+          </>
         )}
       </div>
     </aside>

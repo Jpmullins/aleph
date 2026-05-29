@@ -22,16 +22,17 @@ from aleph_a2ui.components.cards import (
 from aleph_a2ui.components.surfaces import (
     artifacts_surface,
     briefs_surface,
-    hypotheses_surface,
+    hypotheses_surface_v09,
     notes_surface,
     wiki_surface,
 )
-from aleph_core.errors import NotFound, ValidationFailed
-from aleph_notes.models import Note, NoteSection
-from aleph_wiki.models import WikiClaim, WikiPage, WikiRevision
-
 from aleph_api.deps import SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
+from aleph_core.errors import NotFound, ValidationFailed
+from aleph_hypotheses.hypothesis_service import list_hypotheses
+from aleph_hypotheses.models import HypothesisEvidence
+from aleph_notes.models import Note, NoteSection
+from aleph_wiki.models import WikiClaim, WikiPage, WikiRevision
 
 router = APIRouter(prefix="/v1/projects", tags=["surfaces"])
 
@@ -41,13 +42,25 @@ class SurfaceOut(BaseModel):
     surface: dict[str, Any]
 
 
-@router.get("/{project_id}/surfaces/{tab}", response_model=SurfaceOut)
+class SurfaceMessagesOut(BaseModel):
+    """A2UI v0.9 message-list payload (Wave 4).
+
+    The Hypotheses tab is rendered through the upstream `@a2ui` v0_9
+    `MessageProcessor` + `<A2uiSurface>`, so its body carries an ordered list of
+    server-to-client messages instead of the legacy `{tab, surface}` tree.
+    """
+
+    tab: str
+    messages: list[dict[str, Any]]
+
+
+@router.get("/{project_id}/surfaces/{tab}", response_model=None)
 async def get_surface(
     project_id: ProjectScopeDep,
     tab: str,
     session: SessionDep,
     page_id: str | None = Query(default=None),
-) -> SurfaceOut:
+) -> SurfaceOut | SurfaceMessagesOut:
     tab_lc = tab.lower()
     if tab_lc == "wiki":
         return SurfaceOut(
@@ -61,18 +74,16 @@ async def get_surface(
     if tab_lc == "notes":
         return SurfaceOut(tab=tab_lc, surface=await _notes_surface(session, project_id))
     if tab_lc == "hypotheses":
-        s = hypotheses_surface()
-        validate_surface(s)
-        return SurfaceOut(tab=tab_lc, surface=s)
+        return SurfaceMessagesOut(
+            tab=tab_lc,
+            messages=await _hypotheses_messages(session, project_id),
+        )
     if tab_lc == "briefs":
         from aleph_connectors.models import SynthesisProposal
 
-        stmt = (
-            select(SynthesisProposal)
-            .where(
-                SynthesisProposal.project_id == project_id,
-                SynthesisProposal.status == "pending",
-            )
+        stmt = select(SynthesisProposal).where(
+            SynthesisProposal.project_id == project_id,
+            SynthesisProposal.status == "pending",
         )
         n = len(list((await session.execute(stmt)).scalars().all()))
         s = briefs_surface(badge_count=n)
@@ -82,9 +93,42 @@ async def get_surface(
     raise NotFound(msg)
 
 
-async def _wiki_surface(
-    session, project_id: UUID, page_id: str | None
-) -> dict[str, Any]:
+async def _hypotheses_messages(session: Any, project_id: UUID) -> list[dict[str, Any]]:
+    """Build the v0.9 message list for the Hypotheses tab.
+
+    One `HypothesisCard` per hypothesis, with evidence counts aggregated from
+    `hypothesis_evidence`. Props bind into `/items/<i>/...` (Wave 4 T6 delta
+    path).
+    """
+    hyps = await list_hypotheses(session, project_id=project_id)
+    counts: dict[UUID, int] = {}
+    ev_rows = list(
+        (
+            await session.execute(
+                select(HypothesisEvidence.hypothesis_id).where(
+                    HypothesisEvidence.project_id == project_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for hid in ev_rows:
+        counts[hid] = counts.get(hid, 0) + 1
+    return hypotheses_surface_v09(
+        hypotheses=[
+            {
+                "hypothesis_id": str(h.id),
+                "title": h.title,
+                "confidence": h.confidence,
+                "evidence_count": counts.get(h.id, 0),
+            }
+            for h in hyps
+        ]
+    )
+
+
+async def _wiki_surface(session, project_id: UUID, page_id: str | None) -> dict[str, Any]:
     cards: list[dict[str, Any]] = []
     if page_id:
         try:
@@ -136,9 +180,7 @@ async def _notes_surface(session, project_id: UUID) -> dict[str, Any]:
     rows = list(
         (
             await session.execute(
-                select(Note)
-                .where(Note.project_id == project_id)
-                .order_by(Note.created_at.desc())
+                select(Note).where(Note.project_id == project_id).order_by(Note.created_at.desc())
             )
         )
         .scalars()
