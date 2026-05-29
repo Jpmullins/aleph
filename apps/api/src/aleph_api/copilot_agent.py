@@ -63,9 +63,13 @@ confidence), render it as an interactive card rather than describing it \
 in prose. Prefer the analyst's current context (the page or hypothesis \
 they are viewing, provided to you) when relevant.
 
-When the analyst discusses competing explanations, list or create hypotheses \
-and render a HypothesisCard. Confirm the statement with the analyst before \
-creating one.
+Delegate competing-explanation / hypothesis / evidence analysis to the \
+`analyst` subagent via the `task` tool — it lists or creates hypotheses and \
+weighs evidence (Analysis of Competing Hypotheses) and returns a HypothesisCard \
+render instruction; render it. Confirm the statement with the analyst before \
+creating one. Delegate "review/critique this page" to the `reviewer` subagent \
+via the `task` tool — it starts the editorial reviewer (contradiction / \
+weak-source / coverage-gap checks); relay its one-line status.
 
 To add a source or build/revise wiki content, delegate to the `wiki_builder` \
 subagent via the `task` tool — it ingests a URL into the knowledge store (folds \
@@ -266,12 +270,11 @@ async def _read_wiki_impl(query: str, config: RunnableConfig) -> str:
     return f"{body}\n\n_(coverage: {coverage})_"
 
 
-@tool
-async def list_hypotheses_tool(config: RunnableConfig) -> str:
-    """List the current project's hypotheses with their confidence.
+async def _list_hypotheses_impl(config: RunnableConfig) -> str:
+    """Shared body: list the project's hypotheses with their confidence.
 
-    Use this to recall what competing explanations the analyst is already
-    tracking before proposing or creating a new one.
+    Reused by the `analyst` subagent's tool (DRY). Reads the lifespan-bound
+    session_maker + project scope, never the DB credentials directly.
     """
     from aleph_hypotheses.hypothesis_service import list_hypotheses
 
@@ -290,13 +293,10 @@ async def list_hypotheses_tool(config: RunnableConfig) -> str:
     return "Hypotheses:\n" + "\n".join(lines)
 
 
-@tool
-async def create_hypothesis_tool(title: str, statement: str, config: RunnableConfig) -> str:
-    """Create a new hypothesis (a competing explanation) for the project.
+async def _create_hypothesis_impl(title: str, statement: str, config: RunnableConfig) -> str:
+    """Shared body: create a hypothesis (writes an Action Ledger event, rule #4).
 
-    Confirm the statement with the analyst before calling this. `title` is a
-    short label; `statement` is the falsifiable claim. After creating, render a
-    HypothesisCard so the analyst can track and weigh evidence against it.
+    Reused by the `analyst` subagent's tool (DRY).
     """
     from aleph_db.repos.ledger import LedgerWriter
     from aleph_hypotheses.hypothesis_service import create_hypothesis
@@ -334,8 +334,7 @@ async def create_hypothesis_tool(title: str, statement: str, config: RunnableCon
     )
 
 
-@tool
-async def add_hypothesis_evidence_tool(
+async def _add_hypothesis_evidence_impl(
     hypothesis_id: str,
     stance: str,
     evidence_kind: str,
@@ -344,12 +343,9 @@ async def add_hypothesis_evidence_tool(
     note: str = "",
     weight: float = 1.0,
 ) -> str:
-    """Attach a piece of evidence to a hypothesis.
+    """Shared body: attach evidence to a hypothesis (writes a ledger event, rule #4).
 
-    `stance` is one of supports / contradicts / contextualizes. `evidence_kind`
-    is one of claim / source_page / chunk / finding / other_hypothesis.
-    `target_id` is the UUID of the referenced entity. Adding evidence may shift
-    the hypothesis's confidence; re-render its HypothesisCard afterward.
+    Reused by the `analyst` subagent's tool (DRY).
     """
     from sqlalchemy import func, select
 
@@ -817,8 +813,10 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
     from langgraph.config import get_config
     from langgraph.prebuilt.tool_node import ToolRuntime
 
+    from aleph_api.subagents.analyst import build_analyst_subagent
     from aleph_api.subagents.researcher import build_researcher_subagent
     from aleph_api.subagents.retriever import build_retriever_subagent
+    from aleph_api.subagents.reviewer import build_reviewer_subagent
     from aleph_api.subagents.viz_builder import build_viz_builder_subagent
     from aleph_api.subagents.wiki_builder import build_wiki_builder_subagent
 
@@ -887,9 +885,6 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
         model=model,
         tools=[
             search_wiki,
-            list_hypotheses_tool,
-            create_hypothesis_tool,
-            add_hypothesis_evidence_tool,
             list_connectors,
             set_connector_enabled,
             set_model_profile,
@@ -901,6 +896,8 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
             build_researcher_subagent(settings=settings),
             build_wiki_builder_subagent(settings=settings),
             build_viz_builder_subagent(settings=settings),
+            build_analyst_subagent(settings=settings),
+            build_reviewer_subagent(settings=settings),
         ],
         middleware=[CopilotKitMiddleware()],
         backend=_memory_backend,

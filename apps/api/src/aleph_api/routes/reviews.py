@@ -6,13 +6,16 @@ from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Query, status
+from fastapi import APIRouter, Body, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
 from aleph_core.errors import NotFound
+from aleph_core.ids import uuid7
+from aleph_observability.tracing import current_trace_id
 from aleph_reviewer.approval_service import decide
 from aleph_reviewer.models import ApprovalRequest, ReviewFinding, ReviewRun
+from aleph_security.agent_token import mint_agent_token
 from aleph_security.roles import ProjectRole, require_at_least
 
 from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
@@ -74,6 +77,15 @@ class DecideIn(BaseModel):
     reason: str | None = Field(default=None, max_length=4096)
 
 
+class StartEditorialReviewIn(BaseModel):
+    trigger: str = Field(default="manual", max_length=512)
+
+
+class StartEditorialReviewOut(BaseModel):
+    enqueued: bool
+    trigger: str
+
+
 @router.get("/{project_id}/reviews/runs", response_model=list[ReviewRunOut])
 async def list_runs(
     project_id: ProjectScopeDep,
@@ -89,6 +101,70 @@ async def list_runs(
         stmt = stmt.where(ReviewRun.kind == kind)
     rows = list((await session.execute(stmt)).scalars().all())
     return [ReviewRunOut.model_validate(r) for r in rows]
+
+
+@router.post(
+    "/{project_id}/reviews/editorial",
+    response_model=StartEditorialReviewOut,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def start_editorial_review(
+    project_id: ProjectScopeDep,
+    body: Annotated[StartEditorialReviewIn, Body()],
+    request: Request,
+    ledger: LedgerDep,
+    principal: PrincipalDep,
+) -> StartEditorialReviewOut:
+    """Start the editorial reviewer over the project wiki.
+
+    The editorial reviewer scans the project's pages for contradictions,
+    weak/missing sources, and coverage gaps, landing ReviewFindings (and, for
+    consequential ones, ApprovalRequests). The `trigger` is a free-text label
+    carrying the analyst's intent (e.g. the page they asked to review); it is
+    recorded on the ReviewRun and surfaced in the Reviews flow. Runs in the
+    background via the editorial_review_job worker (rule #3 — never touches the
+    DB/worker directly; the worker owns the ReviewRun + findings).
+    """
+    require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
+
+    agent_run_id = uuid7()
+    correlation_id = f"editor-{agent_run_id.hex[:8]}"
+    await ledger.append(
+        project_id=project_id,
+        actor_id=principal.user_id,
+        actor_kind=principal.actor_kind,
+        action_kind="review.editorial.start",
+        target_id=agent_run_id,
+        target_kind="agent_run",
+        payload={"trigger": body.trigger},
+        trace_id=current_trace_id(),
+    )
+
+    token = mint_agent_token(
+        secret=request.app.state.settings.aleph_agent_token_secret,
+        user_id=principal.user_id,
+        project_id=project_id,
+        agent_run_id=agent_run_id,
+        actor_kind="aleph_agent",
+        correlation_id=correlation_id,
+        ttl_seconds=3600,
+    )
+    from arq import create_pool
+    from arq.connections import RedisSettings
+
+    pool = await create_pool(
+        RedisSettings.from_dsn(request.app.state.settings.redis_url)
+    )
+    try:
+        await pool.enqueue_job(
+            "editorial_review_job",
+            str(project_id),
+            body.trigger,
+            token,
+        )
+    finally:
+        await pool.aclose()
+    return StartEditorialReviewOut(enqueued=True, trigger=body.trigger)
 
 
 @router.get(
