@@ -12,7 +12,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from aleph_observability.tracing import instrument_fastapi
 
 from aleph_api.lifespan import lifespan
-from aleph_api.settings import get_settings
 from aleph_api.middleware.auth import AuthMiddleware
 from aleph_api.middleware.errors import ErrorMiddleware
 from aleph_api.middleware.request_id import RequestIDMiddleware
@@ -113,13 +112,10 @@ def create_app() -> FastAPI:
     # Inc 8
     app.include_router(evals.router)
 
-    # Wave 2 — assistant Deep Agent mounted as an AG-UI endpoint at
-    # /copilotkit/agent/assistant (v2 path). The Node aleph-copilot-runtime
-    # bridges the React app to it. `bind_runtime` (session_maker) happens in
-    # lifespan before any request.
-    from aleph_api.copilotkit_endpoint import setup_copilotkit
-
-    setup_copilotkit(app, settings=get_settings())
+    # Wave 2 — the assistant Deep Agent is mounted as an AG-UI endpoint at
+    # /copilotkit/agent/assistant during lifespan startup (NOT here): its
+    # Postgres-backed memory store (Wave 6 D1) must be built inside the running
+    # event loop. The Node aleph-copilot-runtime bridges the React app to it.
 
     instrument_fastapi(app)
 

@@ -21,6 +21,10 @@ dependencies = [
     "ag-ui-langgraph>=0.0.36",
     "deepagents>=0.6",
     "langgraph>=1.2,<2",
+    # Postgres-backed langgraph store for cross-session Deep Agent memory (Wave 6 D1).
+    # Provides langgraph.store.postgres.AsyncPostgresStore; pulls psycopg (sync+async).
+    "langgraph-checkpoint-postgres>=3.1,<4",
+    "psycopg[binary,pool]>=3.2",
     "langchain-openai>=1",
     "aleph-core",
     "aleph-db",

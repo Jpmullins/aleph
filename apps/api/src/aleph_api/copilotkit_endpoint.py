@@ -18,18 +18,26 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
+    from langgraph.store.postgres import AsyncPostgresStore
+
+    from aleph_api.settings import Settings
 
 _AGENT_PATH = "/copilotkit/agent/assistant"
 
 
-def setup_copilotkit(app: "FastAPI", *, settings) -> None:
-    """Build the assistant Deep Agent and mount its AG-UI endpoint."""
+def setup_copilotkit(app: FastAPI, *, settings: Settings, store: AsyncPostgresStore) -> None:
+    """Build the assistant Deep Agent and mount its AG-UI endpoint.
+
+    Called from the FastAPI lifespan startup (not app construction): the agent's
+    Postgres-backed memory `store` must be created inside the running event loop,
+    and the AG-UI route is only consulted after startup completes.
+    """
     from ag_ui_langgraph import add_langgraph_fastapi_endpoint
     from copilotkit import LangGraphAGUIAgent
 
     from aleph_api.copilot_agent import build_assistant_deep_agent
 
-    graph = build_assistant_deep_agent(settings=settings)
+    graph = build_assistant_deep_agent(settings=settings, store=store)
     add_langgraph_fastapi_endpoint(
         app,
         LangGraphAGUIAgent(

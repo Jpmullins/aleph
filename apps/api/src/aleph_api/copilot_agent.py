@@ -28,6 +28,10 @@ from langchain_openai import ChatOpenAI
 from aleph_wiki.index_service import IndexService
 
 if TYPE_CHECKING:
+    from langgraph.store.postgres import AsyncPostgresStore
+    from psycopg import AsyncConnection
+    from psycopg.rows import DictRow
+    from psycopg_pool import AsyncConnectionPool
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from aleph_api.settings import Settings
@@ -75,6 +79,12 @@ project's model profile, when the analyst asks about data sources or model \
 settings. Enabling/disabling a connector is also consequential: the \
 `set_connector_enabled` tool returns an ApprovalCard instruction — render it \
 and let the analyst approve before the change applies.
+
+You have long-term memory at `/memories/`. At the start of substantive work, \
+check `/memories/` (ls/read_file) for durable facts about this project or the \
+analyst's preferences. When you learn something durable (a preference, a key \
+project fact), write it to `/memories/<topic>.md` so you remember it in future \
+sessions.
 """
 
 # Stable, deterministic dev user id so ledger rows (ModelCall /
@@ -83,7 +93,7 @@ and let the analyst approve before the change applies.
 _DEV_USER_UUID = uuid.uuid5(uuid.NAMESPACE_DNS, "dev@aleph.local")
 
 
-def _dev_principal(settings: "Any") -> "Principal":
+def _dev_principal(settings: Any) -> Principal:
     """Build the fixed local-dev principal for service calls from agent tools.
 
     Mirrors `local` auth mode: a single resolvable principal (rather than a
@@ -106,9 +116,9 @@ _runtime: dict[str, Any] = {"session_maker": None, "settings": None, "litellm": 
 
 def bind_runtime(
     *,
-    session_maker: "async_sessionmaker[AsyncSession]",
-    settings: "Settings | None" = None,
-    litellm: "LiteLLMClient | None" = None,
+    session_maker: async_sessionmaker[AsyncSession],
+    settings: Settings | None = None,
+    litellm: LiteLLMClient | None = None,
 ) -> None:
     _runtime["session_maker"] = session_maker
     if settings is not None:
@@ -124,6 +134,24 @@ def get_runtime() -> dict[str, Any]:
     same way the tools below read it (the graph is built before `bind_runtime`).
     """
     return _runtime
+
+
+def _project_id_from_thread_id(thread_id: object) -> UUID | None:
+    """Parse the project UUID out of a project-prefixed thread id.
+
+    The Node CopilotRuntime formats the thread id as `proj:<uuid>:<thread>`
+    (the only channel `ag-ui-langgraph` reliably threads through to the graph).
+    Returns the UUID, or None if the thread id is not project-prefixed / not a
+    valid UUID.
+    """
+    if isinstance(thread_id, str) and thread_id.startswith("proj:"):
+        parts = thread_id.split(":", 2)
+        if len(parts) >= 2:
+            try:
+                return UUID(parts[1])
+            except ValueError:
+                return None
+    return None
 
 
 def _project_id_from_config(config: RunnableConfig | None) -> UUID | None:
@@ -145,13 +173,7 @@ def _project_id_from_config(config: RunnableConfig | None) -> UUID | None:
         or (config.get("metadata") or {}).get("projectId")
     )
     if not raw:
-        thread_id = configurable.get("thread_id") or ""
-        if isinstance(thread_id, str) and thread_id.startswith("proj:"):
-            parts = thread_id.split(":", 2)
-            if len(parts) >= 2:
-                raw = parts[1]
-    if not raw:
-        return None
+        return _project_id_from_thread_id(configurable.get("thread_id"))
     try:
         return UUID(str(raw))
     except ValueError:
@@ -292,7 +314,7 @@ async def create_hypothesis_tool(title: str, statement: str, config: RunnableCon
             hyp_title = h.title
             hyp_short_id = h.short_id
             await session.commit()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return f"Could not create hypothesis: {exc}"
     return (
         f"Created hypothesis [{hyp_short_id}] '{hyp_title}'.\n"
@@ -369,7 +391,7 @@ async def add_hypothesis_evidence_tool(
                 hyp_id = str(h.id)
                 conf = getattr(h, "confidence", "initial")
             await session.commit()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return f"Could not add evidence: {exc}"
     if hyp_id is None:
         return (
@@ -413,7 +435,7 @@ async def start_research(query: str, config: RunnableConfig, depth: str = "shall
                 json={"topic": query, "depth": depth},
                 headers={"Authorization": "Bearer local-dev"},
             )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return f"Could not start research: {exc}"
     if resp.status_code >= 400:
         return f"Research could not start ({resp.status_code}): {resp.text[:200]}"
@@ -452,7 +474,7 @@ async def ingest_source(url: str, config: RunnableConfig, title: str = "") -> st
                 json={"url": url, "title": title},
                 headers={"Authorization": "Bearer local-dev"},
             )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return f"Could not ingest {url}: {exc}"
     if resp.status_code >= 400:
         return f"Could not ingest {url} ({resp.status_code}): {resp.text[:200]}"
@@ -490,7 +512,7 @@ async def _request_agent_action(
                 json={"tool": tool, "args": args, "title": title, "summary": summary},
                 headers={"Authorization": "Bearer local-dev"},
             )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return f"Could not request approval for {tool}: {exc}"
     if resp.status_code >= 400:
         return f"Could not request approval ({resp.status_code}): {resp.text[:200]}"
@@ -572,7 +594,7 @@ async def list_connectors(config: RunnableConfig) -> str:
                 f"{base}/v1/projects/{project_id}/connectors/bindings",
                 headers={"Authorization": "Bearer local-dev"},
             )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return f"Could not list connectors: {exc}"
     if connectors_resp.status_code >= 400:
         return (
@@ -654,7 +676,7 @@ async def set_model_profile(profile_name: str, config: RunnableConfig) -> str:
                 f"{base}/v1/model-profile-templates",
                 headers={"Authorization": "Bearer local-dev"},
             )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return f"Could not read the model profile: {exc}"
     current_name = "unknown"
     if current_resp.status_code < 400:
@@ -674,17 +696,111 @@ async def set_model_profile(profile_name: str, config: RunnableConfig) -> str:
     )
 
 
-def build_assistant_deep_agent(*, settings: "Settings"):
+def _psycopg_conn_string(database_url: str) -> str:
+    """Convert the app's SQLAlchemy asyncpg URL to a psycopg conn string.
+
+    `AsyncPostgresStore` connects with psycopg (not asyncpg), so strip the
+    SQLAlchemy `+asyncpg` driver suffix: `postgresql+asyncpg://…` → `postgresql://…`.
+    """
+    return database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+
+
+def build_agent_store(
+    *, database_url: str
+) -> tuple["AsyncConnectionPool[AsyncConnection[DictRow]]", "AsyncPostgresStore"]:
+    """Build the Postgres-backed langgraph store for cross-session agent memory.
+
+    Returns an *unopened* `(pool, store)` pair: the caller (the FastAPI lifespan)
+    must `await pool.open()` then `await store.setup()` once at startup, and
+    `await pool.close()` at shutdown. The pool is configured exactly as
+    langgraph's own `AsyncPostgresStore.from_conn_string` configures it
+    (autocommit, no prepared statements, dict rows). The store is constructed
+    here — which requires a running event loop — so this must be called from
+    within the async lifespan, not at synchronous app-construction time.
+    """
+    from typing import cast
+
+    from langgraph.store.postgres import AsyncPostgresStore
+    from psycopg.rows import dict_row
+    from psycopg_pool import AsyncConnectionPool
+
+    # Mirror langgraph's own `AsyncPostgresStore.from_conn_string` pool config:
+    # autocommit (the store manages its own transactions), no prepared
+    # statements, and dict rows. The cast matches langgraph's own typing.
+    pool = cast(
+        "AsyncConnectionPool[AsyncConnection[DictRow]]",
+        AsyncConnectionPool(
+            _psycopg_conn_string(database_url),
+            open=False,
+            min_size=1,
+            kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
+        ),
+    )
+    store = AsyncPostgresStore(conn=pool)
+    return pool, store
+
+
+def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore):
     """Compile the assistant Deep Agent (built once at app startup).
 
     Returns a LangGraph `CompiledStateGraph` suitable for
     `LangGraphAGUIAgent(graph=...)`. W3 extends this with subagents.
+
+    `store` is the long-lived Postgres-backed langgraph store created by the
+    lifespan; a `CompositeBackend` routes `/memories/` to it (cross-session
+    persistence) while all other agent files stay ephemeral per-thread.
     """
     from copilotkit import CopilotKitMiddleware
     from deepagents import create_deep_agent
+    from deepagents.backends import (
+        BackendProtocol,
+        CompositeBackend,
+        StateBackend,
+        StoreBackend,
+    )
     from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.config import get_config
+    from langgraph.prebuilt.tool_node import ToolRuntime
 
     from aleph_api.copilot_cost_callback import AgentCostCallbackHandler
+
+    def _memory_namespace(_rt: object) -> tuple[str, ...]:
+        """Scope persistent memory per-project so projects never share memory.
+
+        `StoreBackend` invokes this inside the graph execution context, so the
+        running config (with our `proj:<uuid>:<thread>` thread id) is available
+        via langgraph's `get_config()` — the same channel the tools read project
+        scope from. We parse the project UUID out of the thread id and key the
+        store namespace on it: `(<project_uuid>, "memories")`. When the scope
+        can't be resolved (direct caller without a project-prefixed thread id),
+        fall back to a shared `("shared", "memories")` namespace rather than
+        leaking one project's memory into another's default key.
+        """
+        project_id: UUID | None = None
+        try:
+            cfg = get_config()
+        except Exception:  # noqa: BLE001 — resilient: never crash a store op on config
+            cfg = None
+        if cfg is not None:
+            configurable = cfg.get("configurable") or {}
+            project_id = _project_id_from_thread_id(configurable.get("thread_id"))
+        if project_id is None:
+            return ("shared", "memories")
+        return (str(project_id), "memories")
+
+    def _memory_backend(_rt: ToolRuntime[Any, Any]) -> BackendProtocol:
+        """Route `/memories/` to the per-project StoreBackend, all else ephemeral.
+
+        The `_rt` factory arg is still received from deepagents but is NOT passed
+        to the backends: a positional `runtime` to StateBackend/StoreBackend is
+        deprecated (removed in deepagents 0.7) — they obtain store/context via
+        `get_store()`/`get_runtime()` now. Per-project scoping rides the explicit
+        `namespace=` callable instead.
+        """
+        return CompositeBackend(
+            default=StateBackend(),
+            routes={"/memories/": StoreBackend(namespace=_memory_namespace)},
+        )
 
     _AGENT_MODEL = "claude-sonnet-4-6"
     # Attribute the agent's OWN ChatOpenAI calls to the cost ledger (rule #5).
@@ -708,9 +824,11 @@ def build_assistant_deep_agent(*, settings: "Settings"):
         # ChatOpenAI request + aggregate the usage into the final chunk.
         stream_usage=True,
     )
-    # In-memory checkpointer keeps per-thread state for the AG-UI runtime.
-    # (A Postgres checkpointer is the production upgrade; memory is fine for
-    # the in-process single-replica dev/local runtime.)
+    # In-memory checkpointer keeps per-thread conversation state for the AG-UI
+    # runtime. Cross-SESSION durability rides the `store` instead: the
+    # CompositeBackend routes `/memories/` to a StoreBackend over the
+    # Postgres-backed langgraph store, so memory files survive new threads and
+    # process restarts. Everything else stays ephemeral (StateBackend).
     return create_deep_agent(
         model=model,
         tools=[
@@ -728,5 +846,7 @@ def build_assistant_deep_agent(*, settings: "Settings"):
         ],
         system_prompt=SYSTEM_PROMPT,
         middleware=[CopilotKitMiddleware()],
+        backend=_memory_backend,
+        store=store,
         checkpointer=MemorySaver(),
     )
