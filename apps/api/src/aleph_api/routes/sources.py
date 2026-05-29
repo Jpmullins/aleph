@@ -60,7 +60,9 @@ class SourceOut(BaseModel):
     updated_at: datetime
 
 
-@router.post("/{project_id}/sources/upload", status_code=status.HTTP_201_CREATED, response_model=SourceOut)
+@router.post(
+    "/{project_id}/sources/upload", status_code=status.HTTP_201_CREATED, response_model=SourceOut
+)
 async def upload_source(
     request: Request,
     project_id: ProjectScopeDep,
@@ -124,7 +126,13 @@ async def _kick_off_normalize(
     """
     # Mint an agent token + create an AgentRun so the worker can authenticate.
     agent_run_id = uuid7()
-    correlation_id = f"normalize-{created.source.id.hex[:8]}"
+    # Use the full agent_run_id hex (not a truncated source-id prefix): two
+    # uuid7s minted within the same ~17s window share their first 8 hex digits
+    # (the high bits of the 48-bit ms timestamp), which collides on the unique
+    # `uq_agent_runs_correlation_id` constraint and 500s. correlation_id is an
+    # opaque label minted into the agent token and echoed back by the worker —
+    # nothing parses it from the source id, so the full id is a safe label.
+    correlation_id = f"normalize-{agent_run_id.hex}"
     run = AgentRun(
         id=agent_run_id,
         project_id=project_id,
@@ -170,9 +178,7 @@ async def _kick_off_normalize(
         from arq import create_pool
         from arq.connections import RedisSettings
 
-        pool = await create_pool(
-            RedisSettings.from_dsn(request.app.state.settings.redis_url)
-        )
+        pool = await create_pool(RedisSettings.from_dsn(request.app.state.settings.redis_url))
         try:
             await pool.enqueue_job("normalize_job", str(created.version.id), token)
         finally:
@@ -280,9 +286,7 @@ async def get_source(
 ) -> SourceOut:
     s = (
         await session.execute(
-            select(Source).where(
-                Source.id == source_id, Source.project_id == project_id
-            )
+            select(Source).where(Source.id == source_id, Source.project_id == project_id)
         )
     ).scalar_one_or_none()
     if s is None:
@@ -305,9 +309,7 @@ async def get_source_asset(
 ) -> AssetURLOut:
     src = (
         await session.execute(
-            select(Source).where(
-                Source.id == source_id, Source.project_id == project_id
-            )
+            select(Source).where(Source.id == source_id, Source.project_id == project_id)
         )
     ).scalar_one_or_none()
     if src is None or src.current_version_id is None:
@@ -322,9 +324,7 @@ async def get_source_asset(
         msg = "source version missing"
         raise NotFound(msg)
     asset = (
-        await session.execute(
-            select(SourceAsset).where(SourceAsset.id == version.asset_id)
-        )
+        await session.execute(select(SourceAsset).where(SourceAsset.id == version.asset_id))
     ).scalar_one_or_none()
     if asset is None:
         msg = "source asset row missing"
@@ -350,9 +350,7 @@ class NormalizedOut(BaseModel):
     markdown: str
 
 
-@router.get(
-    "/{project_id}/sources/{source_id}/normalized", response_model=NormalizedOut
-)
+@router.get("/{project_id}/sources/{source_id}/normalized", response_model=NormalizedOut)
 async def get_normalized(
     request: Request,
     project_id: ProjectScopeDep,
@@ -361,9 +359,7 @@ async def get_normalized(
 ) -> NormalizedOut:
     src = (
         await session.execute(
-            select(Source).where(
-                Source.id == source_id, Source.project_id == project_id
-            )
+            select(Source).where(Source.id == source_id, Source.project_id == project_id)
         )
     ).scalar_one_or_none()
     if src is None:
