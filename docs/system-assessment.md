@@ -117,10 +117,19 @@ All 8 hold. Highlights:
    Dependabot high alerts are now cleared.**
 
 ### P2 — debt / robustness
-8. **New agent surface is largely browser-verified-only.** The 6 subagents, the SSE
-   `SurfaceStreamer`, and the agent-events stream have little/no automated test coverage
-   (agent-actions has 4 tests; `diff_data_model` has unit tests). Add integration tests
-   for at least delegation + a delta.
+8. ~~**New agent surface is largely browser-verified-only.**~~ **ADDRESSED 2026-05-29.**
+   Added automated coverage for the agent surface: (a) the SSE **delta pipeline** —
+   `split_surface_messages` + `data_model_patches_to_messages` (incl. the array-remove
+   "re-set whole array" fallback) now unit-tested in `packages/aleph-a2ui/tests/
+   test_surface_streamer.py`, plus a diff→messages round-trip for a real hypotheses delta;
+   (b) **subagent delegation wiring** — `apps/api/tests/unit/test_subagents.py` builds all
+   six subagents and asserts shape + per-subagent cost tag (`assistant.subagent.<name>`,
+   rule #5) + gateway base_url (rule #2); (c) **card builders** in `tests/test_cards.py`;
+   (d) an **agent-events integration test** (`tests/e2e/test_agent_events.py`) covering the
+   list endpoint's serialization (the same query the SSE `/stream` poll runs) + project
+   scoping. Unit suite 69→**97 pass**, integration 12→**14 pass**. The SSE *timer-loop*
+   wiring itself (2.5s recompute) is still only browser-verified — its pure components are
+   now unit-covered, which is the brittle part.
 9. **Docker dev images are baked, lockfile-free for the web image.** `aleph-api`/`aleph-web`
    need `docker compose up -d --build` (no bind-mount/reload); `apps/web/Dockerfile.dev`
    runs `npm install` (no lockfile) — a container-reproducibility nit (CI itself uses the
