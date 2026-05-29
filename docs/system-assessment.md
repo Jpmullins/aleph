@@ -1,12 +1,23 @@
 # Aleph — System Assessment (2026-05-29)
 
+> **UPDATE 2026-05-29 (post green-the-gates):** the P0 hygiene gates below are now
+> **GREEN**. `ruff check` 0 errors (was 854), `ruff format` clean (was 125 files),
+> `pyright` 0 errors (was 337 — framework/untyped-lib fallout downgraded to *warnings*
+> with per-rule justification in `pyproject.toml`; real-bug rules stay errors; 1628
+> warnings remain as tracked, visible debt), web **ESLint** now has a flat config and
+> lints clean (was broken/no-config), unit tests **69 pass / 0 fail** (the stale eval
+> test was fixed). web `tsc`, evals (`pass_rate 1.0`), and `alembic check` were already
+> green. **The remaining open items are now the P1/P2 list** (runtime agent-catalog
+> sync, SSE×OIDC, deps, test coverage). The original red-gate analysis is retained
+> below for the record.
+
 A full-system review after Waves 6, 4, and 3 (+ the alembic-drift fix) merged to
 `main` (`9eeb041`, pushed to origin). Method: four parallel subsystem reviews
 (backend rules, frontend/A2UI, docs accuracy, ops/security/CI) + the full quality
 gates run directly. Brutally honest: the **product works and is browser-verified
-end-to-end**, but the repo's **lint/format/typecheck hygiene gates are red** — and
-that red is overwhelmingly accumulated cosmetic/framework-untyped noise + tooling-
-config gaps, not functional bugs.
+end-to-end**; at review time the repo's **lint/format/typecheck hygiene gates were red**
+— that red was overwhelmingly accumulated cosmetic/framework-untyped noise + tooling-
+config gaps, not functional bugs (since remediated — see the UPDATE banner above).
 
 ## Executive summary
 
