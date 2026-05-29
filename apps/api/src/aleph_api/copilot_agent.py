@@ -51,10 +51,11 @@ with [[Page Title]] wikilink markers. Never fabricate.
 
 If the wiki does not cover the question (search_wiki returns nothing relevant), \
 offer to research it and — when the analyst agrees, or when they explicitly ask \
-to research/look into/synthesize a topic — call `start_research` with a focused \
-query. Research runs in the background and lands a draft wiki page plus an \
-approval proposal in the Briefs tab. After starting research, briefly tell the \
-analyst what you kicked off and that the proposal will appear in Briefs.
+to research/look into/synthesize a topic the wiki doesn't cover — delegate to \
+the `researcher` subagent via the `task` tool. Research runs in the background \
+and lands a draft wiki page plus an approval proposal in the Briefs tab. After \
+delegating, briefly tell the analyst what you kicked off and that the proposal \
+will appear in Briefs.
 
 When the analyst would benefit from a structured view (a comparison \
 table, a chart of figures, a hypothesis matrix, a claim with its \
@@ -411,17 +412,17 @@ async def add_hypothesis_evidence_tool(
     )
 
 
-@tool
-async def start_research(query: str, config: RunnableConfig, depth: str = "shallow") -> str:
+async def _start_research_impl(query: str, config: RunnableConfig, depth: str = "shallow") -> str:
     """Kick off background research on a topic to grow the project's wiki.
 
-    Use this when the wiki does not yet cover what the analyst is asking about,
-    or when they explicitly ask to research/synthesize a topic. `depth` is
-    "shallow" (fast, single pass, ~1 min) or "deep" (thorough, multi-loop,
-    several minutes). Default to "shallow" for responsiveness; only use "deep"
-    when the analyst explicitly asks for a thorough/exhaustive/deep dive.
-    Research runs in the background via the AIQ researcher; when it finishes it
-    lands a draft wiki page and a proposal in the Briefs tab for approval.
+    Shared body of the research dispatch: self-calls the tested `/synthesize`
+    route (connector resolution, AIQ dispatch, the result→wiki poll job; rule #3
+    — never touches the DB directly) and returns immediately. Reused by the
+    `researcher` subagent's `start_research` tool (Wave 3 T3) so the orchestrator
+    delegates research rather than self-calling it inline.
+
+    `depth` is "shallow" (fast, single pass, ~1 min) or "deep" (thorough,
+    multi-loop, several minutes); defaults to "shallow" for responsiveness.
     """
     import httpx
 
@@ -811,6 +812,7 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
     from langgraph.config import get_config
     from langgraph.prebuilt.tool_node import ToolRuntime
 
+    from aleph_api.subagents.researcher import build_researcher_subagent
     from aleph_api.subagents.retriever import build_retriever_subagent
 
     def _memory_namespace(_rt: object) -> tuple[str, ...]:
@@ -881,7 +883,6 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
             list_hypotheses_tool,
             create_hypothesis_tool,
             add_hypothesis_evidence_tool,
-            start_research,
             ingest_source,
             build_artifact,
             list_connectors,
@@ -889,7 +890,11 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
             set_model_profile,
         ],
         system_prompt=SYSTEM_PROMPT,
-        subagents=[echo_subagent, build_retriever_subagent(settings=settings)],
+        subagents=[
+            echo_subagent,
+            build_retriever_subagent(settings=settings),
+            build_researcher_subagent(settings=settings),
+        ],
         middleware=[CopilotKitMiddleware()],
         backend=_memory_backend,
         store=store,
