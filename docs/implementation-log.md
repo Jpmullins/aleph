@@ -1004,3 +1004,28 @@ commits `5c93dbf`→`e2891f1` + chat-routing fix `d75b69b`). Spec/plan:
 `--reload`** — code changes need `docker compose up -d --build <svc>`, NOT
 `restart`. Several tasks initially used `restart` (insufficient); a full
 `up -d --build` makes the running stack match HEAD.
+
+---
+
+## Wave 4 — A2UI v0_9 shared catalog + delta updates
+
+**Completed:** 2026-05-29. Merged to main (`34a4b2a`); branch `wave-4-a2ui-v09` (T1–T7 + final-review fix). Refreshed spec: `2026-05-29-wave-4-a2ui-v09-refresh-design.md` (supersedes the stale one); plan: `2026-05-29-wave-4-a2ui-v09.md`.
+
+### What shipped (spike-gated, each task browser-verified)
+- **Shared v0_9 catalog** (`apps/web/src/a2ui/aleph-catalog-v09.tsx`): the 18 Aleph components defined ONCE via `@a2ui/react/v0_9` `createComponentImplementation`, composed into `new Catalog("aleph://v1", ...)`. Both the right panel and the Live chat consume it (the duplicate `copilot-catalog.tsx` was DELETED; CopilotKit's `createA2UIMessageRenderer` takes the upstream `Catalog` directly).
+- **Panel renderer** (`A2UISurfaceView` + `A2UIStreamSurfaceView`): renders via `MessageProcessor` + `<A2uiSurface>`; the homegrown `register.tsx` walk-and-dispatch is RETIRED (context re-homed to `surface-context.tsx`, which also keeps `renderChildCard` for Wiki/Briefs embedded children the binder doesn't walk).
+- **Backend v0_9 messages** (`aleph_a2ui/messages.py`): `create_surface`/`update_components`/`update_data_model`/`full_surface` (nested-envelope wire shape `{version:"v0.9", <kind>:{...}}`). All 5 tabs' builders emit v0_9; the surface ROOT component must have `id="root"` (the renderer hard-codes that lookup).
+- **Delta SurfaceStreamer** (`aleph_a2ui/surface_streamer.py` + SSE `GET /surfaces/{tab}/stream`): full surface on connect, then `diff_data_model` minimal patches emitted as `updateDataModel` deltas on a 2.5s per-connection recompute-and-diff. Verified live: creating a hypothesis makes its card appear via a delta with no reload.
+- **Unified card actions**: the shared catalog's `adapt()` POSTs `{action_kind,target_id,target_kind,params}` to `/cards/actions` (ActionRouter) for BOTH chat and panel.
+
+### Load-bearing finding (carry forward)
+- **The v0_9 Generic Binder reads zod-v3 internals.** Card schemas MUST use the `zod3` alias (`"zod3":"npm:zod@3.25.76"` in `apps/web/package.json`); an app-zod-4 `z.object` schema SILENTLY disables binding (renders raw `{path}` → React crash). All 18 card schemas use `z3.object`.
+
+### Honest scope / gaps
+- **Deltas are meaningful only for the Hypotheses tab.** The other 4 tabs (Wiki/Artifacts/Notes/Briefs) render as single self-fetching surface views (data NOT in the A2UI data model), so they emit the full surface once + idle (self-refresh via react-query). The general streamer is built so future bound tabs benefit for free.
+- **Runtime agent-facing catalog** (`copilot-runtime/src/server.ts`) still advertises only 7 cards to the agent (Chart/Table/Claim/Hypothesis/Finding/Source/Artifact) — ApprovalCard etc. aren't advertised, so the agent rendering an ApprovalCard inline is LLM-flaky. The RENDER catalog (frontend) has all 18; this is just the agent-prompt schema. Out of scope for W4.
+- **SSE auth:** EventSource can't send Authorization headers → relies on `local` auth mode (same as the existing agent-events stream); OIDC would need a cookie/query-token path.
+- **Per-connection 2.5s polling** = N viewers → N recompute loops; fine for single-user local, would want LISTEN/NOTIFY at scale.
+
+### Operational note
+`aleph-web` / `aleph-api` are baked images (no bind mount) — every change needs `docker compose up -d --build <svc>`. A transient npm-registry hiccup once made a web rebuild fail (`@copilotkit/web-inspector`); it resolved on retry. `Dockerfile.dev` does a lockfile-free `npm install` (non-reproducible) — a latent fragility worth a lockfile.
