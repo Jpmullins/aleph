@@ -1,3 +1,4 @@
+import { useAgent, UseAgentUpdate } from "@copilotkit/react-core/v2";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -33,6 +34,35 @@ interface PhaseState {
   error?: string;
 }
 
+/**
+ * The orchestrator's plan items, written by deepagents' built-in `write_todos`
+ * tool and carried on the Deep Agent's streamed state (`state.todos`). Real
+ * shape from `langchain.agents.middleware.todo.Todo`:
+ *   { content: str, status: "pending" | "in_progress" | "completed" }
+ */
+type TodoStatus = "pending" | "in_progress" | "completed";
+
+interface Todo {
+  content: string;
+  status: TodoStatus;
+}
+
+interface DeepAgentState {
+  todos?: Todo[];
+}
+
+const TODO_GLYPH: Record<TodoStatus, string> = {
+  pending: "◻",
+  in_progress: "⏳",
+  completed: "✓",
+};
+
+const TODO_TEXT: Record<TodoStatus, string> = {
+  pending: "text-slate-500",
+  in_progress: "text-slate-900 font-medium",
+  completed: "text-slate-500 line-through",
+};
+
 interface Props {
   projectId: string;
 }
@@ -65,6 +95,16 @@ export function ActivityCard({ projectId }: Props) {
   const [expanded, setExpanded] = useState(true);
   const [phasesByRun, setPhasesByRun] = useState<Map<string, PhaseState[]>>(new Map());
   const sinceRef = useRef<string>(new Date().toISOString());
+
+  // Live PLAN — the Live "assistant" Deep Agent (Wave 3 orchestrator) maintains
+  // a `todos` array on its streamed AG-UI state via the built-in `write_todos`
+  // tool. `useAgent` exposes that agent instance; subscribing to OnStateChanged
+  // re-renders this card as the plan streams in.
+  const { agent } = useAgent({
+    agentId: "assistant",
+    updates: [UseAgentUpdate.OnStateChanged],
+  });
+  const todos = (agent.state as DeepAgentState | undefined)?.todos ?? [];
 
   // 1) Top-level runs — we still poll the agent-runs endpoint for the run rollup.
   const runs = useQuery<AgentRunOut[]>({
@@ -185,7 +225,8 @@ export function ActivityCard({ projectId }: Props) {
       </button>
       {expanded && (
         <div className="space-y-2 px-4 pb-3">
-          {running.length === 0 && recent.length === 0 && (
+          {todos.length > 0 && <PlanSection todos={todos} />}
+          {running.length === 0 && recent.length === 0 && todos.length === 0 && (
             <p className="py-2 text-xs text-slate-400">No recent activity.</p>
           )}
           {running.map((r) => (
@@ -196,6 +237,38 @@ export function ActivityCard({ projectId }: Props) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function PlanSection({ todos }: { todos: Todo[] }) {
+  const done = todos.filter((t) => t.status === "completed").length;
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50/60 px-3 py-2">
+      <div className="flex items-center justify-between text-xs">
+        <span className="font-medium text-slate-800">Plan</span>
+        <span className="text-slate-500">
+          {done} / {todos.length} done
+        </span>
+      </div>
+      <ul className="mt-1.5 space-y-0.5">
+        {todos.map((t, i) => (
+          <li
+            key={`${i}-${t.content}`}
+            className="flex items-start gap-2 text-[11px] leading-snug"
+          >
+            <span
+              className={`mt-px inline-block w-3 shrink-0 text-center ${
+                t.status === "in_progress" ? "animate-pulse text-blue-600" : "text-slate-500"
+              }`}
+              aria-hidden
+            >
+              {TODO_GLYPH[t.status]}
+            </span>
+            <span className={TODO_TEXT[t.status]}>{t.content}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

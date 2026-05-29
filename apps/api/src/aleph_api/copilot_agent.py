@@ -17,6 +17,7 @@ by lifespan through `bind_runtime()`.
 
 from __future__ import annotations
 
+import pathlib
 import uuid
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -40,45 +41,68 @@ if TYPE_CHECKING:
 
 
 SYSTEM_PROMPT = """\
-You are Aleph's research assistant, operating over a project's compiled \
-wiki — the primary knowledge base.
+You are Aleph (א), the research assistant orchestrating a project's workspace \
+over its compiled wiki — the primary knowledge base. You are the brain of the \
+workspace: you plan, delegate the heavy work to specialist subagents, and keep \
+your own replies to the analyst conversational and concise.
 
-Use `search_wiki` for a quick scan of what pages exist; use `read_wiki` to \
-actually answer a question with a cited, composed answer. \
+## How you work
+
+**Plan first for multi-step work.** When a request needs more than one step \
+(e.g. research a topic *and* turn it into a report, or analyze hypotheses \
+*then* review a page), use the `write_todos` tool to lay out a short plan, then \
+work the plan, updating it as you go. For a single simple step, skip the plan \
+and just do it.
+
+**Delegate the heavy work via the `task` tool.** You hold only a few light \
+tools yourself; everything substantive runs in a specialist subagent whose \
+isolated context keeps your own thread lean:
+- `retriever` — substantive questions that need grounding. It runs the full \
+wiki-first retrieval pipeline and returns a cited answer. Use `search_wiki` \
+yourself only for a quick scan of what pages exist before deciding.
+- `researcher` — research a topic the wiki doesn't cover. Runs in the \
+background; lands a draft wiki page plus an approval proposal in the Briefs tab.
+- `wiki_builder` — ingest a source URL/document, or promote an analyst note to \
+a draft wiki page.
+- `viz_builder` — quick charts, and full reports/decks/exports.
+- `analyst` — hypotheses and Analysis of Competing Hypotheses (enumerate, \
+weigh evidence, score consistency).
+- `reviewer` — review/critique a wiki page (contradiction / weak-source / \
+coverage-gap checks).
+- `echo` — a test subagent; delegate to it only when explicitly asked to test \
+delegation, and relay its reply.
+
+When a subagent returns a render instruction (a SourceCard, ChartCard, \
+HypothesisCard, ApprovalCard, …), render it exactly as instructed. For \
+background work (research), tell the analyst what you kicked off and where the \
+result will appear. Confirm consequential or destructive intent with the \
+analyst before delegating it (e.g. creating a hypothesis, building an artifact, \
+toggling a connector) — those paths are approval-gated and return an \
+ApprovalCard you must render.
+
+**Consult your skills when relevant.** You have SKILL.md skills (research, ach, \
+report-authoring, wiki-style). Their names and descriptions are listed for you; \
+when a request matches one, read the skill for the procedure before acting, and \
+follow it.
+
+## Voice and grounding
+
 Ground every claim in what the wiki actually says and cite pages with \
-[[Page Title]] wikilink markers. Never fabricate.
+[[Page Title]] wikilink markers. Never fabricate. When the analyst would \
+benefit from a structured view (a comparison table, a chart, a hypothesis \
+matrix, a claim with its confidence), render it as an interactive card rather \
+than describing it in prose. Prefer the analyst's current context — the page or \
+hypothesis they are viewing, provided to you — when it is relevant. When work \
+lands in a specific tab (Briefs, Artifacts, Hypotheses), point the analyst \
+there.
 
-If the wiki does not cover the question (search_wiki returns nothing relevant), \
-offer to research it and — when the analyst agrees, or when they explicitly ask \
-to research/look into/synthesize a topic — call `start_research` with a focused \
-query. Research runs in the background and lands a draft wiki page plus an \
-approval proposal in the Briefs tab. After starting research, briefly tell the \
-analyst what you kicked off and that the proposal will appear in Briefs.
-
-When the analyst would benefit from a structured view (a comparison \
-table, a chart of figures, a hypothesis matrix, a claim with its \
-confidence), render it as an interactive card rather than describing it \
-in prose. Prefer the analyst's current context (the page or hypothesis \
-they are viewing, provided to you) when relevant.
-
-When the analyst discusses competing explanations, list or create hypotheses \
-and render a HypothesisCard. Confirm the statement with the analyst before \
-creating one.
-
-When the analyst shares a URL or asks to add a source, call `ingest_source` \
-and render a SourceCard for the result.
-
-When the analyst asks to draft/build a report, deck, or export, call \
-`build_artifact`. Building is a consequential action, so the tool returns an \
-instruction to render an ApprovalCard instead of building immediately — render \
-that ApprovalCard exactly as instructed and tell the analyst the build will run \
-once they approve. The finished artifact lands in the Artifacts tab.
-
-You can list connectors and enable/disable them, and report or change the \
+You can also list connectors and enable/disable them, and report or change the \
 project's model profile, when the analyst asks about data sources or model \
-settings. Enabling/disabling a connector is also consequential: the \
-`set_connector_enabled` tool returns an ApprovalCard instruction — render it \
-and let the analyst approve before the change applies.
+settings — these are light config tools you hold directly. Enabling/disabling a \
+connector is consequential and approval-gated: render the ApprovalCard it \
+returns and let the analyst approve before the change applies.
+
+## Memory
 
 You have long-term memory at `/memories/`. At the start of substantive work, \
 check `/memories/` (ls/read_file) for durable facts about this project or the \
@@ -209,14 +233,15 @@ async def search_wiki(query: str, config: RunnableConfig, top_k: int = 6) -> str
     return "Relevant wiki pages:\n" + "\n".join(lines)
 
 
-@tool
-async def read_wiki(query: str, config: RunnableConfig) -> str:
-    """Read the wiki in depth to answer a question with citations.
+async def _read_wiki_impl(query: str, config: RunnableConfig) -> str:
+    """Run the full wiki-first retrieval pipeline and return a cited answer.
 
-    Use this (not search_wiki) when the analyst asks a substantive question
-    that needs a composed, cited answer. Runs the full wiki-first retrieval
-    pipeline: page selection, 1-hop wikilink expansion, answer composition,
-    and intra-source descent. Returns a cited markdown answer + coverage note.
+    Shared body of the deep wiki read: builds the dev principal, loads the
+    project's ModelProfile, runs the `WikiFirstRetrievalRouter` (page selection,
+    1-hop wikilink expansion, answer composition, intra-source descent) and
+    returns a cited markdown answer + a coverage note. Reused by the `retriever`
+    subagent's `deep_read` tool (Wave 3 T2) so the large composed body lives in
+    the subagent's isolated context rather than the orchestrator's thread.
     """
     from uuid import uuid4
 
@@ -255,12 +280,11 @@ async def read_wiki(query: str, config: RunnableConfig) -> str:
     return f"{body}\n\n_(coverage: {coverage})_"
 
 
-@tool
-async def list_hypotheses_tool(config: RunnableConfig) -> str:
-    """List the current project's hypotheses with their confidence.
+async def _list_hypotheses_impl(config: RunnableConfig) -> str:
+    """Shared body: list the project's hypotheses with their confidence.
 
-    Use this to recall what competing explanations the analyst is already
-    tracking before proposing or creating a new one.
+    Reused by the `analyst` subagent's tool (DRY). Reads the lifespan-bound
+    session_maker + project scope, never the DB credentials directly.
     """
     from aleph_hypotheses.hypothesis_service import list_hypotheses
 
@@ -279,13 +303,10 @@ async def list_hypotheses_tool(config: RunnableConfig) -> str:
     return "Hypotheses:\n" + "\n".join(lines)
 
 
-@tool
-async def create_hypothesis_tool(title: str, statement: str, config: RunnableConfig) -> str:
-    """Create a new hypothesis (a competing explanation) for the project.
+async def _create_hypothesis_impl(title: str, statement: str, config: RunnableConfig) -> str:
+    """Shared body: create a hypothesis (writes an Action Ledger event, rule #4).
 
-    Confirm the statement with the analyst before calling this. `title` is a
-    short label; `statement` is the falsifiable claim. After creating, render a
-    HypothesisCard so the analyst can track and weigh evidence against it.
+    Reused by the `analyst` subagent's tool (DRY).
     """
     from aleph_db.repos.ledger import LedgerWriter
     from aleph_hypotheses.hypothesis_service import create_hypothesis
@@ -323,8 +344,7 @@ async def create_hypothesis_tool(title: str, statement: str, config: RunnableCon
     )
 
 
-@tool
-async def add_hypothesis_evidence_tool(
+async def _add_hypothesis_evidence_impl(
     hypothesis_id: str,
     stance: str,
     evidence_kind: str,
@@ -333,12 +353,9 @@ async def add_hypothesis_evidence_tool(
     note: str = "",
     weight: float = 1.0,
 ) -> str:
-    """Attach a piece of evidence to a hypothesis.
+    """Shared body: attach evidence to a hypothesis (writes a ledger event, rule #4).
 
-    `stance` is one of supports / contradicts / contextualizes. `evidence_kind`
-    is one of claim / source_page / chunk / finding / other_hypothesis.
-    `target_id` is the UUID of the referenced entity. Adding evidence may shift
-    the hypothesis's confidence; re-render its HypothesisCard afterward.
+    Reused by the `analyst` subagent's tool (DRY).
     """
     from sqlalchemy import func, select
 
@@ -406,17 +423,17 @@ async def add_hypothesis_evidence_tool(
     )
 
 
-@tool
-async def start_research(query: str, config: RunnableConfig, depth: str = "shallow") -> str:
+async def _start_research_impl(query: str, config: RunnableConfig, depth: str = "shallow") -> str:
     """Kick off background research on a topic to grow the project's wiki.
 
-    Use this when the wiki does not yet cover what the analyst is asking about,
-    or when they explicitly ask to research/synthesize a topic. `depth` is
-    "shallow" (fast, single pass, ~1 min) or "deep" (thorough, multi-loop,
-    several minutes). Default to "shallow" for responsiveness; only use "deep"
-    when the analyst explicitly asks for a thorough/exhaustive/deep dive.
-    Research runs in the background via the AIQ researcher; when it finishes it
-    lands a draft wiki page and a proposal in the Briefs tab for approval.
+    Shared body of the research dispatch: self-calls the tested `/synthesize`
+    route (connector resolution, AIQ dispatch, the result→wiki poll job; rule #3
+    — never touches the DB directly) and returns immediately. Reused by the
+    `researcher` subagent's `start_research` tool (Wave 3 T3) so the orchestrator
+    delegates research rather than self-calling it inline.
+
+    `depth` is "shallow" (fast, single pass, ~1 min) or "deep" (thorough,
+    multi-loop, several minutes); defaults to "shallow" for responsiveness.
     """
     import httpx
 
@@ -452,13 +469,14 @@ async def start_research(query: str, config: RunnableConfig, depth: str = "shall
     )
 
 
-@tool
-async def ingest_source(url: str, config: RunnableConfig, title: str = "") -> str:
+async def _ingest_source_impl(url: str, config: RunnableConfig, title: str = "") -> str:
     """Ingest a web page or document URL into the project's knowledge store.
 
-    Fetches the URL, normalizes, chunks+embeds, folds into the wiki. Render a
-    SourceCard for the result. Use when the analyst shares a link or asks to add
-    a source.
+    Shared body of source ingestion: self-calls the tested `/sources/ingest-url`
+    route (fetch, normalize, chunk+embed, fold into the wiki; rule #3 — never
+    touches the DB directly) and returns a SourceCard render instruction. Reused
+    by the `wiki_builder` subagent's `ingest_source` tool (Wave 3 T4) so the
+    orchestrator delegates ingestion rather than self-calling it inline.
     """
     import httpx
 
@@ -527,22 +545,21 @@ async def _request_agent_action(
     )
 
 
-@tool
-async def build_artifact(
+async def _build_artifact_impl(
     title: str,
     config: RunnableConfig,
     artifact_kind: str = "report_markdown_bundle",
     wiki_page_ids: list[str] | None = None,
     csl_style: str = "apa-7",
 ) -> str:
-    """Build a product artifact (report/deck/source-pack) from approved wiki pages.
+    """Shared body of artifact building (report/deck/source-pack).
 
-    This is a consequential action, so it is **approval-gated**: instead of
-    building immediately, it creates a pending approval and asks you to render an
-    ApprovalCard. The build only runs after the analyst clicks Approve.
-    `artifact_kind` is one of report_pdf, report_docx, report_markdown_bundle,
-    source_pack, deck_pdf. Use when the analyst asks to draft/build a report,
-    deck, or export.
+    Approval-gated (Wave 6): rather than building immediately, it self-calls the
+    agent-actions/request route to create a pending ApprovalRequest (rule #3 —
+    never touches the DB directly) and returns an ApprovalCard render
+    instruction. The build only runs after the analyst clicks Approve. Reused by
+    the `viz_builder` subagent's `build_artifact` tool (Wave 3 T5) so the
+    orchestrator delegates artifact building rather than self-calling it inline.
     """
     settings = _runtime.get("settings")
     project_id = _project_id_from_config(config)
@@ -740,6 +757,56 @@ def build_agent_store(
     return pool, store
 
 
+# The single agent model id, shared by the orchestrator and its subagents.
+_AGENT_MODEL = "claude-sonnet-4-6"
+
+# SKILL.md skills live in `skills/<name>/SKILL.md` alongside this module. The
+# Deep Agent reads them through its backend, so a FilesystemBackend rooted here
+# is routed under the in-backend `/skills/` prefix (see `_memory_backend`); the
+# orchestrator is given `skills=["/skills"]` to scan that source for skills.
+_SKILLS_DIR = pathlib.Path(__file__).parent / "skills"
+
+
+def _gateway_chat_model(settings: Settings, *, purpose: str) -> ChatOpenAI:
+    """Build a gateway-pointed `ChatOpenAI` with cost attribution (rules #2, #5).
+
+    All agent LLM traffic (orchestrator + every subagent) is constructed here so
+    it is configured identically — same model, gateway `base_url`/`api_key`,
+    temperature, and `stream_usage=True` — and so each gets its own
+    `AgentCostCallbackHandler` tagged with a `purpose`. The callback is attached
+    ONLY to the agent model (never to `LiteLLMClient`), so the LiteLLMClient
+    retrieval path is not double-counted; it writes a `ModelCall` +
+    `CostLedgerEvent` per turn (rule #5) and never crashes the turn on failure.
+    """
+    from aleph_api.copilot_cost_callback import AgentCostCallbackHandler
+
+    return ChatOpenAI(
+        model=_AGENT_MODEL,
+        base_url=settings.litellm_base_url,
+        api_key=settings.insights_litellm_api_key,
+        temperature=0.2,
+        timeout=60,
+        max_retries=2,
+        callbacks=[AgentCostCallbackHandler(model=_AGENT_MODEL, purpose=purpose)],
+        # A streaming OpenAI-compatible response omits the `usage` block unless
+        # `stream_options.include_usage` is set. Without this the on_llm_end
+        # AIMessage has `usage_metadata=None` and the cost callback has nothing
+        # to record (rule #5 gap). `stream_usage=True` makes ChatOpenAI request +
+        # aggregate the usage into the final chunk.
+        stream_usage=True,
+    )
+
+
+def subagent_model(settings: Settings, name: str) -> ChatOpenAI:
+    """Build a subagent's gateway `ChatOpenAI`, cost-tagged per subagent.
+
+    Identical to the orchestrator's model but the cost callback's `purpose` is
+    `assistant.subagent.<name>`, so each subagent's LLM calls write a
+    `ModelCall` + `CostLedgerEvent` attributed to that subagent (rule #5).
+    """
+    return _gateway_chat_model(settings, purpose=f"assistant.subagent.{name}")
+
+
 def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore):
     """Compile the assistant Deep Agent (built once at app startup).
 
@@ -751,10 +818,11 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
     persistence) while all other agent files stay ephemeral per-thread.
     """
     from copilotkit import CopilotKitMiddleware
-    from deepagents import create_deep_agent
+    from deepagents import SubAgent, create_deep_agent
     from deepagents.backends import (
         BackendProtocol,
         CompositeBackend,
+        FilesystemBackend,
         StateBackend,
         StoreBackend,
     )
@@ -762,7 +830,12 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
     from langgraph.config import get_config
     from langgraph.prebuilt.tool_node import ToolRuntime
 
-    from aleph_api.copilot_cost_callback import AgentCostCallbackHandler
+    from aleph_api.subagents.analyst import build_analyst_subagent
+    from aleph_api.subagents.researcher import build_researcher_subagent
+    from aleph_api.subagents.retriever import build_retriever_subagent
+    from aleph_api.subagents.reviewer import build_reviewer_subagent
+    from aleph_api.subagents.viz_builder import build_viz_builder_subagent
+    from aleph_api.subagents.wiki_builder import build_wiki_builder_subagent
 
     def _memory_namespace(_rt: object) -> tuple[str, ...]:
         """Scope persistent memory per-project so projects never share memory.
@@ -788,8 +861,17 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
             return ("shared", "memories")
         return (str(project_id), "memories")
 
+    # Read-only host-filesystem backend for the bundled SKILL.md skills. The
+    # SkillsMiddleware reads skills through the agent's backend, so routing the
+    # in-backend `/skills/` prefix to this FilesystemBackend (rooted at the
+    # `skills/` dir) lets `skills=["/skills"]` discover `skills/<name>/SKILL.md`.
+    # `virtual_mode=True` is required for the CompositeBackend path remapping to
+    # resolve correctly (with it off, the backend lists nothing under a route).
+    _skills_backend = FilesystemBackend(root_dir=str(_SKILLS_DIR), virtual_mode=True)
+
     def _memory_backend(_rt: ToolRuntime[Any, Any]) -> BackendProtocol:
-        """Route `/memories/` to the per-project StoreBackend, all else ephemeral.
+        """Route `/memories/` to the per-project StoreBackend, `/skills/` to the
+        bundled SKILL.md filesystem, all else ephemeral.
 
         The `_rt` factory arg is still received from deepagents but is NOT passed
         to the backends: a positional `runtime` to StateBackend/StoreBackend is
@@ -799,31 +881,30 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
         """
         return CompositeBackend(
             default=StateBackend(),
-            routes={"/memories/": StoreBackend(namespace=_memory_namespace)},
+            routes={
+                "/memories/": StoreBackend(namespace=_memory_namespace),
+                "/skills/": _skills_backend,
+            },
         )
 
-    _AGENT_MODEL = "claude-sonnet-4-6"
-    # Attribute the agent's OWN ChatOpenAI calls to the cost ledger (rule #5).
-    # This callback is attached ONLY to the agent model — never to LiteLLMClient
-    # — so the LiteLLMClient retrieval path is not double-counted. It reads
-    # session_maker + pricing lazily from the bound runtime at call time, and is
-    # built to never crash the agent turn if cost-logging fails.
-    cost_callback = AgentCostCallbackHandler(model=_AGENT_MODEL)
-    model = ChatOpenAI(
-        model=_AGENT_MODEL,
-        base_url=settings.litellm_base_url,
-        api_key=settings.insights_litellm_api_key,
-        temperature=0.2,
-        timeout=60,
-        max_retries=2,
-        callbacks=[cost_callback],
-        # The agent streams, and a streaming OpenAI-compatible response omits the
-        # `usage` block unless `stream_options.include_usage` is set. Without this
-        # the on_llm_end AIMessage has `usage_metadata=None` and the cost callback
-        # has nothing to record (rule #5 gap stays open). `stream_usage=True` makes
-        # ChatOpenAI request + aggregate the usage into the final chunk.
-        stream_usage=True,
-    )
+    # The orchestrator's OWN model. Cost is attributed to `assistant.turn` via
+    # the AgentCostCallbackHandler that `_gateway_chat_model` attaches (rule #5).
+    model = _gateway_chat_model(settings, purpose="assistant.turn")
+
+    # Trivial exemplar subagent proving the in-process sync-subagent (`task`
+    # tool) delegation path. Its LLM calls are cost-attributed to
+    # `assistant.subagent.echo` via `subagent_model` (rule #5).
+    echo_subagent: SubAgent = {
+        "name": "echo",
+        "description": (
+            "Test subagent: echoes back a one-line confirmation. "
+            "Use only when asked to test delegation."
+        ),
+        "system_prompt": (
+            "Return a single short line confirming you ran as the echo subagent. Nothing else."
+        ),
+        "model": subagent_model(settings, "echo"),
+    }
     # In-memory checkpointer keeps per-thread conversation state for the AG-UI
     # runtime. Cross-SESSION durability rides the `store` instead: the
     # CompositeBackend routes `/memories/` to a StoreBackend over the
@@ -833,18 +914,25 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
         model=model,
         tools=[
             search_wiki,
-            read_wiki,
-            list_hypotheses_tool,
-            create_hypothesis_tool,
-            add_hypothesis_evidence_tool,
-            start_research,
-            ingest_source,
-            build_artifact,
             list_connectors,
             set_connector_enabled,
             set_model_profile,
         ],
         system_prompt=SYSTEM_PROMPT,
+        subagents=[
+            echo_subagent,
+            build_retriever_subagent(settings=settings),
+            build_researcher_subagent(settings=settings),
+            build_wiki_builder_subagent(settings=settings),
+            build_viz_builder_subagent(settings=settings),
+            build_analyst_subagent(settings=settings),
+            build_reviewer_subagent(settings=settings),
+        ],
+        # Bundled SKILL.md skills (progressive disclosure): the orchestrator
+        # sees each skill's name + description at startup and reads the full
+        # procedure on demand. `/skills` is the in-backend source the
+        # CompositeBackend routes to the FilesystemBackend above.
+        skills=["/skills"],
         middleware=[CopilotKitMiddleware()],
         backend=_memory_backend,
         store=store,
