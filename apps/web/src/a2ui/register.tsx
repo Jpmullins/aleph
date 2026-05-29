@@ -1,6 +1,7 @@
 import { createContext, useContext, type ComponentType, type ReactNode, type JSX } from "react";
 
 import { ApprovalCard } from "./components/ApprovalCard";
+import { ArtifactCard } from "./components/ArtifactCard";
 import { ArtifactsSurface } from "./components/ArtifactsSurface";
 import { BriefsSurface } from "./components/BriefsSurface";
 import { ChartCard } from "./components/ChartCard";
@@ -35,6 +36,7 @@ const REGISTRY: Record<ComponentName, ComponentType<CommonRenderProps>> = {
   BriefsSurface,
   ClaimCard,
   SourceCard,
+  ArtifactCard,
   ChartCard,
   TableCard,
   MapCard,

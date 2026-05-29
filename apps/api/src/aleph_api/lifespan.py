@@ -9,10 +9,11 @@ import httpx
 import redis.asyncio as aioredis
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from aleph_api.a2ui_handlers import build_action_router
+from aleph_api.settings import Settings, get_settings
 from aleph_db.session import async_engine_for, async_sessionmaker_for
 from aleph_models.client import LiteLLMClient
 from aleph_models.pricing import get_default_pricing
-from aleph_rks.asset_store import AssetStore
 from aleph_observability import (
     configure_logging,
     init_langfuse,
@@ -22,10 +23,8 @@ from aleph_observability import (
     shutdown_langfuse,
     shutdown_otel,
 )
+from aleph_rks.asset_store import AssetStore
 from aleph_security.jwt import JWKSCache
-
-from aleph_api.a2ui_handlers import build_action_router
-from aleph_api.settings import Settings, get_settings
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -34,7 +33,7 @@ if TYPE_CHECKING:
 
 
 @asynccontextmanager
-async def lifespan(app: "FastAPI") -> "AsyncIterator[None]":
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
 
     configure_logging(environment=settings.aleph_env)
@@ -85,7 +84,12 @@ async def lifespan(app: "FastAPI") -> "AsyncIterator[None]":
     )
 
     asset_store: AssetStore | None = None
-    if settings.minio_endpoint and settings.minio_root_user and settings.minio_root_password and settings.aleph_s3_bucket:
+    if (
+        settings.minio_endpoint
+        and settings.minio_root_user
+        and settings.minio_root_password
+        and settings.aleph_s3_bucket
+    ):
         try:
             asset_store = AssetStore(
                 endpoint=settings.minio_endpoint,
@@ -94,7 +98,7 @@ async def lifespan(app: "FastAPI") -> "AsyncIterator[None]":
                 bucket=settings.aleph_s3_bucket,
                 secure=False,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             asset_store = None
 
     app.state.settings = settings
@@ -106,7 +110,7 @@ async def lifespan(app: "FastAPI") -> "AsyncIterator[None]":
     # /copilotkit/agent/assistant) access to the shared session_maker.
     from aleph_api.copilot_agent import bind_runtime
 
-    bind_runtime(session_maker=session_maker, settings=settings)
+    bind_runtime(session_maker=session_maker, settings=settings, litellm=litellm)
     app.state.litellm = litellm
     app.state.redis = redis_client
     app.state.gateway_http = gateway_http
@@ -114,9 +118,29 @@ async def lifespan(app: "FastAPI") -> "AsyncIterator[None]":
     app.state.asset_store = asset_store
     app.state.action_router = build_action_router()
 
+    # Wave 6 D1 — cross-session memory for the assistant Deep Agent. The
+    # Postgres-backed langgraph store (its own `store`/`store_migrations` tables)
+    # must be constructed inside the running event loop, so it is built here
+    # (not at synchronous app construction). Open the pool, create the tables
+    # once via `setup()`, then mount the agent endpoint with this store. The
+    # CompositeBackend routes `/memories/` to it for persistence across sessions.
+    from aleph_api.copilot_agent import build_agent_store
+    from aleph_api.copilotkit_endpoint import setup_copilotkit
+
+    agent_store_pool, agent_store = build_agent_store(database_url=settings.database_url)
+
     try:
+        # Inside the try so a failure in open()/setup()/setup_copilotkit cannot
+        # leak the pool's background task + connections — the finally always
+        # runs once we have a pool to close.
+        await agent_store_pool.open()
+        await agent_store.setup()
+        app.state.agent_store_pool = agent_store_pool
+        app.state.agent_store = agent_store
+        setup_copilotkit(app, settings=settings, store=agent_store)
         yield
     finally:
+        await agent_store_pool.close()
         await gateway_http.aclose()
         await auth_http.aclose()
         await redis_client.aclose()
@@ -125,5 +149,5 @@ async def lifespan(app: "FastAPI") -> "AsyncIterator[None]":
         shutdown_otel()
 
 
-def app_settings(app: "FastAPI") -> Settings:
+def app_settings(app: FastAPI) -> Settings:
     return app.state.settings

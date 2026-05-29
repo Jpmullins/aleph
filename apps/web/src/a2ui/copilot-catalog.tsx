@@ -20,10 +20,15 @@
  * context, which `CopilotChatSurface` wraps around `<CopilotChat>`.
  */
 import { createCatalog } from "@copilotkit/a2ui-renderer";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import type { ComponentType } from "react";
 
+import { useSurface } from "./register";
+import { api } from "@/lib/api";
+
 import { ApprovalCard } from "./components/ApprovalCard";
+import { ArtifactCard } from "./components/ArtifactCard";
 import { ChartCard } from "./components/ChartCard";
 import { ClaimCard } from "./components/ClaimCard";
 import { DiffCard } from "./components/DiffCard";
@@ -126,6 +131,18 @@ export const alephCatalogDefinitions = {
       status: z.string(),
     }),
   },
+  ArtifactCard: {
+    description:
+      "A built product artifact (report/deck/source-pack) with its status. " +
+      "Use after kicking off a build to show the analyst what is being produced.",
+    props: z.object({
+      artifact_id: z.string(),
+      short_id: z.string().optional(),
+      title: z.string(),
+      artifact_kind: z.string(),
+      status: z.string(),
+    }),
+  },
   ApprovalCard: {
     description:
       "A human-in-the-loop approval prompt for a proposed change (e.g. a " +
@@ -170,6 +187,7 @@ const CARD_COMPONENTS: Record<keyof typeof alephCatalogDefinitions, AlephCardCom
   HypothesisCard,
   FindingCard,
   SourceCard,
+  ArtifactCard,
   ApprovalCard,
   DiffCard,
   GraphCard,
@@ -181,17 +199,41 @@ const CARD_COMPONENTS: Record<keyof typeof alephCatalogDefinitions, AlephCardCom
 /**
  * Adapt one Aleph card to CopilotKit's renderer signature. The resolved A2UI
  * data-model `props` become the card's `component.props`; user actions on the
- * card are dispatched back over A2UI so the agent can react (closing the
- * generative loop).
+ * card are routed to Aleph's `ActionRouter` (`POST /v1/projects/{id}/cards/actions`)
+ * exactly as the right panel does — *not* dispatched back into the agent's A2UI
+ * stream. Every Aleph card action (approve/reject/open/navigate_wiki/submit_form/…)
+ * is an ActionRouter action, so a gated ApprovalCard's "Approve" actually executes
+ * the proposed change, and the right-panel surfaces refresh to reflect it.
  */
 function adaptRenderer(type: ComponentName, Card: AlephCardComponent) {
-  return function AlephCardRenderer({
-    props,
-    dispatch,
-  }: {
-    props: Record<string, unknown>;
-    dispatch?: (action: unknown) => void;
-  }) {
+  return function AlephCardRenderer({ props }: { props: Record<string, unknown> }) {
+    const { projectId, surface } = useSurface();
+    const qc = useQueryClient();
+
+    const action = useMutation({
+      mutationFn: async ({
+        actionName,
+        params,
+      }: {
+        actionName: string;
+        params: Record<string, unknown>;
+      }) =>
+        api.post(`/v1/projects/${projectId}/cards/actions`, {
+          surface_kind: surface,
+          action_kind: actionName,
+          target_id: (params.target_id as string | undefined) ?? null,
+          target_kind: (params.target_kind as string | undefined) ?? null,
+          params,
+        }),
+      onSuccess: () => {
+        // Mirror the right panel: refresh the live surfaces (Briefs/Artifacts/
+        // Hypotheses/Wiki/Notes) so the executed action is reflected there.
+        qc.invalidateQueries({ queryKey: ["surface", projectId] });
+        qc.invalidateQueries({ queryKey: ["artifacts", projectId] });
+        qc.invalidateQueries({ queryKey: ["hypotheses", projectId] });
+      },
+    });
+
     const component: A2UIComponent = {
       type,
       id: typeof props.id === "string" ? props.id : type,
@@ -200,12 +242,7 @@ function adaptRenderer(type: ComponentName, Card: AlephCardComponent) {
     return (
       <Card
         component={component}
-        onAction={(action, params) =>
-          dispatch?.({
-            name: action,
-            context: Object.entries(params).map(([key, value]) => ({ key, value })),
-          })
-        }
+        onAction={(actionName, params) => action.mutate({ actionName, params })}
       />
     );
   };

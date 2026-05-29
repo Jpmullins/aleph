@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     # the AgentRun in 'pending' status and the dispatch is a no-op.
     aiq_base_url: str | None = None
 
+    # Self URL. Agent tools that re-enter the API over HTTP (ingest_source,
+    # start_research) call this base so the agent never touches the DB or
+    # asset store directly (architecture rule #3). Overridable via ALEPH_SELF_URL.
+    aleph_self_url: str = "http://localhost:8000"
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

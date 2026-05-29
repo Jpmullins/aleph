@@ -114,6 +114,17 @@ _COMPONENTS = {
         },
         required=["source_id", "short_id", "title"],
     ),
+    "ArtifactCard": _comp(
+        {
+            "artifact_id": _UUID,
+            "short_id": {"type": "string"},
+            "title": {"type": "string"},
+            "artifact_kind": {"type": "string"},
+            "status": {"type": "string"},
+            "open_action": {"const": "open"},
+        },
+        required=["artifact_id", "title", "artifact_kind", "status"],
+    ),
     "ChartCard": _comp(
         {
             "dataset_version_id": {"type": ["string", "null"]},
@@ -155,7 +166,12 @@ _COMPONENTS = {
         {
             "target_id": _UUID,
             "target_kind": {
-                "enum": ["synthesis_proposal", "review_finding", "wiki_revision"]
+                "enum": [
+                    "synthesis_proposal",
+                    "review_finding",
+                    "wiki_revision",
+                    "agent_action",
+                ]
             },
             "title": {"type": "string", "maxLength": 200},
             "summary": {"type": "string", "maxLength": 1000},

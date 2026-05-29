@@ -25,9 +25,19 @@ from aleph_core.errors import NotFound, ValidationFailed
 from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
 from aleph_notes.note_service import update_section as update_note_section
+from aleph_observability.tracing import current_trace_id
+from aleph_reviewer.models import ApprovalRequest
 from aleph_wiki.feedback_service import write_feedback
 from aleph_wiki.handedit_service import clear_section, mark_section
 from aleph_wiki.models import WikiPage
+
+# Agent actions an approval may execute on approve. The approve handler
+# dispatches via this fixed map (route + how to shape the request body), never
+# via arbitrary agent input — args were persisted server-side at request time.
+_AGENT_ACTION_ROUTES: dict[str, str] = {
+    "build_artifact": "/v1/projects/{project_id}/artifacts/build",
+    "set_connector_enabled": "/v1/projects/{project_id}/connectors/bindings",
+}
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,6 +49,36 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Handlers
 # ---------------------------------------------------------------------------
+
+
+async def _execute_agent_action(
+    *, project_id: UUID, tool: str, args: dict[str, Any]
+) -> dict[str, Any]:
+    """Execute an approved agent action by self-calling its underlying route.
+
+    Dispatch is keyed by `_AGENT_ACTION_ROUTES` (a fixed allowlist); `tool` is
+    validated by the caller. `args` were persisted server-side when the approval
+    was requested, so this is not agent-emitted-executable. The real route writes
+    its own ledger + state in its own transaction.
+    """
+    import httpx
+
+    from aleph_api.settings import get_settings
+
+    route = _AGENT_ACTION_ROUTES[tool].format(project_id=project_id)
+    base = get_settings().aleph_self_url
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            f"{base}{route}",
+            json=args,
+            # local-auth-mode only (consistent with the other agent tools). Under
+            # OIDC this self-call would need a real short-lived agent token.
+            headers={"Authorization": "Bearer local-dev"},
+        )
+    if resp.status_code >= 400:
+        msg = f"executing {tool} failed ({resp.status_code}): {resp.text[:200]}"
+        raise ValidationFailed(msg)
+    return resp.json()
 
 
 async def _approve(
@@ -86,6 +126,73 @@ async def _approve(
             page.status = "approved"
         await session.flush()
         return {"target": str(target_id), "new_status": "approved"}
+    if target_kind == "agent_action":
+        # Row-level lock: two concurrent approves of the same agent action must
+        # serialize at the DB level. With FOR UPDATE the second txn blocks until
+        # the first commits, then sees status != pending and no-ops below — so the
+        # multi-second effect (build / connector toggle) executes exactly once.
+        req = (
+            await session.execute(
+                select(ApprovalRequest)
+                .where(
+                    ApprovalRequest.target_id == target_id,
+                    ApprovalRequest.target_kind == "agent_action",
+                    ApprovalRequest.project_id == project_id,
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if req is None:
+            msg = f"agent-action approval {target_id} not found"
+            raise NotFound(msg)
+        if req.status != "pending":
+            # Already decided (e.g. a concurrent approve committed first).
+            # No-op — do NOT re-execute the effect.
+            return {"target": str(target_id), "new_status": req.status, "noop": True}
+        patch: dict[str, Any] = req.proposed_patch_jsonb or {}
+        tool = str(patch.get("tool") or "")
+        args: dict[str, Any] = patch.get("args") or {}
+        if tool not in _AGENT_ACTION_ROUTES:
+            msg = f"agent action tool {tool!r} is not in the execution allowlist"
+            raise ValidationFailed(msg)
+        # Execute the real effect (self-call the underlying route) BEFORE marking
+        # approved, so a failed execution leaves the request pending.
+        executed = await _execute_agent_action(project_id=project_id, tool=tool, args=args)
+        decision = ApprovalDecision(
+            id=uuid7(),
+            project_id=project_id,
+            target_kind="agent_action",
+            target_id=target_id,
+            decision="approved",
+            reason=None,
+            decided_by=principal.user_id,
+            decided_at=utcnow(),
+            created_by=principal.user_id,
+            access_scope="project",
+        )
+        session.add(decision)
+        req.status = "approved"
+        req.decided_at = utcnow()
+        req.decision_id = decision.id
+        await session.flush()
+        # Mirror approval_service.decide(): write the specific decision ledger
+        # event (rule #4), in addition to the generic a2ui.action.approve event
+        # the ActionRouter appends.
+        await ledger.append(
+            project_id=project_id,
+            actor_id=principal.user_id,
+            actor_kind=principal.actor_kind,
+            action_kind="approval_request.approved",
+            target_id=req.id,
+            target_kind="approval_request",
+            payload={"tool": tool, "target_kind": "agent_action"},
+            trace_id=current_trace_id(),
+        )
+        return {
+            "target": str(target_id),
+            "new_status": "approved",
+            "executed": executed,
+        }
     msg = f"approve handler not wired for target_kind={target_kind}"
     raise ValidationFailed(msg)
 
@@ -143,6 +250,58 @@ async def _reject(
             rejected_revision_id=p.revision_id,
             reason=reason,
             rejected_by=principal.user_id,
+        )
+        return {"target": str(target_id), "new_status": "rejected"}
+    if target_kind == "agent_action":
+        # Row-level lock for consistency with _approve — serialize concurrent
+        # decisions on the same agent action at the DB level.
+        req = (
+            await session.execute(
+                select(ApprovalRequest)
+                .where(
+                    ApprovalRequest.target_id == target_id,
+                    ApprovalRequest.target_kind == "agent_action",
+                    ApprovalRequest.project_id == project_id,
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if req is None:
+            msg = f"agent-action approval {target_id} not found"
+            raise NotFound(msg)
+        if req.status != "pending":
+            # Already decided by a concurrent decision — no-op.
+            return {"target": str(target_id), "new_status": req.status, "noop": True}
+        decision = ApprovalDecision(
+            id=uuid7(),
+            project_id=project_id,
+            target_kind="agent_action",
+            target_id=target_id,
+            decision="rejected",
+            reason=reason,
+            decided_by=principal.user_id,
+            decided_at=utcnow(),
+            created_by=principal.user_id,
+            access_scope="project",
+        )
+        session.add(decision)
+        req.status = "rejected"
+        req.decided_at = utcnow()
+        req.decision_id = decision.id
+        # No execution on reject.
+        await session.flush()
+        # Mirror approval_service.decide(): write the specific decision ledger
+        # event (rule #4), in addition to the generic a2ui.action.reject event.
+        patch: dict[str, Any] = req.proposed_patch_jsonb or {}
+        await ledger.append(
+            project_id=project_id,
+            actor_id=principal.user_id,
+            actor_kind=principal.actor_kind,
+            action_kind="approval_request.rejected",
+            target_id=req.id,
+            target_kind="approval_request",
+            payload={"tool": str(patch.get("tool") or ""), "target_kind": "agent_action"},
+            trace_id=current_trace_id(),
         )
         return {"target": str(target_id), "new_status": "rejected"}
     msg = f"reject handler not wired for target_kind={target_kind}"
