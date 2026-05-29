@@ -8,7 +8,11 @@ WORKDIR /app
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl ca-certificates \
+    libpango-1.0-0 libpangoft2-1.0-0 libjpeg62-turbo fonts-dejavu-core \
  && rm -rf /var/lib/apt/lists/*
+# ^ WeasyPrint runtime libs (Builder PDF export). libpango pulls glib/gobject/
+#   cairo/harfbuzz transitively; without these `import weasyprint` raises OSError
+#   on libgobject-2.0-0. (Inc-7 PDF export was never exercised in-container.)
 
 COPY --from=ghcr.io/astral-sh/uv:0.5.21 /uv /usr/local/bin/uv
 

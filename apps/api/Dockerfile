@@ -8,7 +8,9 @@ WORKDIR /app
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl ca-certificates \
+    libpango-1.0-0 libpangoft2-1.0-0 libjpeg62-turbo fonts-dejavu-core \
  && rm -rf /var/lib/apt/lists/*
+# ^ WeasyPrint runtime libs (aleph-artifacts is in the API's dep closure).
 
 COPY --from=ghcr.io/astral-sh/uv:0.5.21 /uv /usr/local/bin/uv
 
