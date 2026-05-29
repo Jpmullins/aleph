@@ -925,3 +925,82 @@ the end so future sessions know where to look.
   trust memory or even the MCP docs — `npm pack <pkg>@<ver>` then read
   `dist/*.d.mts`, or `uv run python -c "import x; print(dir(x))"`. This is how
   the CopilotKit v2, a2ui-renderer, ag-ui-langgraph, and AIQ APIs were pinned.
+
+---
+
+## Wave 6 — Complete the conversational pivot: Live is the only surface
+
+**Completed:** 2026-05-29. Branch `wave-6-conversational-completion` (12 task
+commits `5c93dbf`→`e2891f1` + chat-routing fix `d75b69b`). Spec/plan:
+`docs/superpowers/specs/2026-05-29-wave-6-conversational-completion-design.md`,
+`docs/superpowers/plans/2026-05-29-wave-6-conversational-completion.md`.
+
+### What shipped
+- **Agent tool suite** on the Live Deep Agent (`apps/api/src/aleph_api/copilot_agent.py`):
+  `read_wiki` (wraps the full `WikiFirstRetrievalRouter` — deep cited retrieval,
+  reaching Classic's depth), `list_hypotheses_tool`/`create_hypothesis_tool`/
+  `add_hypothesis_evidence_tool` (+ shared `_dev_principal`, stable
+  `_DEV_USER_UUID`), `ingest_source` (+ new `POST /sources/ingest-url` route),
+  `build_artifact` (+ `ArtifactCard` added to runtime + frontend + canonical +
+  right-panel catalogs), `list_connectors`/`set_connector_enabled`/
+  `set_model_profile`. Tools self-call tested routes (`Bearer local-dev`).
+- **Approval gating (Phase B):** native `create_deep_agent(interrupt_on=...)` was
+  probed and does **NOT** surface an approval UI in this CopilotKit v2 +
+  ag-ui-langgraph stack (the gated tool just executed). Fell back to:
+  consequential tools (`build_artifact`, `set_connector_enabled`) create a
+  pending `ApprovalRequest(target_kind="agent_action", proposed_patch_jsonb=
+  {tool,args})` via `POST /agent-actions/request` and render an `ApprovalCard`;
+  the `_approve`/`_reject` handlers (`a2ui_handlers.py`) allowlist-dispatch the
+  stored action (`with_for_update()` guards against double-approve), execute via
+  self-call, write `ApprovalDecision` + `approval_request.approved/rejected`
+  ledger. **Chat-routing fix (`d75b69b`):** the Live-chat card adapter
+  (`copilot-catalog.tsx`) was dispatching `onAction` back into the agent stream
+  instead of POSTing to the `ActionRouter` — so chat ApprovalCard clicks never
+  executed. Now posts to `/cards/actions` like the right panel. Verified
+  in-browser: build → ApprovalCard → Approve → artifact built + request approved
+  + ledgered.
+- **Agent cost attribution (Phase C, rule #5):** `AgentCostCallbackHandler`
+  (`copilot_cost_callback.py`) writes `ModelCall`+`CostLedgerEvent` for the
+  agent's `ChatOpenAI` turns (mirrors `CostWriter.record_call`/`pricing`),
+  resolves project from the `proj:<uuid>` thread-id, bounded `_pending`, never
+  crashes the turn. **Gotcha:** streaming drops usage unless `stream_usage=True`
+  on `ChatOpenAI` — set it. No double-count (callback only on the agent model).
+  Verified live: an `assistant.turn` row ($0.0273, 1 call) shows in Profile→Usage.
+- **Cross-session memory (Phase D):** langgraph `AsyncPostgresStore` (deps
+  `langgraph-checkpoint-postgres`, `psycopg[binary,pool]`) opened in the lifespan
+  (agent build moved into lifespan — store needs a running loop), `CompositeBackend`
+  routing `/memories/`→`StoreBackend`, **per-project namespace** derived from the
+  thread-id (`(project_uuid,"memories")`, fallback `("shared","memories")`).
+  `store.setup()` creates `store`/`store_migrations` tables.
+- **Cost UI + bell (Phase E):** cost removed from the top `CostBanner` (deleted)
+  and folded into a **Usage** section in the Profile drawer (`Drawers.tsx`,
+  bottom-left ● button); notification bell glyph → monochrome SVG matching its
+  siblings (`LeftPanel.tsx`).
+- **Retire Classic (Phase F):** default `chatMode="live"`, toggle removed,
+  `ChatSurface.tsx` deleted. `assistant_turn_job` + `WikiFirstRetrievalRouter`
+  kept (reused by `read_wiki`; the worker job is now UI-orphaned but retained).
+- **e2e conftest fixed (in A6):** `ALEPH_ENV=ci`→`local` (Settings rejected "ci")
+  and the lifespan is now actually driven (`app.router.lifespan_context`) +
+  MinIO env — the whole integration suite was previously broken at setup. New
+  ledger-assertion integration tests for the mutating tools.
+
+### Honest gaps / known issues
+- **Pre-existing `alembic check` drift** (on `budgets`/`cost_ledger_events`/
+  `ledger_chain_heads` index flags) exists identically on pre-Wave-6 commits —
+  NOT introduced here, but it will fail CI's `alembic check` gate until fixed.
+- **Pre-existing unit failure** `aleph-evals/test_runner.py::test_discovers_dataset_dirs_with_manifest`
+  (confirmed on clean HEAD; unrelated to Wave 6).
+- **`Bearer local-dev` self-call** is local-auth-mode only (consistent with all
+  agent tools); would need a real agent token under OIDC.
+- **D1 cross-session memory** verified by construction (store tables, per-project
+  namespace, clean startup) but NOT yet by a full write-then-read-across-sessions
+  browser run.
+- Builder Inc-7 debts unchanged (chart-PNG container, DOCX, bundled CSL).
+- The `*.id.hex[:8]` correlation_id collision pattern (fixed in the ingest path
+  in A6) still exists in `artifacts.py`/`assistant.py`/aleph-aiq/workers.
+
+### Operational note (cost a verification cycle)
+`aleph-api` and `aleph-web` run from **baked images with no bind mount / no
+`--reload`** — code changes need `docker compose up -d --build <svc>`, NOT
+`restart`. Several tasks initially used `restart` (insufficient); a full
+`up -d --build` makes the running stack match HEAD.
