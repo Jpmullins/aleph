@@ -1,8 +1,40 @@
+import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+
 import { useSurface } from "../register";
+import { WikiBodyMarkdown } from "@/components/WikiBodyMarkdown";
+import { api } from "@/lib/api";
 import { CardShell, FeedbackButton, Pill, type RendererProps } from "./_shared";
+
+interface NormalizedOut {
+  markdown: string;
+  char_count: number;
+  parser: string;
+}
+
+function SourceReader({ projectId, sourceId }: { projectId: string; sourceId: string }) {
+  const q = useQuery<NormalizedOut>({
+    queryKey: ["source-normalized", projectId, sourceId],
+    queryFn: () =>
+      api.get<NormalizedOut>(`/v1/projects/${projectId}/sources/${sourceId}/normalized`),
+  });
+  if (q.isPending) return <p className="mt-2 text-xs text-slate-400">Loading source…</p>;
+  if (q.isError)
+    return (
+      <p className="mt-2 text-xs text-slate-400">
+        Source text isn’t available yet (still normalizing).
+      </p>
+    );
+  return (
+    <div className="mt-2 max-h-[28rem] overflow-y-auto rounded-md border border-[var(--border-muted,#e2e8f0)] bg-[var(--surface-sunken,#f8fafc)] p-3">
+      <WikiBodyMarkdown body={q.data.markdown} />
+    </div>
+  );
+}
 
 export function SourceCard({ component, onAction }: RendererProps) {
   const { projectId, surface } = useSurface();
+  const [reading, setReading] = useState(false);
   const p = component.props as {
     source_id: string;
     short_id: string;
@@ -62,7 +94,16 @@ export function SourceCard({ component, onAction }: RendererProps) {
         >
           Open source page
         </button>
+        <button
+          type="button"
+          onClick={() => setReading((r) => !r)}
+          className="ml-auto text-xs font-medium text-[var(--accent,#f97316)] hover:opacity-80"
+          data-testid={`source-read-${p.source_id}`}
+        >
+          {reading ? "Hide text ▲" : "Read ▾"}
+        </button>
       </div>
+      {reading && <SourceReader projectId={projectId} sourceId={p.source_id} />}
     </CardShell>
   );
 }

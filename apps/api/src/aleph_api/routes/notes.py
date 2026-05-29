@@ -8,8 +8,11 @@ from uuid import UUID
 from fastapi import APIRouter, Body, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from aleph_core.errors import NotFound
-from aleph_notes.models import Note, NoteSection
+from aleph_connectors.models import SynthesisProposal
+from aleph_core.errors import NotFound, ValidationFailed
+from aleph_core.ids import uuid7
+from aleph_core.time import utcnow
+from aleph_db.models.agent import AgentRun
 from aleph_notes.note_service import (
     create_note,
     create_section,
@@ -19,6 +22,7 @@ from aleph_notes.note_service import (
 )
 from aleph_observability.tracing import current_trace_id
 from aleph_security.roles import ProjectRole, require_at_least
+from aleph_wiki.wiki_service import WikiService
 
 from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
@@ -183,3 +187,98 @@ async def patch_section(
         trace_id=current_trace_id(),
     )
     return NoteSectionOut.model_validate(s)
+
+
+class PromoteOut(BaseModel):
+    proposal_id: UUID
+    page_id: UUID
+    revision_id: UUID
+
+
+@router.post(
+    "/{project_id}/notes/{note_id}/promote",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=PromoteOut,
+)
+async def promote_note(
+    project_id: ProjectScopeDep,
+    note_id: UUID,
+    session: SessionDep,
+    ledger: LedgerDep,
+    principal: PrincipalDep,
+) -> PromoteOut:
+    """Promote a note to a draft wiki page + pending proposal (Briefs).
+
+    Concatenates the note's sections into a draft `synthesis` wiki page and
+    records a pending SynthesisProposal so it lands in Briefs for approval —
+    the analyst-authored counterpart to AIQ synthesis.
+    """
+    require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
+    out = await get_note(session, project_id=project_id, note_id=note_id)
+    if out is None:
+        msg = f"note not found: {note_id}"
+        raise NotFound(msg)
+    note, sections = out
+    body_md = "\n\n".join(s.body_md for s in sections if s.body_md.strip())
+    if not body_md.strip():
+        msg = "cannot promote an empty note"
+        raise ValidationFailed(msg)
+
+    # Provenance run for the promotion action (SynthesisProposal needs one).
+    run = AgentRun(
+        id=uuid7(),
+        project_id=project_id,
+        agent_kind="note_promotion",
+        correlation_id=f"note-{uuid7().hex[:12]}",
+        status="succeeded",
+        input_payload={"note_id": str(note_id)},
+        created_by=principal.user_id,
+        access_scope="project",
+        completed_at=utcnow(),
+    )
+    session.add(run)
+    await session.flush()
+
+    svc = WikiService(session)
+    result = await svc.commit_revision(
+        principal=principal,
+        ledger=ledger,
+        project_id=project_id,
+        page_id=None,
+        title=note.title,
+        slug=None,
+        page_kind="synthesis",
+        body_md=body_md,
+        summary=body_md[:512],
+        claims=[],
+        wikilinks=[],
+        commit_message=f"Promoted from note: {note.title}",
+        respect_hand_edits=True,
+    )
+    proposal = SynthesisProposal(
+        id=uuid7(),
+        project_id=project_id,
+        page_id=result.page_id,
+        revision_id=result.revision_id,
+        agent_run_id=run.id,
+        topic=note.title[:512],
+        status="pending",
+        approval_decision_id=None,
+        created_by=principal.user_id,
+        access_scope="project",
+    )
+    session.add(proposal)
+    await session.flush()
+    await ledger.append(
+        project_id=project_id,
+        actor_id=principal.user_id,
+        actor_kind=principal.actor_kind,
+        action_kind="note.promote",
+        target_id=proposal.id,
+        target_kind="synthesis_proposal",
+        payload={"note_id": str(note_id), "page_id": str(result.page_id)},
+        trace_id=current_trace_id(),
+    )
+    return PromoteOut(
+        proposal_id=proposal.id, page_id=result.page_id, revision_id=result.revision_id
+    )
