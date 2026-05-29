@@ -5,7 +5,6 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { ActivityCard } from "@/components/ActivityCard";
 import { A2UIRightPanel } from "@/components/A2UIRightPanel";
 import { CopilotChatSurface } from "@/components/CopilotChatSurface";
-import { CostBanner } from "@/components/CostBanner";
 import { Drawer } from "@/components/Drawers";
 import { LeftPanel, type DrawerKind } from "@/components/LeftPanel";
 import { api, type ProjectOut } from "@/lib/api";
@@ -51,7 +50,6 @@ export function ProjectWorkspace({ projectId, onBack }: Props) {
   return (
     <WorkspaceUIProvider>
       <div className="flex h-full flex-col">
-        <CostBanner projectId={projectId} />
         <div className="flex min-h-0 flex-1">
           <PanelGroup direction="horizontal" autoSaveId="aleph-workspace-layout" className="flex-1">
             <Panel defaultSize={18} minSize={14} maxSize={30} className="min-w-0">

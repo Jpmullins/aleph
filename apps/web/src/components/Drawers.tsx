@@ -39,7 +39,7 @@ export function Drawer({ kind, projectId, onClose }: Props) {
           {kind === "settings" && <SettingsBody projectId={projectId} />}
           {kind === "logs" && <LogsBody projectId={projectId} />}
           {kind === "notifications" && <NotificationsBody projectId={projectId} />}
-          {kind === "profile" && <ProfileBody />}
+          {kind === "profile" && <ProfileBody projectId={projectId} />}
         </div>
       </div>
     </div>
@@ -209,19 +209,55 @@ function NotificationsBody({ projectId }: { projectId: string }) {
   );
 }
 
-function ProfileBody() {
+function ProfileBody({ projectId }: { projectId: string }) {
   const me = useQuery<MeOut>({
     queryKey: ["me"],
     queryFn: () => api.get<MeOut>("/v1/me"),
   });
+  const cost = useQuery<CostRollupOut>({
+    queryKey: ["cost", projectId],
+    queryFn: () => api.get<CostRollupOut>(`/v1/projects/${projectId}/cost`),
+    refetchInterval: 30_000,
+  });
   if (!me.data) return <p className="text-slate-400">Loading…</p>;
+  const usage = cost.data;
+  const cap = usage ? Number(usage.cap_usd) : 0;
+  const spent = usage ? Number(usage.spent_usd) : 0;
+  const pct = usage && cap > 0 ? Math.min(100, (spent / cap) * 100) : 0;
   return (
-    <Section title="Signed in as">
-      <Row label="Email" value={me.data.email || "—"} />
-      <Row label="Subject" value={me.data.subject} mono />
-      <Row label="Actor kind" value={me.data.actor_kind} />
-      <Row label="User ID" value={me.data.user_id} mono />
-    </Section>
+    <div className="space-y-5">
+      <Section title="Signed in as">
+        <Row label="Email" value={me.data.email || "—"} />
+        <Row label="Subject" value={me.data.subject} mono />
+        <Row label="Actor kind" value={me.data.actor_kind} />
+        <Row label="User ID" value={me.data.user_id} mono />
+      </Section>
+      <Section title="Usage">
+        {usage ? (
+          <>
+            <Row label="Budget cap" value={`$${cap.toFixed(2)}`} />
+            <Row label="Spent to date" value={`$${spent.toFixed(4)}`} />
+            <Row label="Percent used" value={`${pct.toFixed(1)}%`} />
+            {usage.by_phase.length > 0 && (
+              <div className="mt-3">
+                <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-slate-400">
+                  By capability
+                </p>
+                {usage.by_phase.map((b) => (
+                  <Row
+                    key={b.key}
+                    label={b.key}
+                    value={`$${Number(b.cost_usd).toFixed(4)} · ${b.call_count} calls`}
+                  />
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          <p className="text-slate-400">Loading usage…</p>
+        )}
+      </Section>
+    </div>
   );
 }
 
