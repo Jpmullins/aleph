@@ -92,13 +92,14 @@ All 8 hold. Highlights:
 4. **Pre-existing unit fail** `aleph-evals test_runner` — fix or quarantine.
 
 ### P1 — before an OIDC / production deploy
-5. **Runtime agent-facing catalog is stale (the most impactful functional gap).**
-   `apps/copilot-runtime/src/server.ts` `ALEPH_A2UI_CATALOG` advertises only ~7 of the
-   18 catalog components to the agent — **ApprovalCard, FormCard, DiffCard, the 5
-   surfaces, etc. are missing.** The frontend renders all 18, but the agent isn't told
-   they exist, so it can only *reliably* emit the 7 (this is why ApprovalCard rendering
-   in chat is LLM-flaky). Fix: regenerate the runtime catalog from the shared
-   `aleph-catalog-v09` set so the agent-facing schema matches the renderer.
+5. ~~**Runtime agent-facing catalog is stale.**~~ **RESOLVED 2026-05-29** (`d477184`).
+   `apps/copilot-runtime/src/server.ts` `ALEPH_A2UI_CATALOG` now advertises all **13
+   cards** to the agent (added ApprovalCard, FormCard, MapCard, GraphCard,
+   NotebookCellCard, DiffCard; props mirror the shared v0_9 frontend catalog). The 5
+   surfaces are intentionally NOT advertised (they're right-panel containers driven by
+   the surface stream, not agent-emitted chat cards). Verified in-browser: `build_artifact`
+   now reliably renders an ApprovalCard and Approve executes (artifact built + request
+   approved).
 6. **SSE × OIDC incompatibility (undocumented).** The surface-stream + agent-events SSE
    and the `Bearer local-dev` self-call tools work only in `local` auth mode (EventSource
    can't send auth headers; self-calls aren't real agent tokens). Under `oidc` they 401.
