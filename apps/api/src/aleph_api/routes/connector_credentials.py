@@ -97,14 +97,14 @@ async def list_creds(
     }
     out: list[CredentialOut] = []
     for c in connectors:
-        has = c.id in cred_rows
+        row = cred_rows.get(c.id)
         out.append(
             CredentialOut(
                 connector_kind=c.kind,
-                has_project_specific=has,
-                rotated_at=cred_rows[c.id].rotated_at.isoformat()
-                if has and cred_rows[c.id].rotated_at
-                else None,
+                has_project_specific=row is not None,
+                rotated_at=(
+                    row.rotated_at.isoformat() if row and row.rotated_at else None
+                ),
             )
         )
     return out
