@@ -114,6 +114,8 @@ services:
       # LLM transport — same Insights gateway the rest of Aleph uses.
       LITELLM_BASE_URL: ${LITELLM_BASE_URL}
       INSIGHTS_LITELLM_API_KEY: ${INSIGHTS_LITELLM_API_KEY}
+      # Web search for the research agents (tavily_web_search tool).
+      TAVILY_API_KEY: ${TAVILY_API_KEY}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       DASK_NWORKERS: "1"
       DASK_NTHREADS: "4"
