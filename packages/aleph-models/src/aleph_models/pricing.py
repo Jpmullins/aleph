@@ -112,9 +112,7 @@ class PricingTable:
             return Decimal("0"), Decimal("0")
         full_input_tokens = max(input_tokens - cached_tokens, 0)
         cache_savings = (
-            Decimal(cached_tokens)
-            * p.input_per_token
-            * (p.cache_discount_pct / Decimal("100"))
+            Decimal(cached_tokens) * p.input_per_token * (p.cache_discount_pct / Decimal("100"))
         )
         cost = (
             Decimal(full_input_tokens) * p.input_per_token
@@ -123,9 +121,7 @@ class PricingTable:
             * (Decimal("1") - p.cache_discount_pct / Decimal("100"))
             + Decimal(completion_tokens) * p.output_per_token
         )
-        return cost.quantize(Decimal("0.000001")), cache_savings.quantize(
-            Decimal("0.000001")
-        )
+        return cost.quantize(Decimal("0.000001")), cache_savings.quantize(Decimal("0.000001"))
 
 
 def get_default_pricing() -> PricingTable:

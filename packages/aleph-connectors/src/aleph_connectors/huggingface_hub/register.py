@@ -40,9 +40,7 @@ class HuggingFaceHubConnector:
     def __init__(self, *, http_client: httpx.AsyncClient | None = None) -> None:
         self._http = http_client or httpx.AsyncClient(timeout=20.0)
 
-    async def search(
-        self, ctx: ConnectorContext, query: SearchQuery
-    ) -> list[ConnectorResult]:
+    async def search(self, ctx: ConnectorContext, query: SearchQuery) -> list[ConnectorResult]:
         headers = {}
         if ctx.credential_value:
             headers["Authorization"] = f"Bearer {ctx.credential_value}"
@@ -80,9 +78,7 @@ class HuggingFaceHubConnector:
             )
         return out
 
-    async def fetch(
-        self, ctx: ConnectorContext, result: ConnectorResult
-    ) -> RawPayload:
+    async def fetch(self, ctx: ConnectorContext, result: ConnectorResult) -> RawPayload:
         if not result.url:
             msg = "hf hub fetch requires a url"
             raise NotSupported(msg)
@@ -90,7 +86,7 @@ class HuggingFaceHubConnector:
         if resp.status_code >= 400:
             # README may not exist; persist a placeholder marker so the
             # caller knows the search succeeded but content was empty.
-            data = (f"# {result.title}\n\n_No README at {result.url}._\n").encode("utf-8")
+            data = (f"# {result.title}\n\n_No README at {result.url}._\n").encode()
             return RawPayload(
                 data=data,
                 mime_type="text/markdown",

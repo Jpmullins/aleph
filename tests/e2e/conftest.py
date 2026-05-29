@@ -102,7 +102,6 @@ async def http_client(asgi_app) -> AsyncIterator[httpx.AsyncClient]:
     Auth is mocked by monkey-patching the auth middleware to inject a
     Principal directly. See `_TestAuthMiddleware` setup.
     """
-    from starlette.middleware import Middleware
 
     from aleph_api.middleware.auth import AuthMiddleware  # noqa: F401
 

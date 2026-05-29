@@ -12,6 +12,8 @@ from fastapi import APIRouter, Body, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
+from aleph_api.middleware.project_scope import ProjectScopeDep
 from aleph_core.errors import NotFound, ValidationFailed
 from aleph_core.ids import uuid7
 from aleph_core.schemas.project import (
@@ -22,15 +24,11 @@ from aleph_core.schemas.project import (
 )
 from aleph_db.models.agent import AgentRun
 from aleph_db.models.identity import ProjectMember
-from aleph_db.models.project import Project
 from aleph_db.repos import model_profile as profile_repo
 from aleph_db.repos import project as project_repo
-from aleph_rks.models import Connector, ConnectorBinding
 from aleph_observability.tracing import current_trace_id
+from aleph_rks.models import Connector, ConnectorBinding
 from aleph_security.roles import ProjectRole, require_at_least
-
-from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
-from aleph_api.middleware.project_scope import ProjectScopeDep
 
 router = APIRouter(prefix="/v1/projects", tags=["projects"])
 
@@ -140,11 +138,7 @@ async def create_project(
     # connectors (Tavily, Exa, …) are bound but left disabled until the
     # analyst supplies credentials. One seed event covers the whole set.
     default_connectors = list(
-        (
-            await session.execute(
-                select(Connector).where(Connector.enabled_by_default.is_(True))
-            )
-        )
+        (await session.execute(select(Connector).where(Connector.enabled_by_default.is_(True))))
         .scalars()
         .all()
     )
@@ -180,17 +174,13 @@ async def create_project(
 
 
 @router.get("", response_model=list[ProjectOut])
-async def list_projects(
-    session: SessionDep, principal: PrincipalDep
-) -> list[ProjectOut]:
+async def list_projects(session: SessionDep, principal: PrincipalDep) -> list[ProjectOut]:
     rows = await project_repo.list_member_projects(session, user_id=principal.user_id)
     return [ProjectOut.model_validate(p) for p in rows]
 
 
 @router.get("/{project_id}", response_model=ProjectOut)
-async def get_project(
-    project_id: ProjectScopeDep, session: SessionDep
-) -> ProjectOut:
+async def get_project(project_id: ProjectScopeDep, session: SessionDep) -> ProjectOut:
     p = await project_repo.get_project(session, project_id)
     if p is None:  # pragma: no cover — scope dep guards above
         msg = f"project not found: {project_id}"
@@ -255,9 +245,7 @@ async def add_member(
     principal: PrincipalDep,
 ) -> ProjectMemberOut:
     require_at_least(principal, project_id, at_least=ProjectRole.OWNER)
-    existing = await project_repo.get_member(
-        session, project_id=project_id, user_id=body.user_id
-    )
+    existing = await project_repo.get_member(session, project_id=project_id, user_id=body.user_id)
     if existing is not None:
         msg = "member already exists"
         raise ValidationFailed(msg)
@@ -291,9 +279,7 @@ async def remove_member(
     principal: PrincipalDep,
 ) -> None:
     require_at_least(principal, project_id, at_least=ProjectRole.OWNER)
-    member = await project_repo.get_member(
-        session, project_id=project_id, user_id=user_id
-    )
+    member = await project_repo.get_member(session, project_id=project_id, user_id=user_id)
     if member is None:
         msg = "member not found"
         raise NotFound(msg)
@@ -315,9 +301,7 @@ async def remove_member(
     )
 
 
-@router.patch(
-    "/{project_id}/members/{user_id}", response_model=ProjectMemberOut
-)
+@router.patch("/{project_id}/members/{user_id}", response_model=ProjectMemberOut)
 async def change_member_role(
     project_id: ProjectScopeDep,
     user_id: UUID,
@@ -327,9 +311,7 @@ async def change_member_role(
     principal: PrincipalDep,
 ) -> ProjectMemberOut:
     require_at_least(principal, project_id, at_least=ProjectRole.OWNER)
-    member = await project_repo.get_member(
-        session, project_id=project_id, user_id=user_id
-    )
+    member = await project_repo.get_member(session, project_id=project_id, user_id=user_id)
     if member is None:
         msg = "member not found"
         raise NotFound(msg)
@@ -351,12 +333,8 @@ async def change_member_role(
     return ProjectMemberOut.model_validate(member)
 
 
-@router.get(
-    "/{project_id}/members", response_model=list[ProjectMemberOut]
-)
-async def list_members(
-    project_id: ProjectScopeDep, session: SessionDep
-) -> list[ProjectMemberOut]:
+@router.get("/{project_id}/members", response_model=list[ProjectMemberOut])
+async def list_members(project_id: ProjectScopeDep, session: SessionDep) -> list[ProjectMemberOut]:
     stmt = (
         select(ProjectMember)
         .where(ProjectMember.project_id == project_id)

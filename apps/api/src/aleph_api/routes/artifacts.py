@@ -15,22 +15,21 @@ from fastapi import APIRouter, Body, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
+from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
+from aleph_api.middleware.project_scope import ProjectScopeDep
 from aleph_artifacts.artifact_service import (
     create_artifact,
     get_artifact,
     list_artifacts,
     list_versions,
 )
-from aleph_artifacts.models import ArtifactVersion, RenderedAsset
-from aleph_core.errors import NotFound, ValidationFailed
+from aleph_artifacts.models import RenderedAsset
+from aleph_core.errors import NotFound
 from aleph_core.ids import uuid7
 from aleph_db.models.agent import AgentRun
 from aleph_observability.tracing import current_trace_id
 from aleph_security.agent_token import mint_agent_token
 from aleph_security.roles import ProjectRole, require_at_least
-
-from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
-from aleph_api.middleware.project_scope import ProjectScopeDep
 
 router = APIRouter(prefix="/v1/projects", tags=["artifacts"])
 
@@ -91,16 +90,12 @@ class BuildOut(BaseModel):
 
 
 @router.get("/{project_id}/artifacts", response_model=list[ArtifactOut])
-async def get_artifacts(
-    project_id: ProjectScopeDep, session: SessionDep
-) -> list[ArtifactOut]:
+async def get_artifacts(project_id: ProjectScopeDep, session: SessionDep) -> list[ArtifactOut]:
     rows = await list_artifacts(session, project_id=project_id)
     return [ArtifactOut.model_validate(r) for r in rows]
 
 
-@router.get(
-    "/{project_id}/artifacts/{artifact_id}", response_model=ArtifactOut
-)
+@router.get("/{project_id}/artifacts/{artifact_id}", response_model=ArtifactOut)
 async def get_one_artifact(
     project_id: ProjectScopeDep,
     artifact_id: UUID,
@@ -122,9 +117,7 @@ async def get_artifact_versions(
     artifact_id: UUID,
     session: SessionDep,
 ) -> list[ArtifactVersionOut]:
-    rows = await list_versions(
-        session, project_id=project_id, artifact_id=artifact_id
-    )
+    rows = await list_versions(session, project_id=project_id, artifact_id=artifact_id)
     return [ArtifactVersionOut.model_validate(r) for r in rows]
 
 
@@ -193,9 +186,7 @@ async def post_build(
         from arq import create_pool
         from arq.connections import RedisSettings
 
-        pool = await create_pool(
-            RedisSettings.from_dsn(request.app.state.settings.redis_url)
-        )
+        pool = await create_pool(RedisSettings.from_dsn(request.app.state.settings.redis_url))
         try:
             await pool.enqueue_job(
                 "builder_job",
@@ -211,7 +202,7 @@ async def post_build(
             dispatched = True
         finally:
             await pool.aclose()
-    except Exception:  # noqa: BLE001
+    except Exception:
         dispatched = False
     return BuildOut(
         artifact_id=str(artifact.id),
@@ -220,12 +211,8 @@ async def post_build(
     )
 
 
-@router.get(
-    "/{project_id}/rendered-assets", response_model=list[RenderedAssetOut]
-)
-async def get_renders(
-    project_id: ProjectScopeDep, session: SessionDep
-) -> list[RenderedAssetOut]:
+@router.get("/{project_id}/rendered-assets", response_model=list[RenderedAssetOut])
+async def get_renders(project_id: ProjectScopeDep, session: SessionDep) -> list[RenderedAssetOut]:
     stmt = (
         select(RenderedAsset)
         .where(RenderedAsset.project_id == project_id)

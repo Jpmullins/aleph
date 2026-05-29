@@ -7,12 +7,12 @@ from uuid import UUID
 
 from sqlalchemy import select
 
-from aleph_core.time import utcnow
-from aleph_db.models.agent import AgentRun
-from aleph_db.models.model_profile import ModelProfile
 from aleph_assistant.agent.workflow import AssistantTurnState, AssistantTurnWorkflow
 from aleph_assistant.models import AssistantMessage
 from aleph_assistant.thread_service import list_messages
+from aleph_core.time import utcnow
+from aleph_db.models.agent import AgentRun
+from aleph_db.models.model_profile import ModelProfile
 from aleph_security.agent_token import verify_agent_token
 from aleph_security.principal import Principal
 
@@ -46,9 +46,7 @@ async def assistant_turn_job(
 
     async with maker() as session:
         profile = (
-            await session.execute(
-                select(ModelProfile).where(ModelProfile.project_id == project_id)
-            )
+            await session.execute(select(ModelProfile).where(ModelProfile.project_id == project_id))
         ).scalar_one_or_none()
         if profile is None:
             msg = f"no profile for project {project_id}"
@@ -85,7 +83,7 @@ async def assistant_turn_job(
     try:
         await workflow.run(state)
         run_status = "succeeded"
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         error_text = str(exc)[:4096]
         run_status = "failed"
 

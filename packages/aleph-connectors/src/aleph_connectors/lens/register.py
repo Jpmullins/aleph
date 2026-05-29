@@ -41,9 +41,7 @@ class LensConnector:
     def __init__(self, *, http_client: httpx.AsyncClient | None = None) -> None:
         self._http = http_client or httpx.AsyncClient(timeout=20.0)
 
-    async def search(
-        self, ctx: ConnectorContext, query: SearchQuery
-    ) -> list[ConnectorResult]:
+    async def search(self, ctx: ConnectorContext, query: SearchQuery) -> list[ConnectorResult]:
         if not ctx.credential_value:
             msg = "Lens.org connector is disabled until a credential is provided"
             raise NotSupported(msg)
@@ -61,7 +59,11 @@ class LensConnector:
         for r in body.get("data", []):
             lens_id = r.get("lens_id") or r.get("id") or ""
             title = r.get("title") or lens_id
-            doi = (r.get("external_ids") or {}).get("doi") if isinstance(r.get("external_ids"), dict) else None
+            doi = (
+                (r.get("external_ids") or {}).get("doi")
+                if isinstance(r.get("external_ids"), dict)
+                else None
+            )
             year = r.get("year_published")
             out.append(
                 ConnectorResult(
@@ -80,9 +82,7 @@ class LensConnector:
             )
         return out
 
-    async def fetch(
-        self, ctx: ConnectorContext, result: ConnectorResult
-    ) -> RawPayload:
+    async def fetch(self, ctx: ConnectorContext, result: ConnectorResult) -> RawPayload:
         if not result.url:
             msg = "lens fetch requires a url"
             raise NotSupported(msg)

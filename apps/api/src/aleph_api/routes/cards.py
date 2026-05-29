@@ -16,10 +16,9 @@ from pydantic import BaseModel, Field
 
 from aleph_a2ui.action_router import ActionRouter, CardActionRequest
 from aleph_a2ui.catalog import CATALOG
-from aleph_security.roles import ProjectRole, require_at_least
-
 from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
+from aleph_security.roles import ProjectRole, require_at_least
 
 router = APIRouter(prefix="/v1", tags=["cards"])
 

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 
 from aleph_core.ids import uuid7
 from aleph_wiki.models import Alias, WikiLink, WikiPage
@@ -22,7 +22,7 @@ class AliasResolution:
 
 
 class AliasService:
-    def __init__(self, session: "AsyncSession") -> None:
+    def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
     async def upsert(
@@ -63,9 +63,7 @@ class AliasService:
         await self._session.flush()
         return a
 
-    async def resolve(
-        self, *, project_id: UUID, surface_form: str
-    ) -> AliasResolution | None:
+    async def resolve(self, *, project_id: UUID, surface_form: str) -> AliasResolution | None:
         a = (
             await self._session.execute(
                 select(Alias).where(

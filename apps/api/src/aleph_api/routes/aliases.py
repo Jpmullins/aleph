@@ -10,12 +10,11 @@ from fastapi import APIRouter, Body, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
+from aleph_api.deps import PrincipalDep, SessionDep
+from aleph_api.middleware.project_scope import ProjectScopeDep
 from aleph_security.roles import ProjectRole, require_at_least
 from aleph_wiki.alias_service import AliasService
 from aleph_wiki.models import Alias
-
-from aleph_api.deps import PrincipalDep, SessionDep
-from aleph_api.middleware.project_scope import ProjectScopeDep
 
 router = APIRouter(prefix="/v1/projects", tags=["wiki-aliases"])
 

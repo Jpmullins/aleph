@@ -9,8 +9,8 @@ from __future__ import annotations
 from aleph_wiki.wiki_service import (
     _hash,
     _slugify,
-    _split_sections,
     _splice_protected_sections,
+    _split_sections,
 )
 
 
@@ -38,9 +38,7 @@ def test_splice_preserves_protected_section() -> None:
     prior = "# A\n\nORIGINAL A\n\n## B\n\nORIGINAL B\n"
     new = "# A\n\nNEW A\n\n## B\n\nNEW B\n"
     # Locate the prior section char ranges.
-    prior_sections = {
-        s.anchor: (s.char_start, s.char_end) for s in _split_sections(prior)
-    }
+    prior_sections = {s.anchor: (s.char_start, s.char_end) for s in _split_sections(prior)}
     merged = _splice_protected_sections(
         new,
         prior_body=prior,

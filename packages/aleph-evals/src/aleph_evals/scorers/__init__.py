@@ -11,7 +11,6 @@ from aleph_evals.scorers.permission import score_permission
 from aleph_evals.scorers.retrieval import score_retrieval
 from aleph_evals.scorers.synthesis import score_synthesis
 
-
 _REGISTRY = {
     "retrieval": score_retrieval,
     "citation": score_citation,

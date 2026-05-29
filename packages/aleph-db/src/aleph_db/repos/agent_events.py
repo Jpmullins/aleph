@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import functools
 import time
+from collections.abc import Callable
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from aleph_core.ids import uuid7
 from aleph_db.models.agent import AgentEvent
@@ -25,22 +26,22 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from uuid import UUID
 
-    from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
 __all__ = [
-    "emit_phase_started",
     "emit_phase_completed",
     "emit_phase_failed",
+    "emit_phase_started",
     "phase",
     "with_phase",
 ]
 
 
 async def emit_phase_started(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
-    agent_run_id: "UUID",
+    agent_run_id: UUID,
     phase_name: str,
     payload: dict[str, Any] | None = None,
 ) -> AgentEvent:
@@ -56,9 +57,9 @@ async def emit_phase_started(
 
 
 async def emit_phase_completed(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
-    agent_run_id: "UUID",
+    agent_run_id: UUID,
     phase_name: str,
     duration_ms: int,
     payload: dict[str, Any] | None = None,
@@ -79,9 +80,9 @@ async def emit_phase_completed(
 
 
 async def emit_phase_failed(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
-    agent_run_id: "UUID",
+    agent_run_id: UUID,
     phase_name: str,
     error_text: str,
 ) -> AgentEvent:
@@ -98,12 +99,12 @@ async def emit_phase_failed(
 
 @asynccontextmanager
 async def phase(
-    maker: "async_sessionmaker[AsyncSession]",
+    maker: async_sessionmaker[AsyncSession],
     *,
-    agent_run_id: "UUID | None",
+    agent_run_id: UUID | None,
     phase_name: str,
     started_payload: dict[str, Any] | None = None,
-) -> "AsyncIterator[dict[str, Any]]":
+) -> AsyncIterator[dict[str, Any]]:
     """Wrap a workflow node body in phase_started / phase_completed / phase_failed events.
 
     Pattern:
@@ -166,7 +167,7 @@ async def phase(
         await session.commit()
 
 
-def with_phase(phase_name: str, *, ctx_getter: "Callable[[], Any]") -> Any:
+def with_phase(phase_name: str, *, ctx_getter: Callable[[], Any]) -> Any:
     """Decorator that wraps a LangGraph node coroutine in phase events.
 
     Usage:
@@ -188,9 +189,7 @@ def with_phase(phase_name: str, *, ctx_getter: "Callable[[], Any]") -> Any:
         async def wrapper(state: dict[str, Any]) -> Any:
             maker = ctx_getter().session_maker
             agent_run_id = state.get("agent_run_id") if isinstance(state, dict) else None
-            async with phase(
-                maker, agent_run_id=agent_run_id, phase_name=phase_name
-            ):
+            async with phase(maker, agent_run_id=agent_run_id, phase_name=phase_name):
                 return await fn(state)
 
         return wrapper

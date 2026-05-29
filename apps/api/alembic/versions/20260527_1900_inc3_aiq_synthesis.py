@@ -76,9 +76,7 @@ def upgrade() -> None:
             sa.Column("kms_key_arn", sa.String(2048), nullable=True),
             sa.Column("rotated_at", sa.DateTime(timezone=True), nullable=True),
         ),
-        sa.UniqueConstraint(
-            "project_id", "connector_id", name="uq_cred_project_connector"
-        ),
+        sa.UniqueConstraint("project_id", "connector_id", name="uq_cred_project_connector"),
     )
 
     # ---- synthesis_proposals ----------------------------------------------
@@ -96,13 +94,9 @@ def upgrade() -> None:
                 nullable=False,
                 server_default="pending",
             ),
-            sa.Column(
-                "approval_decision_id", postgresql.UUID(as_uuid=True), nullable=True
-            ),
+            sa.Column("approval_decision_id", postgresql.UUID(as_uuid=True), nullable=True),
         ),
-        sa.UniqueConstraint(
-            "page_id", "revision_id", name="uq_synth_page_rev"
-        ),
+        sa.UniqueConstraint("page_id", "revision_id", name="uq_synth_page_rev"),
     )
 
     # ---- approval_decisions -----------------------------------------------
@@ -141,7 +135,9 @@ def upgrade() -> None:
                 sa.bindparam("name", name),
                 sa.bindparam("output_kind", output_kind),
                 sa.bindparam("req_auth", requires_auth),
-                sa.bindparam("schema", json.dumps({"$schema": "http://json-schema.org/draft-07/schema#"})),
+                sa.bindparam(
+                    "schema", json.dumps({"$schema": "http://json-schema.org/draft-07/schema#"})
+                ),
                 sa.bindparam("enabled", enabled_by_default),
             )
         )
@@ -153,7 +149,5 @@ def downgrade() -> None:
     op.drop_table("connector_credentials")
     for kind, *_ in _INC3_CONNECTORS:
         op.execute(
-            sa.text("DELETE FROM connectors WHERE kind = :k").bindparams(
-                sa.bindparam("k", kind)
-            )
+            sa.text("DELETE FROM connectors WHERE kind = :k").bindparams(sa.bindparam("k", kind))
         )

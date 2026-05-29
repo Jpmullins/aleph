@@ -12,7 +12,6 @@ rendered asset, and source version (lineage_jsonb).
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypedDict
 from uuid import UUID
@@ -27,14 +26,13 @@ from aleph_artifacts.exporters import (
 )
 from aleph_artifacts.models import Artifact, ArtifactVersion
 from aleph_core.ids import uuid7
-from aleph_core.time import utcnow
 from aleph_db.repos.agent_events import with_phase
 from aleph_observability.tracing import start_span
-from aleph_rks.models import Source, SourceAsset, SourceVersion
+from aleph_rks.models import Source
 from aleph_wiki.models import WikiPage, WikiRevision
 
 if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from aleph_db.repos.ledger import LedgerWriter
     from aleph_rks.asset_store import AssetStore
@@ -43,9 +41,9 @@ if TYPE_CHECKING:
 
 @dataclass
 class _Ctx:
-    session_maker: "async_sessionmaker[AsyncSession]"
-    asset_store: "AssetStore"
-    principal: "Principal"
+    session_maker: async_sessionmaker[AsyncSession]
+    asset_store: AssetStore
+    principal: Principal
 
 
 _active_ctx: _Ctx | None = None
@@ -158,15 +156,9 @@ async def _node_citation_resolve(state: BuilderState) -> dict[str, Any]:
                         "id": sid,
                         "type": meta.get("type", "article"),
                         "title": src.title,
-                        "author": meta.get("authors")
-                        or meta.get("author")
-                        or [],
+                        "author": meta.get("authors") or meta.get("author") or [],
                         "issued": meta.get("issued")
-                        or (
-                            {"date-parts": [[meta["year"]]]}
-                            if meta.get("year")
-                            else {}
-                        ),
+                        or ({"date-parts": [[meta["year"]]]} if meta.get("year") else {}),
                         "URL": src.url,
                         "container-title": meta.get("publication_info")
                         or meta.get("container-title"),
@@ -207,7 +199,7 @@ async def _node_bibliography(state: BuilderState) -> dict[str, Any]:
 @with_phase("package", ctx_getter=lambda: _ctx())
 async def _node_package(state: BuilderState) -> dict[str, Any]:
     """Produce the final bytes per `artifact_kind`."""
-    ctx = _ctx()
+    _ctx()
     with start_span("builder.package"):
         full_md = (
             f"# {state.get('artifact_id')}\n\n"
@@ -274,8 +266,8 @@ async def _put_artifact_bytes(
     from io import BytesIO
 
     key = f"projects/{project_id}/artifacts/{artifact_id}/{version_no}.{ext}"
-    bucket = ctx.asset_store._bucket  # noqa: SLF001
-    client = ctx.asset_store._client  # noqa: SLF001
+    bucket = ctx.asset_store._bucket
+    client = ctx.asset_store._client
     client.put_object(
         bucket,
         key,
@@ -294,9 +286,9 @@ class BuilderWorkflow:
     def __init__(
         self,
         *,
-        session_maker: "async_sessionmaker[AsyncSession]",
-        asset_store: "AssetStore",
-        principal: "Principal",
+        session_maker: async_sessionmaker[AsyncSession],
+        asset_store: AssetStore,
+        principal: Principal,
     ) -> None:
         self._ctx = _Ctx(
             session_maker=session_maker,
@@ -322,7 +314,7 @@ class BuilderWorkflow:
     async def run(
         self,
         *,
-        ledger: "LedgerWriter",
+        ledger: LedgerWriter,
         project_id: UUID,
         agent_run_id: UUID,
         artifact: Artifact,
@@ -338,9 +330,7 @@ class BuilderWorkflow:
             async with self._ctx.session_maker() as session:
                 max_no = (
                     await session.execute(
-                        select(
-                            ArtifactVersion.version_no
-                        )
+                        select(ArtifactVersion.version_no)
                         .where(ArtifactVersion.artifact_id == artifact.id)
                         .order_by(ArtifactVersion.version_no.desc())
                         .limit(1)
@@ -364,9 +354,7 @@ class BuilderWorkflow:
             lineage = {
                 "wiki_page_ids": [str(w) for w in wiki_page_ids],
                 "dataset_version_ids": [str(d) for d in dataset_version_ids],
-                "rendered_asset_ids": [
-                    str(r) for r in (out.get("rendered_asset_ids") or [])
-                ],
+                "rendered_asset_ids": [str(r) for r in (out.get("rendered_asset_ids") or [])],
                 "outline": out.get("outline"),
                 "template_name": template_name,
                 "csl_style": csl_style,

@@ -33,7 +33,7 @@ class PhaseStat:
 
 
 async def record_aiq_phase_stats(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
     project_id: UUID,
     agent_run_id: UUID,

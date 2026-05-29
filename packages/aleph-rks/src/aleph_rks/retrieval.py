@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 
 from aleph_rks.models import DocumentChunk, RetrievalIndexRecord
 
@@ -30,7 +30,7 @@ class ChunkHit:
 
 
 async def descend_into_source(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
     project_id: UUID,
     source_id: UUID,
@@ -48,7 +48,9 @@ async def descend_into_source(
             DocumentChunk.ordinal,
             DocumentChunk.text,
             DocumentChunk.section_path,
-            (1.0 - func.cast(DocumentChunk.embedding.cosine_distance(query_embedding), float)).label(  # type: ignore[attr-defined]
+            (
+                1.0 - func.cast(DocumentChunk.embedding.cosine_distance(query_embedding), float)
+            ).label(  # type: ignore[attr-defined]
                 "cos_sim"
             ),
         )
@@ -94,15 +96,13 @@ async def descend_into_source(
     return hits[:top_k]
 
 
-async def get_index_record(
-    session: "AsyncSession", source_id: UUID
-) -> RetrievalIndexRecord | None:
+async def get_index_record(session: AsyncSession, source_id: UUID) -> RetrievalIndexRecord | None:
     stmt = select(RetrievalIndexRecord).where(RetrievalIndexRecord.source_id == source_id)
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
 async def needs_reembed(
-    session: "AsyncSession", source_id: UUID, *, current_embedder_model: str
+    session: AsyncSession, source_id: UUID, *, current_embedder_model: str
 ) -> bool:
     rec = await get_index_record(session, source_id)
     if rec is None:

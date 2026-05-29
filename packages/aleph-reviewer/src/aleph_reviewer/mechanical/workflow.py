@@ -10,7 +10,6 @@ Most checks are deterministic. citation_match wraps AIQ's
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, TypedDict
@@ -25,7 +24,6 @@ from aleph_observability.tracing import start_span
 from aleph_reviewer.review_service import add_finding, finalize_run, start_run
 from aleph_rks.models import Source, SourceAsset, SourceVersion
 from aleph_wiki.citation_verification import (
-    CITATION_RE,
     CitationVerificationFailure,
     verify_citations,
 )
@@ -33,20 +31,19 @@ from aleph_wiki.models import (
     Citation,
     WikiClaim,
     WikiLink,
-    WikiPage,
     WikiRevision,
 )
 
 if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from aleph_security.principal import Principal
 
 
 @dataclass
 class _Ctx:
-    session_maker: "async_sessionmaker[AsyncSession]"
-    principal: "Principal"
+    session_maker: async_sessionmaker[AsyncSession]
+    principal: Principal
     freshness_threshold: timedelta = timedelta(days=180)
 
 
@@ -80,11 +77,9 @@ async def _node_citation_match(state: MechanicalReviewState) -> dict[str, int]:
                 return {"n": 0}
             # Build registry from Citation rows for claims on this revision.
             claim_rows = list(
-                (
-                    await session.execute(
-                        select(WikiClaim).where(WikiClaim.revision_id == rev.id)
-                    )
-                ).scalars().all()
+                (await session.execute(select(WikiClaim).where(WikiClaim.revision_id == rev.id)))
+                .scalars()
+                .all()
             )
             claim_ids = [c.id for c in claim_rows]
             citation_rows = (
@@ -93,7 +88,9 @@ async def _node_citation_match(state: MechanicalReviewState) -> dict[str, int]:
                         await session.execute(
                             select(Citation).where(Citation.claim_id.in_(claim_ids))
                         )
-                    ).scalars().all()
+                    )
+                    .scalars()
+                    .all()
                 )
                 if claim_ids
                 else []
@@ -162,9 +159,7 @@ async def _node_broken_links(state: MechanicalReviewState) -> dict[str, int]:
                     ),
                     target_page_id=state["page_id"],
                     target_revision_id=state["revision_id"],
-                    evidence_refs=[
-                        {"kind": "wikilink", "dst_title": link.dst_title}
-                    ],
+                    evidence_refs=[{"kind": "wikilink", "dst_title": link.dst_title}],
                     auto_resolvable=False,
                     created_by=ctx.principal.user_id,
                 )
@@ -187,7 +182,7 @@ async def _node_stale_sources(state: MechanicalReviewState) -> dict[str, int]:
             rows = list((await session.execute(stmt)).all())
             seen: set[UUID] = set()
             cutoff = utcnow() - ctx.freshness_threshold
-            for claim, cite in rows:
+            for _claim, cite in rows:
                 if cite.source_page_id is None:
                     continue
                 # Resolve source by joining SourcePage → Source via project + page.
@@ -254,10 +249,7 @@ async def _node_duplicate_sources(state: MechanicalReviewState) -> dict[str, int
                     finding_kind="duplicate_source",
                     severity="low",
                     title=f"Duplicate source content: sha256={sha[:10]}…",
-                    description=(
-                        f"{count} source assets share the same sha256. "
-                        "Consider merging."
-                    ),
+                    description=(f"{count} source assets share the same sha256. Consider merging."),
                     evidence_refs=[{"kind": "sha256", "value": sha, "count": int(count)}],
                     auto_resolvable=False,
                     created_by=ctx.principal.user_id,
@@ -291,17 +283,19 @@ class MechanicalReviewerWorkflow:
     def __init__(
         self,
         *,
-        session_maker: "async_sessionmaker[AsyncSession]",
-        principal: "Principal",
+        session_maker: async_sessionmaker[AsyncSession],
+        principal: Principal,
     ) -> None:
         self._ctx = _Ctx(session_maker=session_maker, principal=principal)
         graph: StateGraph = StateGraph(MechanicalReviewState)
         # Wrap each node to fan results into typed slots on state.
         graph.add_node(
             "citation_match",
-            lambda s: _node_citation_match(s).__await__()  # type: ignore[func-returns-value]
-            if False
-            else _wrap(_node_citation_match, "n_citation"),
+            lambda s: (
+                _node_citation_match(s).__await__()  # type: ignore[func-returns-value]
+                if False
+                else _wrap(_node_citation_match, "n_citation")
+            ),
         )
         graph.add_node("citation_match", _wrap(_node_citation_match, "n_citation"))
         graph.add_node("broken_links", _wrap(_node_broken_links, "n_links"))
@@ -316,8 +310,9 @@ class MechanicalReviewerWorkflow:
         graph.add_edge("finalize", END)
         self._compiled = graph.compile()
 
-    async def run(self, *, project_id: UUID, revision_id: UUID, page_id: UUID,
-                  agent_run_id: UUID) -> int:
+    async def run(
+        self, *, project_id: UUID, revision_id: UUID, page_id: UUID, agent_run_id: UUID
+    ) -> int:
         global _active_ctx
         _active_ctx = self._ctx
         async with self._ctx.session_maker() as session:

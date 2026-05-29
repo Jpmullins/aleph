@@ -18,13 +18,9 @@ from aleph_db.base import Base, CommonColumns
 
 class ModelProfile(CommonColumns, Base):
     __tablename__ = "model_profiles"
-    __table_args__ = (
-        UniqueConstraint("project_id", "name", name="uq_profile_project_name"),
-    )
+    __table_args__ = (UniqueConstraint("project_id", "name", name="uq_profile_project_name"),)
 
     name: Mapped[str] = mapped_column(String(64), nullable=False)
     project_id: Mapped[UUID | None] = mapped_column(nullable=True, index=True)
-    is_template: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default="false"
-    )
+    is_template: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     bindings_jsonb: Mapped[dict] = mapped_column(JSONB, nullable=False)

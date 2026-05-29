@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 from pathlib import Path
 
 from aleph_evals.ci.gate import write_summary

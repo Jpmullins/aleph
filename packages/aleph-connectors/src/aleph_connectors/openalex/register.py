@@ -41,9 +41,7 @@ class OpenAlexConnector:
     def __init__(self, *, http_client: httpx.AsyncClient | None = None) -> None:
         self._http = http_client or httpx.AsyncClient(timeout=20.0)
 
-    async def search(
-        self, ctx: ConnectorContext, query: SearchQuery
-    ) -> list[ConnectorResult]:
+    async def search(self, ctx: ConnectorContext, query: SearchQuery) -> list[ConnectorResult]:
         mailto = os.environ.get("ALEPH_OPENALEX_MAILTO", "")
         params = {
             "search": query.text,
@@ -62,10 +60,9 @@ class OpenAlexConnector:
             short_id = work_id.rsplit("/", 1)[-1] if work_id else ""
             title = r.get("title") or short_id
             doi = r.get("doi")
-            oa_pdf = (
-                (r.get("open_access") or {}).get("oa_url")
-                or (r.get("primary_location") or {}).get("pdf_url")
-            )
+            oa_pdf = (r.get("open_access") or {}).get("oa_url") or (
+                r.get("primary_location") or {}
+            ).get("pdf_url")
             out.append(
                 ConnectorResult(
                     external_id=short_id,
@@ -84,9 +81,7 @@ class OpenAlexConnector:
             )
         return out
 
-    async def fetch(
-        self, ctx: ConnectorContext, result: ConnectorResult
-    ) -> RawPayload:
+    async def fetch(self, ctx: ConnectorContext, result: ConnectorResult) -> RawPayload:
         url = result.url
         if not url:
             msg = "openalex fetch requires a url"
@@ -97,13 +92,7 @@ class OpenAlexConnector:
             raise NotSupported(msg)
         data = resp.content
         ct = resp.headers.get("content-type", "application/octet-stream").split(";")[0].strip()
-        ext = (
-            "pdf"
-            if "pdf" in ct
-            else "html"
-            if "html" in ct
-            else "bin"
-        )
+        ext = "pdf" if "pdf" in ct else "html" if "html" in ct else "bin"
         return RawPayload(
             data=data,
             mime_type=ct,

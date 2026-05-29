@@ -8,7 +8,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 
 from aleph_artifacts.models import Artifact, ArtifactVersion
-from aleph_core.errors import NotFound, ValidationFailed
+from aleph_core.errors import ValidationFailed
 from aleph_core.ids import uuid7
 
 if TYPE_CHECKING:
@@ -17,15 +17,15 @@ if TYPE_CHECKING:
     from aleph_security.principal import Principal
 
 
-async def _next_short_id(session: "AsyncSession") -> str:
+async def _next_short_id(session: AsyncSession) -> str:
     n = (await session.execute(select(func.count()).select_from(Artifact))).scalar_one()
     return f"A{int(n) + 1:04d}"
 
 
 async def create_artifact(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
-    principal: "Principal",
+    principal: Principal,
     project_id: UUID,
     title: str,
     artifact_kind: str,
@@ -57,20 +57,16 @@ async def create_artifact(
 
 
 async def get_artifact(
-    session: "AsyncSession", *, project_id: UUID, artifact_id: UUID
+    session: AsyncSession, *, project_id: UUID, artifact_id: UUID
 ) -> Artifact | None:
     return (
         await session.execute(
-            select(Artifact).where(
-                Artifact.id == artifact_id, Artifact.project_id == project_id
-            )
+            select(Artifact).where(Artifact.id == artifact_id, Artifact.project_id == project_id)
         )
     ).scalar_one_or_none()
 
 
-async def list_artifacts(
-    session: "AsyncSession", *, project_id: UUID
-) -> list[Artifact]:
+async def list_artifacts(session: AsyncSession, *, project_id: UUID) -> list[Artifact]:
     stmt = (
         select(Artifact)
         .where(Artifact.project_id == project_id)
@@ -80,7 +76,7 @@ async def list_artifacts(
 
 
 async def list_versions(
-    session: "AsyncSession", *, project_id: UUID, artifact_id: UUID
+    session: AsyncSession, *, project_id: UUID, artifact_id: UUID
 ) -> list[ArtifactVersion]:
     stmt = (
         select(ArtifactVersion)

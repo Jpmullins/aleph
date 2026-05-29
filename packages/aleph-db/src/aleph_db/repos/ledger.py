@@ -63,7 +63,7 @@ class LedgerWriter:
     transaction's lifetime.
     """
 
-    def __init__(self, session: "AsyncSession") -> None:
+    def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
     async def append(
@@ -113,9 +113,7 @@ class LedgerWriter:
         await self._session.flush()
         return event
 
-    async def _lock_or_create_head(
-        self, *, project_id: UUID | None
-    ) -> LedgerChainHead:
+    async def _lock_or_create_head(self, *, project_id: UUID | None) -> LedgerChainHead:
         if project_id is None:
             stmt = (
                 select(LedgerChainHead)

@@ -69,9 +69,7 @@ def upgrade() -> None:
         sa.Column("project_id", postgresql.UUID(as_uuid=True), nullable=False, index=True),
         sa.Column("card_id", postgresql.UUID(as_uuid=True), nullable=False, index=True),
         sa.Column("version_no", sa.Integer(), nullable=False),
-        sa.Column(
-            "a2ui_payload_jsonb", postgresql.JSONB(), nullable=False
-        ),
+        sa.Column("a2ui_payload_jsonb", postgresql.JSONB(), nullable=False),
         sa.Column(
             "data_model_jsonb",
             postgresql.JSONB(),
@@ -169,9 +167,7 @@ def upgrade() -> None:
             sa.Column("body_md", sa.Text(), nullable=False, server_default=""),
             sa.Column("anchor", sa.String(255), nullable=True),
         ),
-        sa.UniqueConstraint(
-            "note_id", "ordinal", name="uq_note_sections_note_ord"
-        ),
+        sa.UniqueConstraint("note_id", "ordinal", name="uq_note_sections_note_ord"),
     )
 
 
@@ -179,12 +175,8 @@ def downgrade() -> None:
     op.drop_table("note_sections")
     op.drop_table("notes")
     op.drop_table("card_actions")
-    op.execute(
-        "DROP TRIGGER IF EXISTS card_versions_no_update ON interactive_card_versions"
-    )
-    op.execute(
-        "DROP TRIGGER IF EXISTS card_versions_no_delete ON interactive_card_versions"
-    )
+    op.execute("DROP TRIGGER IF EXISTS card_versions_no_update ON interactive_card_versions")
+    op.execute("DROP TRIGGER IF EXISTS card_versions_no_delete ON interactive_card_versions")
     op.execute("DROP FUNCTION IF EXISTS card_versions_immutable")
     op.drop_table("interactive_card_versions")
     op.drop_table("interactive_cards")

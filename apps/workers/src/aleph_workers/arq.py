@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 import redis.asyncio as aioredis
@@ -22,7 +22,6 @@ from aleph_observability import (
     shutdown_otel,
 )
 from aleph_rks.asset_store import AssetStore
-
 from aleph_workers.jobs import (
     aiq_synthesis_poll_job,
     assistant_turn_job,
@@ -102,7 +101,7 @@ def _redis_from_url(url: str) -> RedisSettings:
 
 
 class WorkerSettings:
-    functions = [
+    functions: ClassVar = [
         smoke_llm_job,
         normalize_job,
         chunk_embed_job,

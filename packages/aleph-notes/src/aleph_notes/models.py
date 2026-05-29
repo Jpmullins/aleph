@@ -19,9 +19,7 @@ class Note(CommonColumns, Base):
 
 class NoteSection(CommonColumns, Base):
     __tablename__ = "note_sections"
-    __table_args__ = (
-        UniqueConstraint("note_id", "ordinal", name="uq_note_sections_note_ord"),
-    )
+    __table_args__ = (UniqueConstraint("note_id", "ordinal", name="uq_note_sections_note_ord"),)
 
     project_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     note_id: Mapped[UUID] = mapped_column(nullable=False, index=True)

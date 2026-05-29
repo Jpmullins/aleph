@@ -10,12 +10,11 @@ from fastapi import APIRouter, Body, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
+from aleph_api.deps import PrincipalDep, SessionDep
+from aleph_api.middleware.project_scope import ProjectScopeDep
 from aleph_security.roles import ProjectRole, require_at_least
 from aleph_wiki.feedback_service import pending_for_concept, write_feedback
 from aleph_wiki.models import RejectionFeedback
-
-from aleph_api.deps import PrincipalDep, SessionDep
-from aleph_api.middleware.project_scope import ProjectScopeDep
 
 router = APIRouter(prefix="/v1/projects", tags=["wiki-feedback"])
 
@@ -74,9 +73,7 @@ async def list_feedback(
     concept_name: Annotated[str | None, Query()] = None,
 ) -> list[RejectionFeedbackOut]:
     if concept_name:
-        rows = await pending_for_concept(
-            session, project_id=project_id, concept_name=concept_name
-        )
+        rows = await pending_for_concept(session, project_id=project_id, concept_name=concept_name)
         return [RejectionFeedbackOut.model_validate(r) for r in rows]
     stmt = (
         select(RejectionFeedback)

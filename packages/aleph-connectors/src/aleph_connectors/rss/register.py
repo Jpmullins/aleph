@@ -39,9 +39,7 @@ class RSSConnector:
     def __init__(self, *, http_client: httpx.AsyncClient | None = None) -> None:
         self._http = http_client or httpx.AsyncClient(timeout=20.0)
 
-    async def search(
-        self, ctx: ConnectorContext, query: SearchQuery
-    ) -> list[ConnectorResult]:
+    async def search(self, ctx: ConnectorContext, query: SearchQuery) -> list[ConnectorResult]:
         feed_url = (query.extra or {}).get("feed_url")
         if not feed_url:
             msg = "RSS connector requires extra['feed_url']"
@@ -76,9 +74,7 @@ class RSSConnector:
             )
         return out
 
-    async def fetch(
-        self, ctx: ConnectorContext, result: ConnectorResult
-    ) -> RawPayload:
+    async def fetch(self, ctx: ConnectorContext, result: ConnectorResult) -> RawPayload:
         url = result.url
         if not url:
             msg = "rss fetch requires a url"

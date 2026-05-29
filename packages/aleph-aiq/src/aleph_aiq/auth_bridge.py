@@ -65,9 +65,7 @@ def issue_service_token(
 
 def verify_service_token(token: str, *, secret: str) -> AIQServiceToken:
     try:
-        claims = jwt.decode(
-            token, secret, algorithms=["HS256"], audience=_AUD, issuer=_ISS
-        )
+        claims = jwt.decode(token, secret, algorithms=["HS256"], audience=_AUD, issuer=_ISS)
     except JWTError as exc:
         msg = f"invalid aiq service token: {exc}"
         raise PermissionDenied(msg) from exc

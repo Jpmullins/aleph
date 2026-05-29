@@ -242,9 +242,7 @@ def finding_card(p: FindingCardProps, *, card_id: str | None = None) -> dict[str
     )
 
 
-def hypothesis_card(
-    p: HypothesisCardProps, *, card_id: str | None = None
-) -> dict[str, Any]:
+def hypothesis_card(p: HypothesisCardProps, *, card_id: str | None = None) -> dict[str, Any]:
     return _card(
         "HypothesisCard",
         card_id=card_id,
@@ -258,9 +256,7 @@ def hypothesis_card(
     )
 
 
-def notebook_cell_card(
-    p: NotebookCellCardProps, *, card_id: str | None = None
-) -> dict[str, Any]:
+def notebook_cell_card(p: NotebookCellCardProps, *, card_id: str | None = None) -> dict[str, Any]:
     return _card(
         "NotebookCellCard",
         card_id=card_id,

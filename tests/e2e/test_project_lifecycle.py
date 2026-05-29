@@ -12,6 +12,8 @@ This test:
 
 from __future__ import annotations
 
+import itertools
+
 import pytest
 from sqlalchemy import select
 
@@ -87,5 +89,5 @@ async def test_project_create_and_ledger(http_client, auth_bypass, asgi_app):
     assert "project_member.add" in kinds
 
     # Chain continuity within this project's events.
-    for prev, curr in zip(rows, rows[1:], strict=False):
+    for prev, curr in itertools.pairwise(rows):
         assert curr.prev_event_id == prev.id

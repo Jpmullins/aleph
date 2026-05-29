@@ -91,20 +91,14 @@ async def test_smoke_llm_writes_model_call_and_cost_ledger(
     maker = asgi_app.state.session_maker
     async with maker() as session:
         calls = list(
-            (
-                await session.execute(
-                    select(ModelCall).where(ModelCall.project_id == pid)
-                )
-            )
+            (await session.execute(select(ModelCall).where(ModelCall.project_id == pid)))
             .scalars()
             .all()
         )
         events = list(
             (
                 await session.execute(
-                    select(CostLedgerEvent).where(
-                        CostLedgerEvent.project_id == pid
-                    )
+                    select(CostLedgerEvent).where(CostLedgerEvent.project_id == pid)
                 )
             )
             .scalars()

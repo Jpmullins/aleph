@@ -8,7 +8,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, status
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
 
+from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
+from aleph_api.middleware.project_scope import ProjectScopeDep
 from aleph_core.errors import NotFound
 from aleph_hypotheses.hypothesis_service import (
     add_evidence,
@@ -22,10 +25,6 @@ from aleph_hypotheses.models import (
     HypothesisVersion,
 )
 from aleph_security.roles import ProjectRole, require_at_least
-from sqlalchemy import select
-
-from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
-from aleph_api.middleware.project_scope import ProjectScopeDep
 
 router = APIRouter(prefix="/v1/projects", tags=["hypotheses"])
 
@@ -55,9 +54,7 @@ class HypothesisUpdateIn(BaseModel):
 
 class EvidenceIn(BaseModel):
     stance: str = Field(pattern=r"^(supports|contradicts|contextualizes)$")
-    evidence_kind: str = Field(
-        pattern=r"^(claim|source_page|chunk|finding|other_hypothesis)$"
-    )
+    evidence_kind: str = Field(pattern=r"^(claim|source_page|chunk|finding|other_hypothesis)$")
     target_id: UUID
     weight: float = Field(default=1.0, ge=0, le=10.0)
     note: str = Field(default="", max_length=2048)
@@ -76,9 +73,7 @@ class EvidenceOut(BaseModel):
 
 
 @router.get("/{project_id}/hypotheses", response_model=list[HypothesisOut])
-async def get_hypotheses(
-    project_id: ProjectScopeDep, session: SessionDep
-) -> list[HypothesisOut]:
+async def get_hypotheses(project_id: ProjectScopeDep, session: SessionDep) -> list[HypothesisOut]:
     rows = await list_hypotheses(session, project_id=project_id)
     return [HypothesisOut.model_validate(r) for r in rows]
 
@@ -113,9 +108,7 @@ class AchMatrixOut(BaseModel):
 
 
 @router.get("/{project_id}/hypotheses/ach", response_model=AchMatrixOut)
-async def get_ach_matrix(
-    project_id: ProjectScopeDep, session: SessionDep
-) -> AchMatrixOut:
+async def get_ach_matrix(project_id: ProjectScopeDep, session: SessionDep) -> AchMatrixOut:
     """Analysis of Competing Hypotheses matrix.
 
     Columns = hypotheses, rows = distinct evidence targets, cells = the stance
@@ -214,9 +207,7 @@ async def get_one(
     hypothesis_id: UUID,
     session: SessionDep,
 ) -> HypothesisOut:
-    h = await get_hypothesis(
-        session, project_id=project_id, hypothesis_id=hypothesis_id
-    )
+    h = await get_hypothesis(session, project_id=project_id, hypothesis_id=hypothesis_id)
     if h is None:
         msg = f"hypothesis {hypothesis_id} not found"
         raise NotFound(msg)
@@ -236,9 +227,7 @@ async def patch_hypothesis(
     principal: PrincipalDep,
 ) -> HypothesisOut:
     require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
-    h = await get_hypothesis(
-        session, project_id=project_id, hypothesis_id=hypothesis_id
-    )
+    h = await get_hypothesis(session, project_id=project_id, hypothesis_id=hypothesis_id)
     if h is None:
         msg = f"hypothesis {hypothesis_id} not found"
         raise NotFound(msg)

@@ -28,16 +28,16 @@ if TYPE_CHECKING:
     from aleph_security.principal import Principal
 
 
-async def _next_short_id(session: "AsyncSession") -> str:
+async def _next_short_id(session: AsyncSession) -> str:
     n = (await session.execute(select(func.count()).select_from(Hypothesis))).scalar_one()
     return f"H{int(n) + 1:04d}"
 
 
 async def create_hypothesis(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
-    ledger: "LedgerWriter",
-    principal: "Principal",
+    ledger: LedgerWriter,
+    principal: Principal,
     project_id: UUID,
     title: str,
     statement: str,
@@ -90,7 +90,7 @@ async def create_hypothesis(
 
 
 async def get_hypothesis(
-    session: "AsyncSession", *, project_id: UUID, hypothesis_id: UUID
+    session: AsyncSession, *, project_id: UUID, hypothesis_id: UUID
 ) -> Hypothesis | None:
     return (
         await session.execute(
@@ -102,9 +102,7 @@ async def get_hypothesis(
     ).scalar_one_or_none()
 
 
-async def list_hypotheses(
-    session: "AsyncSession", *, project_id: UUID
-) -> list[Hypothesis]:
+async def list_hypotheses(session: AsyncSession, *, project_id: UUID) -> list[Hypothesis]:
     stmt = (
         select(Hypothesis)
         .where(Hypothesis.project_id == project_id)
@@ -114,10 +112,10 @@ async def list_hypotheses(
 
 
 async def record_version(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
-    ledger: "LedgerWriter",
-    principal: "Principal",
+    ledger: LedgerWriter,
+    principal: Principal,
     hypothesis: Hypothesis,
     statement: str,
     confidence: str,
@@ -128,8 +126,9 @@ async def record_version(
         raise ValidationFailed(msg)
     max_no = (
         await session.execute(
-            select(func.coalesce(func.max(HypothesisVersion.version_no), 0))
-            .where(HypothesisVersion.hypothesis_id == hypothesis.id)
+            select(func.coalesce(func.max(HypothesisVersion.version_no), 0)).where(
+                HypothesisVersion.hypothesis_id == hypothesis.id
+            )
         )
     ).scalar_one()
     new_no = int(max_no) + 1
@@ -171,10 +170,10 @@ async def record_version(
 
 
 async def add_evidence(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
-    ledger: "LedgerWriter",
-    principal: "Principal",
+    ledger: LedgerWriter,
+    principal: Principal,
     hypothesis_id: UUID,
     stance: str,
     evidence_kind: str,
@@ -214,11 +213,11 @@ async def add_evidence(
     all_ev = list(
         (
             await session.execute(
-                select(HypothesisEvidence).where(
-                    HypothesisEvidence.hypothesis_id == hypothesis_id
-                )
+                select(HypothesisEvidence).where(HypothesisEvidence.hypothesis_id == hypothesis_id)
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     new_conf = next_confidence_from_evidence(
         [EvidenceRow(stance=e.stance, weight=e.weight) for e in all_ev]

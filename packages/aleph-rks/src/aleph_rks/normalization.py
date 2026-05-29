@@ -81,7 +81,7 @@ class PyPDFNormalizer:
         for page in reader.pages:
             try:
                 text = page.extract_text() or ""
-            except Exception:  # noqa: BLE001
+            except Exception:
                 text = ""
             pages_text.append(text)
             total_chars += len(text)
@@ -112,7 +112,6 @@ class PDFMinerNormalizer:
 
     def __init__(self) -> None:
         import pdfminer  # noqa: F401
-
         from pdfminer import __version__ as v
 
         self.parser_version = f"pdfminer.six@{v}"
@@ -224,9 +223,7 @@ class HtmlNormalizer:
     def __init__(self) -> None:
         import readability
 
-        self.parser_version = (
-            f"readability-lxml@{getattr(readability, '__version__', 'unknown')}"
-        )
+        self.parser_version = f"readability-lxml@{getattr(readability, '__version__', 'unknown')}"
 
     def normalize(self, data: bytes) -> NormalizationResult:
         from bs4 import BeautifulSoup
@@ -325,7 +322,6 @@ class EpubNormalizer:
 
     def __init__(self) -> None:
         import ebooklib  # noqa: F401
-
         from ebooklib import __version__ as v
 
         self.parser_version = f"ebooklib@{v}"
@@ -385,15 +381,13 @@ class EpubNormalizer:
 
 
 def normalizer_for(mime_type: str) -> Normalizer:
-    mt = mime_type.split(";")[0].strip().lower()
+    mt = mime_type.split(";", maxsplit=1)[0].strip().lower()
     if mt == "application/pdf":
         try:
             return PyPDFNormalizer()
         except NormalizationFailed:
             return PDFMinerNormalizer()
-    if mt == (
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    ):
+    if mt == ("application/vnd.openxmlformats-officedocument.wordprocessingml.document"):
         return DocxNormalizer()
     if mt in {"text/html", "application/xhtml+xml"}:
         return HtmlNormalizer()
@@ -412,7 +406,7 @@ def normalize_bytes(data: bytes, mime_type: str) -> NormalizationResult:
     try:
         return primary.normalize(data)
     except NormalizationFailed:
-        if mime_type.split(";")[0].strip().lower() == "application/pdf":
+        if mime_type.split(";", maxsplit=1)[0].strip().lower() == "application/pdf":
             return PDFMinerNormalizer().normalize(data)
         raise
 

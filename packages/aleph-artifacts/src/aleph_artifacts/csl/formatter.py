@@ -49,11 +49,7 @@ def format_bibliography(
 
     bib_source = CiteProcJSON(items)
     bib_style = CitationStylesStyle(str(style_path), validate=False)
-    fmt = (
-        formatter.html
-        if output == "html"
-        else formatter.plain
-    )
+    fmt = formatter.html if output == "html" else formatter.plain
     bib = CitationStylesBibliography(bib_style, bib_source, fmt)
     # Register all items so citation order is stable.
     for item in items:

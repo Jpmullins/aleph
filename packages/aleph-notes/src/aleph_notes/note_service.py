@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 
 async def create_note(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
     project_id: UUID,
     title: str,
@@ -34,24 +34,16 @@ async def create_note(
     return n
 
 
-async def list_notes(
-    session: "AsyncSession", *, project_id: UUID
-) -> list[Note]:
-    stmt = (
-        select(Note)
-        .where(Note.project_id == project_id)
-        .order_by(Note.created_at.desc())
-    )
+async def list_notes(session: AsyncSession, *, project_id: UUID) -> list[Note]:
+    stmt = select(Note).where(Note.project_id == project_id).order_by(Note.created_at.desc())
     return list((await session.execute(stmt)).scalars().all())
 
 
 async def get_note(
-    session: "AsyncSession", *, project_id: UUID, note_id: UUID
+    session: AsyncSession, *, project_id: UUID, note_id: UUID
 ) -> tuple[Note, list[NoteSection]] | None:
     note = (
-        await session.execute(
-            select(Note).where(Note.id == note_id, Note.project_id == project_id)
-        )
+        await session.execute(select(Note).where(Note.id == note_id, Note.project_id == project_id))
     ).scalar_one_or_none()
     if note is None:
         return None
@@ -70,7 +62,7 @@ async def get_note(
 
 
 async def create_section(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
     project_id: UUID,
     note_id: UUID,
@@ -80,8 +72,9 @@ async def create_section(
 ) -> NoteSection:
     next_ord = (
         await session.execute(
-            select(func.coalesce(func.max(NoteSection.ordinal), -1))
-            .where(NoteSection.note_id == note_id)
+            select(func.coalesce(func.max(NoteSection.ordinal), -1)).where(
+                NoteSection.note_id == note_id
+            )
         )
     ).scalar_one() + 1
     s = NoteSection(
@@ -100,7 +93,7 @@ async def create_section(
 
 
 async def update_section(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
     project_id: UUID,
     section_id: UUID,

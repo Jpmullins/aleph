@@ -8,7 +8,6 @@ Higher-fidelity backends (Prince) are pluggable by passing a different
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
 
 _DEFAULT_CSS = """
 @page { size: A4; margin: 22mm 18mm 22mm 18mm; }

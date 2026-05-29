@@ -724,7 +724,7 @@ def _psycopg_conn_string(database_url: str) -> str:
 
 def build_agent_store(
     *, database_url: str
-) -> tuple["AsyncConnectionPool[AsyncConnection[DictRow]]", "AsyncPostgresStore"]:
+) -> tuple[AsyncConnectionPool[AsyncConnection[DictRow]], AsyncPostgresStore]:
     """Build the Postgres-backed langgraph store for cross-session agent memory.
 
     Returns an *unopened* `(pool, store)` pair: the caller (the FastAPI lifespan)
@@ -852,7 +852,7 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
         project_id: UUID | None = None
         try:
             cfg = get_config()
-        except Exception:  # noqa: BLE001 — resilient: never crash a store op on config
+        except Exception:
             cfg = None
         if cfg is not None:
             configurable = cfg.get("configurable") or {}

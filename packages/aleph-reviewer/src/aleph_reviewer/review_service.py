@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 
 async def start_run(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
     project_id: UUID,
     kind: str,
@@ -46,7 +46,7 @@ async def start_run(
 
 
 async def add_finding(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
     review_run_id: UUID,
     project_id: UUID,
@@ -90,7 +90,7 @@ async def add_finding(
 
 
 async def finalize_run(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
     run_id: UUID,
     status: str,
@@ -106,7 +106,7 @@ async def finalize_run(
 
 
 async def list_findings(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
     project_id: UUID,
     status_filter: str | None = None,

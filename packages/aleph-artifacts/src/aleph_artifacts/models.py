@@ -26,9 +26,7 @@ class RenderedAsset(CommonColumns, Base):
     source_kind: Mapped[str] = mapped_column(String(32), nullable=False)
     source_id: Mapped[UUID] = mapped_column(nullable=False)
     source_version_id: Mapped[UUID | None] = mapped_column(nullable=True)
-    dataset_version_ids: Mapped[list] = mapped_column(
-        JSONB, nullable=False, server_default="[]"
-    )
+    dataset_version_ids: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
     output_format: Mapped[str] = mapped_column(String(16), nullable=False)
     storage_uri: Mapped[str] = mapped_column(String(1024), nullable=False)
     width_px: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -51,11 +49,7 @@ class Artifact(CommonColumns, Base):
 
 class ArtifactVersion(Base):
     __tablename__ = "artifact_versions"
-    __table_args__ = (
-        UniqueConstraint(
-            "artifact_id", "version_no", name="uq_artifact_version_no"
-        ),
-    )
+    __table_args__ = (UniqueConstraint("artifact_id", "version_no", name="uq_artifact_version_no"),)
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
     project_id: Mapped[UUID] = mapped_column(nullable=False, index=True)

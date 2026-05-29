@@ -27,9 +27,7 @@ class ErrorMiddleware(BaseHTTPMiddleware):
                 "detail": "An unexpected error occurred.",
                 "instance": str(request.url.path),
             }
-            return JSONResponse(
-                body, status_code=500, media_type="application/problem+json"
-            )
+            return JSONResponse(body, status_code=500, media_type="application/problem+json")
 
 
 def _problem(exc: AlephError, request: Request) -> Response:
@@ -43,6 +41,4 @@ def _problem(exc: AlephError, request: Request) -> Response:
     }
     if exc.detail:
         body["details"] = exc.detail
-    return JSONResponse(
-        body, status_code=status, media_type="application/problem+json"
-    )
+    return JSONResponse(body, status_code=status, media_type="application/problem+json")

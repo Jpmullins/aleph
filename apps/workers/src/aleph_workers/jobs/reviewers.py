@@ -44,9 +44,7 @@ async def mechanical_review_job(
     # correlation_id is unique-constrained).
     async with maker() as session:
         existing = (
-            await session.execute(
-                select(AgentRun).where(AgentRun.id == claims.agent_run_id)
-            )
+            await session.execute(select(AgentRun).where(AgentRun.id == claims.agent_run_id))
         ).scalar_one_or_none()
         if existing is not None:
             existing.status = "running"
@@ -72,9 +70,7 @@ async def mechanical_review_job(
             agent_run_id = run.id
         await session.commit()
 
-    workflow = MechanicalReviewerWorkflow(
-        session_maker=maker, principal=principal
-    )
+    workflow = MechanicalReviewerWorkflow(session_maker=maker, principal=principal)
     n = await workflow.run(
         project_id=project_id,
         revision_id=revision_id,
@@ -114,9 +110,7 @@ async def editorial_review_job(
 
     async with maker() as session:
         profile = (
-            await session.execute(
-                select(ModelProfile).where(ModelProfile.project_id == project_id)
-            )
+            await session.execute(select(ModelProfile).where(ModelProfile.project_id == project_id))
         ).scalar_one_or_none()
         if profile is None:
             msg = f"no profile for project {project_id}"

@@ -5,18 +5,16 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Query, Request
+from fastapi import APIRouter, Body, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from aleph_api.deps import LiteLLMDep, PrincipalDep, SessionDep
+from aleph_api.middleware.project_scope import ProjectScopeDep
 from aleph_core.errors import NotFound, ValidationFailed
-from aleph_core.schemas.model_profile import Capability
 from aleph_db.repos import model_profile as profile_repo
 from aleph_rks.models import DocumentChunk, Source
 from aleph_rks.retrieval import descend_into_source
-
-from aleph_api.deps import LiteLLMDep, PrincipalDep, SessionDep
-from aleph_api.middleware.project_scope import ProjectScopeDep
 
 router = APIRouter(prefix="/v1/projects", tags=["chunks"])
 
@@ -29,9 +27,7 @@ class ChunkOut(BaseModel):
     token_count: int
 
 
-@router.get(
-    "/{project_id}/sources/{source_id}/chunks", response_model=list[ChunkOut]
-)
+@router.get("/{project_id}/sources/{source_id}/chunks", response_model=list[ChunkOut])
 async def list_chunks(
     project_id: ProjectScopeDep,
     source_id: UUID,
@@ -41,9 +37,7 @@ async def list_chunks(
 ) -> list[ChunkOut]:
     src = (
         await session.execute(
-            select(Source).where(
-                Source.id == source_id, Source.project_id == project_id
-            )
+            select(Source).where(Source.id == source_id, Source.project_id == project_id)
         )
     ).scalar_one_or_none()
     if src is None:
@@ -96,9 +90,7 @@ async def search_chunks(
 ) -> list[ChunkSearchHitOut]:
     src = (
         await session.execute(
-            select(Source).where(
-                Source.id == source_id, Source.project_id == project_id
-            )
+            select(Source).where(Source.id == source_id, Source.project_id == project_id)
         )
     ).scalar_one_or_none()
     if src is None:

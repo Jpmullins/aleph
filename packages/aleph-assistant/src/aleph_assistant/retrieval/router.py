@@ -13,7 +13,6 @@ path (1→3) is wiki-page-selection + wikilink-graph traversal.
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -30,7 +29,7 @@ from aleph_wiki.index_service import IndexService, PageSelectionResult
 from aleph_wiki.models import WikiPage, WikiRevision
 
 if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from aleph_assistant.models import AssistantMessage
     from aleph_db.models.model_profile import ModelProfile
@@ -101,9 +100,7 @@ class RetrievalResult:
     descent_chunks: list[DescentChunk]
     descent_requests: list[DescentRequest]
     synthesis_requests: list[SynthesisRequest]
-    coverage_judgment: Literal[
-        "ok", "descent_needed", "synthesis_needed", "descent_used"
-    ]
+    coverage_judgment: Literal["ok", "descent_needed", "synthesis_needed", "descent_used"]
     composed_body_md: str
     page_selection_reason: str
     truncated_pages: list[str] = field(default_factory=list)
@@ -118,8 +115,8 @@ class WikiFirstRetrievalRouter:
     def __init__(
         self,
         *,
-        session_maker: "async_sessionmaker[AsyncSession]",
-        litellm: "LiteLLMClient",
+        session_maker: async_sessionmaker[AsyncSession],
+        litellm: LiteLLMClient,
     ) -> None:
         self._maker = session_maker
         self._litellm = litellm
@@ -127,12 +124,12 @@ class WikiFirstRetrievalRouter:
     async def retrieve(
         self,
         *,
-        principal: "Principal",
+        principal: Principal,
         project_id: UUID,
         thread_id: UUID,
         query: str,
-        prior_messages: list["AssistantMessage"],
-        profile: "ModelProfile",
+        prior_messages: list[AssistantMessage],
+        profile: ModelProfile,
         agent_run_id: UUID | None,
         top_k_pages: int = 8,
         descent_budget_chunks: int = 12,
@@ -206,9 +203,7 @@ class WikiFirstRetrievalRouter:
 
             # Step 4 — descent if requested.
             descent_chunks: list[DescentChunk] = []
-            coverage: Literal[
-                "ok", "descent_needed", "synthesis_needed", "descent_used"
-            ]
+            coverage: Literal["ok", "descent_needed", "synthesis_needed", "descent_used"]
             if composer_out["descent_requests"]:
                 descent_chunks = await self._do_descent(
                     principal=principal,
@@ -259,12 +254,12 @@ class WikiFirstRetrievalRouter:
     async def _select_pages_llm(
         self,
         *,
-        principal: "Principal",
+        principal: Principal,
         project_id: UUID,
         agent_run_id: UUID | None,
         profile_bindings: dict,
         query: str,
-        prior_messages: list["AssistantMessage"],
+        prior_messages: list[AssistantMessage],
         candidates: list[PageSelectionResult],
         top_k: int,
     ) -> _SelectionOutcome:
@@ -277,9 +272,7 @@ class WikiFirstRetrievalRouter:
                 "title": c.title,
                 "slug": c.slug,
                 "summary": c.summary,
-                "wikilinks_out": [
-                    w.get("dst_title") for w in (c.wikilinks_out or [])[:5]
-                ],
+                "wikilinks_out": [w.get("dst_title") for w in (c.wikilinks_out or [])[:5]],
                 "score": c.score,
                 "page_kind": c.page_kind,
                 "is_stub": c.is_stub,
@@ -422,12 +415,12 @@ class WikiFirstRetrievalRouter:
     async def _compose(
         self,
         *,
-        principal: "Principal",
+        principal: Principal,
         project_id: UUID,
         agent_run_id: UUID | None,
         profile_bindings: dict,
         query: str,
-        prior_messages: list["AssistantMessage"],
+        prior_messages: list[AssistantMessage],
         selected: list[SelectedPage],
         expanded: list[ExpandedPage],
         descent_chunks: list[DescentChunk],
@@ -462,9 +455,7 @@ class WikiFirstRetrievalRouter:
             }
             for d in descent_chunks
         ]
-        recent = [
-            {"role": m.role, "body": m.body_md[:1500]} for m in prior_messages[-8:]
-        ]
+        recent = [{"role": m.role, "body": m.body_md[:1500]} for m in prior_messages[-8:]]
 
         payload = json.dumps(
             {
@@ -509,9 +500,7 @@ class WikiFirstRetrievalRouter:
             sid = r.get("source_short_id")
             q = r.get("query_within_source")
             if isinstance(sid, str) and isinstance(q, str) and sid.strip() and q.strip():
-                descent.append(
-                    DescentRequest(source_short_id=sid.strip(), query_within_source=q)
-                )
+                descent.append(DescentRequest(source_short_id=sid.strip(), query_within_source=q))
         synth: list[SynthesisRequest] = []
         for r in raw_s:
             if not isinstance(r, dict):
@@ -529,7 +518,7 @@ class WikiFirstRetrievalRouter:
     async def _do_descent(
         self,
         *,
-        principal: "Principal",
+        principal: Principal,
         project_id: UUID,
         agent_run_id: UUID | None,
         profile_bindings: dict,
@@ -617,9 +606,7 @@ def _safe_json(content: str) -> Any:
         return {}
 
 
-async def _hydrate_bodies(
-    session: "AsyncSession", page_ids: set[UUID]
-) -> dict[UUID, str]:
+async def _hydrate_bodies(session: AsyncSession, page_ids: set[UUID]) -> dict[UUID, str]:
     if not page_ids:
         return {}
     page_stmt = select(WikiPage).where(WikiPage.id.in_(page_ids))

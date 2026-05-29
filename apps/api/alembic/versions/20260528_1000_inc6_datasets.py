@@ -56,9 +56,7 @@ def upgrade() -> None:
         *_common(
             sa.Column("project_id", postgresql.UUID(as_uuid=True), nullable=False, index=True),
             sa.Column("name", sa.String(255), nullable=False),
-            sa.Column(
-                "description", sa.Text(), nullable=False, server_default=""
-            ),
+            sa.Column("description", sa.Text(), nullable=False, server_default=""),
             sa.Column("dataset_kind", sa.String(32), nullable=False),
             sa.Column("source_connector_kind", sa.String(64), nullable=True),
             sa.Column("short_id", sa.String(16), nullable=False, unique=True),
@@ -106,9 +104,7 @@ def upgrade() -> None:
         sa.Column("author_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("trace_id", sa.String(128), nullable=True),
         sa.Column("ledger_event_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.UniqueConstraint(
-            "dataset_id", "version_no", name="uq_dataset_version_no"
-        ),
+        sa.UniqueConstraint("dataset_id", "version_no", name="uq_dataset_version_no"),
     )
     op.execute(
         """

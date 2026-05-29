@@ -8,11 +8,10 @@ from uuid import UUID
 from fastapi import APIRouter, status
 from pydantic import BaseModel, ConfigDict
 
-from aleph_security.roles import ProjectRole, require_at_least
-from aleph_wiki.handedit_service import clear_section, mark_section
-
 from aleph_api.deps import PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
+from aleph_security.roles import ProjectRole, require_at_least
+from aleph_wiki.handedit_service import clear_section, mark_section
 
 router = APIRouter(prefix="/v1/projects", tags=["wiki-handedits"])
 

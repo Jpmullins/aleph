@@ -39,16 +39,10 @@ class WikiPage(CommonColumns, Base):
     project_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     slug: Mapped[str] = mapped_column(String(512), nullable=False)
-    page_kind: Mapped[str] = mapped_column(
-        String(16), nullable=False, server_default="topic"
-    )
+    page_kind: Mapped[str] = mapped_column(String(16), nullable=False, server_default="topic")
     current_revision_id: Mapped[UUID | None] = mapped_column(nullable=True)
-    is_stub: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default="false"
-    )
-    status: Mapped[str] = mapped_column(
-        String(32), nullable=False, server_default="draft"
-    )
+    is_stub: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="draft")
     last_compiled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -58,9 +52,7 @@ class WikiRevision(Base):
     """Immutable wiki revision. Triggers in the Inc 1 migration reject UPDATE/DELETE."""
 
     __tablename__ = "wiki_revisions"
-    __table_args__ = (
-        UniqueConstraint("page_id", "revision_no", name="uq_wiki_rev_page_no"),
-    )
+    __table_args__ = (UniqueConstraint("page_id", "revision_no", name="uq_wiki_rev_page_no"),)
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
     page_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
@@ -72,9 +64,7 @@ class WikiRevision(Base):
     author_id: Mapped[UUID] = mapped_column(nullable=False)
     parent_revision_id: Mapped[UUID | None] = mapped_column(nullable=True)
     body_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    commit_message: Mapped[str] = mapped_column(
-        String(2048), nullable=False, server_default=""
-    )
+    commit_message: Mapped[str] = mapped_column(String(2048), nullable=False, server_default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -113,9 +103,7 @@ class WikiLink(Base):
     src_revision_id: Mapped[UUID] = mapped_column(nullable=False)
     dst_page_id: Mapped[UUID | None] = mapped_column(nullable=True, index=True)
     dst_title: Mapped[str] = mapped_column(String(512), nullable=False)
-    occurrences: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="1"
-    )
+    occurrences: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
 
 class WikiClaim(CommonColumns, Base):
@@ -126,12 +114,8 @@ class WikiClaim(CommonColumns, Base):
     revision_id: Mapped[UUID] = mapped_column(nullable=False)
     section_anchor: Mapped[str | None] = mapped_column(String(512), nullable=True)
     text: Mapped[str] = mapped_column(String(2048), nullable=False)
-    confidence: Mapped[str] = mapped_column(
-        String(16), nullable=False, server_default="cited"
-    )
-    status: Mapped[str] = mapped_column(
-        String(16), nullable=False, server_default="active"
-    )
+    confidence: Mapped[str] = mapped_column(String(16), nullable=False, server_default="cited")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="active")
 
 
 class Citation(Base):
@@ -155,20 +139,14 @@ class SourcePage(Base):
     project_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     source_id: Mapped[UUID] = mapped_column(nullable=False, unique=True)
     page_id: Mapped[UUID] = mapped_column(nullable=False, unique=True)
-    extracted_claims_jsonb: Mapped[list] = mapped_column(
-        JSONB, nullable=False, server_default="[]"
-    )
-    extracted_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    extracted_claims_jsonb: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class Alias(CommonColumns, Base):
     __tablename__ = "aliases"
     __table_args__ = (
-        UniqueConstraint(
-            "project_id", "surface_form", name="uq_aliases_project_surface"
-        ),
+        UniqueConstraint("project_id", "surface_form", name="uq_aliases_project_surface"),
         Index("ix_aliases_project_canonical", "project_id", "canonical_name"),
     )
 
@@ -176,9 +154,7 @@ class Alias(CommonColumns, Base):
     surface_form: Mapped[str] = mapped_column(String(512), nullable=False)
     canonical_name: Mapped[str] = mapped_column(String(512), nullable=False)
     canonical_page_id: Mapped[UUID | None] = mapped_column(nullable=True)
-    confidence: Mapped[float] = mapped_column(
-        Float, nullable=False, server_default="1.0"
-    )
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, server_default="1.0")
 
 
 class HandEditMark(CommonColumns, Base):
@@ -195,13 +171,9 @@ class HandEditMark(CommonColumns, Base):
     page_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     section_anchor: Mapped[str | None] = mapped_column(String(512), nullable=True)
     body_sha256_at_edit: Mapped[str] = mapped_column(String(64), nullable=False)
-    applied_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     applied_by: Mapped[UUID] = mapped_column(nullable=False)
-    cleared_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    cleared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     cleared_by: Mapped[UUID | None] = mapped_column(nullable=True)
 
 
@@ -214,9 +186,7 @@ class RejectionFeedback(CommonColumns, Base):
     rejected_revision_id: Mapped[UUID | None] = mapped_column(nullable=True)
     reason: Mapped[str] = mapped_column(String(4096), nullable=False)
     rejected_by: Mapped[UUID] = mapped_column(nullable=False)
-    rejected_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    rejected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     addressed_in_revision_id: Mapped[UUID | None] = mapped_column(nullable=True)
 
 
@@ -231,19 +201,11 @@ class WikiIndex(Base):
     project_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     slug: Mapped[str] = mapped_column(String(512), nullable=False)
-    aliases_jsonb: Mapped[list] = mapped_column(
-        JSONB, nullable=False, server_default="[]"
-    )
-    summary: Mapped[str] = mapped_column(
-        String(2048), nullable=False, server_default=""
-    )
-    wikilinks_out_jsonb: Mapped[list] = mapped_column(
-        JSONB, nullable=False, server_default="[]"
-    )
+    aliases_jsonb: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    summary: Mapped[str] = mapped_column(String(2048), nullable=False, server_default="")
+    wikilinks_out_jsonb: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
     page_kind: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     is_stub: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    indexed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    indexed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     index_tsv: Mapped[TSVECTOR] = mapped_column(TSVECTOR, nullable=False)

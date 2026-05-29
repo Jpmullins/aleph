@@ -34,7 +34,7 @@ class PageSelectionResult:
 
 
 class IndexService:
-    def __init__(self, session: "AsyncSession") -> None:
+    def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
     async def refresh_page(
@@ -45,9 +45,7 @@ class IndexService:
         summary: str | None = None,
     ) -> None:
         page = (
-            await self._session.execute(
-                select(WikiPage).where(WikiPage.id == page_id)
-            )
+            await self._session.execute(select(WikiPage).where(WikiPage.id == page_id))
         ).scalar_one_or_none()
         if page is None:
             return
@@ -57,8 +55,7 @@ class IndexService:
                 await self._session.execute(
                     select(Alias.surface_form).where(
                         Alias.project_id == project_id,
-                        (Alias.canonical_page_id == page_id)
-                        | (Alias.canonical_name == page.title),
+                        (Alias.canonical_page_id == page_id) | (Alias.canonical_name == page.title),
                     )
                 )
             )
@@ -71,9 +68,7 @@ class IndexService:
             link_rows = list(
                 (
                     await self._session.execute(
-                        select(WikiLink).where(
-                            WikiLink.src_revision_id == page.current_revision_id
-                        )
+                        select(WikiLink).where(WikiLink.src_revision_id == page.current_revision_id)
                     )
                 )
                 .scalars()
@@ -92,9 +87,7 @@ class IndexService:
         if summary is None and page.current_revision_id is not None:
             cur = (
                 await self._session.execute(
-                    select(WikiRevision).where(
-                        WikiRevision.id == page.current_revision_id
-                    )
+                    select(WikiRevision).where(WikiRevision.id == page.current_revision_id)
                 )
             ).scalar_one_or_none()
             summary = (cur.summary if cur else "") or ""
@@ -149,9 +142,7 @@ class IndexService:
             )
             .where(
                 WikiIndex.project_id == project_id,
-                WikiIndex.index_tsv.op("@@")(
-                    func.plainto_tsquery("english", query)
-                ),
+                WikiIndex.index_tsv.op("@@")(func.plainto_tsquery("english", query)),
             )
             .order_by(text("rank DESC"))
             .limit(top_k)

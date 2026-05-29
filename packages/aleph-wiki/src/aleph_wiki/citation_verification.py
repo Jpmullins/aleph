@@ -37,7 +37,7 @@ class CitationVerificationFailure(Exception):
         self.missing_markers = missing_markers
 
 
-def verify_citations(
+def verify_citations[T](
     *,
     body_md: str,
     source_registry: dict[str, T],
@@ -62,13 +62,8 @@ def verify_citations(
         else:
             verified[marker] = ref
     if missing:
-        msg = (
-            f"{len(missing)} citation marker(s) have no backing source: "
-            + ", ".join(missing)
-        )
-        raise CitationVerificationFailure(
-            msg, verified=verified, missing_markers=missing
-        )
+        msg = f"{len(missing)} citation marker(s) have no backing source: " + ", ".join(missing)
+        raise CitationVerificationFailure(msg, verified=verified, missing_markers=missing)
     return verified
 
 

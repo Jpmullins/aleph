@@ -12,6 +12,7 @@ mismatch via `RetrievalIndexRecord` and re-embeds the source's chunks.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -32,8 +33,8 @@ class EmbedBatchResult:
 
 async def embed_texts(
     *,
-    client: "LiteLLMClient",
-    principal: "Principal",
+    client: LiteLLMClient,
+    principal: Principal,
     project_id: UUID,
     agent_run_id: UUID | None,
     profile_bindings: dict,
@@ -63,10 +64,8 @@ async def embed_texts(
         )
         all_embeddings.extend(resp.embeddings)
         total_tokens += resp.input_tokens
-        try:
+        with contextlib.suppress(ValueError):
             total_cost += float(resp.cost_usd)
-        except ValueError:
-            pass
         model = resp.model
 
     return EmbedBatchResult(

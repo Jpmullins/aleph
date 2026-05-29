@@ -34,12 +34,8 @@ class Connector(CommonColumns, Base):
     kind: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     output_kind: Mapped[str] = mapped_column(String(16), nullable=False)
-    requires_auth: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default="false"
-    )
-    metadata_schema_jsonb: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, server_default="{}"
-    )
+    requires_auth: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    metadata_schema_jsonb: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
     enabled_by_default: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false"
     )
@@ -48,19 +44,13 @@ class Connector(CommonColumns, Base):
 class ConnectorBinding(CommonColumns, Base):
     __tablename__ = "connector_bindings"
     __table_args__ = (
-        UniqueConstraint(
-            "project_id", "connector_id", name="uq_binding_project_connector"
-        ),
+        UniqueConstraint("project_id", "connector_id", name="uq_binding_project_connector"),
     )
 
     project_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     connector_id: Mapped[UUID] = mapped_column(nullable=False)
-    enabled: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default="true"
-    )
-    config_jsonb: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, server_default="{}"
-    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    config_jsonb: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
 
 
 class Source(CommonColumns, Base):
@@ -75,30 +65,22 @@ class Source(CommonColumns, Base):
     external_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
-    source_metadata_jsonb: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, server_default="{}"
-    )
+    source_metadata_jsonb: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
     short_id: Mapped[str] = mapped_column(String(16), nullable=False, unique=True)
-    status: Mapped[str] = mapped_column(
-        String(32), nullable=False, server_default="ingested"
-    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="ingested")
     failure_reason: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     current_version_id: Mapped[UUID | None] = mapped_column(nullable=True)
 
 
 class SourceVersion(CommonColumns, Base):
     __tablename__ = "source_versions"
-    __table_args__ = (
-        UniqueConstraint("source_id", "version_no", name="uq_source_version_no"),
-    )
+    __table_args__ = (UniqueConstraint("source_id", "version_no", name="uq_source_version_no"),)
 
     source_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     version_no: Mapped[int] = mapped_column(Integer, nullable=False)
     asset_id: Mapped[UUID] = mapped_column(nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    fetched_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     parser_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     normalized_document_id: Mapped[UUID | None] = mapped_column(nullable=True)
 
@@ -124,12 +106,8 @@ class NormalizedDocument(CommonColumns, Base):
     parser_version: Mapped[str] = mapped_column(String(64), nullable=False)
     char_count: Mapped[int] = mapped_column(Integer, nullable=False)
     token_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    structure_jsonb: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, server_default="{}"
-    )
-    quality_flags_jsonb: Mapped[list] = mapped_column(
-        JSONB, nullable=False, server_default="[]"
-    )
+    structure_jsonb: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
+    quality_flags_jsonb: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
 
 
 class DocumentChunk(Base):
@@ -170,6 +148,4 @@ class RetrievalIndexRecord(CommonColumns, Base):
     source_id: Mapped[UUID] = mapped_column(nullable=False, unique=True)
     embedder_model: Mapped[str] = mapped_column(String(128), nullable=False)
     chunk_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    indexed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    indexed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

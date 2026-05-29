@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from langchain_core.runnables import (
-    RunnableConfig,  # noqa: TC002 — runtime import: @tool introspects this annotation to build the args schema
+    RunnableConfig,
 )
 from langchain_core.tools import tool
 
@@ -26,7 +26,7 @@ def build_researcher_subagent(*, settings: Any) -> dict[str, Any]:
     circular import (copilot_agent does not import this module at top level; the
     orchestrator builder calls this function at startup).
     """
-    from aleph_api.copilot_agent import (  # noqa: PLC0415 — function-local to break the copilot_agent ↔ subagents import cycle
+    from aleph_api.copilot_agent import (
         _start_research_impl,  # pyright: ignore[reportPrivateUsage] — shared dispatch body deliberately reused (DRY); module-private to the api
         subagent_model,
     )

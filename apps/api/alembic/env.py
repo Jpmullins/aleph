@@ -18,8 +18,8 @@ if TYPE_CHECKING:
     from sqlalchemy.sql.schema import SchemaItem
 
 # Import every model package so Base.metadata is populated.
-from aleph_db.base import Base
 import aleph_db.models  # noqa: F401  (registers tables with metadata)
+from aleph_db.base import Base
 
 # Inc 1: register the RKS and Wiki model trees.
 try:
@@ -37,7 +37,7 @@ except ImportError:
     pass
 # Inc 3: connectors + AIQ.
 try:
-    import aleph_connectors.credentials  # noqa: F401
+    import aleph_connectors.credentials
     import aleph_connectors.models  # noqa: F401
 except ImportError:
     pass
@@ -49,7 +49,7 @@ except ImportError:
     pass
 # Inc 5: reviewer + hypotheses + agent memory.
 try:
-    import aleph_core.agent_memory  # noqa: F401
+    import aleph_core.agent_memory
     import aleph_hypotheses.models  # noqa: F401
     import aleph_reviewer.models  # noqa: F401
 except ImportError:

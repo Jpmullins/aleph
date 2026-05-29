@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from aleph_rks.chunking import chunk_markdown
 
-
 SAMPLE = """# Methods
 
 ## Sample Selection

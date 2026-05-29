@@ -7,8 +7,8 @@ our framework set; the workflow contract here is the same.
 """
 
 from aleph_reviewer.editorial.workflow import (
-    EditorialReviewState,
     EditorialReviewerWorkflow,
+    EditorialReviewState,
 )
 
 __all__ = ["EditorialReviewState", "EditorialReviewerWorkflow"]

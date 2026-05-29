@@ -89,9 +89,7 @@ def upgrade() -> None:
             server_default="fixture",
         ),
         sa.Column("origin_ref_id", postgresql.UUID(as_uuid=True), nullable=True),
-        sa.UniqueConstraint(
-            "eval_dataset_id", "case_key", name="uq_eval_cases_dataset_key"
-        ),
+        sa.UniqueConstraint("eval_dataset_id", "case_key", name="uq_eval_cases_dataset_key"),
     )
 
     # eval_runs
@@ -110,12 +108,8 @@ def upgrade() -> None:
                 nullable=False,
                 server_default="running",
             ),
-            sa.Column(
-                "pass_count", sa.Integer(), nullable=False, server_default="0"
-            ),
-            sa.Column(
-                "fail_count", sa.Integer(), nullable=False, server_default="0"
-            ),
+            sa.Column("pass_count", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("fail_count", sa.Integer(), nullable=False, server_default="0"),
             sa.Column(
                 "metrics_jsonb",
                 postgresql.JSONB(),
@@ -147,9 +141,7 @@ def upgrade() -> None:
             nullable=False,
             server_default="{}",
         ),
-        sa.Column(
-            "latency_ms", sa.Integer(), nullable=False, server_default="0"
-        ),
+        sa.Column("latency_ms", sa.Integer(), nullable=False, server_default="0"),
         sa.Column(
             "cost_usd",
             sa.Numeric(12, 6),
@@ -167,9 +159,7 @@ def upgrade() -> None:
             sa.Column("target_kind", sa.String(32), nullable=False),
             sa.Column("target_id", postgresql.UUID(as_uuid=True), nullable=False, index=True),
             sa.Column("signal", sa.String(32), nullable=False),
-            sa.Column(
-                "note", sa.Text(), nullable=False, server_default=""
-            ),
+            sa.Column("note", sa.Text(), nullable=False, server_default=""),
             sa.Column("severity", sa.String(16), nullable=True),
             sa.Column(
                 "context_jsonb",
@@ -177,9 +167,7 @@ def upgrade() -> None:
                 nullable=False,
                 server_default="{}",
             ),
-            sa.Column(
-                "promoted_to_eval_case_id", postgresql.UUID(as_uuid=True), nullable=True
-            ),
+            sa.Column("promoted_to_eval_case_id", postgresql.UUID(as_uuid=True), nullable=True),
         ),
     )
 

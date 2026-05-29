@@ -15,7 +15,6 @@ from uuid import UUID
 from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
 from aleph_db.models.agent import AgentEvent, AgentRun
-from aleph_observability.tracing import current_trace_id
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,7 +27,7 @@ class StartedAIQJob:
 
 
 async def create_aiq_agent_run(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
     project_id: UUID,
     topic: str,
@@ -58,7 +57,7 @@ async def create_aiq_agent_run(
 
 
 async def append_aiq_event(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
     agent_run_id: UUID,
     event_kind: str,

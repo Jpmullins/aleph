@@ -42,9 +42,7 @@ class ExaConnector:
         self._base = base_url
         self._http = http_client or httpx.AsyncClient(timeout=20.0)
 
-    async def search(
-        self, ctx: ConnectorContext, query: SearchQuery
-    ) -> list[ConnectorResult]:
+    async def search(self, ctx: ConnectorContext, query: SearchQuery) -> list[ConnectorResult]:
         if not ctx.credential_value:
             msg = "Exa requires an API key"
             raise NotSupported(msg)
@@ -73,9 +71,7 @@ class ExaConnector:
             for r in body.get("results", [])
         ]
 
-    async def fetch(
-        self, ctx: ConnectorContext, result: ConnectorResult
-    ) -> RawPayload:
+    async def fetch(self, ctx: ConnectorContext, result: ConnectorResult) -> RawPayload:
         if not result.url:
             msg = "Exa fetch requires a url"
             raise NotSupported(msg)

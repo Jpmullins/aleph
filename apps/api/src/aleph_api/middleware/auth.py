@@ -254,9 +254,7 @@ async def _resolve_or_provision_user(
         return new_id
 
 
-def _problem(
-    status: int, code: str, detail: str, request: Request
-) -> Response:
+def _problem(status: int, code: str, detail: str, request: Request) -> Response:
     body = {
         "type": f"about:blank#{code}",
         "title": code.replace("_", " ").capitalize(),

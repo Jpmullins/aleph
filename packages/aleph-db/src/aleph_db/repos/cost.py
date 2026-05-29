@@ -23,7 +23,7 @@ class CostWriter:
     the project's `budgets.spent_usd`.
     """
 
-    def __init__(self, session: "AsyncSession") -> None:
+    def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
     async def record_call(
@@ -76,17 +76,13 @@ class CostWriter:
         return call
 
 
-async def get_budget(
-    session: "AsyncSession", project_id: UUID
-) -> Budget | None:
+async def get_budget(session: AsyncSession, project_id: UUID) -> Budget | None:
     return (
         await session.execute(select(Budget).where(Budget.project_id == project_id))
     ).scalar_one_or_none()
 
 
-async def cost_by_phase(
-    session: "AsyncSession", project_id: UUID
-) -> list[tuple[str, Decimal, int]]:
+async def cost_by_phase(session: AsyncSession, project_id: UUID) -> list[tuple[str, Decimal, int]]:
     stmt = (
         select(
             ModelCall.purpose,
@@ -101,9 +97,7 @@ async def cost_by_phase(
     return [(purpose, Decimal(cost), int(calls)) for purpose, cost, calls in rows]
 
 
-async def cost_by_model(
-    session: "AsyncSession", project_id: UUID
-) -> list[tuple[str, Decimal, int]]:
+async def cost_by_model(session: AsyncSession, project_id: UUID) -> list[tuple[str, Decimal, int]]:
     stmt = (
         select(
             ModelCall.model,
@@ -119,7 +113,7 @@ async def cost_by_model(
 
 
 async def recent_calls(
-    session: "AsyncSession", project_id: UUID, *, limit: int = 25
+    session: AsyncSession, project_id: UUID, *, limit: int = 25
 ) -> list[ModelCall]:
     stmt = (
         select(ModelCall)

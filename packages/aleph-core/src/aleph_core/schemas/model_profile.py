@@ -27,13 +27,11 @@ class ModelBindingIn(BaseModel):
 
     model: str = Field(min_length=1, max_length=128)
     provider: str = Field(default="litellm", pattern=r"^litellm$")
-    fallback: "ModelBindingIn | None" = None
+    fallback: ModelBindingIn | None = None
     max_input_tokens: int = Field(default=200_000, ge=1, le=10_000_000)
     cost_per_input_token_usd: Decimal = Field(default=Decimal("0"), ge=Decimal("0"))
     cost_per_output_token_usd: Decimal = Field(default=Decimal("0"), ge=Decimal("0"))
-    cache_discount_pct: Decimal = Field(
-        default=Decimal("0"), ge=Decimal("0"), le=Decimal("100")
-    )
+    cache_discount_pct: Decimal = Field(default=Decimal("0"), ge=Decimal("0"), le=Decimal("100"))
 
 
 class ModelBindingOut(BaseModel):
@@ -41,7 +39,7 @@ class ModelBindingOut(BaseModel):
 
     model: str
     provider: str
-    fallback: "ModelBindingOut | None" = None
+    fallback: ModelBindingOut | None = None
     max_input_tokens: int
     cost_per_input_token_usd: Decimal
     cost_per_output_token_usd: Decimal

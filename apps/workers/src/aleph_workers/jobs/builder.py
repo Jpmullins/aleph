@@ -44,9 +44,7 @@ async def builder_job(
     asset_store = ctx["asset_store"]
 
     async with maker() as session:
-        artifact = await get_artifact(
-            session, project_id=project_id, artifact_id=artifact_id
-        )
+        artifact = await get_artifact(session, project_id=project_id, artifact_id=artifact_id)
         if artifact is None:
             msg = f"artifact {artifact_id} not found"
             raise RuntimeError(msg)
@@ -70,13 +68,9 @@ async def builder_job(
         await session.commit()
         agent_run_id = run.id
         # Fresh load to avoid detached-state issues across awaits.
-        artifact = await get_artifact(
-            session, project_id=project_id, artifact_id=artifact_id
-        )
+        artifact = await get_artifact(session, project_id=project_id, artifact_id=artifact_id)
 
-    workflow = BuilderWorkflow(
-        session_maker=maker, asset_store=asset_store, principal=principal
-    )
+    workflow = BuilderWorkflow(session_maker=maker, asset_store=asset_store, principal=principal)
     try:
         async with maker() as session:
             ledger = LedgerWriter(session)
@@ -94,7 +88,7 @@ async def builder_job(
         status = "succeeded"
         error_text = None
         version_id = str(version.id)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         status = "failed"
         error_text = str(exc)[:4096]
         version_id = None

@@ -13,7 +13,6 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import BinaryIO
 from uuid import UUID
 
 from minio import Minio
@@ -66,9 +65,7 @@ class AssetStore:
         ext = ext.lstrip(".")
         return f"projects/{project_id}/sources/{source_id}/{sha256}.{ext}"
 
-    def _normalized_key(
-        self, *, project_id: UUID, source_id: UUID, version_no: int
-    ) -> str:
+    def _normalized_key(self, *, project_id: UUID, source_id: UUID, version_no: int) -> str:
         return f"projects/{project_id}/normalized/{source_id}/{version_no}.md"
 
     def put_source_asset(
@@ -137,16 +134,11 @@ class AssetStore:
         if expected_sha256 is not None:
             got = hashlib.sha256(data).hexdigest()
             if got != expected_sha256:
-                msg = (
-                    f"sha256 mismatch on {storage_uri}: "
-                    f"expected {expected_sha256}, got {got}"
-                )
+                msg = f"sha256 mismatch on {storage_uri}: expected {expected_sha256}, got {got}"
                 raise AssetStoreError(msg)
         return data
 
-    def presigned_get_url(
-        self, storage_uri: str, *, ttl: timedelta = timedelta(minutes=10)
-    ) -> str:
+    def presigned_get_url(self, storage_uri: str, *, ttl: timedelta = timedelta(minutes=10)) -> str:
         bucket, key = self._parse(storage_uri)
         return self._client.presigned_get_object(bucket, key, expires=ttl)
 

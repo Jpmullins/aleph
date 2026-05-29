@@ -1,12 +1,12 @@
 """normalize_job: Source → NormalizedDocument.
 
-  1. Fetch SourceVersion + asset bytes; verify sha256.
-  2. Pick normalizer by mime_type.
-  3. Produce markdown + structure + quality_flags.
-  4. Store markdown to MinIO; insert NormalizedDocument row.
-  5. Update Source.status="normalized"; set version.normalized_document_id.
-  6. Enqueue chunk_embed_job + wiki_ingest_job.
-  7. Ledger normalization.completed.
+1. Fetch SourceVersion + asset bytes; verify sha256.
+2. Pick normalizer by mime_type.
+3. Produce markdown + structure + quality_flags.
+4. Store markdown to MinIO; insert NormalizedDocument row.
+5. Update Source.status="normalized"; set version.normalized_document_id.
+6. Enqueue chunk_embed_job + wiki_ingest_job.
+7. Ledger normalization.completed.
 """
 
 from __future__ import annotations
@@ -102,25 +102,19 @@ async def normalize_job(
         async with maker() as session:
             ledger = LedgerWriter(session)
             version = (
-                await session.execute(
-                    select(SourceVersion).where(SourceVersion.id == version_id)
-                )
+                await session.execute(select(SourceVersion).where(SourceVersion.id == version_id))
             ).scalar_one_or_none()
             if version is None:
                 msg = f"source version {version_id} not found"
                 raise RuntimeError(msg)
             source = (
-                await session.execute(
-                    select(Source).where(Source.id == version.source_id)
-                )
+                await session.execute(select(Source).where(Source.id == version.source_id))
             ).scalar_one_or_none()
             if source is None:
                 msg = f"source {version.source_id} not found"
                 raise RuntimeError(msg)
             asset = (
-                await session.execute(
-                    select(SourceAsset).where(SourceAsset.id == version.asset_id)
-                )
+                await session.execute(select(SourceAsset).where(SourceAsset.id == version.asset_id))
             ).scalar_one_or_none()
             if asset is None:
                 msg = f"source asset {version.asset_id} not found"
@@ -196,12 +190,8 @@ async def normalize_job(
     # Enqueue downstream jobs.
     redis_pool = ctx.get("redis_pool")
     if redis_pool is not None:
-        await redis_pool.enqueue_job(
-            "chunk_embed_job", str(normalized_id), agent_token
-        )
-        await redis_pool.enqueue_job(
-            "wiki_ingest_job", str(normalized_id), agent_token
-        )
+        await redis_pool.enqueue_job("chunk_embed_job", str(normalized_id), agent_token)
+        await redis_pool.enqueue_job("wiki_ingest_job", str(normalized_id), agent_token)
 
     result_payload = {"normalized_document_id": str(normalized_id)}
     await _set_run_status(

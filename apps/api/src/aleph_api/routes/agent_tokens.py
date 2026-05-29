@@ -13,6 +13,7 @@ from uuid import UUID
 from fastapi import APIRouter, Body, Request
 from pydantic import BaseModel
 
+from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
 from aleph_core.errors import NotFound, ValidationFailed
 from aleph_core.ids import uuid7
 from aleph_db.models.agent import AgentRun
@@ -20,8 +21,6 @@ from aleph_db.repos.project import get_member, get_project
 from aleph_observability.tracing import current_trace_id
 from aleph_security.agent_token import AgentActorKind, mint_agent_token
 from aleph_security.roles import ProjectRole, require_at_least
-
-from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
 
 router = APIRouter(prefix="/v1", tags=["agent-tokens"])
 
@@ -60,9 +59,7 @@ async def mint_token(
     if project is None:
         msg = f"project not found: {project_id}"
         raise NotFound(msg)
-    member = await get_member(
-        session, project_id=project_id, user_id=principal.user_id
-    )
+    member = await get_member(session, project_id=project_id, user_id=principal.user_id)
     if member is None:
         # Same as the project-scope dep: 404 on non-membership.
         msg = f"project not found: {project_id}"

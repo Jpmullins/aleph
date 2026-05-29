@@ -6,9 +6,7 @@ Returns the list of `SynthesisProposal`s (Inc 3) plus any future
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
-from uuid import UUID
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -19,10 +17,9 @@ from aleph_a2ui.components.cards import (
     approval_card,
 )
 from aleph_a2ui.components.surfaces import briefs_surface
-from aleph_connectors.models import SynthesisProposal
-
 from aleph_api.deps import SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
+from aleph_connectors.models import SynthesisProposal
 
 router = APIRouter(prefix="/v1/projects", tags=["briefs"])
 
@@ -33,9 +30,7 @@ class BriefsOut(BaseModel):
 
 
 @router.get("/{project_id}/briefs", response_model=BriefsOut)
-async def get_briefs(
-    project_id: ProjectScopeDep, session: SessionDep
-) -> BriefsOut:
+async def get_briefs(project_id: ProjectScopeDep, session: SessionDep) -> BriefsOut:
     stmt = (
         select(SynthesisProposal)
         .where(

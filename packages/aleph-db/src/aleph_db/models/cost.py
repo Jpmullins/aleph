@@ -24,9 +24,7 @@ class ModelCall(Base):
     input_tokens: Mapped[int] = mapped_column(nullable=False, server_default="0")
     cached_tokens: Mapped[int] = mapped_column(nullable=False, server_default="0")
     completion_tokens: Mapped[int] = mapped_column(nullable=False, server_default="0")
-    cost_usd: Mapped[Decimal] = mapped_column(
-        Numeric(12, 6), nullable=False, server_default="0"
-    )
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False, server_default="0")
     cache_savings_usd: Mapped[Decimal] = mapped_column(
         Numeric(12, 6), nullable=False, server_default="0"
     )
@@ -42,9 +40,7 @@ class ModelCall(Base):
 
 class CostLedgerEvent(Base):
     __tablename__ = "cost_ledger_events"
-    __table_args__ = (
-        UniqueConstraint("model_call_id", name="uq_cost_ledger_model_call"),
-    )
+    __table_args__ = (UniqueConstraint("model_call_id", name="uq_cost_ledger_model_call"),)
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
     project_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
@@ -61,18 +57,10 @@ class CostLedgerEvent(Base):
 
 class Budget(CommonColumns, Base):
     __tablename__ = "budgets"
-    __table_args__ = (
-        UniqueConstraint("project_id", name="uq_budgets_project_id"),
-    )
+    __table_args__ = (UniqueConstraint("project_id", name="uq_budgets_project_id"),)
 
     project_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     cap_usd: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
-    soft_pct: Mapped[Decimal] = mapped_column(
-        Numeric(5, 2), nullable=False, server_default="80"
-    )
-    hard_pct: Mapped[Decimal] = mapped_column(
-        Numeric(5, 2), nullable=False, server_default="100"
-    )
-    spent_usd: Mapped[Decimal] = mapped_column(
-        Numeric(12, 6), nullable=False, server_default="0"
-    )
+    soft_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, server_default="80")
+    hard_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, server_default="100")
+    spent_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False, server_default="0")

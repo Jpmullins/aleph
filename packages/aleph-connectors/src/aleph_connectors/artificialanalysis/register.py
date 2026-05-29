@@ -39,9 +39,7 @@ class ArtificialAnalysisConnector:
     def __init__(self, *, http_client: httpx.AsyncClient | None = None) -> None:
         self._http = http_client or httpx.AsyncClient(timeout=30.0)
 
-    async def search(
-        self, ctx: ConnectorContext, query: SearchQuery
-    ) -> list[ConnectorResult]:
+    async def search(self, ctx: ConnectorContext, query: SearchQuery) -> list[ConnectorResult]:
         if not ctx.credential_value:
             msg = "artificialanalysis.ai requires an API key"
             raise NotSupported(msg)
@@ -74,9 +72,7 @@ class ArtificialAnalysisConnector:
             )
         return rows
 
-    async def fetch(
-        self, ctx: ConnectorContext, result: ConnectorResult
-    ) -> RawPayload:
+    async def fetch(self, ctx: ConnectorContext, result: ConnectorResult) -> RawPayload:
         # `dataset_rows` connectors don't return a single document; the
         # caller invokes `extract_rows` to turn the search result into
         # observation rows. We still implement `fetch` for the Protocol,
