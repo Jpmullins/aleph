@@ -1,6 +1,8 @@
 # Wave 3 — Deep Agents harness + subagents + SKILL.md (design)
 
-Status: **planned** (not started). Author handoff doc — read the
+> **⚠️ SUPERSEDED (2026-05-29)** by `2026-05-29-wave-3-orchestrator-subagents-refresh-design.md`. This spec's "migrate the working editorial/wiki LangGraph agents onto the harness" framing was reconsidered as low-value framework-churn. Wave 3 SHIPPED instead as the Live assistant becoming a Deep-Agents **orchestrator** that delegates to 6 purpose-built subagents (retriever/researcher/wiki_builder/viz_builder/analyst/reviewer) wrapping existing services. Kept for history.
+
+Status: **SUPERSEDED** (originally "planned"). Author handoff doc — read the
 "References" section first; it lists exactly which local repos, docs, MCP
 servers, and skills to consult so you plan against *correct, current* APIs.
 

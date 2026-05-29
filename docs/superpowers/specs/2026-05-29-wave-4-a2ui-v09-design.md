@@ -1,6 +1,8 @@
 # Wave 4 — A2UI v0.9 protocol + Generic Binder + delta updates (design)
 
-Status: **planned** (not started). Read "References" first.
+> **⚠️ SUPERSEDED (2026-05-29)** by `2026-05-29-wave-4-a2ui-v09-refresh-design.md`, which is grounded in the actually-installed `@a2ui` 0.10 API (v0_9 subpath, `MessageProcessor`/`A2uiSurface`, the zod3-binder requirement). Wave 4 SHIPPED: one shared v0_9 catalog drives both the right panel and the chat; backend emits v0_9 messages + an SSE delta `SurfaceStreamer`; the homegrown renderer + duplicate chat catalog were retired. Kept for history.
+
+Status: **SUPERSEDED** (originally "planned"). Read "References" first.
 
 ## Why this wave
 
