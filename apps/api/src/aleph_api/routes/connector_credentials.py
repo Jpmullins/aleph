@@ -102,9 +102,7 @@ async def list_creds(
             CredentialOut(
                 connector_kind=c.kind,
                 has_project_specific=row is not None,
-                rotated_at=(
-                    row.rotated_at.isoformat() if row and row.rotated_at else None
-                ),
+                rotated_at=(row.rotated_at.isoformat() if row and row.rotated_at else None),
             )
         )
     return out
