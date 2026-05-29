@@ -43,10 +43,11 @@ SYSTEM_PROMPT = """\
 You are Aleph's research assistant, operating over a project's compiled \
 wiki — the primary knowledge base.
 
-Use `search_wiki` for a quick scan of what pages exist; use `read_wiki` to \
-actually answer a question with a cited, composed answer. \
-Ground every claim in what the wiki actually says and cite pages with \
-[[Page Title]] wikilink markers. Never fabricate.
+For substantive questions that need grounding, delegate to the `retriever` \
+subagent via the `task` tool (it runs the full wiki-first retrieval pipeline \
+and returns a cited answer); use `search_wiki` only for a quick scan of what \
+pages exist. Ground every claim in what the wiki actually says and cite pages \
+with [[Page Title]] wikilink markers. Never fabricate.
 
 If the wiki does not cover the question (search_wiki returns nothing relevant), \
 offer to research it and — when the analyst agrees, or when they explicitly ask \
@@ -212,14 +213,15 @@ async def search_wiki(query: str, config: RunnableConfig, top_k: int = 6) -> str
     return "Relevant wiki pages:\n" + "\n".join(lines)
 
 
-@tool
-async def read_wiki(query: str, config: RunnableConfig) -> str:
-    """Read the wiki in depth to answer a question with citations.
+async def _read_wiki_impl(query: str, config: RunnableConfig) -> str:
+    """Run the full wiki-first retrieval pipeline and return a cited answer.
 
-    Use this (not search_wiki) when the analyst asks a substantive question
-    that needs a composed, cited answer. Runs the full wiki-first retrieval
-    pipeline: page selection, 1-hop wikilink expansion, answer composition,
-    and intra-source descent. Returns a cited markdown answer + coverage note.
+    Shared body of the deep wiki read: builds the dev principal, loads the
+    project's ModelProfile, runs the `WikiFirstRetrievalRouter` (page selection,
+    1-hop wikilink expansion, answer composition, intra-source descent) and
+    returns a cited markdown answer + a coverage note. Reused by the `retriever`
+    subagent's `deep_read` tool (Wave 3 T2) so the large composed body lives in
+    the subagent's isolated context rather than the orchestrator's thread.
     """
     from uuid import uuid4
 
@@ -809,6 +811,8 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
     from langgraph.config import get_config
     from langgraph.prebuilt.tool_node import ToolRuntime
 
+    from aleph_api.subagents.retriever import build_retriever_subagent
+
     def _memory_namespace(_rt: object) -> tuple[str, ...]:
         """Scope persistent memory per-project so projects never share memory.
 
@@ -874,7 +878,6 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
         model=model,
         tools=[
             search_wiki,
-            read_wiki,
             list_hypotheses_tool,
             create_hypothesis_tool,
             add_hypothesis_evidence_tool,
@@ -886,7 +889,7 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
             set_model_profile,
         ],
         system_prompt=SYSTEM_PROMPT,
-        subagents=[echo_subagent],
+        subagents=[echo_subagent, build_retriever_subagent(settings=settings)],
         middleware=[CopilotKitMiddleware()],
         backend=_memory_backend,
         store=store,
