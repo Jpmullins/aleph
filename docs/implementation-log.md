@@ -1101,3 +1101,65 @@ unit-tests, integration-tests, evals, build-web).
 - A **full orchestrator→subagent delegation** run (the LLM actually invoking the `task`
   tool) is still browser-verified only; it's inherently non-deterministic and unsuitable
   for CI. The wiring it depends on (subagents built + cost-tagged) is unit-covered.
+
+---
+
+## Wave: Real-time push layer + Live Wiki (2026-05-30)
+
+**Branch:** `wave-realtime-push-live-wiki`. Spec:
+`docs/superpowers/specs/2026-05-29-live-wiki-design.md` (scope expanded to all streams).
+Product enrichment toward the "living KB" vision: the wiki tab updates the instant an
+agent writes, with full presence ("✦ agent is editing this page…" + "updated just now"
+pulse), built on a new push layer that replaces idle polling under **every** SSE stream.
+
+### Push layer (foundation)
+- **Migration `realtime_notify_triggers`:** `AFTER INSERT/UPDATE` `pg_notify('aleph_changes',…)`
+  triggers on `action_ledger_events`, `agent_events` (project resolved via `agent_runs`),
+  `assistant_messages`. Delivered on COMMIT; identity-only payloads. (one statement per
+  `op.execute` — asyncpg's extended protocol rejects multi-statement strings.)
+- **`apps/api/.../realtime.py`:** `ChangeBroker` (in-process per-project fan-out, pure) +
+  `NotifyListener` (one supervised asyncpg `LISTEN` connection; event-driven reconnect via
+  `add_termination_listener`, no polling). `asyncpg_dsn()` strips the `+asyncpg` tag. Built +
+  started/stopped in the lifespan.
+- **Design choice:** triggers over Redis pub/sub — automatic (can't be bypassed by any code
+  path) + transactionally correct (after-commit). Each stream keeps a **slow poll fallback**
+  under the push so a dropped listener self-heals (push primary, fallback safety net — not a
+  shortcut, the production-grade way to do push).
+
+### Streams migrated (all four)
+agent-events (5s fallback), surfaces recompute-and-diff (10s), assistant message tail (1s),
+and the new changes stream (5s). Each subscribes to the broker and wakes on push; the
+cursor/recompute logic is unchanged, so nothing is ever missed regardless of signal timing.
+
+### Live wiki (consumer)
+- **`routes/changes.py`** `GET /changes/stream` — push-native; emits `committed` (ledger
+  allowlist `{wiki.revision.commit}`) / `compiling` / `compile_done` (the page-scoped
+  `compile_page` phase). Pure serializers; 60s replay on connect for in-flight presence.
+- **Wiki workflow:** emits `compile_page` phase_started at source-page compose (lasting
+  presence through the multi-second LLM compose) + compile_done after commit; the
+  `wiki.revision.commit` ledger payload gains `page_title`.
+- **Frontend:** `useWikiLiveSignals` subscribes to the stream, maintains compiling/recently-
+  committed maps, and invalidates the `wiki-pages` + `wiki-page` queries on commit so the
+  index AND the open page refresh in place (fixes the open page never refreshing). The index
+  poll dropped 4–15s → 30s backstop. `WikiSurface` renders the "✦ editing…" badge, "updated"
+  pulse, reader banner, and header "building…" hint.
+
+### Tests (thorough)
+- **Unit (113 total, +16):** ChangeBroker fan-out/scoping/timeout/drain/full-queue-drop +
+  `asyncpg_dsn`; the changes serializers (allowlist, page-id requirement, shapes, ordering).
+- **Integration (24 total, +10):** end-to-end push (ledger & agent_event writes → broker,
+  scoped); each migrated stream **wakes on push** (<3s, << its fallback) **and self-heals via
+  fallback** (listener stopped); surfaces emits a real v0.9 hypotheses delta; assistant pushes
+  a token delta; changes stream emits committed (on a wiki commit) + compiling (on compile_page).
+  - Testing note: httpx **ASGITransport can't stream** (runs the app to completion), so the
+    stream tests drive `StreamingResponse.body_iterator` via a background **pump task + queue**
+    — `wait_for(anext(agen))` would cancel the in-flight `__anext__` and destroy the generator.
+- web tsc + eslint + build clean.
+
+### Honest scope / limits (unchanged from spec)
+- Push primary + **poll fallback** (1–10s safety nets, not the latency you see).
+- One listener connection per API process (single uvicorn process today).
+- `agent_events` trigger does a PK lookup on `agent_runs` for project_id (no schema change).
+- **Hand-edits** write no ledger event → not live (out of scope; editor sees their own edit).
+- **SSE × OIDC** unchanged — all streams (this included) rely on `local` auth mode; documented.
+- The `changes` stream is general (allowlist) — Notes/Briefs can consume it later.
