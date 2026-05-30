@@ -4,7 +4,11 @@ Monorepo with `uv` (Python) + `pnpm` (JS) workspaces.
 
 ```
 apps/
-  api/                        FastAPI app — request/response + SSE later
+  api/                        FastAPI app — request/response + SSE (LISTEN/NOTIFY-push-backed)
+    src/aleph_api/realtime.py   LISTEN/NOTIFY push layer: ChangeBroker (per-project
+                              fan-out) + NotifyListener (supervised asyncpg conn)
+    src/aleph_api/routes/changes.py  GET /v1/projects/{id}/changes/stream — push-native
+                              SSE (committed / compiling / compile_done signals)
   web/                        React + Vite SPA
   workers/                    Arq workers — long-running + agent jobs
 packages/

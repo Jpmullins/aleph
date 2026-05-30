@@ -83,6 +83,33 @@ curl -X PATCH http://localhost:8000/v1/projects/<id> \
             # update via psql or write a follow-up route.
 ```
 
+### Real-time updates stopped (wiki tab / activity feed / surfaces not live)
+
+The realtime push layer wakes every SSE stream on change instead of idle-polling.
+Each `aleph-api` process holds **one** supervised asyncpg connection running
+`LISTEN aleph_changes` (the `NotifyListener`, started in the FastAPI lifespan).
+Postgres `AFTER INSERT/UPDATE` triggers call `pg_notify('aleph_changes', …)` on
+`action_ledger_events`, `agent_events`, and `assistant_messages` (delivered on
+COMMIT); the listener fans out to a per-project in-process `ChangeBroker`.
+
+If live updates stop:
+
+- The listener self-heals — on connection loss it reconnects with capped backoff.
+- Every stream also has a **poll fallback** (1–10s depending on the stream), so
+  data keeps flowing even while the listener is down — just at fallback latency
+  instead of sub-second push.
+- Check `aleph-api` logs for `notify listener connected` /
+  `notify listener connection error`:
+
+```bash
+docker compose -f deploy/compose/docker-compose.yml logs --tail 200 aleph-api \
+  | grep -i "notify listener"
+```
+
+- The `realtime_notify_triggers` migration must be applied for triggers to exist —
+  it ships as part of `alembic upgrade head` (see "Postgres up but migrations
+  missing" above). Without it, streams fall back to polling only.
+
 ## Rotating secrets
 
 - `INSIGHTS_LITELLM_API_KEY` — coordinate with gateway operator; update

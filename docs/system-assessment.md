@@ -1,5 +1,18 @@
 # Aleph — System Assessment (2026-05-29)
 
+> **UPDATE 2026-05-30 (Realtime push + Live Wiki wave merged):** every SSE stream
+> (agent-events, surfaces, assistant, and a new `changes` stream) now wakes on a Postgres
+> **LISTEN/NOTIFY** push (triggers → a supervised `NotifyListener` → in-process `ChangeBroker`
+> fan-out) instead of idle polling, each with a self-healing poll fallback. The **wiki tab is
+> now live**: index + open page refresh the instant an agent writes (the open page previously
+> never refreshed), with "✦ editing…" presence + an "updated" pulse. Verified: 113 unit + 24
+> integration tests, a live end-to-end check against the rebuilt running stack, and a
+> headless-browser (Playwright) confirmation of the presence lifecycle. **CI green on `main`.**
+> This narrows P1 #6 — the SSE×OIDC gap now spans all four streams (still `local`-mode-only;
+> documented; the push is server-side so the EventSource auth limitation is unchanged) and
+> remains the one item to address before an OIDC deploy. New honest limit: hand-edits write
+> no ledger event, so they are not pushed live (the editor sees their own edit locally).
+>
 > **UPDATE 2026-05-29 (post CI-fix + coverage):** **all five CI jobs are now green on
 > `main`** — `lint-and-typecheck`, `unit-tests`, `integration-tests`, `evals`, `build-web`.
 > The pipeline itself had been red (every job ran `uv sync --all-extras`, which leaves

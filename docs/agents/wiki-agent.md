@@ -45,6 +45,25 @@ and the gateway is the only LLM transport.
   `Source:<short_id>` and includes them as constraints. On commit, the
   feedback rows' `addressed_in_revision_id` is set to the new revision.
 
+## Live wiki signals
+
+The workflow emits a page-scoped `compile_page` phase event so the Wiki
+tab updates the instant the agent writes (no poll lag):
+
+- `phase_started` fires at the start of `source_page_compose`, so the
+  "✦ editing…" presence badge lasts through the multi-second LLM compose.
+- `phase_completed` fires after `commit_revision`.
+- `commit_revision` also adds `page_title` to the `wiki.revision.commit`
+  ledger payload (additive), so the commit signal names the page.
+
+These feed the push layer: `GET /v1/projects/{id}/changes/stream`
+translates the `compile_page` phase events into `compiling` /
+`compile_done` signals and `wiki.revision.commit` ledger events into
+`committed` signals. The frontend `useWikiLiveSignals` hook subscribes
+and invalidates the `wiki-pages` + `wiki-page` caches, so the index and
+the open page refresh in place with an editing badge and an "updated"
+pulse. See `docs/domain/wiki.md` for the surface behavior.
+
 ## Failure modes
 
 If any node raises, the AgentRun is marked `failed` and the `Source`

@@ -6,8 +6,9 @@ The center panel renders an active assistant session's thread.
 
 - Auto-creates a session if none exists for the project.
 - Posts user messages via `POST /v1/projects/{id}/threads/{tid}/messages`.
-- Polls `GET …/messages` while the assistant message is in `streaming`
-  status; switches to no-polling on completion.
+- Streams the assistant message via the push-backed
+  `GET …/messages/{mid}/stream` (see below) while it is in `streaming`
+  status; the stream closes on completion.
 - Each assistant message shows: coverage judgment, latency, cost,
   cited wiki page titles, descent chunk count (when applicable).
 
@@ -15,11 +16,16 @@ The center panel renders an active assistant session's thread.
 
 `GET /v1/projects/{id}/messages/{mid}/stream` emits JSON events of
 shape `{event: "token", delta: "..."}` then a final
-`{event: "done", status: "complete"}`. Inc 2 backs streaming with
-periodic body polling — the assistant turn writes `body_md` in chunks
-as the LangGraph workflow progresses; Inc 4 swaps in true composer
-token streaming when the A2UI integration replaces the polling
-mechanism.
+`{event: "done", status: "complete"}`. The stream is backed by the
+Postgres LISTEN/NOTIFY push layer: the assistant turn still writes
+`body_md` in chunks as the workflow progresses, and each `body_md`
+`UPDATE` fires an `aleph_changes` notification that wakes the stream,
+which re-reads `body_md` and emits the new tail. This is not true
+per-token streaming — the stream approximates tokens by diffing the
+growing `body_md` — but the *trigger* is now a push (near-live deltas),
+not a fixed poll. A slow 1s poll fallback runs underneath as a
+self-healing safety net, and the turn is bounded by a ~5min wall-clock
+deadline.
 
 ## Citation hover (Inc 1's renderer)
 

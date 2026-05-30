@@ -16,13 +16,19 @@ Surfaces with content types that don't exist yet ship a clear
 placeholder rather than a fake one. Inc 4's `ArtifactsSurface` says
 "no artifacts yet — Builder lands in Increment 7." This is intentional:
 the *surface* is real (the catalog component, the action plumbing, the
-SSE update path), only its *content type* awaits its own increment.
+push update path), only its *content type* awaits its own increment.
 
 ## Refresh
 
-Inc 4 surfaces are refreshed by client-side `@tanstack/react-query`
-poll/refetch (10s for Briefs). The SSE channel from Inc 2 wires up
-true server-push in a follow-on commit.
+The surface stream `GET /v1/projects/{id}/surfaces/{tab}/stream` is
+backed by the Postgres LISTEN/NOTIFY push layer: any project mutation
+fires an `aleph_changes` notification that wakes the stream, which
+recomputes the surface and emits a diff (structural `updateComponents`
+plus per-path `updateDataModel` deltas). A slow 10s poll fallback runs
+underneath as a self-healing safety net — wakes are now sub-second on
+writes rather than the previous fixed 2.5s recompute poll. Tabs that
+self-fetch via client-side `@tanstack/react-query` poll/refetch (e.g.
+Briefs at 10s) keep that path.
 
 ## Pinned cards
 

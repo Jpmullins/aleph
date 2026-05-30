@@ -31,6 +31,14 @@ multi-agent and audit-grade.
   every change to the agent run that produced it.
 - **Hand-editable.** Analysts edit pages directly; `HandEditMark` keeps
   the next compile from clobbering their work.
+- **Live.** Wiki updates are pushed sub-second. When an agent compiles or
+  commits a page, the Wiki surface reflects it immediately via the
+  Postgres LISTEN/NOTIFY push layer (the `changes` stream + `compile_page`
+  presence signals) — the index and the currently-open page refresh in
+  place, with an "✦ editing…" badge while compiling and an "updated" pulse
+  on commit. Limit: hand-edits (`mark_section`) write no ledger event, so
+  they are **not** pushed live (the editor still sees their own change
+  locally).
 
 ## SourcePage bridge
 

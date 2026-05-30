@@ -20,6 +20,22 @@ The build proceeds in nine increments. Each increment ships its declared scope i
 | 7 | [`2026-05-27-inc-7-builder-artifacts-design.md`](2026-05-27-inc-7-builder-artifacts-design.md) | `RenderedAsset` + Playwright sandbox (no DB/S3 creds), `Artifact`/`Version`, Builder LangGraph workflow, exporters (PDF/DOCX/markdown-bundle/source-pack), CSL bibliography (APA-7/Chicago/IEEE/Vancouver/custom), full lineage_jsonb, reproducible builds. | Export a cited PDF with embedded charts; lineage traceable end-to-end. |
 | 8 | [`2026-05-27-inc-8-eval-feedback-gates-design.md`](2026-05-27-inc-8-eval-feedback-gates-design.md) | `EvalDataset`/`Case`/`Run`/`Result`, unified runner, all per-increment evals discoverable from filesystem, `UserFeedback` model + inline affordances, AIQ FreshQA + DeepResearch Bench adapters, CI gates (permission leakage = 0, citation correctness, cost drift), feedback → eval-case promotion. | Self-monitoring product. Every PR runs the cross-cutting eval suite under both ModelProfiles. |
 
+## Post-Inc-8 waves
+
+Build is complete through Increment 8. Subsequent work ships as **waves** (same
+"final production form" rule). Wave specs live alongside the increment specs here; the
+canonical record of what shipped vs. honest gaps is [`../../implementation-log.md`](../../implementation-log.md),
+and the latest system review is [`../../system-assessment.md`](../../system-assessment.md).
+
+| Wave | Spec | Scope |
+|---|---|---|
+| W3 (reconsidered) | [`2026-05-29-wave-3-orchestrator-subagents-refresh-design.md`](2026-05-29-wave-3-orchestrator-subagents-refresh-design.md) | Live assistant as a Deep-Agents orchestrator delegating to 6 purpose-built subagents (+ SKILL.md skills, todos-in-Activity). Supersedes `2026-05-29-wave-3-deep-agents-design.md`. |
+| W4 | [`2026-05-29-wave-4-a2ui-v09-refresh-design.md`](2026-05-29-wave-4-a2ui-v09-refresh-design.md) | A2UI **v0_9** shared catalog (right panel + chat from one upstream `@a2ui` catalog) + SSE delta SurfaceStreamer. Supersedes `2026-05-29-wave-4-a2ui-v09-design.md`. |
+| W6 | [`2026-05-29-wave-6-conversational-completion-design.md`](2026-05-29-wave-6-conversational-completion-design.md) | Conversational completion — Live is the only chat surface; agent tool suite; ApprovalCard-gated actions; agent cost attribution; per-project cross-session memory; cost UI in Profile. |
+| Realtime + Live Wiki | [`2026-05-29-live-wiki-design.md`](2026-05-29-live-wiki-design.md) | Postgres **LISTEN/NOTIFY** push layer under all four SSE streams (agent-events, surfaces, assistant, new `changes`) replacing idle polling, + self-healing poll fallback; the wiki tab updates the instant an agent writes ("✦ editing…" presence + "updated" pulse, open page refreshes in place). |
+
+(W1, W2, W5 and the AIQ research→wiki pipeline shipped without standalone wave specs — see the implementation log.)
+
 ## Cross-references
 
 Every increment spec includes:

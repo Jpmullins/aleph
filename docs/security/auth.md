@@ -102,12 +102,23 @@ Token theft requires the gateway secret — rotate per the runbook if leaked.
 Two paths added in post-Inc-8 waves work under `ALEPH_AUTH_MODE=local` but
 would **fail under `oidc`**, and must be addressed before an OIDC/production deploy:
 
-1. **Server-Sent Events** (the right-panel surface stream
-   `GET /v1/projects/{id}/surfaces/{tab}/stream` from Wave 4, and the
-   `GET .../agent-events/stream` activity stream). The browser `EventSource` API
+1. **Server-Sent Events** — **all four** SSE streams:
+   - the right-panel surface stream `GET /v1/projects/{id}/surfaces/{tab}/stream` (Wave 4),
+   - the `GET .../agent-events/stream` activity stream,
+   - the assistant message token stream `GET .../messages/{id}/stream`, and
+   - the new realtime change stream `GET .../changes/stream`.
+
+   The browser `EventSource` API
    **cannot set an `Authorization` header**, so under `oidc` these requests reach
    the project-scope dependency with no bearer token → 401. In `local` mode every
    request maps to the fixed dev principal, so they work today.
+
+   As of the realtime push wave, all four streams are LISTEN/NOTIFY-push-backed
+   (Postgres triggers → `pg_notify` → per-process `NotifyListener` → in-process
+   `ChangeBroker` fan-out, with a slow poll fallback underneath each). That push is
+   entirely **server-side** and does not change this limitation: the *browser* still
+   can't authenticate the `EventSource` connection under `oidc`. So the fix below
+   now applies uniformly to all four streams.
    - **Fix (deploy-ready design):** have the auth middleware ALSO accept the access
      token from a query parameter (e.g. `?access_token=<jwt>`) for the SSE routes,
      verified through the same `verify_user_jwt` path; the frontend appends its

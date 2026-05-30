@@ -5,9 +5,11 @@ sent event per new `AgentEvent` row scoped to the project's agent runs.
 The activity card uses these to render per-phase progress (which the
 top-level `AgentRun.status` cannot express).
 
-Implementation: cursor-based polling against Postgres. Cheap and
-infrastructure-free. Upgrade to `LISTEN/NOTIFY` if 500 ms latency
-becomes a problem.
+Implementation: the stream subscribes to the `ChangeBroker` and wakes on a
+Postgres LISTEN/NOTIFY push the instant an `agent_event` for the project commits,
+then does a cursor query for the new rows. A slow poll fallback (`_FALLBACK_SEC`)
+underneath self-heals a dropped listener — so no event is ever missed regardless
+of signal timing.
 """
 
 from __future__ import annotations
