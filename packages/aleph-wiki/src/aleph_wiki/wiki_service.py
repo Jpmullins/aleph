@@ -247,6 +247,7 @@ class WikiService:
                 target_kind="wiki_page",
                 payload={
                     "page_id": str(page.id),
+                    "page_title": title,
                     "revision_no": new_rev_no,
                     "body_sha256": body_hash,
                     "page_kind": page_kind,

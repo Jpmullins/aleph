@@ -23,6 +23,7 @@ from aleph_api.routes import (
     assistant,
     briefs,
     cards,
+    changes,
     chunks,
     connector_credentials,
     connectors,
@@ -101,6 +102,7 @@ def create_app() -> FastAPI:
     app.include_router(agent_actions.router)
     app.include_router(briefs.router)
     app.include_router(surfaces.router)
+    app.include_router(changes.router)
     # Inc 5
     app.include_router(reviews.router)
     app.include_router(hypotheses.router)

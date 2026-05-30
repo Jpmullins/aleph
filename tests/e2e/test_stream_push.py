@@ -279,3 +279,85 @@ async def test_surfaces_hypotheses_stream_pushes_delta(http_client, asgi_app):
         assert "updateComponents" in delta or "updateDataModel" in delta
     finally:
         await reader.aclose()
+
+
+async def _write_compile_event(
+    asgi_app: Any, *, project_id: UUID, event_kind: str, payload: dict[str, Any]
+) -> None:
+    maker = asgi_app.state.session_maker
+    run_id = uuid7()
+    async with maker() as session:
+        session.add(
+            AgentRun(
+                id=run_id,
+                project_id=project_id,
+                agent_kind="wiki",
+                correlation_id=f"corr-{uuid7()}",
+                status="running",
+                created_by=uuid7(),
+            )
+        )
+        await session.flush()
+        session.add(
+            AgentEvent(
+                id=uuid7(), agent_run_id=run_id, event_kind=event_kind, payload_jsonb=payload
+            )
+        )
+        await session.commit()
+
+
+async def test_changes_stream_emits_committed_on_wiki_commit(asgi_app):
+    from aleph_api.routes.changes import stream_changes
+    from aleph_core.time import utcnow
+    from aleph_db.models.ledger import ActionLedgerEvent
+
+    pid = uuid7()
+    page_id = uuid7()
+    resp = await stream_changes(pid, _fake_request(asgi_app), since=None)
+    reader = _StreamReader(resp)
+    try:
+        await reader.settle()  # consume the initial (replay + heartbeat) burst
+        maker = asgi_app.state.session_maker
+        async with maker() as session:
+            session.add(
+                ActionLedgerEvent(
+                    id=uuid7(),
+                    project_id=pid,
+                    actor_id=uuid7(),
+                    actor_kind="aleph_agent",
+                    action_kind="wiki.revision.commit",
+                    target_id=page_id,
+                    target_kind="wiki_page",
+                    payload_jsonb={"page_title": "Acme", "page_id": str(page_id)},
+                    timestamp=utcnow(),
+                    chain_hash="0" * 64,
+                )
+            )
+            await session.commit()
+        sig = await reader.next_json(deadline=3.0)
+        assert sig["kind"] == "committed"
+        assert sig["page_title"] == "Acme"
+        assert sig["page_id"] == str(page_id)
+    finally:
+        await reader.aclose()
+
+
+async def test_changes_stream_emits_compiling_on_compile_page(asgi_app):
+    from aleph_api.routes.changes import stream_changes
+
+    pid = uuid7()
+    resp = await stream_changes(pid, _fake_request(asgi_app), since=None)
+    reader = _StreamReader(resp)
+    try:
+        await reader.settle()
+        await _write_compile_event(
+            asgi_app,
+            project_id=pid,
+            event_kind="phase_started",
+            payload={"phase": "compile_page", "page_title": "Acme", "page_kind": "source"},
+        )
+        sig = await reader.next_json(deadline=3.0)
+        assert sig["kind"] == "compiling"
+        assert sig["page_title"] == "Acme"
+    finally:
+        await reader.aclose()
