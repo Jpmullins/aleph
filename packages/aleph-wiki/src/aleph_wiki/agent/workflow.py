@@ -38,7 +38,7 @@ from pydantic import BaseModel, Field
 from aleph_core.ids import uuid7
 from aleph_core.schemas.model_profile import Capability
 from aleph_core.time import utcnow
-from aleph_db.repos.agent_events import with_phase
+from aleph_db.repos.agent_events import emit_phase_completed, emit_phase_started, with_phase
 from aleph_models.client import ChatMessage
 from aleph_observability.tracing import start_span
 from aleph_wiki.alias_service import AliasService
@@ -141,6 +141,44 @@ def _ctx() -> WorkflowContext:
         msg = "WikiIngestWorkflow context not initialized"
         raise RuntimeError(msg)
     return _active_ctx
+
+
+async def _emit_compile_page(
+    ctx: WorkflowContext,
+    state: WikiIngestState,
+    *,
+    started: bool,
+    page_title: str,
+    page_kind: str,
+    page_id: UUID | None = None,
+) -> None:
+    """Emit a page-scoped `compile_page` progress event for live-wiki presence.
+
+    `started` (at compose) → the `changes` stream maps it to a `compiling` signal
+    ("✦ agent is editing this page…"); the completion (at commit) → `compile_done`,
+    which clears the indicator. The `wiki.revision.commit` ledger event drives the
+    "updated just now" pulse + the page refetch. No-op outside an agent run.
+    """
+    agent_run_id = state.get("agent_run_id")
+    if agent_run_id is None:
+        return
+    payload: dict[str, Any] = {"page_title": page_title, "page_kind": page_kind}
+    if page_id is not None:
+        payload["page_id"] = str(page_id)
+    async with ctx.session_maker() as session:
+        if started:
+            await emit_phase_started(
+                session, agent_run_id=agent_run_id, phase_name="compile_page", payload=payload
+            )
+        else:
+            await emit_phase_completed(
+                session,
+                agent_run_id=agent_run_id,
+                phase_name="compile_page",
+                duration_ms=0,
+                payload=payload,
+            )
+        await session.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -309,6 +347,16 @@ async def _node_source_page_compose(state: WikiIngestState) -> dict:
     ):
         # Pull rejection feedback for THIS source concept.
         ctx = _ctx()
+        # Live-wiki presence: signal that the agent has started composing this
+        # page (lasts through the multi-second LLM compose). Keyed by title since
+        # the page row may not exist yet; the commit signal carries the page_id.
+        await _emit_compile_page(
+            ctx,
+            state,
+            started=True,
+            page_title=state["source_title"],
+            page_kind="source",
+        )
         rejections: list[RejectionFeedback] = []
         async with ctx.session_maker() as session:
             rejections = await pending_for_concept(
@@ -619,6 +667,18 @@ async def _node_commit_revision(state: WikiIngestState) -> dict:
                 )
 
             await session.commit()
+
+        # Live-wiki presence: the source page is committed → clear the "editing"
+        # indicator (the `wiki.revision.commit` ledger event already drives the
+        # pulse + refetch). Emitted after commit so the page row exists.
+        await _emit_compile_page(
+            ctx,
+            state,
+            started=False,
+            page_title=sd.title,
+            page_kind="source",
+            page_id=result.page_id,
+        )
         return {"committed_revision_ids": committed}
 
 

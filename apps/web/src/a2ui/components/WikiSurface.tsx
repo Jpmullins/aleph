@@ -3,8 +3,14 @@ import { useMemo, useState } from "react";
 
 import { renderChildCard, useSurface } from "../surface-context";
 import { WikiBodyMarkdown } from "@/components/WikiBodyMarkdown";
+import { useWikiLiveSignals, type WikiLiveSignals } from "@/hooks/useWikiLiveSignals";
 import { api } from "@/lib/api";
 import { CardShell, FeedbackButton, Pill, SurfaceHeader, type RendererProps } from "./_shared";
+
+/** Is this page currently being compiled by an agent (by id or title)? */
+function isCompiling(live: WikiLiveSignals, p: { id: string; title: string }): boolean {
+  return live.compilingPages.has(p.id) || live.compilingPages.has(`title:${p.title}`);
+}
 
 interface WikiPageSummary {
   id: string;
@@ -37,6 +43,11 @@ export function WikiSurface({ component, onAction }: RendererProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
 
+  // Live signals: instant index/page refresh + "✦ editing…" / "updated" presence
+  // as agents write. Freshness now comes from the push stream, so the query below
+  // only keeps a slow safety-net interval.
+  const live = useWikiLiveSignals(projectId);
+
   // Embedded A2UI cards (charts / tables / graphs / maps the agent placed
   // on this surface) render above the page browser, per spec §7.4 —
   // "inline charts/tables/maps render here where they belong."
@@ -45,12 +56,9 @@ export function WikiSurface({ component, onAction }: RendererProps) {
   const pages = useQuery<WikiPageSummary[]>({
     queryKey: ["wiki-pages", projectId],
     queryFn: () => api.get<WikiPageSummary[]>(`/v1/projects/${projectId}/wiki/pages`),
-    refetchInterval: (q) => {
-      // While the wiki is being built, poll so new pages appear live.
-      const data = q.state.data;
-      if (!Array.isArray(data)) return 5_000;
-      return data.length === 0 ? 4_000 : 15_000;
-    },
+    // Event-driven now (the changes stream invalidates this on every write); the
+    // interval is just a self-healing backstop if the stream drops.
+    refetchInterval: 30_000,
   });
 
   const filtered = useMemo(() => {
@@ -69,7 +77,16 @@ export function WikiSurface({ component, onAction }: RendererProps) {
 
   // Reading a page.
   if (selectedId) {
-    return <WikiPageReader projectId={projectId} pageId={selectedId} onBack={() => setSelectedId(null)} />;
+    const selectedPage = (pages.data ?? []).find((p) => p.id === selectedId);
+    const compiling = selectedPage ? isCompiling(live, selectedPage) : false;
+    return (
+      <WikiPageReader
+        projectId={projectId}
+        pageId={selectedId}
+        compiling={compiling}
+        onBack={() => setSelectedId(null)}
+      />
+    );
   }
 
   return (
@@ -77,7 +94,11 @@ export function WikiSurface({ component, onAction }: RendererProps) {
       <SurfaceHeader
         title="Wiki"
         subtitle={
-          pages.data ? `${pages.data.length} page${pages.data.length === 1 ? "" : "s"}` : undefined
+          live.isAgentBuilding
+            ? "✦ agent is building the wiki…"
+            : pages.data
+              ? `${pages.data.length} page${pages.data.length === 1 ? "" : "s"}`
+              : undefined
         }
       />
       <div className="border-b border-slate-200 px-3 py-2">
@@ -103,18 +124,10 @@ export function WikiSurface({ component, onAction }: RendererProps) {
         {pages.isSuccess && pages.data.length === 0 && embeds.length === 0 && <WikiEmptyState />}
 
         {topicPages.length > 0 && (
-          <PageGroup
-            label="Topic pages"
-            pages={topicPages}
-            onSelect={setSelectedId}
-          />
+          <PageGroup label="Topic pages" pages={topicPages} live={live} onSelect={setSelectedId} />
         )}
         {sourcePages.length > 0 && (
-          <PageGroup
-            label="Source pages"
-            pages={sourcePages}
-            onSelect={setSelectedId}
-          />
+          <PageGroup label="Source pages" pages={sourcePages} live={live} onSelect={setSelectedId} />
         )}
       </div>
     </div>
@@ -143,10 +156,12 @@ function WikiEmptyState() {
 function PageGroup({
   label,
   pages,
+  live,
   onSelect,
 }: {
   label: string;
   pages: WikiPageSummary[];
+  live: WikiLiveSignals;
   onSelect: (id: string) => void;
 }) {
   return (
@@ -155,24 +170,40 @@ function PageGroup({
         {label} ({pages.length})
       </h4>
       <ul className="space-y-1.5">
-        {pages.map((p) => (
-          <li key={p.id}>
-            <button
-              type="button"
-              onClick={() => onSelect(p.id)}
-              className="block w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-left hover:border-slate-400"
-              data-testid={`wiki-page-${p.id}`}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="truncate text-sm font-medium text-slate-900">{p.title}</span>
-                {p.is_stub && <Pill tone="amber">stub</Pill>}
-              </div>
-              {p.summary && (
-                <p className="mt-0.5 line-clamp-2 text-xs text-slate-500">{p.summary}</p>
-              )}
-            </button>
-          </li>
-        ))}
+        {pages.map((p) => {
+          const compiling = isCompiling(live, p);
+          const pulsing = live.recentlyCommitted.has(p.id);
+          return (
+            <li key={p.id}>
+              <button
+                type="button"
+                onClick={() => onSelect(p.id)}
+                className={`block w-full rounded-md border bg-white px-3 py-2 text-left transition-colors hover:border-slate-400 ${
+                  pulsing
+                    ? "border-emerald-400 bg-emerald-50"
+                    : compiling
+                      ? "border-sky-300"
+                      : "border-slate-200"
+                }`}
+                data-testid={`wiki-page-${p.id}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-sm font-medium text-slate-900">{p.title}</span>
+                  {compiling ? (
+                    <Pill tone="sky">✦ editing…</Pill>
+                  ) : pulsing ? (
+                    <Pill tone="emerald">updated</Pill>
+                  ) : (
+                    p.is_stub && <Pill tone="amber">stub</Pill>
+                  )}
+                </div>
+                {p.summary && (
+                  <p className="mt-0.5 line-clamp-2 text-xs text-slate-500">{p.summary}</p>
+                )}
+              </button>
+            </li>
+          );
+        })}
       </ul>
     </section>
   );
@@ -181,10 +212,12 @@ function PageGroup({
 function WikiPageReader({
   projectId,
   pageId,
+  compiling,
   onBack,
 }: {
   projectId: string;
   pageId: string;
+  compiling: boolean;
   onBack: () => void;
 }) {
   const { surface } = useSurface();
@@ -220,6 +253,15 @@ function WikiPageReader({
         )}
       </div>
       <div className="flex-1 overflow-y-auto p-4">
+        {compiling && (
+          <div
+            className="mb-3 flex items-center gap-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs text-sky-700"
+            data-testid="wiki-editing-banner"
+          >
+            <span className="animate-pulse">✦</span> An agent is editing this page — it will
+            refresh as soon as the changes land.
+          </div>
+        )}
         {detail.isPending && <p className="text-sm text-slate-400">Loading page…</p>}
         {detail.isError && <p className="text-sm text-red-700">Failed to load page.</p>}
         {detail.data && (

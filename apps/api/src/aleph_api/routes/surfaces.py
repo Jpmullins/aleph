@@ -7,7 +7,6 @@ SSE channel; for Inc 4 this returns a one-shot snapshot.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -48,14 +47,13 @@ if TYPE_CHECKING:
 
 router = APIRouter(prefix="/v1/projects", tags=["surfaces"])
 
-# Bounded recompute interval for the delta stream. Each connection rebuilds its
-# tab's data model every `_STREAM_RECOMPUTE_SEC` and emits `updateDataModel`
-# deltas only when the model actually changed (no diff → nothing emitted). This
-# is the simplest universal change signal — no coupling to which mutation paths
-# touch a given tab — at the cost of up-to-this-many-seconds latency. The
-# agent-events stream uses 0.75s, but surface recompute hits Postgres harder
-# (full tab rebuild), so we poll more conservatively.
-_STREAM_RECOMPUTE_SEC = 2.5
+# Poll-fallback window for the delta stream. The stream wakes on a push signal
+# (any mutation for the project) and recomputes-and-diffs the tab's surface,
+# emitting `updateDataModel` deltas only when the model actually changed (no diff
+# → nothing emitted). Absent any push it recomputes after this many seconds as a
+# self-healing safety net. Surface recompute hits Postgres harder than the
+# agent-events requery (full tab rebuild), so its fallback is more conservative.
+_STREAM_FALLBACK_SEC = 10.0
 
 
 class SurfaceMessagesOut(BaseModel):
@@ -128,14 +126,16 @@ async def stream_surface(
     produces data deltas; the other four emit their structural surface once and
     then idle — which is correct, they self-refresh via react-query.
 
-    Change signal: bounded per-connection recompute (poll). Chosen over a ledger
-    pub/sub because surfaces aggregate across many entities/mutation kinds, so a
-    universal recompute-and-diff is simpler and tab-agnostic. Latency is at most
-    `_STREAM_RECOMPUTE_SEC` (2.5s).
+    Change signal: LISTEN/NOTIFY push (any mutation for the project) wakes a
+    recompute-and-diff instantly, with a `_STREAM_FALLBACK_SEC` poll fallback.
+    Recompute-and-diff stays the universal, tab-agnostic detector (surfaces
+    aggregate across many entities/mutation kinds); the push just replaces the
+    old fixed 2.5s poll as the wake trigger.
     """
     tab_lc = tab.lower()
     surface_id = tab_lc
     maker = request.app.state.session_maker
+    broker = request.app.state.change_broker
 
     async def _gen() -> AsyncIterator[bytes]:
         # Initial full surface.
@@ -145,36 +145,43 @@ async def stream_surface(
         for m in messages:
             yield f"data: {json.dumps(m)}\n\n".encode()
 
-        while True:
-            if await request.is_disconnected():
-                return
-            await asyncio.sleep(_STREAM_RECOMPUTE_SEC)
-            if await request.is_disconnected():
-                return
+        # Push: any mutation for this project wakes a recompute-and-diff the
+        # instant it commits (the broker is fed by the LISTEN/NOTIFY listener).
+        # `sub.wait` also returns after `_STREAM_FALLBACK_SEC` with no push, so a
+        # dropped listener self-heals. Recompute-and-diff stays the universal,
+        # tab-agnostic change detector; only the wake trigger changed (was a 2.5s
+        # poll).
+        async with broker.subscribe(project_id) as sub:
+            while True:
+                if await request.is_disconnected():
+                    return
+                await sub.wait(timeout=_STREAM_FALLBACK_SEC)
+                if await request.is_disconnected():
+                    return
 
-            async with maker() as session:
-                fresh = await _build_tab_messages(session, project_id, tab_lc, page_id)
-            structural, model = split_surface_messages(fresh)
+                async with maker() as session:
+                    fresh = await _build_tab_messages(session, project_id, tab_lc, page_id)
+                structural, model = split_surface_messages(fresh)
 
-            # Structural change (cards added/removed) → re-send updateComponents.
-            # The processor updates existing component ids in place and only adds
-            # new ones, so existing DOM nodes are preserved.
-            if structural != prev_structural:
-                for m in structural:
-                    if "updateComponents" in m:
-                        yield f"data: {json.dumps(m)}\n\n".encode()
-                prev_structural = structural
+                # Structural change (cards added/removed) → re-send updateComponents.
+                # The processor updates existing component ids in place and only adds
+                # new ones, so existing DOM nodes are preserved.
+                if structural != prev_structural:
+                    for m in structural:
+                        if "updateComponents" in m:
+                            yield f"data: {json.dumps(m)}\n\n".encode()
+                    prev_structural = structural
 
-            # Data-model deltas.
-            patches = diff_data_model(prev_model, model)
-            for delta in data_model_patches_to_messages(
-                surface_id=surface_id, patches=patches, next_model=model
-            ):
-                yield f"data: {json.dumps(delta)}\n\n".encode()
-            prev_model = model
+                # Data-model deltas.
+                patches = diff_data_model(prev_model, model)
+                for delta in data_model_patches_to_messages(
+                    surface_id=surface_id, patches=patches, next_model=model
+                ):
+                    yield f"data: {json.dumps(delta)}\n\n".encode()
+                prev_model = model
 
-            # Heartbeat so idle proxies don't close the connection.
-            yield b": heartbeat\n\n"
+                # Heartbeat so idle proxies don't close the connection.
+                yield b": heartbeat\n\n"
 
     return StreamingResponse(
         _gen(),

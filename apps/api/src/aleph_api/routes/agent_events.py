@@ -12,7 +12,6 @@ becomes a problem.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -27,7 +26,9 @@ from aleph_db.models.agent import AgentEvent, AgentRun
 
 router = APIRouter(prefix="/v1/projects", tags=["agent-events"])
 
-_POLL_INTERVAL_SEC = 0.75
+# Poll-fallback window: the stream wakes instantly on a push signal; absent any
+# push it re-queries after this many seconds (self-healing safety net).
+_FALLBACK_SEC = 5.0
 _BATCH_LIMIT = 100
 
 
@@ -102,47 +103,52 @@ async def stream_agent_events(
         }
     """
     maker = request.app.state.session_maker
+    broker = request.app.state.change_broker
     cursor: datetime = since or datetime.now(tz=UTC)
 
     async def _gen() -> AsyncIterator[bytes]:
         nonlocal cursor
-        while True:
-            if await request.is_disconnected():
-                return
+        # Push: wake the instant an agent_event for this project commits (the
+        # broker is fed by the LISTEN/NOTIFY listener). `sub.wait` also returns
+        # after `_FALLBACK_SEC` with no push, so a dropped listener self-heals.
+        async with broker.subscribe(project_id) as sub:
+            while True:
+                if await request.is_disconnected():
+                    return
 
-            async with maker() as session:
-                stmt = (
-                    select(AgentEvent, AgentRun.agent_kind)
-                    .join(AgentRun, AgentRun.id == AgentEvent.agent_run_id)
-                    .where(
-                        AgentRun.project_id == project_id,
-                        AgentEvent.timestamp > cursor,
+                async with maker() as session:
+                    stmt = (
+                        select(AgentEvent, AgentRun.agent_kind)
+                        .join(AgentRun, AgentRun.id == AgentEvent.agent_run_id)
+                        .where(
+                            AgentRun.project_id == project_id,
+                            AgentEvent.timestamp > cursor,
+                        )
+                        .order_by(AgentEvent.timestamp.asc())
+                        .limit(_BATCH_LIMIT)
                     )
-                    .order_by(AgentEvent.timestamp.asc())
-                    .limit(_BATCH_LIMIT)
-                )
-                rows = (await session.execute(stmt)).all()
+                    rows = (await session.execute(stmt)).all()
 
-            for event, agent_kind in rows:
-                payload = event.payload_jsonb or {}
-                body = {
-                    "id": str(event.id),
-                    "agent_run_id": str(event.agent_run_id),
-                    "agent_kind": agent_kind,
-                    "event_kind": event.event_kind,
-                    "phase": payload.get("phase"),
-                    "duration_ms": payload.get("duration_ms"),
-                    "payload": {
-                        k: v for k, v in payload.items() if k not in ("phase", "duration_ms")
-                    },
-                    "timestamp": event.timestamp.isoformat(),
-                }
-                yield f"event: phase\ndata: {json.dumps(body)}\n\n".encode()
-                cursor = event.timestamp
+                for event, agent_kind in rows:
+                    payload = event.payload_jsonb or {}
+                    body = {
+                        "id": str(event.id),
+                        "agent_run_id": str(event.agent_run_id),
+                        "agent_kind": agent_kind,
+                        "event_kind": event.event_kind,
+                        "phase": payload.get("phase"),
+                        "duration_ms": payload.get("duration_ms"),
+                        "payload": {
+                            k: v for k, v in payload.items() if k not in ("phase", "duration_ms")
+                        },
+                        "timestamp": event.timestamp.isoformat(),
+                    }
+                    yield f"event: phase\ndata: {json.dumps(body)}\n\n".encode()
+                    cursor = event.timestamp
 
-            # Heartbeat so proxies don't close idle connections.
-            yield b"event: heartbeat\ndata: \n\n"
-            await asyncio.sleep(_POLL_INTERVAL_SEC)
+                # Heartbeat so proxies don't close idle connections.
+                yield b"event: heartbeat\ndata: \n\n"
+                await sub.wait(timeout=_FALLBACK_SEC)
 
     return StreamingResponse(
         _gen(),
