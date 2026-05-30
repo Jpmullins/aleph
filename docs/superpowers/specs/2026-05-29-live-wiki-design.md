@@ -2,7 +2,11 @@
 
 **Date:** 2026-05-29 (scope expanded 2026-05-30)
 **Branch:** `wave-realtime-push-live-wiki`
-**Status:** approved (brainstorming) — pending implementation plan
+**Status:** IMPLEMENTED 2026-05-30 on `wave-realtime-push-live-wiki` (push layer + all
+4 streams migrated + live wiki). Verified: 113 unit + 24 integration tests, and a live
+end-to-end check against the rebuilt running stack (real SSE pushed compiling + committed
+for a real page). Not verified: browser visual (no Chrome connected for the remote session;
+frontend is tsc/eslint/build-clean and mirrors the proven ActivityCard EventSource pattern).
 **Vision tie-in:** "the knowledge base evolves organically in real time" (the living
 multi-agent workspace).
 
