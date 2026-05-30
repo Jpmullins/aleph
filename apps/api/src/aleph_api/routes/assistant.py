@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Any
@@ -34,6 +35,11 @@ from aleph_security.agent_token import mint_agent_token
 from aleph_security.roles import ProjectRole, require_at_least
 
 router = APIRouter(prefix="/v1/projects", tags=["assistant"])
+
+# Poll-fallback window for the message stream: it wakes instantly on the
+# assistant_messages UPDATE push; absent any push it re-reads after this many
+# seconds (self-healing). Short, since token streaming wants snappy updates.
+_ASSISTANT_FALLBACK_SEC = 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -382,31 +388,35 @@ async def stream_message(
     project_id: ProjectScopeDep,
     message_id: UUID,
 ) -> StreamingResponse:
-    """SSE stream that polls the in-progress assistant message and emits
-    incremental updates as Server-Sent Events. The composer's actual
-    token-streaming is approximated by polling `body_md` length — this
-    keeps the streaming wire format stable; Inc 4 swaps the in-process
-    composer to true token streaming."""
+    """SSE stream of the in-progress assistant message, emitting incremental
+    `body_md` deltas as Server-Sent Events.
+
+    Wakes on LISTEN/NOTIFY push the instant the worker updates `body_md`/`status`
+    (the `assistant_messages` UPDATE trigger), with a short `_ASSISTANT_FALLBACK_SEC`
+    poll fallback so a dropped listener self-heals. The composer's token-streaming
+    is approximated by re-reading `body_md` length on each wake."""
 
     async def events() -> Any:
         last_len = 0
         maker = request.app.state.session_maker
-        for _ in range(600):  # ~5 min cap
-            async with maker() as s:
-                msg = await s.get(AssistantMessage, message_id)
-                if msg is None or msg.project_id != project_id:
-                    yield 'data: {"event":"error","reason":"not_found"}\n\n'
-                    return
-                if len(msg.body_md) > last_len:
-                    delta = msg.body_md[last_len:]
-                    last_len = len(msg.body_md)
-                    import json as _json
-
-                    yield ("data: " + _json.dumps({"event": "token", "delta": delta}) + "\n\n")
-                if msg.status in ("complete", "failed", "budget_blocked"):
-                    yield ('data: {"event":"done","status":"' + msg.status + '"}\n\n')
-                    return
-            await asyncio.sleep(0.5)
+        broker = request.app.state.change_broker
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + 300.0  # ~5 min cap
+        async with broker.subscribe(project_id) as sub:
+            while loop.time() < deadline:
+                async with maker() as s:
+                    msg = await s.get(AssistantMessage, message_id)
+                    if msg is None or msg.project_id != project_id:
+                        yield 'data: {"event":"error","reason":"not_found"}\n\n'
+                        return
+                    if len(msg.body_md) > last_len:
+                        delta = msg.body_md[last_len:]
+                        last_len = len(msg.body_md)
+                        yield ("data: " + json.dumps({"event": "token", "delta": delta}) + "\n\n")
+                    if msg.status in ("complete", "failed", "budget_blocked"):
+                        yield ('data: {"event":"done","status":"' + msg.status + '"}\n\n')
+                        return
+                await sub.wait(timeout=_ASSISTANT_FALLBACK_SEC)
         yield 'data: {"event":"timeout"}\n\n'
 
     return StreamingResponse(
