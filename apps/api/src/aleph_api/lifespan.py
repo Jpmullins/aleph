@@ -10,6 +10,7 @@ import redis.asyncio as aioredis
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from aleph_api.a2ui_handlers import build_action_router
+from aleph_api.realtime import ChangeBroker, NotifyListener, asyncpg_dsn
 from aleph_api.settings import Settings, get_settings
 from aleph_db.session import async_engine_for, async_sessionmaker_for
 from aleph_models.client import LiteLLMClient
@@ -118,6 +119,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.asset_store = asset_store
     app.state.action_router = build_action_router()
 
+    # Real-time push layer: one supervised LISTEN/NOTIFY connection republishes
+    # DB change signals (from the `realtime_notify_triggers` migration) to an
+    # in-process per-project broker that the SSE streams subscribe to. Each
+    # stream keeps a slow poll fallback so a dropped listener self-heals.
+    change_broker = ChangeBroker()
+    notify_listener = NotifyListener(dsn=asyncpg_dsn(settings.database_url), broker=change_broker)
+    app.state.change_broker = change_broker
+    app.state.notify_listener = notify_listener
+
     # Wave 6 D1 — cross-session memory for the assistant Deep Agent. The
     # Postgres-backed langgraph store (its own `store`/`store_migrations` tables)
     # must be constructed inside the running event loop, so it is built here
@@ -138,8 +148,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.agent_store_pool = agent_store_pool
         app.state.agent_store = agent_store
         setup_copilotkit(app, settings=settings, store=agent_store)
+        await notify_listener.start()
         yield
     finally:
+        await notify_listener.stop()
         await agent_store_pool.close()
         await gateway_http.aclose()
         await auth_http.aclose()
