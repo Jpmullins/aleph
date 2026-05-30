@@ -1,215 +1,215 @@
-# Live Wiki — design
+# Real-time push layer + Live Wiki — design
 
-**Date:** 2026-05-29
+**Date:** 2026-05-29 (scope expanded 2026-05-30)
+**Branch:** `wave-realtime-push-live-wiki`
 **Status:** approved (brainstorming) — pending implementation plan
 **Vision tie-in:** "the knowledge base evolves organically in real time" (the living
-multi-agent workspace). Wiki is the KB core, so it is the flagship live surface.
+multi-agent workspace).
 
-## Goal
+## Scope (as agreed)
 
-The wiki right-panel tab updates the instant an agent writes — no manual refresh —
-with **full presence**:
+Two layers, built together on a new branch, thoroughly tested:
 
-1. New / changed pages appear in the index immediately.
-2. The open page you are reading refreshes immediately when an agent edits it
-   (today it is a one-shot fetch that never refreshes).
-3. A live "✦ agent is editing this page…" indicator shows while a wiki compile is
-   in flight (before the commit lands), and a brief "updated just now" pulse flashes
-   on a page when its commit lands.
+1. **Real-time push layer** — replace every SSE stream's idle polling with Postgres
+   `LISTEN/NOTIFY` push (instant on write) **plus a slow poll fallback** for self-healing.
+   Migrate **all four** streams: agent-events, surfaces, assistant-message, and the new
+   changes stream. No stubs — push primary, fallback underneath.
+2. **Live Wiki** — the flagship consumer: the wiki tab updates the instant an agent writes,
+   with a live "✦ agent is editing this page…" presence indicator and an "updated just now"
+   pulse, built on the push layer.
 
-## Why event-driven off the Action Ledger
+Decisions locked: **all streams migrated now** (highest completeness, accepted regression
+surface, mitigated by thorough per-stream tests); **hand-edits excluded** from live updates
+(the editor already sees their own change; agent-writes only).
 
-Every wiki write already emits an `ActionLedgerEvent` (`action_kind="wiki.revision.commit"`,
-`target_id=page_id`) inside the commit transaction — rule #4 ("every mutation writes a
-ledger event"). The table is indexed and cursor-queryable by `(project_id, timestamp)`,
-exactly like `AgentEvent`, which the working agent-events SSE already polls. So the
-"something changed" signal exists and is the architecturally-correct source; nothing
-new needs to be invented to know *that* a page changed.
+## Why LISTEN/NOTIFY + triggers (not Redis pub/sub, not app-level publish)
 
-In-flight presence ("editing now", before the commit) is **not** a state mutation, so it
-does not belong in the ledger. It rides the existing ephemeral-progress channel —
-`AgentEvent` rows emitted per workflow phase via `emit_phase_*` — which the wiki
-workflow already produces. We add a page-scoped progress event so the browser learns
-*which* page is being compiled.
+Every mutation already lands a row in a known table (`action_ledger_events`,
+`agent_events`) or updates `assistant_messages`. A **Postgres trigger** that calls
+`pg_notify` on insert/update is:
 
-### Approaches considered (and why this one)
+- **Automatic + can't-be-bypassed** — fires for every write regardless of code path, so
+  no call site can forget to publish (a real risk with app-level Redis publish).
+- **Transactionally correct** — `NOTIFY` is delivered on COMMIT, so subscribers never see
+  uncommitted data. App-level publish must be carefully placed after commit at every site;
+  the trigger gets this for free.
 
-- **A — event-driven off the ledger (chosen).** Reuses the ledger + the proven SSE
-  cursor-poll pattern; keeps the rich markdown reader intact; refetches only the
-  affected page (correct granularity for large markdown). Sub-second, low-risk.
-- **B — rebuild the wiki as a data-bound A2UI surface** (like Hypotheses) so the
-  existing 2.5s streamer diffs it. Rejected: re-expressing the whole reader/browser as
-  declarative components and diffing markdown bodies through JSON-pointer every tick is
-  wasteful and regression-prone, for marginal gain.
-- **C — hybrid** (ledger trigger + data-model deltas for just the index list).
-  A reasonable later refinement, not the first cut.
+Redis pub/sub was considered (Redis is already in `app.state`) but loses both properties.
+The trigger approach's one cost — a dedicated listener connection with reconnect — is
+contained, and the poll fallback covers a dropped listener so the UI never goes silent.
 
 ## Architecture
 
 ```
-agent compiles page
-  └─ workflow emits page-scoped progress AgentEvent {page_id,page_title,page_kind}
-        └─ GET /changes/stream poll (≈0.75s, cursor) → SSE signal {kind:"compiling",…}
-              └─ WikiSurface shows "✦ editing…" on that page
-  └─ commit_revision writes ledger wiki.revision.commit {page_id,page_title}
-        └─ GET /changes/stream poll → SSE signal {kind:"committed",…}
-              └─ WikiSurface invalidates ["wiki-pages",pid] + (if open) ["wiki-page",pid,pageId]
-                 clears "editing", flashes "updated just now" pulse
-                    └─ react-query refetches → index + reader re-render with new content
+mutation commits (ledger/agent_event/assistant_message write)
+  └─ AFTER INSERT/UPDATE trigger → pg_notify('aleph_changes', {src,project_id,…})   [DB, on commit]
+        └─ NotifyListener (one raw asyncpg conn, LISTEN, reconnect-supervised)        [per API process]
+              └─ ChangeBroker.publish(project_id, signal)                              [in-process fan-out]
+                    └─ each SSE generator: await broker.wait(project_id, timeout=FALLBACK)
+                          ├─ woke on push  → run its query/recompute, emit             [instant]
+                          └─ woke on timeout (no push) → same, as a safety net          [self-healing]
 ```
 
-The change source is the Action Ledger (committed) + AgentEvents (in-flight). A new
-lightweight per-project **change-signal SSE** carries compact signals to the browser; the
-existing rich `WikiSurface` (react-query) consumes them and invalidates precisely. The
-heavy markdown reader is unchanged — we refetch the *affected* page, not diff it.
+### Components — push layer
 
-## Components
+#### P1. DB triggers (new Alembic migration; raw SQL via `op.execute`)
 
-### Backend
+A shared notify function + per-table triggers. Payload is minimal (well under the ~8000-byte
+`NOTIFY` cap) — it carries identity, not data; the stream still does a small cursor query to
+fetch the actual new rows.
 
-#### B1. `GET /v1/projects/{project_id}/changes/stream` (new: `apps/api/src/aleph_api/routes/changes.py`)
+- `action_ledger_events` — `AFTER INSERT` →
+  `pg_notify('aleph_changes', json_build_object('src','ledger','project_id',NEW.project_id,'action_kind',NEW.action_kind,'target_id',NEW.target_id,'ts',extract(epoch from NEW.timestamp)))`.
+  Rows with `project_id IS NULL` (e.g. `user.create`) are skipped (no project to fan out to).
+- `agent_events` — `AFTER INSERT`. `agent_events` has no `project_id` column, so the trigger
+  resolves it: `SELECT project_id FROM agent_runs WHERE id = NEW.agent_run_id` (indexed PK
+  lookup) → `pg_notify('aleph_changes', {'src':'agent_event','project_id':…,'agent_run_id':…,'event_kind':NEW.event_kind,'ts':…})`.
+- `assistant_messages` — `AFTER UPDATE` when `body_md` or `status` changed →
+  `pg_notify('aleph_changes', {'src':'assistant','project_id':NEW.project_id,'message_id':NEW.id,'status':NEW.status,'ts':…})`.
 
-SSE endpoint, cursor-based poll at `_POLL_INTERVAL_SEC = 0.75` (mirrors `agent_events.py`).
-Project-scoped via `ProjectScopeDep`. `since` query param (ISO 8601) is an optional cursor.
+`down_revision` drops the triggers + function. No table/column changes (the `agent_runs`
+lookup is read-only).
 
-Each poll runs two scoped SELECTs and merges their signals in ascending timestamp order:
+#### P2. `NotifyListener` + `ChangeBroker` (new module `apps/api/src/aleph_api/realtime.py`)
 
-1. **Committed** — `ActionLedgerEvent` rows where `project_id == project_id`,
-   `timestamp > cursor`, and `action_kind` ∈ the wiki allowlist
-   `{"wiki.revision.commit"}` (a module-level frozenset, extensible). →
-   `{"kind":"committed","action_kind":…,"page_id":str(target_id),"page_title":payload.get("page_title"),"actor_kind":…,"ts":iso}`.
-2. **Compiling** — `AgentEvent` rows joined to `AgentRun` (so we can scope by
-   `AgentRun.project_id == project_id` and filter `AgentRun.agent_kind == "wiki"`) where
-   `AgentEvent.timestamp > cursor` and `event_kind == "phase_started"` and the payload
-   carries a `page_id`. → `{"kind":"compiling","page_id":…,"page_title":…,"page_kind":…,"ts":iso}`.
-   A matching `phase_completed`/`phase_failed` with the same `page_id` →
-   `{"kind":"compile_done","page_id":…,"ts":iso}` (lets the frontend clear "editing" even
-   if no commit followed, e.g. a no-op revision).
+- **`ChangeBroker`** — pure in-process pub/sub, unit-testable, no DB. Holds
+  `dict[UUID, set[asyncio.Queue]]`. `subscribe(project_id) -> Subscription` (context manager
+  registering a bounded queue); `publish(project_id, signal: dict)` puts the signal on every
+  live queue for that project (drops on full queue with a logged warning — backpressure
+  safety). `Subscription.wait(timeout) -> dict | None` returns the next signal or `None` on
+  timeout (drives the fallback).
+- **`NotifyListener`** — opens **one raw asyncpg connection** (DSN derived from
+  `settings.database_url` by stripping the SQLAlchemy `+asyncpg` driver tag — pure helper
+  `asyncpg_dsn(url)`), runs `LISTEN aleph_changes`, and on each notification parses the JSON
+  payload and calls `broker.publish(project_id, signal)`. **Supervised:** wrapped in a task
+  that, on connection error, logs and reconnects with capped backoff; while down, every
+  stream's poll fallback keeps data flowing. Built + started in the lifespan
+  (`app.state.change_broker`, `app.state.notify_listener`), cancelled + connection closed on
+  shutdown.
 
-The cursor advances to the max emitted `timestamp` across both sources. Each signal is
-one SSE frame: `event: change\ndata: <json>\n\n`. A `: heartbeat\n\n` is emitted each
-idle tick so proxies don't close the connection. On connect (before the loop), the
-endpoint **replays in-flight compiles** from the last `_REPLAY_WINDOW_SEC = 60` seconds —
-`phase_started` page events with no later `phase_completed`/`phase_failed`/commit for the
-same `page_id` — so a page opened mid-compile shows presence without waiting for the next
-signal.
+#### P3. Stream migrations (all four) — push primary, poll fallback
 
-The SSE auth limitation applies (EventSource can't send `Authorization`; relies on `local`
-auth mode — same as the existing surface and agent-events streams). This is the documented
-SSE×OIDC gap; no new exposure.
+Each stream replaces `await asyncio.sleep(interval)` with
+`signal = await subscription.wait(timeout=FALLBACK_SEC)` inside a `broker.subscribe(project_id)`
+context. On wake (push or timeout) it runs its existing query/recompute and emits. Per-stream
+fallback windows (safety net only; push is the real path):
 
-#### B2. Pure signal serializers (in `routes/changes.py` or a small `aleph_api` helper module)
+1. **`agent-events/stream`** — fallback 5s. Cursor SELECT `AgentEvent > cursor` → emit.
+2. **`surfaces/{tab}/stream`** — fallback 10s. Recompute `_build_tab_messages` + diff → emit
+   structural/data deltas (unchanged diff logic; only the wake trigger changes).
+3. **`messages/{id}/stream`** (assistant) — fallback 1s (token-streaming wants snappy). Re-read
+   message, emit `token`/`done`. Push fires on each `body_md` update for near-live tokens.
+4. **`changes/stream`** (new) — fallback 5s. See L-layer below.
 
-Extracted so the gen-loop is thin and the mapping is unit-tested without a DB:
+The 5-minute / 600-iteration caps become wall-clock deadlines so behavior is unchanged.
 
-- `ledger_rows_to_signals(rows: list[tuple[ActionLedgerEvent]]) -> list[dict]` — applies the
-  allowlist and maps to `committed` signals.
-- `phase_rows_to_signals(rows: list[tuple[AgentEvent, str]]) -> list[dict]` — maps wiki
-  page-scoped `phase_started`→`compiling`, `phase_completed`/`phase_failed`→`compile_done`;
-  drops rows without a `page_id` in payload.
+### Components — live wiki (consumer of the push layer)
 
-Both are pure (`list[dict]` in/out), deterministic, no I/O.
+#### L1. `GET /v1/projects/{id}/changes/stream` (new `routes/changes.py`)
 
-#### B3. Page-scoped progress emission (modify `packages/aleph-wiki/src/aleph_wiki/agent/workflow.py`)
+Subscribes to the broker; on wake, runs two scoped cursor SELECTs and merges signals in
+ascending-`ts` order:
 
-The compile path knows each page's `page_id` + `title` (drafts pre-allocate `page_id`).
-Emit a page-scoped `phase_started` **before** committing each page and a matching
-`phase_completed` after, carrying `payload={"page_id":…, "page_title":…, "page_kind":…}`:
+- Ledger rows with `action_kind` in a wiki allowlist (`{"wiki.revision.commit"}`, a frozenset,
+  extensible) → `{"kind":"committed","page_id","page_title","actor_kind","ts"}`.
+- Wiki page-scoped `AgentEvent`s (joined to `AgentRun` for `project_id` + `agent_kind=="wiki"`)
+  whose payload has a `page_id`: `phase_started`→`{"kind":"compiling","page_id","page_title","page_kind","ts"}`,
+  `phase_completed`/`phase_failed`→`{"kind":"compile_done","page_id","ts"}`.
 
-- A new phase name `"compile_page"` wraps the per-page commit in `_node_commit_revision`
-  (source page + each topic stub), using the existing `phase(...)` context manager with the
-  page payload — NOT the node-level `@with_phase` (which is per-node, not per-page). The
-  node-level `commit_revision` phase stays as-is.
-- Add `page_title` to the `wiki.revision.commit` ledger payload in
-  `WikiService.commit_revision` if not already present (today payload is
-  `{page_id, revision_no, body_sha256, page_kind, commit_message}` — add `page_title=title`).
+On connect, replays in-flight compiles from the last `_REPLAY_WINDOW_SEC=60`s (a `compiling`
+with no later `compile_done`/commit for the same page) so a page opened mid-compile shows
+presence immediately. One SSE frame per signal: `event: change\ndata:<json>`.
 
-No new tables, no migration: reuses `AgentEvent` + `ActionLedgerEvent`.
+#### L2. Pure signal serializers (`routes/changes.py`)
 
-### Frontend
+`ledger_rows_to_signals(rows) -> list[dict]` and `phase_rows_to_signals(rows) -> list[dict]` —
+pure, deterministic, unit-tested without a DB (allowlist filter, page_id requirement,
+ordering, shape).
 
-#### F1. `useWikiLiveSignals(projectId)` (new: `apps/web/src/hooks/useWikiLiveSignals.ts`)
+#### L3. Page-scoped progress emission (modify `packages/aleph-wiki/.../agent/workflow.py`)
 
-Opens one `EventSource` to `…/changes/stream`, parses `change` frames, and:
+Wrap each per-page commit in `_node_commit_revision` (source page + each topic stub) in the
+existing `phase(...)` context manager with phase name `"compile_page"` and
+`payload={"page_id","page_title","page_kind"}`. (The node-level `@with_phase("commit_revision")`
+stays.) Add `page_title=title` to the `wiki.revision.commit` ledger payload in
+`WikiService.commit_revision` (additive). Side effect: the ActivityCard's existing agent-events
+feed will show the new `compile_page` phase — benign extra granularity.
 
-- Maintains `compilingPages: Map<string, {pageTitle:string; since:number}>` keyed by
-  `page_id` (or, when `page_id` is absent for a brand-new page, by a `title:`-prefixed key).
-  `compiling` adds; `compile_done`/`committed` remove.
-- Maintains `recentlyCommitted: Map<string, number>` (page_id → ts) for the pulse; entries
-  auto-expire after ~3s.
-- On `committed`: `queryClient.invalidateQueries({queryKey:["wiki-pages",projectId]})` and, if
-  the page is currently open, `["wiki-page",projectId,pageId]`.
-- Cursor (`sinceRef`) tracks the last `ts` so reconnects don't replay processed signals.
-- Auto-reconnects on error (mirrors `ActivityCard`/`A2UIStreamSurfaceView`).
+#### L4. Frontend `useWikiLiveSignals(projectId)` (new `apps/web/src/hooks/useWikiLiveSignals.ts`)
 
-Returns `{compilingPages, recentlyCommitted}` for the view to render presence.
+One `EventSource` to `…/changes/stream`. Maintains `compilingPages: Map<key,{pageTitle,since}>`
+(keyed by `page_id`, or `title:<t>` for a not-yet-existing page) and `recentlyCommitted:
+Map<page_id,ts>` (auto-expires ~3s for the pulse). On `committed`:
+`queryClient.invalidateQueries(["wiki-pages",pid])` and, if that page is open,
+`["wiki-page",pid,pageId]` — this is the fix for "open page never refreshes". Cursor (`sinceRef`)
++ auto-reconnect mirror `ActivityCard`/`A2UIStreamSurfaceView`.
 
-#### F2. `WikiSurface.tsx` (modify)
+#### L5. `WikiSurface.tsx` (modify)
 
-- Call `useWikiLiveSignals(projectId)`; pass `compilingPages`/`recentlyCommitted` down to the
-  index list and the reader.
-- **Index:** each page row that is in `compilingPages` (by id or title) renders a
-  "✦ editing…" badge; a row in `recentlyCommitted` briefly gets an "updated just now"
-  highlight (CSS class with a fade transition).
-- **Reader (`WikiPageReader`):** if the open page id is in `compilingPages`, show a
-  "✦ an agent is editing this page…" banner; when its commit arrives the reader has already
-  been invalidated+refetched, so the banner clears and the pulse flashes once.
-- Lower the index query's `refetchInterval` to a slow `30_000` safety net (was 4–15s
-  adaptive) — freshness now comes from the event stream, the interval is just a backstop.
-- Give the open-page query a `refetchInterval` of `false` (unchanged default) — it is now
-  refreshed by targeted invalidation, which is the fix for "open page never refreshes".
+Consume the hook; render "✦ editing…" on compiling pages (index + reader banner) and an
+"updated just now" highlight on recently-committed pages. Lower the index query
+`refetchInterval` to a 30s safety net (freshness now comes from the stream); the open-page
+query stays event-invalidated (no interval).
 
 ## Data model / API changes
 
-- **No schema change, no migration.** Reuses `ActionLedgerEvent` + `AgentEvent`.
+- **One migration:** triggers + notify function only (no table/column changes).
 - **One new route:** `GET /v1/projects/{id}/changes/stream`.
-- **Ledger payload addition:** `wiki.revision.commit` gains `page_title` (additive; existing
-  consumers ignore unknown keys).
-- **New AgentEvent phase:** `compile_page` (page-scoped), emitted by the wiki workflow.
+- **Ledger payload addition:** `wiki.revision.commit` gains `page_title` (additive).
+- **New AgentEvent phase:** `compile_page` (page-scoped).
 
-## Testing
+## Testing (thorough — explicit user requirement)
 
 ### Unit (no compose)
-- `ledger_rows_to_signals`: allowlist filter (a non-wiki `action_kind` is dropped); shape of a
-  `committed` signal incl. `page_title` from payload; empty input → `[]`.
-- `phase_rows_to_signals`: `phase_started`+page_id → `compiling`; `phase_completed`+page_id →
-  `compile_done`; a `phase_started` with no `page_id` is dropped; ascending-ts ordering preserved.
+- **`ChangeBroker`**: publish reaches all subscribers of a project and none of another;
+  `wait` returns the signal, or `None` on timeout; unsubscribe removes the queue; full-queue
+  drop is safe.
+- **`asyncpg_dsn(url)`**: strips `+asyncpg`, preserves host/db/creds/params.
+- **Notify-payload parse**: malformed/again payloads don't crash the listener loop.
+- **`ledger_rows_to_signals` / `phase_rows_to_signals`**: allowlist filter, page_id
+  requirement, `committed`/`compiling`/`compile_done` shapes, ordering.
 
-### Integration (compose: Postgres + Redis)
-- Insert a project; insert a `wiki.revision.commit` `ActionLedgerEvent` (target_id=page_id,
-  payload has page_title) → `GET /changes/stream` (consume initial replay + one tick) emits a
-  `committed` signal with the right page_id/title; a second project's stream does **not** see it
-  (scoping).
-- Insert an `AgentRun(agent_kind="wiki")` + a page-scoped `phase_started` `AgentEvent` → the
-  stream emits a `compiling` signal; the matching `phase_completed` → `compile_done`.
-- (Reuse the deterministic insert pattern from `tests/e2e/test_agent_events.py`.)
-
-The SSE gen-loop is consumed via the ASGI client with a short read deadline (read the initial
-replay frames + one poll tick, then assert and close) to keep the test deterministic.
+### Integration (compose: Postgres + Redis [+ MinIO for ingest])
+- **Trigger → push end-to-end**: a real `LISTEN aleph_changes` test connection receives a
+  notify when a ledger row / agent_event / assistant_message is written in a committed txn;
+  payload has the right `project_id`.
+- **Each migrated stream wakes on push** (emits within a short deadline well under its
+  fallback window), and **still emits via fallback when the listener is disabled** (prove the
+  safety net).
+- **changes/stream**: ledger `wiki.revision.commit` → `committed` signal (+ `page_title`),
+  scoped to the right project, not leaked to another; wiki `phase_started`/`completed` →
+  `compiling`/`compile_done`.
+- Reuse the deterministic insert pattern from `tests/e2e/test_agent_events.py`; consume SSE via
+  the ASGI client with a short read deadline.
 
 ### Browser (per the "verify each wave live" rule)
-Ask the Live agent to ingest a source (e.g. a URL) into the wiki. Without touching the UI,
-observe on the Wiki tab: the page appears in the index, shows "✦ editing…" during compile,
-then flashes "updated just now" and renders the body — and an already-open page refreshes in
-place when re-compiled.
+- Ingest a source via the Live agent; on the Wiki tab watch a page appear → "✦ editing…" →
+  "updated just now" → body renders, and an already-open page refresh in place.
+- Regression sanity on the migrated streams: ActivityCard phases still stream, a hypothesis
+  still appears on the Hypotheses surface via a delta, assistant tokens still stream.
 
-## Honest scope / trade-offs
+## Honest scope / trade-offs / limits
 
-- Still a **0.75s ledger poll**, not Postgres `LISTEN/NOTIFY`. Fine for single-user local;
-  LISTEN/NOTIFY is the documented scale upgrade (noted in `agent_events.py`). N viewers = N
-  poll loops, same as the existing streams.
-- A **brand-new page** shows presence by `title` until its row exists, then resolves to
-  `page_id` (the commit signal carries `page_id`).
-- **Hand-edits** (`handedit_service.mark_section`) write no ledger event today, so they do not
-  trigger live updates — out of scope (the editor already sees their own change locally).
-- SSE auth: relies on `local` mode (the existing SSE×OIDC gap). No new exposure; documented.
-- The `changes/stream` is intentionally **general** (allowlist-filtered): Notes/Briefs can
-  subscribe later by widening the allowlist and adding their own consumers. Out of scope now —
-  wiki is the only consumer this iteration (YAGNI on the others).
+- **Push primary, poll fallback** — not pure push. This is deliberate and production-grade:
+  the fallback self-heals a dropped listener so the UI never silently dies. Fallback windows
+  (1–10s) are safety nets, not the latency you'll see (push is sub-100ms in practice).
+- **One listener connection per API process.** Single uvicorn process today (confirmed: no
+  `--workers`); if scaled to N processes, each holds its own `LISTEN` — fine, `NOTIFY`
+  broadcasts to all. In-process fan-out means cross-process delivery already works (every
+  process gets the notify).
+- **`agent_events` trigger does a PK lookup** on `agent_runs` to resolve `project_id` — one
+  indexed read per event insert. Acceptable; avoids a schema denormalization.
+- **Hand-edits** (`mark_section`) write no ledger event, so they don't push — out of scope
+  (editor sees their own edit locally).
+- **SSE auth** relies on `local` mode (EventSource can't send headers) — the existing,
+  documented SSE×OIDC gap; no new exposure. Must be addressed before an OIDC deploy regardless.
+- **Brand-new page** shows presence by title until its row exists, then resolves to `page_id`.
+- **`ChangeBroker` is in-memory** (per process) — correct, since each process has its own
+  subscribers + its own listener. No external broker needed.
 
-## Out of scope (this iteration)
-
-- Notes/Briefs/Artifacts live updates (the stream is built general; consumers come later).
-- Postgres `LISTEN/NOTIFY` (poll is sufficient now).
-- Live updates for hand-edits.
+## Out of scope (this wave)
+- Postgres `LISTEN/NOTIFY` is the push transport; no message broker (Kafka/Redis-streams).
+- Live updates for hand-edits; Notes/Briefs presence UI (the `changes/stream` is general —
+  consumers come later).
 - Per-keystroke collaborative editing / multi-user cursors.
+- SSE×OIDC auth (tracked separately).
