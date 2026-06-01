@@ -149,11 +149,27 @@ External reference clones the design depends on:
 
 ## Docs map
 
-- `docs/superpowers/specs/` — design specs (top-level + per-increment)
-- `docs/engineering/` — `repo-structure.md`, `local-development.md`, `quality-gates.md`, `litellm-transport.md`
-- `docs/domain/` — `wiki.md`, `rks.md`, `claims-and-provenance.md`, `ledger.md`
-- `docs/security/` — `auth.md`, `aiq-boundary.md`, `connector-credentials.md`
+**Specs & plans**
+- `docs/superpowers/specs/` — design specs (top-level `2026-05-26-aleph-design.md` + per-increment `2026-05-27-inc-{0..8}-*`)
+- `docs/superpowers/specs/2026-05-29-wave-{3,4}-*-refresh-design.md` + `2026-05-29-wave-6-conversational-completion-design.md` + `2026-05-29-live-wiki-design.md` — the **shipped**-wave designs (W3 orchestrator+subagents; W4 A2UI v0_9; W6 conversational completion; realtime-push + live wiki), each with a References section pinning the exact local repos / MCP servers / skills. The original `wave-{3,4}-*-design.md` are superseded (banners at their top).
+- `docs/superpowers/plans/` — the implementation plans for waves 3 / 4 / 6
+
+**Canonical status**
+- `docs/implementation-log.md` — appended after every increment/wave (the canonical record of what shipped vs. honest gaps); entries for W6, W4, W3, the realtime-push + live-wiki wave + the 2026-05-28/29 session entry with the full reference map (local repos, a2ui.org, MCP servers, skills)
+- `docs/system-assessment.md` — the 2026-05-29 full system review (updated 2026-05-30): what works (verified), quality-gate reality, and the prioritized gap list
+
+**Engineering & ops**
+- `docs/engineering/` — `repo-structure.md`, `local-development.md`, `quality-gates.md`, `litellm-transport.md`, `tests-per-increment.md`
 - `docs/operations/` — `runbook.md`, `aiq-runbook.md`
-- `docs/superpowers/specs/2026-05-29-wave-{3,4}-*-refresh-design.md` + `2026-05-29-wave-6-conversational-completion-design.md` — the **shipped**-wave designs (W3 orchestrator+subagents; W4 A2UI v0_9; W6 conversational completion), each with a References section pinning the exact local repos / MCP servers / skills. The original `wave-{3,4}-*-design.md` are superseded (banners at their top).
-- `docs/implementation-log.md` — appended after every increment/wave (the canonical record of what shipped vs. honest gaps); entries for W6, W4, W3 + the 2026-05-28/29 session entry with the full reference map (local repos, a2ui.org, MCP servers, skills)
-- `docs/system-assessment.md` — the 2026-05-29 full system review: what works (verified), quality-gate reality, and the prioritized gap list
+- `docs/security/` — `auth.md` (incl. the deferred SSE×OIDC gap), `aiq-boundary.md`, `connector-credentials.md`
+
+**Subsystem docs**
+- `docs/domain/` — `wiki.md`, `rks.md`, `claims-and-provenance.md`, `ledger.md`
+- `docs/agents/` — `wiki-agent.md`, `assistant-agent.md`, `research-agent.md`, `synthesize-action.md`, `aiq-config.md`
+- `docs/a2ui/` — `surfaces.md`, `action-router.md`, `catalog.md`; `docs/ui/` — `chat-surface.md`
+- `docs/retrieval/` — `wiki-first-router.md`; `docs/pipelines/` — `chunking-and-embedding.md`, `normalization.md`
+- `docs/wiki/` — `aliases.md`, `hand-edits.md`, `rejection-feedback.md`
+- `docs/connectors/` — `connector-contract.md`, `upload.md`
+- `docs/reviewers/` — `mechanical.md`, `editorial.md`, `approval-workflow.md`
+- `docs/hypotheses/` — `hypotheses.md`; `docs/datasets/` — `datasets.md`
+- `docs/artifacts/` — `builder.md`, `exporters.md`; `docs/evals/` — `eval-suite.md`, `regression-suite.md`

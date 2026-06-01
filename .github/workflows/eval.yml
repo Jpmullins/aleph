@@ -14,7 +14,11 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.5.21"
-      - run: uv sync --all-extras
+      # MUST be --all-packages (matches ci.yml): --all-extras alone leaves
+      # workspace members uninstalled → aleph_evals import fails before it can
+      # write a report. This is why the nightly cron was red while ci.yml's
+      # evals job (same eval command, corrected flags) stayed green.
+      - run: uv sync --all-packages --all-extras
       - name: Run all evals (strict)
         run: |
           uv run python -m aleph_evals \
