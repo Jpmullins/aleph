@@ -76,9 +76,7 @@ async def test_create_project_bootstrap_disabled(http_client, auth_bypass, asgi_
 
     monkeypatch.setattr(proj, "create_pool", lambda *a, **k: _Pool())  # type: ignore[arg-type]
 
-    resp = await http_client.post(
-        "/v1/projects", json={"title": "No bootstrap", "description": ""}
-    )
+    resp = await http_client.post("/v1/projects", json={"title": "No bootstrap", "description": ""})
     assert resp.status_code == 201
     project_id = resp.json()["id"]
 

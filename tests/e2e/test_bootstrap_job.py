@@ -41,9 +41,19 @@ def patched_scope_gateway(monkeypatch):
     canned = {
         "id": "chatcmpl-boot",
         "model": "claude-haiku-4-5",
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": scope}, "finish_reason": "stop"}],
-        "usage": {"prompt_tokens": 20, "completion_tokens": 40, "total_tokens": 60,
-                  "prompt_tokens_details": {"cached_tokens": 0}},
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": scope},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 20,
+            "completion_tokens": 40,
+            "total_tokens": 60,
+            "prompt_tokens_details": {"cached_tokens": 0},
+        },
     }
 
     async def fake_post(self, path, payload):
@@ -82,14 +92,28 @@ async def test_bootstrap_job_seeds_overview_and_caps_dispatch(
         owner_id = project.created_by
         run_id = uuid7()
         corr = f"bootstrap-{run_id.hex}"
-        session.add(AgentRun(id=run_id, project_id=pid, agent_kind="bootstrap",
-                             correlation_id=corr, status="pending", input_payload={},
-                             created_by=owner_id, access_scope="project"))
+        session.add(
+            AgentRun(
+                id=run_id,
+                project_id=pid,
+                agent_kind="bootstrap",
+                correlation_id=corr,
+                status="pending",
+                input_payload={},
+                created_by=owner_id,
+                access_scope="project",
+            )
+        )
         await session.commit()
 
     token = mint_agent_token(
-        secret=settings.aleph_agent_token_secret, user_id=owner_id, project_id=pid,
-        agent_run_id=run_id, actor_kind="aleph_agent", correlation_id=corr, ttl_seconds=3600,
+        secret=settings.aleph_agent_token_secret,
+        user_id=owner_id,
+        project_id=pid,
+        agent_run_id=run_id,
+        actor_kind="aleph_agent",
+        correlation_id=corr,
+        ttl_seconds=3600,
     )
 
     # Patch dispatch_research to record topics (no AIQ).
@@ -122,8 +146,11 @@ async def test_bootstrap_job_seeds_overview_and_caps_dispatch(
     from aleph_wiki.models import WikiPage
 
     async with maker() as session:
-        pages = list((await session.execute(
-            select(WikiPage).where(WikiPage.project_id == pid))).scalars().all())
+        pages = list(
+            (await session.execute(select(WikiPage).where(WikiPage.project_id == pid)))
+            .scalars()
+            .all()
+        )
         run = (await session.execute(select(AgentRun).where(AgentRun.id == run_id))).scalar_one()
     assert any(p.title == "Sandworm APT" and p.status == "draft" for p in pages)
     assert run.status == "succeeded"
