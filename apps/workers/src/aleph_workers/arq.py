@@ -25,6 +25,7 @@ from aleph_rks.asset_store import AssetStore
 from aleph_workers.jobs import (
     aiq_synthesis_poll_job,
     assistant_turn_job,
+    bootstrap_project_job,
     builder_job,
     chunk_embed_job,
     editorial_review_job,
@@ -111,6 +112,7 @@ class WorkerSettings:
         editorial_review_job,
         builder_job,
         aiq_synthesis_poll_job,
+        bootstrap_project_job,
     ]
     on_startup = _startup
     on_shutdown = _shutdown
