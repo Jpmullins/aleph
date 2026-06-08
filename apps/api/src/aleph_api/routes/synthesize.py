@@ -15,13 +15,13 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
+from arq import create_pool
+from arq.connections import RedisSettings
 from fastapi import APIRouter, Body, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
-from aleph_aiq.auth_bridge import issue_service_token
-from aleph_aiq.client import AIQClient
-from aleph_aiq.job_service import append_aiq_event, create_aiq_agent_run
+from aleph_aiq.dispatch import dispatch_research
 from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
 from aleph_connectors.models import ApprovalDecision, SynthesisProposal
@@ -29,8 +29,6 @@ from aleph_core.errors import NotFound, ValidationFailed
 from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
 from aleph_observability.tracing import current_trace_id
-from aleph_rks.models import Connector, ConnectorBinding
-from aleph_security.agent_token import mint_agent_token
 from aleph_security.roles import ProjectRole, require_at_least
 from aleph_wiki.feedback_service import write_feedback
 from aleph_wiki.models import WikiPage
@@ -84,123 +82,34 @@ async def synthesize(
 ) -> SynthesizeOut:
     require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
 
-    # Resolve allowed connectors from project bindings (enabled=True only).
-    stmt = (
-        select(Connector.kind)
-        .join(ConnectorBinding, ConnectorBinding.connector_id == Connector.id)
-        .where(
-            ConnectorBinding.project_id == project_id,
-            ConnectorBinding.enabled.is_(True),
-        )
-    )
-    enabled = [k for (k,) in (await session.execute(stmt)).all()]
-    if body.allowed_connectors:
-        enabled = [k for k in enabled if k in body.allowed_connectors]
-    if not enabled:
-        msg = "no connectors are enabled for this project"
-        raise ValidationFailed(msg)
-
-    started = await create_aiq_agent_run(
-        session,
-        project_id=project_id,
-        topic=body.topic,
-        depth=body.depth,
-        allowed_connector_kinds=enabled,
-        created_by=principal.user_id,
-    )
-    await ledger.append(
-        project_id=project_id,
-        actor_id=principal.user_id,
-        actor_kind=principal.actor_kind,
-        action_kind="synthesize.dispatch",
-        target_id=started.agent_run_id,
-        target_kind="agent_run",
-        payload={
-            "topic": body.topic,
-            "depth": body.depth,
-            "allowed_connectors": enabled,
-        },
-        trace_id=current_trace_id(),
-    )
-
+    # Resolve connectors → create run → dispatch → enqueue poll, via the shared
+    # helper (the same path the bootstrap_project_job uses).
     settings = request.app.state.settings
-    service_token = issue_service_token(
-        secret=settings.aleph_agent_token_secret,
-        project_id=project_id,
-        agent_run_id=started.agent_run_id,
-        principal_user_id=principal.user_id,
-    )
-    # Agent token for the poll worker's Principal (the AIQ service_token above
-    # is AIQ-scoped and won't pass verify_agent_token).
-    poll_agent_token = mint_agent_token(
-        secret=settings.aleph_agent_token_secret,
-        user_id=principal.user_id,
-        project_id=project_id,
-        agent_run_id=started.agent_run_id,
-        actor_kind="aleph_agent",
-        correlation_id=started.correlation_id,
-        ttl_seconds=3600,
-    )
-
-    # Dispatch to the AIQ server. If AIQ is not yet vendored / not reachable,
-    # the AgentRun stays in 'pending' and the caller can re-dispatch later.
-    aiq_base = getattr(settings, "aiq_base_url", None) or "http://aiq-server:8001"
-    aiq_job_id: str | None = None
-    dispatched = False
-    client = AIQClient(base_url=aiq_base, service_token=service_token)
+    pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
     try:
-        if await client.health():
-            aiq_job_id = await client.dispatch_deep(
+        try:
+            started = await dispatch_research(
+                session=session,
+                settings=settings,
+                redis_pool=pool,
                 project_id=project_id,
+                principal_user_id=principal.user_id,
+                actor_kind=principal.actor_kind,
+                ledger=ledger,
                 topic=body.topic,
-                allowed_data_sources=enabled,
                 depth=body.depth,
+                allowed_connectors=body.allowed_connectors,
             )
-            dispatched = True
-            await append_aiq_event(
-                session,
-                agent_run_id=started.agent_run_id,
-                event_kind="aiq.job.dispatched",
-                payload={"aiq_job_id": aiq_job_id},
-            )
-            # Enqueue the poller that turns the finished AIQ report into a
-            # wiki synthesis proposal (research → wiki build).
-            try:
-                from arq import create_pool
-                from arq.connections import RedisSettings
-
-                pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
-                try:
-                    await pool.enqueue_job(
-                        "aiq_synthesis_poll_job",
-                        str(started.agent_run_id),
-                        aiq_job_id,
-                        str(project_id),
-                        body.topic,
-                        poll_agent_token,
-                    )
-                finally:
-                    await pool.aclose()
-            except Exception as exc:
-                await append_aiq_event(
-                    session,
-                    agent_run_id=started.agent_run_id,
-                    event_kind="aiq.poll.enqueue_failed",
-                    payload={"error": str(exc)[:1024]},
-                )
-    except Exception as exc:
-        await append_aiq_event(
-            session,
-            agent_run_id=started.agent_run_id,
-            event_kind="aiq.dispatch.failed",
-            payload={"error": str(exc)[:1024]},
-        )
+        except ValueError as exc:
+            raise ValidationFailed(str(exc)) from exc
+    finally:
+        await pool.aclose()
 
     return SynthesizeOut(
         agent_run_id=str(started.agent_run_id),
         correlation_id=started.correlation_id,
-        aiq_job_id=aiq_job_id,
-        dispatched=dispatched,
+        aiq_job_id=started.aiq_job_id,
+        dispatched=started.dispatched,
     )
 
 
