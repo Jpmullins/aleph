@@ -8,7 +8,8 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Body, status
+from arq import create_pool
+from fastapi import APIRouter, Body, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -44,6 +45,7 @@ class _UpdateMemberRole(BaseModel):
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=ProjectOut)
 async def create_project(
+    request: Request,
     body: Annotated[ProjectCreate, Body()],
     session: SessionDep,
     ledger: LedgerDep,
@@ -169,6 +171,63 @@ async def create_project(
             payload={"bindings": seeded},
             trace_id=trace_id,
         )
+
+    # Bootstrap-on-create: kick off the background wiki build from title +
+    # description. The AgentRun is created synchronously so the Activity card
+    # shows "Bootstrapping project" the instant the project screen loads; the
+    # worker job drives the phases. No cost gate — bounded by bootstrap_max_topics.
+    settings = request.app.state.settings
+    if getattr(settings, "bootstrap_auto_enabled", False):
+        from aleph_security.agent_token import mint_agent_token
+
+        boot_run_id = uuid7()
+        boot_corr = f"bootstrap-{boot_run_id.hex[:8]}"
+        session.add(
+            AgentRun(
+                id=boot_run_id,
+                project_id=project_id,
+                agent_kind="bootstrap",
+                correlation_id=boot_corr,
+                status="pending",
+                input_payload={"title": body.title, "description": body.description},
+                created_by=principal.user_id,
+                access_scope="project",
+            )
+        )
+        await session.flush()
+        await ledger.append(
+            project_id=project_id,
+            actor_id=principal.user_id,
+            actor_kind=principal.actor_kind,
+            action_kind="bootstrap.dispatch",
+            target_id=boot_run_id,
+            target_kind="agent_run",
+            payload={"title": body.title},
+            trace_id=trace_id,
+        )
+        boot_token = mint_agent_token(
+            secret=settings.aleph_agent_token_secret,
+            user_id=principal.user_id,
+            project_id=project_id,
+            agent_run_id=boot_run_id,
+            actor_kind="aleph_agent",
+            correlation_id=boot_corr,
+            ttl_seconds=3600,
+        )
+        try:
+            from arq.connections import RedisSettings
+
+            pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+            try:
+                await pool.enqueue_job(
+                    "bootstrap_project_job", str(project_id), str(boot_run_id), boot_token
+                )
+            finally:
+                await pool.aclose()
+        except Exception:
+            # Enqueue failure is non-fatal: the run stays 'pending' and can be
+            # re-dispatched; project creation must still succeed.
+            pass
 
     return ProjectOut.model_validate(project)
 
