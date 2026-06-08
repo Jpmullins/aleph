@@ -82,6 +82,14 @@ class Settings(BaseSettings):
     # asset store directly (architecture rule #3). Overridable via ALEPH_SELF_URL.
     aleph_self_url: str = "http://localhost:8000"
 
+    # Bootstrap-on-create. When a project is created, a background
+    # `bootstrap_project_job` scopes the title+description into seed topics,
+    # seeds an overview wiki page, and fans out research per topic. Cost is
+    # bounded by `bootstrap_max_topics` (no per-action gating — see budget docs).
+    bootstrap_auto_enabled: bool = True
+    bootstrap_max_topics: int = 3
+    bootstrap_depth: Literal["shallow", "deep"] = "shallow"
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
