@@ -181,7 +181,7 @@ async def create_project(
         from aleph_security.agent_token import mint_agent_token
 
         boot_run_id = uuid7()
-        boot_corr = f"bootstrap-{boot_run_id.hex[:8]}"
+        boot_corr = f"bootstrap-{boot_run_id.hex}"  # full hex — hex[:8] collides within ~65s
         session.add(
             AgentRun(
                 id=boot_run_id,

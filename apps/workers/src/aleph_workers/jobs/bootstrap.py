@@ -11,6 +11,7 @@ Phase 3 ``dispatch_research`` — fan out the AIQ research→synthesis pipeline 
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any
 from uuid import UUID
@@ -37,12 +38,42 @@ from aleph_wiki.wiki_service import WikiLinkDraft, WikiService
 
 _SCOPE_SYS = (
     "You are bootstrapping a research wiki for a new investigation. Given the "
-    "project title and description, return a JSON object with exactly two keys: "
+    "project title and description, return ONLY a raw JSON object (no prose, no "
+    "markdown code fences) with exactly two keys: "
     '"overview_md" (a 2-4 paragraph markdown overview framing the research scope; '
     'mention each seed topic as a [[wikilink]]) and "seed_topics" (an array of '
     "at most {max_topics} concise, distinct topic titles suitable as wiki page "
     "names — proper nouns / concepts, not sentences)."
 )
+
+_JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+def _loads_lenient(text: str) -> dict[str, Any]:
+    """Recover a JSON object from an LLM response.
+
+    Bedrock/Anthropic via the gateway does not reliably honor
+    ``response_format={"type": "json_object"}``, so the model may wrap the JSON
+    in ``` fences or prefix it with prose. Try a direct parse, then the first
+    ``{...}`` span. Returns ``{}`` if nothing parses (caller falls back to using
+    the raw text as the overview body).
+    """
+    s = (text or "").strip()
+    if not s:
+        return {}
+    try:
+        obj = json.loads(s)
+        return obj if isinstance(obj, dict) else {}
+    except json.JSONDecodeError:
+        pass
+    m = _JSON_OBJ_RE.search(s)
+    if m is None:
+        return {}
+    try:
+        obj = json.loads(m.group(0))
+        return obj if isinstance(obj, dict) else {}
+    except json.JSONDecodeError:
+        return {}
 
 
 async def _set_status(maker: Any, run_id: UUID, status: str, error: str | None = None) -> None:
@@ -121,9 +152,13 @@ async def bootstrap_project_job(
                 max_tokens=1500,
                 purpose="bootstrap.scope",
             )
-            content = resp.choices[0].message.content if resp.choices else "{}"
-            parsed = json.loads(content or "{}")
-            overview_md = str(parsed.get("overview_md") or f"# {title}\n\n{description}").strip()
+            content = (resp.choices[0].message.content if resp.choices else "") or ""
+            parsed = _loads_lenient(content)
+            # If JSON couldn't be recovered, use the raw model text as the
+            # overview body so the page still seeds (degraded: no seed topics).
+            overview_md = str(
+                parsed.get("overview_md") or content or f"# {title}\n\n{description}"
+            ).strip()
             seed_topics = [
                 str(t).strip() for t in (parsed.get("seed_topics") or []) if str(t).strip()
             ][:max_topics]

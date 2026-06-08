@@ -36,7 +36,10 @@ async def create_aiq_agent_run(
     created_by: UUID,
 ) -> StartedAIQJob:
     agent_run_id = uuid7()
-    correlation_id = f"aiq-{agent_run_id.hex[:8]}"
+    # Full hex, not hex[:8]: uuid7's first 32 bits are the top of the ms
+    # timestamp (constant for ~65s), so hex[:8] collides for runs created in the
+    # same window — e.g. the bootstrap fan-out creating several aiq runs at once.
+    correlation_id = f"aiq-{agent_run_id.hex}"
     run = AgentRun(
         id=agent_run_id,
         project_id=project_id,

@@ -56,6 +56,10 @@ def patched_scope_gateway(monkeypatch):
 async def test_bootstrap_job_seeds_overview_and_caps_dispatch(
     http_client, auth_bypass, patched_scope_gateway, asgi_app, monkeypatch
 ):
+    # Disable the auto-trigger so the API doesn't also create a bootstrap run;
+    # this test drives the job directly on a run it creates.
+    monkeypatch.setattr(asgi_app.state.settings, "bootstrap_auto_enabled", False)
+
     # A real project (seeds profile + connector bindings).
     proj = await http_client.post(
         "/v1/projects",
@@ -77,7 +81,7 @@ async def test_bootstrap_job_seeds_overview_and_caps_dispatch(
         project = (await session.execute(select(Project).where(Project.id == pid))).scalar_one()
         owner_id = project.created_by
         run_id = uuid7()
-        corr = f"bootstrap-{run_id.hex[:8]}"
+        corr = f"bootstrap-{run_id.hex}"
         session.add(AgentRun(id=run_id, project_id=pid, agent_kind="bootstrap",
                              correlation_id=corr, status="pending", input_payload={},
                              created_by=owner_id, access_scope="project"))
