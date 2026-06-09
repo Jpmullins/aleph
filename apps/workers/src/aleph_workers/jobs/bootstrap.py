@@ -43,7 +43,15 @@ _SCOPE_SYS = (
     '"overview_md" (a 2-4 paragraph markdown overview framing the research scope; '
     'mention each seed topic as a [[wikilink]]) and "seed_topics" (an array of '
     "at most {max_topics} concise, distinct topic titles suitable as wiki page "
-    "names — proper nouns / concepts, not sentences)."
+    "names — proper nouns / concepts, not sentences).\n\n"
+    "CRITICAL — stay on the EXACT subject of the title. Every seed topic must be "
+    "a specific sub-area of the precise subject stated in the title, NOT a broader "
+    "field, adjacent area, or general survey. If the description lists facets "
+    "(e.g. applications, algorithms, gaps, forecasts), make each seed topic a "
+    "concrete instance of one of those facets applied to the EXACT subject — "
+    "qualified by the subject, never the facet in general. Example: for a project "
+    "on 'forecasting of X', a topic must be about forecasting X specifically (not "
+    "'forecasting' in general). Prefer narrow, on-topic titles over broad ones."
 )
 
 _JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)

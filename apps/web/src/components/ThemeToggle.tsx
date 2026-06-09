@@ -40,8 +40,7 @@ export function ThemeToggle({ className }: Props) {
     applyMode(initial);
   }, []);
 
-  const cycle = () => {
-    const next: Mode = mode === "light" ? "dark" : mode === "dark" ? "system" : "light";
+  const choose = (next: Mode) => {
     setMode(next);
     applyMode(next);
     try {
@@ -51,27 +50,51 @@ export function ThemeToggle({ className }: Props) {
     }
   };
 
-  const icon = mode === "light" ? "☀" : mode === "dark" ? "☾" : "◐";
-  const label =
-    mode === "light"
-      ? "Light theme (click for dark)"
-      : mode === "dark"
-        ? "Dark theme (click for system)"
-        : "System theme (click for light)";
+  const OPTIONS: { mode: Mode; icon: string; label: string }[] = [
+    { mode: "light", icon: "☀", label: "Light" },
+    { mode: "dark", icon: "☾", label: "Dark" },
+    { mode: "system", icon: "⊙", label: "System" },
+  ];
 
   return (
-    <button
-      type="button"
-      onClick={cycle}
-      title={label}
-      aria-label={label}
+    <div
+      role="group"
+      aria-label="Display theme"
       className={
-        "rounded-md px-2 py-1 text-base hover:bg-slate-100 hover:text-slate-900 " +
+        "inline-flex items-center gap-0.5 rounded-md border border-[var(--border-muted,#e2e8f0)] " +
+        "bg-[var(--surface-sunken,#f8fafc)] p-0.5 " +
         (className ?? "")
       }
-      data-testid="theme-toggle"
     >
-      {icon}
-    </button>
+      {OPTIONS.map(({ mode: m, icon, label }) => {
+        const active = m === mode;
+        return (
+          <button
+            key={m}
+            type="button"
+            onClick={() => choose(m)}
+            title={`${label} theme`}
+            aria-label={`${label} theme`}
+            aria-pressed={active}
+            className={
+              "rounded px-2 py-1 text-sm leading-none transition-colors " +
+              (active
+                ? "font-medium"
+                : "text-[var(--text-muted,#94a3b8)] hover:text-[var(--text-primary,#0f172a)]")
+            }
+            style={
+              active
+                ? { background: "var(--accent,#f97316)", color: "var(--accent-fg,#ffffff)" }
+                : undefined
+            }
+            // Keep the legacy testid on the Dark segment so existing e2e that
+            // clicks `theme-toggle` and expects data-theme ∈ {light,dark} passes.
+            data-testid={m === "dark" ? "theme-toggle" : `theme-${m}`}
+          >
+            <span aria-hidden>{icon}</span>
+          </button>
+        );
+      })}
+    </div>
   );
 }

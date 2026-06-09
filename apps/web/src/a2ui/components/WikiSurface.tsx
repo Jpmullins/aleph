@@ -227,8 +227,8 @@ function WikiPageReader({
   });
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 border-b border-slate-200 px-3 py-2">
+    <div className="flex flex-col">
+      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-slate-200 bg-white px-3 py-2">
         <button
           type="button"
           onClick={onBack}
@@ -252,7 +252,7 @@ function WikiPageReader({
           </span>
         )}
       </div>
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="p-4">
         {compiling && (
           <div
             className="mb-3 flex items-center gap-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs text-sky-700"

@@ -30,7 +30,7 @@ function RealPanel({ projectId }: Props) {
   const streamUrl = `${baseUrl}/v1/projects/${projectId}/surfaces/${tab.toLowerCase()}/stream`;
 
   return (
-    <aside className="flex w-[28rem] flex-col border-l border-slate-200 bg-white">
+    <aside className="flex h-full min-h-0 w-[28rem] flex-col border-l border-slate-200 bg-white">
       <nav className="flex border-b border-slate-200">
         {TABS.map((t) => (
           <button
@@ -48,7 +48,7 @@ function RealPanel({ projectId }: Props) {
           </button>
         ))}
       </nav>
-      <div className="flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         <A2UIStreamSurfaceView
           key={tab}
           streamUrl={streamUrl}
