@@ -68,6 +68,7 @@ interface Props {
 }
 
 const KIND_LABELS: Record<string, string> = {
+  bootstrap: "Bootstrapping project",
   normalizer: "Normalizing source",
   normalize: "Normalizing source",
   chunk_embed: "Chunking + embedding",

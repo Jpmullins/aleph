@@ -42,6 +42,12 @@ class WorkerSettings(BaseSettings):
 
     aiq_base_url: str = "http://aiq-server:8000"
 
+    # Bootstrap-on-create (mirrors aleph_api.settings.Settings). The
+    # bootstrap_project_job reads these to bound the fan-out.
+    bootstrap_auto_enabled: bool = True
+    bootstrap_max_topics: int = 3
+    bootstrap_depth: str = "shallow"
+
 
 @lru_cache(maxsize=1)
 def get_worker_settings() -> WorkerSettings:

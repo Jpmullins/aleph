@@ -2,6 +2,7 @@
 
 from aleph_workers.jobs.aiq_synthesis import aiq_synthesis_poll_job
 from aleph_workers.jobs.assistant_turn import assistant_turn_job
+from aleph_workers.jobs.bootstrap import bootstrap_project_job
 from aleph_workers.jobs.builder import builder_job
 from aleph_workers.jobs.chunk_embed import chunk_embed_job
 from aleph_workers.jobs.normalize import normalize_job
@@ -15,6 +16,7 @@ from aleph_workers.jobs.wiki_ingest import wiki_ingest_job
 __all__ = [
     "aiq_synthesis_poll_job",
     "assistant_turn_job",
+    "bootstrap_project_job",
     "builder_job",
     "chunk_embed_job",
     "editorial_review_job",
