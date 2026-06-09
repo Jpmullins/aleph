@@ -20,12 +20,14 @@ import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
+from uuid import UUID
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Path, Query, Request
 from sqlalchemy import select
 from starlette.responses import StreamingResponse
 
-from aleph_api.middleware.project_scope import ProjectScopeDep
+from aleph_api.deps import PrincipalDep
+from aleph_api.middleware.project_scope import assert_stream_access
 from aleph_db.models.agent import AgentEvent, AgentRun
 from aleph_db.models.ledger import ActionLedgerEvent
 
@@ -94,10 +96,13 @@ def phase_rows_to_signals(rows: list[AgentEvent]) -> list[dict[str, Any]]:
 
 @router.get("/{project_id}/changes/stream", response_model=None)
 async def stream_changes(
-    project_id: ProjectScopeDep,
+    project_id: Annotated[UUID, Path(...)],
     request: Request,
+    principal: PrincipalDep,
     since: Annotated[datetime | None, Query()] = None,
 ) -> StreamingResponse:
+    # Membership check WITHOUT pinning a pool connection for the stream's life.
+    await assert_stream_access(request, project_id, principal)
     maker = request.app.state.session_maker
     broker = request.app.state.change_broker
     now = datetime.now(tz=UTC)
