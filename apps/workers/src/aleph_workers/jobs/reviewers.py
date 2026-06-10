@@ -119,7 +119,7 @@ async def editorial_review_job(
             id=uuid7(),
             project_id=project_id,
             agent_kind="editorial_reviewer",
-            correlation_id=claims.correlation_id or f"editor-{uuid7().hex[:8]}",
+            correlation_id=claims.correlation_id or f"editor-{uuid7().hex}",
             status="running",
             started_at=utcnow(),
             input_payload={"trigger": trigger},

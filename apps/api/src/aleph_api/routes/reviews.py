@@ -126,7 +126,7 @@ async def start_editorial_review(
     require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
 
     agent_run_id = uuid7()
-    correlation_id = f"editor-{agent_run_id.hex[:8]}"
+    correlation_id = f"editor-{agent_run_id.hex}"
     await ledger.append(
         project_id=project_id,
         actor_id=principal.user_id,

@@ -156,7 +156,7 @@ async def post_build(
     )
 
     agent_run_id = uuid7()
-    correlation_id = f"builder-{artifact.id.hex[:8]}"
+    correlation_id = f"builder-{agent_run_id.hex}"  # full hex — hex[:8] collides within ~65s
     run = AgentRun(
         id=agent_run_id,
         project_id=project_id,

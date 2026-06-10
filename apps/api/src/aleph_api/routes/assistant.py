@@ -295,7 +295,7 @@ async def post_message(
 
     # Create assistant message placeholder (status=streaming) + AgentRun.
     agent_run_id = uuid7()
-    correlation_id = f"chat-{user_msg.id.hex[:8]}"
+    correlation_id = f"chat-{agent_run_id.hex}"
     run = AgentRun(
         id=agent_run_id,
         project_id=project_id,

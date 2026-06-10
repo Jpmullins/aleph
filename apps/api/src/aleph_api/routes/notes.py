@@ -253,7 +253,7 @@ async def promote_note(
         id=uuid7(),
         project_id=project_id,
         agent_kind="note_promotion",
-        correlation_id=f"note-{uuid7().hex[:12]}",
+        correlation_id=f"note-{uuid7().hex}",
         status="succeeded",
         input_payload={"note_id": str(note_id)},
         created_by=principal.user_id,
