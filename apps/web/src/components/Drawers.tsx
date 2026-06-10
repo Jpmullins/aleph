@@ -72,7 +72,7 @@ function SettingsBody({ projectId }: { projectId: string }) {
     <div className="space-y-5">
       <Section title="Project">
         <Row label="Title" value={p.title} />
-        <Row label="Description" value={p.description || "—"} />
+        <Row label="Description" value={p.description || "—"} multiline />
         <Row label="Status" value={p.status} />
         <Row label="Created" value={new Date(p.created_at).toLocaleString()} />
       </Section>
@@ -270,11 +270,34 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function Row({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+function Row({
+  label,
+  value,
+  mono = false,
+  multiline = false,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+  multiline?: boolean;
+}) {
+  // Multiline values (e.g. the project description) stack the value below the
+  // label and wrap fully instead of truncating to a single line.
+  if (multiline) {
+    return (
+      <div className="flex flex-col gap-1">
+        <span className="text-xs uppercase tracking-wider text-slate-400">{label}</span>
+        <span className="whitespace-pre-wrap break-words text-sm text-slate-800">{value}</span>
+      </div>
+    );
+  }
   return (
     <div className="flex items-baseline justify-between gap-3">
       <span className="text-xs uppercase tracking-wider text-slate-400">{label}</span>
-      <span className={`truncate text-right text-sm text-slate-800 ${mono ? "font-mono text-xs" : ""}`} title={value}>
+      <span
+        className={`truncate text-right text-sm text-slate-800 ${mono ? "font-mono text-xs" : ""}`}
+        title={value}
+      >
         {value}
       </span>
     </div>

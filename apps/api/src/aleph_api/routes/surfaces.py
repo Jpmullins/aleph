@@ -8,10 +8,10 @@ SSE channel; for Inc 4 this returns a one-shot snapshot.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Path, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from starlette.responses import StreamingResponse
@@ -34,8 +34,8 @@ from aleph_a2ui.surface_streamer import (
     diff_data_model,
     split_surface_messages,
 )
-from aleph_api.deps import SessionDep
-from aleph_api.middleware.project_scope import ProjectScopeDep
+from aleph_api.deps import PrincipalDep, SessionDep
+from aleph_api.middleware.project_scope import ProjectScopeDep, assert_stream_access
 from aleph_core.errors import NotFound, ValidationFailed
 from aleph_hypotheses.hypothesis_service import list_hypotheses
 from aleph_hypotheses.models import HypothesisEvidence
@@ -103,9 +103,10 @@ async def get_surface(
 
 @router.get("/{project_id}/surfaces/{tab}/stream", response_model=None)
 async def stream_surface(
-    project_id: ProjectScopeDep,
+    project_id: Annotated[UUID, Path(...)],
     tab: str,
     request: Request,
+    principal: PrincipalDep,
     page_id: str | None = Query(default=None),
 ) -> StreamingResponse:
     """Delta SurfaceStreamer (Wave 4 T6).
@@ -132,6 +133,8 @@ async def stream_surface(
     aggregate across many entities/mutation kinds); the push just replaces the
     old fixed 2.5s poll as the wake trigger.
     """
+    # Membership check WITHOUT pinning a pool connection for the stream's life.
+    await assert_stream_access(request, project_id, principal)
     tab_lc = tab.lower()
     surface_id = tab_lc
     maker = request.app.state.session_maker

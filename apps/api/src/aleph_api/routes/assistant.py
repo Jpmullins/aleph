@@ -9,12 +9,12 @@ from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Request, status
+from fastapi import APIRouter, Body, Path, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
-from aleph_api.middleware.project_scope import ProjectScopeDep
+from aleph_api.middleware.project_scope import ProjectScopeDep, assert_stream_access
 from aleph_assistant.models import AssistantMessage, AssistantSession
 from aleph_assistant.thread_service import (
     append_message,
@@ -385,8 +385,9 @@ async def get_one_message(
 @router.get("/{project_id}/messages/{message_id}/stream")
 async def stream_message(
     request: Request,
-    project_id: ProjectScopeDep,
+    project_id: Annotated[UUID, Path(...)],
     message_id: UUID,
+    principal: PrincipalDep,
 ) -> StreamingResponse:
     """SSE stream of the in-progress assistant message, emitting incremental
     `body_md` deltas as Server-Sent Events.
@@ -395,6 +396,8 @@ async def stream_message(
     (the `assistant_messages` UPDATE trigger), with a short `_ASSISTANT_FALLBACK_SEC`
     poll fallback so a dropped listener self-heals. The composer's token-streaming
     is approximated by re-reading `body_md` length on each wake."""
+    # Membership check WITHOUT pinning a pool connection for the stream's life.
+    await assert_stream_access(request, project_id, principal)
 
     async def events() -> Any:
         last_len = 0

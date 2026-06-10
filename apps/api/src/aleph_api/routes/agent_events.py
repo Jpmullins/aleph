@@ -18,12 +18,14 @@ import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Path, Query, Request
 from sqlalchemy import select
 from starlette.responses import StreamingResponse
 
-from aleph_api.middleware.project_scope import ProjectScopeDep
+from aleph_api.deps import PrincipalDep
+from aleph_api.middleware.project_scope import ProjectScopeDep, assert_stream_access
 from aleph_db.models.agent import AgentEvent, AgentRun
 
 router = APIRouter(prefix="/v1/projects", tags=["agent-events"])
@@ -83,8 +85,9 @@ async def list_agent_events(
 
 @router.get("/{project_id}/agent-events/stream")
 async def stream_agent_events(
-    project_id: ProjectScopeDep,
+    project_id: Annotated[UUID, Path(...)],
     request: Request,
+    principal: PrincipalDep,
     since: Annotated[datetime | None, Query()] = None,
 ):
     """SSE stream of AgentEvent rows for the project's agent runs.
@@ -104,6 +107,8 @@ async def stream_agent_events(
           "timestamp": "2026-05-28T14:32:00+00:00"
         }
     """
+    # Membership check WITHOUT pinning a pool connection for the stream's life.
+    await assert_stream_access(request, project_id, principal)
     maker = request.app.state.session_maker
     broker = request.app.state.change_broker
     cursor: datetime = since or datetime.now(tz=UTC)
