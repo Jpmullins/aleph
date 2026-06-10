@@ -15,6 +15,7 @@ from aleph_a2ui.components.surfaces import (
     artifacts_surface_v09,
     briefs_surface_v09,
     hypotheses_surface_v09,
+    hypothesis_cards_v09,
     notes_surface_v09,
     wiki_surface_v09,
 )
@@ -134,7 +135,13 @@ def test_notes_surface_v09_shape() -> None:
 
 
 def test_hypotheses_surface_v09_shape() -> None:
-    msgs = hypotheses_surface_v09(
+    _assert_surface_messages(
+        hypotheses_surface_v09(), surface_id="hypotheses", component="HypothesesSurface"
+    )
+
+
+def test_hypothesis_cards_v09_shape() -> None:
+    msgs = hypothesis_cards_v09(
         hypotheses=[
             {"hypothesis_id": "h1", "title": "T", "confidence": "likely", "evidence_count": 2}
         ]

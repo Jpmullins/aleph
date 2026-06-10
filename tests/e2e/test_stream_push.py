@@ -36,6 +36,41 @@ from aleph_db.models.agent import AgentEvent, AgentRun
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 
+@pytest.fixture
+async def auth_bypass(monkeypatch):
+    from aleph_api.middleware import auth as auth_mod
+
+    async def fake_verify(token, *, jwks_cache, issuer, audience, leeway_seconds=30):
+        return {"sub": "user-stream", "email": "stream@test.local", "name": "Stream"}
+
+    monkeypatch.setattr(auth_mod, "verify_user_jwt", fake_verify)
+
+
+async def _scoped_project(http_client: Any, asgi_app: Any) -> tuple[UUID, Any]:
+    """A real project + an owner Principal.
+
+    The stream routes run `assert_stream_access` (membership check with a
+    short-lived session) before streaming, so a bare random project id 404s.
+    """
+    from aleph_db.models.project import Project
+    from aleph_security.principal import Principal
+
+    resp = await http_client.post(
+        "/v1/projects", json={"title": "stream-push", "description": "", "budget_usd": "1.00"}
+    )
+    assert resp.status_code == 201, resp.text
+    pid = UUID(resp.json()["id"])
+    maker = asgi_app.state.session_maker
+    async with maker() as session:
+        project = await session.get(Project, pid)
+        assert project is not None
+        owner_id = project.created_by
+    principal = Principal(
+        user_id=owner_id, subject="user-stream", email="stream@test.local", actor_kind="user"
+    )
+    return pid, principal
+
+
 def _fake_request(asgi_app: Any) -> Any:
     from types import SimpleNamespace
 
@@ -159,11 +194,11 @@ async def _write_agent_event(asgi_app: Any, *, project_id: UUID, event_kind: str
         await session.commit()
 
 
-async def test_agent_events_stream_wakes_on_push(asgi_app):
+async def test_agent_events_stream_wakes_on_push(http_client, auth_bypass, asgi_app):
     from aleph_api.routes.agent_events import stream_agent_events
 
-    pid = uuid7()
-    resp = await stream_agent_events(pid, _fake_request(asgi_app), since=None)
+    pid, principal = await _scoped_project(http_client, asgi_app)
+    resp = await stream_agent_events(pid, _fake_request(asgi_app), principal, since=None)
     reader = _StreamReader(resp)
     try:
         await reader.wait_heartbeat()  # subscription is now live
@@ -176,15 +211,15 @@ async def test_agent_events_stream_wakes_on_push(asgi_app):
         await reader.aclose()
 
 
-async def test_agent_events_stream_self_heals_via_fallback(asgi_app):
+async def test_agent_events_stream_self_heals_via_fallback(http_client, auth_bypass, asgi_app):
     from aleph_api.routes.agent_events import stream_agent_events
 
+    pid, principal = await _scoped_project(http_client, asgi_app)
     # With the listener stopped (no push), a write must still surface via the
     # fallback poll. Fallback is 5s, so allow 8s.
     await asgi_app.state.notify_listener.stop()
     try:
-        pid = uuid7()
-        resp = await stream_agent_events(pid, _fake_request(asgi_app), since=None)
+        resp = await stream_agent_events(pid, _fake_request(asgi_app), principal, since=None)
         reader = _StreamReader(resp)
         try:
             await reader.wait_heartbeat()
@@ -197,12 +232,12 @@ async def test_agent_events_stream_self_heals_via_fallback(asgi_app):
         await asgi_app.state.notify_listener.start()
 
 
-async def test_agent_events_stream_is_project_scoped(asgi_app):
+async def test_agent_events_stream_is_project_scoped(http_client, auth_bypass, asgi_app):
     from aleph_api.routes.agent_events import stream_agent_events
 
-    pid = uuid7()
+    pid, principal = await _scoped_project(http_client, asgi_app)
     other = uuid4()
-    resp = await stream_agent_events(pid, _fake_request(asgi_app), since=None)
+    resp = await stream_agent_events(pid, _fake_request(asgi_app), principal, since=None)
     reader = _StreamReader(resp)
     try:
         await reader.wait_heartbeat()
@@ -213,11 +248,11 @@ async def test_agent_events_stream_is_project_scoped(asgi_app):
         await reader.aclose()
 
 
-async def test_assistant_message_stream_pushes_token(asgi_app):
+async def test_assistant_message_stream_pushes_token(http_client, auth_bypass, asgi_app):
     from aleph_api.routes.assistant import stream_message
     from aleph_assistant.models import AssistantMessage
 
-    pid = uuid7()
+    pid, principal = await _scoped_project(http_client, asgi_app)
     msg_id = uuid7()
     maker = asgi_app.state.session_maker
     async with maker() as session:
@@ -230,12 +265,12 @@ async def test_assistant_message_stream_pushes_token(asgi_app):
                 role="assistant",
                 body_md="",
                 status="pending",
-                created_by=uuid7(),
+                created_by=principal.user_id,
             )
         )
         await session.commit()
 
-    resp = await stream_message(_fake_request(asgi_app), pid, msg_id)
+    resp = await stream_message(_fake_request(asgi_app), pid, msg_id, principal)
     reader = _StreamReader(resp)
     try:
         # No heartbeat on this stream; settle confirms the gen ran its first
@@ -254,24 +289,23 @@ async def test_assistant_message_stream_pushes_token(asgi_app):
         await reader.aclose()
 
 
-async def test_surfaces_hypotheses_stream_pushes_delta(http_client, asgi_app):
+async def test_surfaces_notes_stream_pushes_update(http_client, auth_bypass, asgi_app):
     from aleph_api.routes.surfaces import stream_surface
 
-    # Real flow: create a hypothesis → its ledger event fires the push → the
-    # surface stream wakes, recomputes, and emits a v0.9 delta for the new card.
-    resp_p = await http_client.post(
-        "/v1/projects", json={"title": "surf-push", "description": "", "budget_usd": "1.00"}
-    )
-    assert resp_p.status_code == 201, resp_p.text
-    pid_str = resp_p.json()["id"]
+    # Real flow: create a note + section → the ledger event fires the push → the
+    # surface stream wakes, recomputes, and the structural change (a new
+    # NotebookCellCard child) is emitted as a v0.9 updateComponents.
+    pid, principal = await _scoped_project(http_client, asgi_app)
 
-    resp = await stream_surface(UUID(pid_str), "hypotheses", _fake_request(asgi_app), page_id=None)
+    resp = await stream_surface(pid, "notes", _fake_request(asgi_app), principal, page_id=None)
     reader = _StreamReader(resp)
     try:
         await reader.settle()  # consume the initial full surface; gen parks on wait
+        r = await http_client.post(f"/v1/projects/{pid}/notes", json={"title": "Stream note"})
+        assert r.status_code == 201, r.text
+        note_id = r.json()["id"]
         r = await http_client.post(
-            f"/v1/projects/{pid_str}/hypotheses",
-            json={"title": "H-delta", "statement": "s"},
+            f"/v1/projects/{pid}/notes/{note_id}/sections", json={"body_md": "live cell"}
         )
         assert r.status_code == 201, r.text
         delta = await reader.next_json(deadline=5.0)
@@ -306,14 +340,14 @@ async def _write_compile_event(
         await session.commit()
 
 
-async def test_changes_stream_emits_committed_on_wiki_commit(asgi_app):
+async def test_changes_stream_emits_committed_on_wiki_commit(http_client, auth_bypass, asgi_app):
     from aleph_api.routes.changes import stream_changes
     from aleph_core.time import utcnow
     from aleph_db.models.ledger import ActionLedgerEvent
 
-    pid = uuid7()
+    pid, principal = await _scoped_project(http_client, asgi_app)
     page_id = uuid7()
-    resp = await stream_changes(pid, _fake_request(asgi_app), since=None)
+    resp = await stream_changes(pid, _fake_request(asgi_app), principal, since=None)
     reader = _StreamReader(resp)
     try:
         await reader.settle()  # consume the initial (replay + heartbeat) burst
@@ -342,11 +376,11 @@ async def test_changes_stream_emits_committed_on_wiki_commit(asgi_app):
         await reader.aclose()
 
 
-async def test_changes_stream_emits_compiling_on_compile_page(asgi_app):
+async def test_changes_stream_emits_compiling_on_compile_page(http_client, auth_bypass, asgi_app):
     from aleph_api.routes.changes import stream_changes
 
-    pid = uuid7()
-    resp = await stream_changes(pid, _fake_request(asgi_app), since=None)
+    pid, principal = await _scoped_project(http_client, asgi_app)
+    resp = await stream_changes(pid, _fake_request(asgi_app), principal, since=None)
     reader = _StreamReader(resp)
     try:
         await reader.settle()

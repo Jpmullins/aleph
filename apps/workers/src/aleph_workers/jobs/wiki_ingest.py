@@ -80,7 +80,7 @@ async def wiki_ingest_job(
                 id=new_agent_run_id,
                 project_id=normalized.project_id,
                 agent_kind="wiki",
-                correlation_id=f"wiki-{new_agent_run_id.hex[:12]}",
+                correlation_id=f"wiki-{new_agent_run_id.hex}",
                 status="running",
                 started_at=utcnow(),
                 input_payload={

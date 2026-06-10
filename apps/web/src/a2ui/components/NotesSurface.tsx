@@ -99,10 +99,12 @@ export function NotesSurface(_: RendererProps) {
 function NoteEditor({ projectId, noteId }: { projectId: string; noteId: string }) {
   const qc = useQueryClient();
   const [body, setBody] = useState("");
+  const [title, setTitle] = useState("");
   const [preview, setPreview] = useState(false);
   const [saved, setSaved] = useState<"idle" | "saving" | "saved">("idle");
   const sectionId = useRef<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const titleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const detail = useQuery<NoteDetail>({
     queryKey: ["note", projectId, noteId],
@@ -114,8 +116,23 @@ function NoteEditor({ projectId, noteId }: { projectId: string; noteId: string }
     const s = detail.data?.sections[0];
     sectionId.current = s?.id ?? null;
     setBody(s?.body_md ?? "");
+    setTitle(detail.data?.note.title ?? "");
     setSaved("idle");
   }, [detail.data, noteId]);
+
+  const saveTitle = async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    await api.patch(`/v1/projects/${projectId}/notes/${noteId}`, { title: trimmed });
+    qc.invalidateQueries({ queryKey: ["notes", projectId] });
+    qc.invalidateQueries({ queryKey: ["note", projectId, noteId] });
+  };
+
+  const onTitleChange = (text: string) => {
+    setTitle(text);
+    if (titleTimer.current) clearTimeout(titleTimer.current);
+    titleTimer.current = setTimeout(() => void saveTitle(text), 700);
+  };
 
   const save = async (text: string) => {
     setSaved("saving");
@@ -150,6 +167,15 @@ function NoteEditor({ projectId, noteId }: { projectId: string; noteId: string }
 
   return (
     <div className="flex h-full flex-col p-3">
+      <input
+        value={title}
+        onChange={(e) => onTitleChange(e.target.value)}
+        onBlur={() => void saveTitle(title)}
+        placeholder="Note title"
+        aria-label="Note title"
+        className="mb-2 w-full rounded-md border border-transparent bg-transparent px-1 py-0.5 text-sm font-semibold text-[var(--text-primary,#0f172a)] hover:border-[var(--border-muted,#e2e8f0)] focus:border-[var(--accent,#f97316)] focus:outline-none"
+        data-testid="note-title"
+      />
       <div className="mb-2 flex items-center gap-2">
         <span className="text-xs text-[var(--text-muted,#94a3b8)]">
           {saved === "saving" ? "Saving…" : saved === "saved" ? "Saved" : ""}

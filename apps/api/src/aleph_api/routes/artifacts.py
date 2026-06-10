@@ -26,6 +26,7 @@ from aleph_artifacts.artifact_service import (
 from aleph_artifacts.models import RenderedAsset
 from aleph_core.errors import NotFound
 from aleph_core.ids import uuid7
+from aleph_core.time import utcnow
 from aleph_db.models.agent import AgentRun
 from aleph_observability.tracing import current_trace_id
 from aleph_security.agent_token import mint_agent_token
@@ -155,7 +156,7 @@ async def post_build(
     )
 
     agent_run_id = uuid7()
-    correlation_id = f"builder-{artifact.id.hex[:8]}"
+    correlation_id = f"builder-{agent_run_id.hex}"  # full hex — hex[:8] collides within ~65s
     run = AgentRun(
         id=agent_run_id,
         project_id=project_id,
@@ -202,8 +203,14 @@ async def post_build(
             dispatched = True
         finally:
             await pool.aclose()
-    except Exception:
+    except Exception as exc:
         dispatched = False
+        # A swallowed dispatch failure must not strand the run in `pending`
+        # forever — the Activity card treats pending as live work.
+        run.status = "failed"
+        run.completed_at = utcnow()
+        run.error_text = f"failed to enqueue builder_job: {exc}"[:4096]
+        await session.flush()
     return BuildOut(
         artifact_id=str(artifact.id),
         agent_run_id=str(agent_run_id),

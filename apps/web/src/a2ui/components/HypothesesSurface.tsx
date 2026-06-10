@@ -35,6 +35,7 @@ export function HypothesesSurface(_: RendererProps) {
   const hypotheses = useQuery<HypothesisOut[]>({
     queryKey: ["hypotheses", projectId],
     queryFn: () => api.get<HypothesisOut[]>(`/v1/projects/${projectId}/hypotheses`),
+    refetchInterval: 15_000,
   });
 
   return (

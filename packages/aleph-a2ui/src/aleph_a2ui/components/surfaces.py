@@ -98,19 +98,22 @@ def hypotheses_surface(
     )
 
 
-def hypotheses_surface_v09(
+def hypothesis_cards_v09(
     *,
     hypotheses: list[dict[str, Any]],
     surface_id: str = "hypotheses",
     catalog_id: str = ALEPH_V09_CATALOG_ID,
 ) -> list[dict[str, Any]]:
-    """Build the A2UI v0.9 message list for the Hypotheses right-panel tab.
+    """Bound-card message list: one `HypothesisCard` per hypothesis in a `Column`.
 
-    Renders one `HypothesisCard` per hypothesis inside a `Column`. Card props
-    are data BINDINGS into `/items/<i>/...` so a later per-path `updateDataModel`
-    (Wave 4 T6) can patch confidence/evidence in place without re-sending the
-    component tree. `hypotheses` is a list of dicts with keys `hypothesis_id`,
-    `title`, `confidence`, `evidence_count`.
+    Card props are data BINDINGS into `/items/<i>/...` so a per-path
+    `updateDataModel` (Wave 4 T6) can patch confidence/evidence in place
+    without re-sending the component tree. This is the data-binding/delta
+    exemplar the other tabs will adopt when their data moves into the surface
+    data model; the Hypotheses TAB itself mounts the interactive
+    `HypothesesSurface` view (see `hypotheses_surface_v09`). `hypotheses` is a
+    list of dicts with keys `hypothesis_id`, `title`, `confidence`,
+    `evidence_count`.
     """
     components: list[dict[str, Any]] = []
     items: list[dict[str, Any]] = []
@@ -196,7 +199,7 @@ def _surface_messages(
     The single surface component MUST carry `id="root"`: the upstream
     `@a2ui/react` `<A2uiSurface>` renders exactly the component whose id is
     `"root"` (`DeferredChild id="root"`), falling back to `[Loading root...]`
-    when no such component exists. (`hypotheses_surface_v09` satisfies this via
+    when no such component exists. (`hypothesis_cards_v09` satisfies this via
     its root `Column`; these single-component surfaces satisfy it by naming the
     surface view itself `root`.) `surface_id` remains the surface-level id used
     by `createSurface`/`updateComponents` and as the React key.
@@ -252,6 +255,18 @@ def notes_surface_v09(
     return _surface_messages(
         surface_id=surface_id,
         component_name="NotesSurface",
+        children=children or [],
+    )
+
+
+def hypotheses_surface_v09(
+    *,
+    children: list[dict[str, Any]] | None = None,
+    surface_id: str = "hypotheses",
+) -> list[dict[str, Any]]:
+    return _surface_messages(
+        surface_id=surface_id,
+        component_name="HypothesesSurface",
         children=children or [],
     )
 

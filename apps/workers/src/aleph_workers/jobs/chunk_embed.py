@@ -62,7 +62,7 @@ async def chunk_embed_job(
                 id=chunk_run_id,
                 project_id=claims.project_id,
                 agent_kind="chunk_embed",
-                correlation_id=f"chunk-{chunk_run_id.hex[:12]}",
+                correlation_id=f"chunk-{chunk_run_id.hex}",
                 status="running",
                 started_at=utcnow(),
                 input_payload={"normalized_document_id": str(normalized_id)},

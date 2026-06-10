@@ -34,6 +34,24 @@ async def create_note(
     return n
 
 
+async def update_note(
+    session: AsyncSession,
+    *,
+    project_id: UUID,
+    note_id: UUID,
+    title: str,
+) -> Note:
+    n = (
+        await session.execute(select(Note).where(Note.id == note_id, Note.project_id == project_id))
+    ).scalar_one_or_none()
+    if n is None:
+        msg = f"note {note_id} not found"
+        raise NotFound(msg)
+    n.title = title[:255] or "Untitled"
+    await session.flush()
+    return n
+
+
 async def list_notes(session: AsyncSession, *, project_id: UUID) -> list[Note]:
     stmt = select(Note).where(Note.project_id == project_id).order_by(Note.created_at.desc())
     return list((await session.execute(stmt)).scalars().all())
