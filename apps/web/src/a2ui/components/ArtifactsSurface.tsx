@@ -121,14 +121,22 @@ function BuildArtifactModal({
   const [description, setDescription] = useState("");
 
   const build = useMutation({
-    mutationFn: async () =>
-      api.post(`/v1/projects/${projectId}/artifacts/build`, {
-        title,
-        artifact_kind: kind,
-        description,
-        template_name: kind,
-        csl_style: "apa-7",
-      }),
+    mutationFn: async () => {
+      const out = await api.post<{ dispatched: boolean }>(
+        `/v1/projects/${projectId}/artifacts/build`,
+        {
+          title,
+          artifact_kind: kind,
+          description,
+          template_name: kind,
+          csl_style: "apa-7",
+        },
+      );
+      if (!out.dispatched) {
+        throw new Error("build accepted but could not be dispatched to the worker queue");
+      }
+      return out;
+    },
     onSuccess: onBuilt,
   });
 
