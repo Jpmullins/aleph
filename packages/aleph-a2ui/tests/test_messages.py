@@ -14,8 +14,8 @@ from aleph_a2ui.components.surfaces import (
     ALEPH_V09_CATALOG_ID,
     artifacts_surface_v09,
     briefs_surface_v09,
-    hypothesis_cards_v09,
     hypotheses_surface_v09,
+    hypothesis_cards_v09,
     notes_surface_v09,
     wiki_surface_v09,
 )

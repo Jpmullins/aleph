@@ -60,9 +60,6 @@ async def builder_job(
         agent_run_id=claims.agent_run_id,
         correlation_id=claims.correlation_id,
     )
-    if claims.agent_run_id is None:
-        msg = "builder_job requires agent_run_id in the agent token"
-        raise RuntimeError(msg)
     agent_run_id = claims.agent_run_id
     project_id = UUID(project_id_str)
     artifact_id = UUID(artifact_id_str)

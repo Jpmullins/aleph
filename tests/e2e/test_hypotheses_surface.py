@@ -48,6 +48,5 @@ async def test_hypotheses_tab_mounts_the_rich_surface(http_client, auth_bypass):
     roots = [c for c in comps if c.get("id") == "root"]
     assert len(roots) == 1
     assert roots[0]["component"] == "HypothesesSurface", (
-        "the tab must mount the interactive HypothesesSurface "
-        f"(got {roots[0]['component']!r})"
+        f"the tab must mount the interactive HypothesesSurface (got {roots[0]['component']!r})"
     )
