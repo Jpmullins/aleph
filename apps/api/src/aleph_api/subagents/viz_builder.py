@@ -36,22 +36,27 @@ def build_viz_builder_subagent(*, settings: Any) -> dict[str, Any]:
     """
     from aleph_api.copilot_agent import (
         _build_artifact_impl,  # pyright: ignore[reportPrivateUsage] — shared build body deliberately reused (DRY); module-private to the api
+        _pin_to_briefs_impl,  # pyright: ignore[reportPrivateUsage]
         subagent_model,
     )
 
     @tool
-    def make_chart(
+    async def make_chart(
         title: str,
         x_field: str,
         y_field: str,
         points: list[dict[str, Any]],
+        config: RunnableConfig,
+        pin: bool = True,
     ) -> str:
         """Make a quick chart from inline data points (no approval needed).
 
         Builds a minimal Vega-Lite spec (bar chart) over `points` (a list of
         objects, each carrying the `x_field` and `y_field` keys) and returns a
-        ChartCard render instruction. Use for a quick inline visualization of a
-        handful of figures. For a full report/deck/export, use build_artifact.
+        ChartCard render instruction. By default the chart is also pinned to
+        the Briefs tab so it survives the conversation (pass pin=false for a
+        throwaway inline chart). For a full report/deck/export, use
+        build_artifact.
         """
         spec: dict[str, Any] = {
             "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
@@ -63,7 +68,25 @@ def build_viz_builder_subagent(*, settings: Any) -> dict[str, Any]:
                 "y": {"field": y_field, "type": "quantitative"},
             },
         }
-        return f"Render a ChartCard with title='{title}' and vega_lite_spec={json.dumps(spec)}."
+        pinned = ""
+        if pin:
+            pinned = await _pin_to_briefs_impl(
+                "ChartCard",
+                title,
+                {
+                    "dataset_version_id": None,
+                    "title": title,
+                    "vega_lite_spec": spec,
+                    "open_action": "open",
+                    "_placeholder": True,
+                },
+                config,
+            )
+            pinned = f" {pinned}"
+        return (
+            f"Render a ChartCard with title='{title}' and "
+            f"vega_lite_spec={json.dumps(spec)}.{pinned}"
+        )
 
     @tool
     async def build_artifact(

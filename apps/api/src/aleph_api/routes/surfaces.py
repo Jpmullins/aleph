@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from starlette.responses import StreamingResponse
 
+from aleph_a2ui.card_service import list_pinned
 from aleph_a2ui.components.cards import (
     ApprovalCardProps,
     ClaimCardProps,
@@ -353,4 +354,6 @@ async def _briefs_messages(session: Any, project_id: UUID) -> list[dict[str, Any
                 card_id=f"finding-{f.id}",
             )
         )
+    for _card, version in await list_pinned(session, project_id=project_id, pinned_to="briefs"):
+        cards.append(version.a2ui_payload_jsonb)
     return briefs_surface_v09(badge_count=len(cards), children=cards)

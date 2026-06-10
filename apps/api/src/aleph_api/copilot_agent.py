@@ -469,6 +469,36 @@ async def _start_research_impl(query: str, config: RunnableConfig, depth: str = 
     )
 
 
+async def _pin_to_briefs_impl(
+    card_kind: str,
+    title: str,
+    props: dict[str, Any],
+    config: RunnableConfig,
+) -> str:
+    """Persist a catalog card to the Briefs pile (rule #3 — self-calls the
+    tested `/cards/pin` route, never raw DB). The card survives the chat
+    transcript and renders in the Briefs tab until the analyst unpins it."""
+    import httpx
+
+    settings = _runtime.get("settings")
+    project_id = _project_id_from_config(config)
+    if settings is None or project_id is None:
+        return "Cannot pin (no project scope)."
+    base = settings.aleph_self_url
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{base}/v1/projects/{project_id}/cards/pin",
+                json={"card_kind": card_kind, "title": title, "props": props},
+                headers={"Authorization": "Bearer local-dev"},
+            )
+    except Exception as exc:
+        return f"Could not pin the {card_kind}: {exc}"
+    if resp.status_code >= 400:
+        return f"Could not pin the {card_kind} ({resp.status_code}): {resp.text[:200]}"
+    return f"Pinned '{title}' to the Briefs tab (card {resp.json()['card_id']})."
+
+
 async def _ingest_source_impl(url: str, config: RunnableConfig, title: str = "") -> str:
     """Ingest a web page or document URL into the project's knowledge store.
 

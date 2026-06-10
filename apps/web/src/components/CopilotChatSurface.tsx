@@ -18,10 +18,22 @@
  * right panel renders.
  */
 import { CopilotChat, useAgentContext, useFrontendTool } from "@copilotkit/react-core/v2";
+import { useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 
 import { SurfaceProvider } from "@/a2ui/surface-context";
+import { api } from "@/lib/api";
 import { SURFACE_TABS, useWorkspaceUI } from "@/lib/workspace-ui";
+
+interface CardActionRow {
+  id: string;
+  surface_kind: string;
+  action_kind: string;
+  target_kind: string | null;
+  result: Record<string, unknown>;
+  actor_kind: string;
+  created_at: string;
+}
 
 interface Props {
   projectId: string;
@@ -38,6 +50,29 @@ export function CopilotChatSurface({ projectId, threadId }: Props) {
       "The analyst's current workspace view: which right-panel surface tab is " +
       "active and which wiki page (if any) they have open.",
     value: { activeSurface, openPageTitle: openPageTitle ?? "(none)" },
+  });
+
+  // Close the action loop: tell the agent what the analyst recently did on the
+  // surfaces (approved/rejected proposals, resolved/dismissed findings, unpins)
+  // so it doesn't fire-and-forget its own cards.
+  const recentActions = useQuery<CardActionRow[]>({
+    queryKey: ["card-actions", projectId],
+    queryFn: () => api.get<CardActionRow[]>(`/v1/projects/${projectId}/cards/actions?limit=10`),
+    refetchInterval: 15_000,
+  });
+  useAgentContext({
+    description:
+      "The analyst's recent card actions on the workspace surfaces (newest " +
+      "first): approvals/rejections of proposals, resolved/dismissed review " +
+      "findings, unpinned cards. Use this to know the outcome of cards you " +
+      "rendered — do not re-ask about decisions already made here.",
+    value: (recentActions.data ?? []).map((a) => ({
+      action: a.action_kind,
+      surface: a.surface_kind,
+      target_kind: a.target_kind ?? "",
+      outcome: JSON.stringify(a.result),
+      at: a.created_at,
+    })),
   });
 
   // Let the agent steer the right panel (shared state, agent → UI).

@@ -21,9 +21,28 @@ export function BriefsSurface({ component, onAction }: RendererProps) {
         <p className="text-sm text-slate-500">No pending briefs.</p>
       ) : (
         <div className="flex-1 space-y-2 overflow-y-auto">
-          {children.map((c) => (
-            <div key={c.id}>{renderChildCard(c, onAction)}</div>
-          ))}
+          {children.map((c) => {
+            const pinnedCardId = c.id.startsWith("pinned-")
+              ? c.id.slice("pinned-".length)
+              : null;
+            return (
+              <div key={c.id} className="group relative">
+                {pinnedCardId && (
+                  <button
+                    type="button"
+                    onClick={() => onAction("unpin", { card_id: pinnedCardId })}
+                    title="Unpin from Briefs"
+                    aria-label="Unpin from Briefs"
+                    className="absolute right-2 top-2 z-10 hidden rounded px-1.5 py-0.5 text-xs text-[var(--text-muted,#94a3b8)] hover:bg-[var(--surface-sunken,#f8fafc)] hover:text-[var(--text-primary,#0f172a)] group-hover:block"
+                    data-testid={`unpin-${pinnedCardId}`}
+                  >
+                    ✕ Unpin
+                  </button>
+                )}
+                {renderChildCard(c, onAction)}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

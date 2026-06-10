@@ -17,6 +17,7 @@ from uuid import UUID
 from sqlalchemy import select
 
 from aleph_a2ui.action_router import ActionRouter, CardActionRequest
+from aleph_a2ui.card_service import unpin_card
 from aleph_connectors.models import (
     ApprovalDecision,
     SynthesisProposal,
@@ -368,6 +369,29 @@ async def _reject(
     raise ValidationFailed(msg)
 
 
+async def _unpin(
+    *,
+    session: AsyncSession,
+    ledger: LedgerWriter,
+    principal: Principal,
+    project_id: UUID,
+    request: CardActionRequest,
+) -> dict[str, Any]:
+    card_id = UUID(request.params["card_id"])
+    card = await unpin_card(session, project_id=project_id, card_id=card_id)
+    await ledger.append(
+        project_id=project_id,
+        actor_id=principal.user_id,
+        actor_kind=principal.actor_kind,
+        action_kind="card.unpin",
+        target_id=card.id,
+        target_kind="interactive_card",
+        payload={"card_kind": card.card_kind, "title": card.title or ""},
+        trace_id=current_trace_id(),
+    )
+    return {"card_id": str(card_id), "pinned_to": None}
+
+
 async def _open(*, request: CardActionRequest, **_: Any) -> dict[str, Any]:
     return {
         "navigate": {
@@ -469,6 +493,7 @@ def build_action_router() -> ActionRouter:
     r.register("approve", _approve)
     r.register("reject", _reject)
     r.register("open", _open)
+    r.register("unpin", _unpin)
     r.register("navigate_wiki", _navigate_wiki)
     r.register("submit_form", _submit_form)
     r.register("create_hypothesis", _create_hypothesis)

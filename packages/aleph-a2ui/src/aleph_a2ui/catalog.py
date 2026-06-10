@@ -301,6 +301,13 @@ _ACTIONS = {
             "required": ["target_id", "target_kind"],
         }
     },
+    "unpin": {
+        "params": {
+            "type": "object",
+            "properties": {"card_id": _UUID},
+            "required": ["card_id"],
+        }
+    },
     "navigate_wiki": {
         "params": {
             "type": "object",
