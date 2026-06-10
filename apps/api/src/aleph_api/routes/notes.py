@@ -20,6 +20,7 @@ from aleph_notes.note_service import (
     create_section,
     get_note,
     list_notes,
+    update_note,
     update_section,
 )
 from aleph_observability.tracing import current_trace_id
@@ -50,6 +51,10 @@ class NoteDetailOut(BaseModel):
 
 
 class NoteCreateIn(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+
+
+class NoteUpdateIn(BaseModel):
     title: str = Field(min_length=1, max_length=255)
 
 
@@ -95,6 +100,30 @@ async def post_note(
         target_id=n.id,
         target_kind="note",
         payload={"title": body.title},
+        trace_id=current_trace_id(),
+    )
+    return NoteOut.model_validate(n)
+
+
+@router.patch("/{project_id}/notes/{note_id}", response_model=NoteOut)
+async def patch_note(
+    project_id: ProjectScopeDep,
+    note_id: UUID,
+    body: Annotated[NoteUpdateIn, Body()],
+    session: SessionDep,
+    ledger: LedgerDep,
+    principal: PrincipalDep,
+) -> NoteOut:
+    require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
+    n = await update_note(session, project_id=project_id, note_id=note_id, title=body.title)
+    await ledger.append(
+        project_id=project_id,
+        actor_id=principal.user_id,
+        actor_kind=principal.actor_kind,
+        action_kind="note.update",
+        target_id=n.id,
+        target_kind="note",
+        payload={"title": n.title},
         trace_id=current_trace_id(),
     )
     return NoteOut.model_validate(n)
