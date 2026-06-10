@@ -228,7 +228,7 @@ function WikiPageReader({
 
   return (
     <div className="flex flex-col">
-      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-slate-200 bg-white px-3 py-2">
+      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-[var(--border-muted,#e2e8f0)] bg-[var(--surface-raised,#fff)] px-3 py-2">
         <button
           type="button"
           onClick={onBack}

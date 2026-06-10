@@ -17,12 +17,12 @@ export function Pill({
   children: ReactNode;
 }) {
   const cls: Record<string, string> = {
-    amber: "bg-amber-100 text-amber-900",
-    emerald: "bg-emerald-100 text-emerald-900",
-    red: "bg-red-100 text-red-900",
-    sky: "bg-sky-100 text-sky-900",
-    violet: "bg-violet-100 text-violet-900",
-    slate: "bg-slate-100 text-slate-700",
+    amber: "bg-[var(--badge-warning-bg,#fef3c7)] text-[var(--badge-warning-fg,#854d0e)]",
+    emerald: "bg-[var(--badge-completed-bg,#d1fae5)] text-[var(--badge-completed-fg,#065f46)]",
+    red: "bg-[var(--badge-failed-bg,#fee2e2)] text-[var(--badge-failed-fg,#991b1b)]",
+    sky: "bg-[var(--badge-running-bg,#dbeafe)] text-[var(--badge-running-fg,#1e3a8a)]",
+    violet: "bg-violet-100 text-violet-900 dark:bg-violet-500/20 dark:text-violet-300",
+    slate: "bg-[var(--badge-idle-bg,#f1f5f9)] text-[var(--badge-idle-fg,#475569)]",
   };
   return (
     <span
@@ -47,16 +47,22 @@ export function CardShell({
   children: ReactNode;
 }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+    <div className="rounded-lg border border-[var(--border-muted,#e2e8f0)] bg-[var(--surface-raised,#fff)] p-3 shadow-sm">
       {(title || actions) && (
         <div className="mb-1 flex items-start justify-between gap-2">
-          {title && <div className="text-sm font-semibold text-slate-900">{title}</div>}
+          {title && (
+            <div className="text-sm font-semibold text-[var(--text-primary,#0f172a)]">{title}</div>
+          )}
           {actions && <div className="flex items-center gap-1">{actions}</div>}
         </div>
       )}
-      {subtitle && <div className="mb-2 text-xs text-slate-500">{subtitle}</div>}
+      {subtitle && <div className="mb-2 text-xs text-[var(--text-muted,#94a3b8)]">{subtitle}</div>}
       {children}
-      {footer && <div className="mt-2 border-t border-slate-100 pt-2 text-[11px] text-slate-500">{footer}</div>}
+      {footer && (
+        <div className="mt-2 border-t border-[var(--border-muted,#e2e8f0)] pt-2 text-[11px] text-[var(--text-muted,#94a3b8)]">
+          {footer}
+        </div>
+      )}
     </div>
   );
 }
@@ -71,10 +77,12 @@ export function SurfaceHeader({
   actions?: ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+    <div className="flex items-center justify-between border-b border-[var(--border-muted,#e2e8f0)] px-4 py-3">
       <div>
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-700">{title}</h3>
-        {subtitle && <p className="mt-0.5 text-xs text-slate-500">{subtitle}</p>}
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-secondary,#475569)]">
+          {title}
+        </h3>
+        {subtitle && <p className="mt-0.5 text-xs text-[var(--text-muted,#94a3b8)]">{subtitle}</p>}
       </div>
       {actions && <div className="flex items-center gap-2">{actions}</div>}
     </div>
@@ -155,10 +163,10 @@ export function FeedbackButton({ projectId, targetKind, targetId, surface }: Fee
       </button>
       {open && (
         <div
-          className="absolute right-0 z-10 mt-1 w-56 rounded-md border border-slate-200 bg-white p-2 text-xs shadow-lg"
+          className="absolute right-0 z-10 mt-1 w-56 rounded-md border border-[var(--border-muted,#e2e8f0)] bg-[var(--surface-elevated,#fff)] p-2 text-xs shadow-lg"
           onClick={(e) => e.stopPropagation()}
         >
-          <p className="mb-2 font-medium text-slate-700">What's wrong?</p>
+          <p className="mb-2 font-medium text-[var(--text-secondary,#475569)]">What's wrong?</p>
           <ul className="mb-2 space-y-1">
             {FEEDBACK_OPTIONS.map((opt) => (
               <li key={opt.signal}>

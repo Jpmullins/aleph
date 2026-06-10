@@ -6,18 +6,19 @@ const STORAGE_KEY = "aleph.theme";
 
 function applyMode(mode: Mode) {
   const root = document.documentElement;
-  if (mode === "system") {
-    root.removeAttribute("data-theme");
-  } else {
-    root.setAttribute("data-theme", mode);
-  }
-  // CopilotKit v2 (the Live chat) keys its dark styles off a `.dark` class,
-  // so mirror Aleph's effective dark state onto it.
+  // "system" is resolved to an explicit light/dark attribute: the dark-mode
+  // class-remap shim in tokens.css keys off [data-theme="dark"], so leaving
+  // the attribute unset in system-dark would dark-flip the CSS tokens (via
+  // the prefers-color-scheme block) while every hardcoded bg-white/slate-*
+  // component stayed light.
   const prefersDark =
     typeof window !== "undefined" &&
     window.matchMedia?.("(prefers-color-scheme: dark)").matches;
-  const isDark = mode === "dark" || (mode === "system" && !!prefersDark);
-  root.classList.toggle("dark", isDark);
+  const resolved = mode === "system" ? (prefersDark ? "dark" : "light") : mode;
+  root.setAttribute("data-theme", resolved);
+  // CopilotKit v2 (the Live chat) keys its dark styles off a `.dark` class,
+  // so mirror Aleph's effective dark state onto it.
+  root.classList.toggle("dark", resolved === "dark");
 }
 
 function loadMode(): Mode {
@@ -38,6 +39,14 @@ export function ThemeToggle({ className }: Props) {
     const initial = loadMode();
     setMode(initial);
     applyMode(initial);
+    // In system mode, follow OS theme changes live.
+    const mq = window.matchMedia?.("(prefers-color-scheme: dark)");
+    if (!mq) return;
+    const onChange = () => {
+      if (loadMode() === "system") applyMode("system");
+    };
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
   }, []);
 
   const choose = (next: Mode) => {
