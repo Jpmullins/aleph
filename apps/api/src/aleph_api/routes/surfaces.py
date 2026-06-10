@@ -37,8 +37,6 @@ from aleph_a2ui.surface_streamer import (
 from aleph_api.deps import PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep, assert_stream_access
 from aleph_core.errors import NotFound, ValidationFailed
-from aleph_hypotheses.hypothesis_service import list_hypotheses
-from aleph_hypotheses.models import HypothesisEvidence
 from aleph_notes.models import Note, NoteSection
 from aleph_wiki.models import WikiClaim, WikiPage
 
@@ -196,36 +194,11 @@ async def stream_surface(
 async def _hypotheses_messages(session: Any, project_id: UUID) -> list[dict[str, Any]]:
     """Build the v0.9 message list for the Hypotheses tab.
 
-    One `HypothesisCard` per hypothesis, with evidence counts aggregated from
-    `hypothesis_evidence`. Props bind into `/items/<i>/...` (Wave 4 T6 delta
-    path).
+    A single interactive `HypothesesSurface` (header, + New, ACH matrix,
+    feedback, empty state) that fetches its own hypothesis list — the same
+    pattern as the other four tabs.
     """
-    hyps = await list_hypotheses(session, project_id=project_id)
-    counts: dict[UUID, int] = {}
-    ev_rows = list(
-        (
-            await session.execute(
-                select(HypothesisEvidence.hypothesis_id).where(
-                    HypothesisEvidence.project_id == project_id
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    for hid in ev_rows:
-        counts[hid] = counts.get(hid, 0) + 1
-    return hypotheses_surface_v09(
-        hypotheses=[
-            {
-                "hypothesis_id": str(h.id),
-                "title": h.title,
-                "confidence": h.confidence,
-                "evidence_count": counts.get(h.id, 0),
-            }
-            for h in hyps
-        ]
-    )
+    return hypotheses_surface_v09()
 
 
 async def _wiki_messages(
