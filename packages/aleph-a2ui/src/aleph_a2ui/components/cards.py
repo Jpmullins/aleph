@@ -161,7 +161,9 @@ def chart_card(p: ChartCardProps, *, card_id: str | None = None) -> dict[str, An
             "title": p.title,
             "vega_lite_spec": p.vega_lite_spec,
             "open_action": "open",
-            "_placeholder": p.dataset_version_id is None,
+            # Placeholder only when there is nothing to render at all — an
+            # inline vega_lite_spec renders without a dataset binding.
+            "_placeholder": p.dataset_version_id is None and not p.vega_lite_spec,
         },
     )
 

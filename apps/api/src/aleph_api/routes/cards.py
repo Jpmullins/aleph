@@ -18,8 +18,8 @@ from sqlalchemy import select
 
 from aleph_a2ui.action_router import ActionRouter, CardActionRequest
 from aleph_a2ui.card_service import pin_card
-from aleph_a2ui.models import CardAction
 from aleph_a2ui.catalog import CATALOG, CatalogValidationError, validate_component
+from aleph_a2ui.models import CardAction
 from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
 from aleph_core.errors import ValidationFailed

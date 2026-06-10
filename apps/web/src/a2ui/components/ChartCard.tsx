@@ -62,7 +62,10 @@ export function ChartCard({ component }: RendererProps) {
     };
   }, [spec, rows]);
 
-  if (p._placeholder || (!p.dataset_version_id && !p.vega_lite_spec)) {
+  // An inline vega_lite_spec always renders — `_placeholder` only matters when
+  // the card has neither a spec nor a dataset binding to fetch one from.
+  const hasInlineSpec = !!p.vega_lite_spec && Object.keys(p.vega_lite_spec).length > 0;
+  if (!hasInlineSpec && (p._placeholder || !p.dataset_version_id)) {
     return (
       <CardShell
         title={p.title || "Chart"}
