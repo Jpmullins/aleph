@@ -19,8 +19,10 @@ from starlette.responses import StreamingResponse
 from aleph_a2ui.components.cards import (
     ApprovalCardProps,
     ClaimCardProps,
+    FindingCardProps,
     approval_card,
     claim_card,
+    finding_card,
 )
 from aleph_a2ui.components.surfaces import (
     artifacts_surface_v09,
@@ -291,10 +293,12 @@ async def _notes_messages(session: Any, project_id: UUID) -> list[dict[str, Any]
 async def _briefs_messages(session: Any, project_id: UUID) -> list[dict[str, Any]]:
     """v0.9 message list for the Briefs tab — a single `BriefsSurface`.
 
-    Pending `SynthesisProposal`s render as `ApprovalCard` children (the legacy
-    `A2UIComponent` `{type,id,props}` shape the surface view consumes).
+    The action pile: pending `SynthesisProposal`s render as `ApprovalCard`s and
+    open `ReviewFinding`s as `FindingCard`s (the legacy `A2UIComponent`
+    `{type,id,props}` shape the surface view consumes). Badge = total pending items.
     """
     from aleph_connectors.models import SynthesisProposal
+    from aleph_reviewer.models import ReviewFinding
 
     rows = list(
         (
@@ -322,4 +326,31 @@ async def _briefs_messages(session: Any, project_id: UUID) -> list[dict[str, Any
                 card_id=f"synth-{p.id}",
             )
         )
-    return briefs_surface_v09(badge_count=len(rows), children=cards)
+    findings = list(
+        (
+            await session.execute(
+                select(ReviewFinding)
+                .where(
+                    ReviewFinding.project_id == project_id,
+                    ReviewFinding.status == "open",
+                )
+                .order_by(ReviewFinding.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for f in findings:
+        cards.append(
+            finding_card(
+                FindingCardProps(
+                    finding_id=f.id,
+                    severity=f.severity,
+                    kind=f.finding_kind,
+                    summary=f"{f.title} — {f.description}"[:1000],
+                    evidence_refs=list(f.evidence_refs_jsonb or []),
+                ),
+                card_id=f"finding-{f.id}",
+            )
+        )
+    return briefs_surface_v09(badge_count=len(cards), children=cards)

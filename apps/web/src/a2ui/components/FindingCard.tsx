@@ -44,7 +44,7 @@ export function FindingCard({ component, onAction }: RendererProps) {
           }
           className="ml-auto text-xs text-emerald-700 hover:text-emerald-900"
         >
-          Apply fix
+          Resolve
         </button>
         <button
           type="button"

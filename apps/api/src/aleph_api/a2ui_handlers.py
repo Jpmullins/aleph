@@ -26,7 +26,7 @@ from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
 from aleph_notes.note_service import update_section as update_note_section
 from aleph_observability.tracing import current_trace_id
-from aleph_reviewer.models import ApprovalRequest
+from aleph_reviewer.models import ApprovalRequest, ReviewFinding
 from aleph_wiki.feedback_service import write_feedback
 from aleph_wiki.handedit_service import clear_section, mark_section
 from aleph_wiki.models import WikiPage
@@ -193,6 +193,34 @@ async def _approve(
             "new_status": "approved",
             "executed": executed,
         }
+    if target_kind == "review_finding":
+        finding = (
+            await session.execute(
+                select(ReviewFinding).where(
+                    ReviewFinding.id == target_id,
+                    ReviewFinding.project_id == project_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if finding is None:
+            msg = f"finding {target_id} not found"
+            raise NotFound(msg)
+        if finding.status != "open":
+            msg = f"finding already {finding.status}"
+            raise ValidationFailed(msg)
+        finding.status = "resolved"
+        await session.flush()
+        await ledger.append(
+            project_id=project_id,
+            actor_id=principal.user_id,
+            actor_kind=principal.actor_kind,
+            action_kind="review_finding.resolve",
+            target_id=finding.id,
+            target_kind="review_finding",
+            payload={"title": finding.title, "finding_kind": finding.finding_kind},
+            trace_id=current_trace_id(),
+        )
+        return {"target": str(target_id), "new_status": "resolved"}
     msg = f"approve handler not wired for target_kind={target_kind}"
     raise ValidationFailed(msg)
 
@@ -304,6 +332,38 @@ async def _reject(
             trace_id=current_trace_id(),
         )
         return {"target": str(target_id), "new_status": "rejected"}
+    if target_kind == "review_finding":
+        finding = (
+            await session.execute(
+                select(ReviewFinding).where(
+                    ReviewFinding.id == target_id,
+                    ReviewFinding.project_id == project_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if finding is None:
+            msg = f"finding {target_id} not found"
+            raise NotFound(msg)
+        if finding.status != "open":
+            msg = f"finding already {finding.status}"
+            raise ValidationFailed(msg)
+        finding.status = "dismissed"
+        await session.flush()
+        await ledger.append(
+            project_id=project_id,
+            actor_id=principal.user_id,
+            actor_kind=principal.actor_kind,
+            action_kind="review_finding.dismiss",
+            target_id=finding.id,
+            target_kind="review_finding",
+            payload={
+                "title": finding.title,
+                "finding_kind": finding.finding_kind,
+                "reason": reason,
+            },
+            trace_id=current_trace_id(),
+        )
+        return {"target": str(target_id), "new_status": "dismissed"}
     msg = f"reject handler not wired for target_kind={target_kind}"
     raise ValidationFailed(msg)
 
