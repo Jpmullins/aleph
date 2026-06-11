@@ -68,6 +68,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { useSurface } from "./surface-context";
 import { api } from "@/lib/api";
+import { SURFACE_TABS, useWorkspaceUI, type SurfaceTab } from "@/lib/workspace-ui";
 
 import { ApprovalCard as ApprovalCardView } from "./components/ApprovalCard";
 import { ArtifactCard as ArtifactCardView } from "./components/ArtifactCard";
@@ -112,6 +113,7 @@ function adapt(
   return function AlephCardImpl({ props }: { props: Record<string, unknown> }) {
     const { projectId, surface } = useSurface();
     const qc = useQueryClient();
+    const { setActiveSurface, setOpenPageId } = useWorkspaceUI();
 
     const action = useMutation({
       mutationFn: async ({
@@ -121,19 +123,27 @@ function adapt(
         actionName: string;
         params: Record<string, unknown>;
       }) =>
-        api.post(`/v1/projects/${projectId}/cards/actions`, {
+        api.post<{
+          result?: { navigate?: { tab?: string; page_id?: string } };
+        }>(`/v1/projects/${projectId}/cards/actions`, {
           surface_kind: surface,
           action_kind: actionName,
           target_id: (params.target_id as string | undefined) ?? null,
           target_kind: (params.target_kind as string | undefined) ?? null,
           params,
         }),
-      onSuccess: () => {
+      onSuccess: (out) => {
         // Mirror the right panel: refresh the live surfaces (Briefs/Artifacts/
         // Hypotheses/Wiki/Notes) so the executed action is reflected there.
         qc.invalidateQueries({ queryKey: ["surface", projectId] });
         qc.invalidateQueries({ queryKey: ["artifacts", projectId] });
         qc.invalidateQueries({ queryKey: ["hypotheses", projectId] });
+        // `open` actions resolve to a workspace location — actually go there.
+        const nav = out?.result?.navigate;
+        if (nav?.tab && (SURFACE_TABS as readonly string[]).includes(nav.tab)) {
+          if (nav.page_id) setOpenPageId(nav.page_id);
+          setActiveSurface(nav.tab as SurfaceTab);
+        }
       },
     });
 

@@ -2,27 +2,41 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
 /**
- * Live-wiki signals from the push layer.
+ * Live workspace signals from the push layer.
  *
  * Subscribes to `GET /v1/projects/{id}/changes/stream` (LISTEN/NOTIFY-backed) and
- * turns its `committed` / `compiling` / `compile_done` signals into:
+ * turns its signals into:
  *   - `compilingPages` — pages an agent is actively writing ("✦ editing…"),
  *   - `recentlyCommitted` — pages that just saved (the "updated just now" pulse),
- * and invalidates the wiki react-query caches so the index and the open page
- * refresh the instant an agent writes (the open-page query has no interval, so
- * this targeted invalidation is what makes a page you're reading refresh).
+ *   - targeted react-query invalidations per domain (`changed` signals), so
+ *     EVERY tab's data refreshes the instant something writes — notes,
+ *     hypotheses, artifacts, wiki sources — instead of waiting for its poll.
+ *
+ * Mount ONCE per workspace (the `LiveSignalsProvider` in ProjectWorkspace) so
+ * there is a single EventSource regardless of the active tab; surface views
+ * consume the result via `useLiveSignals()`.
  *
  * Pages are keyed by `page_id` when known, else `title:<title>` (a brand-new page
  * is signalled by title until its row exists; the commit signal carries the id).
  */
 export interface WikiChangeSignal {
-  kind: "committed" | "compiling" | "compile_done";
-  page_id: string | null;
-  page_title: string | null;
+  kind: "committed" | "compiling" | "compile_done" | "changed";
+  page_id?: string | null;
+  page_title?: string | null;
   page_kind?: string;
+  domain?: "notes" | "hypotheses" | "artifacts" | "wiki" | "briefs";
   actor_kind?: string;
   ts: string;
 }
+
+/** Which react-query key prefixes each `changed` domain invalidates. */
+const DOMAIN_QUERY_KEYS: Record<string, string[][]> = {
+  notes: [["notes"], ["note"]],
+  hypotheses: [["hypotheses"], ["ach-matrix"]],
+  artifacts: [["artifacts"], ["agent-runs"]],
+  wiki: [["wiki-pages"]],
+  briefs: [["surface"]],
+};
 
 export interface CompilingPage {
   pageTitle: string | null;
@@ -67,12 +81,20 @@ export function useWikiLiveSignals(projectId: string): WikiLiveSignals {
         return;
       }
       sinceRef.current = sig.ts;
+
+      if (sig.kind === "changed") {
+        for (const key of DOMAIN_QUERY_KEYS[sig.domain ?? ""] ?? []) {
+          queryClient.invalidateQueries({ queryKey: [...key, projectId] });
+        }
+        return;
+      }
+
       const k = keyFor(sig);
 
       if (sig.kind === "compiling" && k) {
         setCompilingPages((prev) => {
           const next = new Map(prev);
-          next.set(k, { pageTitle: sig.page_title, since: Date.now() });
+          next.set(k, { pageTitle: sig.page_title ?? null, since: Date.now() });
           return next;
         });
         return;

@@ -51,7 +51,7 @@ def test_ledger_commit_maps_to_committed_signal() -> None:
 
 
 def test_ledger_non_allowlisted_kind_dropped() -> None:
-    rows = [_ledger("hypothesis.create", target_id=uuid.uuid4())]
+    rows = [_ledger("project_member.add", target_id=uuid.uuid4())]
     assert ledger_rows_to_signals(rows) == []
 
 
@@ -104,3 +104,29 @@ def test_phase_non_compile_page_dropped() -> None:
 
 def test_phase_without_any_page_identity_dropped() -> None:
     assert phase_rows_to_signals([_event("phase_started", payload={"phase": "compile_page"})]) == []
+
+
+def test_domain_ledger_kinds_map_to_changed_signals() -> None:
+    rows = [
+        _ledger("note.update", target_id=uuid.uuid4()),
+        _ledger("hypothesis.create", target_id=uuid.uuid4()),
+        _ledger("card.pin", target_id=uuid.uuid4()),
+        _ledger("artifact.version.create", target_id=uuid.uuid4()),
+        _ledger("source.create", target_id=uuid.uuid4()),
+    ]
+    sigs = ledger_rows_to_signals(rows)
+    changed = [s for s in sigs if s["kind"] == "changed"]
+    assert [s["domain"] for s in changed] == [
+        "notes",
+        "hypotheses",
+        "briefs",
+        "artifacts",
+        "wiki",
+    ]
+    assert all(s["action_kind"] for s in changed)
+    assert all(s["ts"] for s in changed)
+
+
+def test_unmapped_ledger_kinds_emit_nothing() -> None:
+    rows = [_ledger("project.update"), _ledger("budget.set")]
+    assert ledger_rows_to_signals(rows) == []

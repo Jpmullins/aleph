@@ -41,29 +41,68 @@ _BATCH_LIMIT = 200
 # compiling/compile_done pairs).
 _REPLAY_WINDOW_SEC = 60.0
 
-# Ledger action kinds the live surfaces care about. Extensible (Notes/Briefs later).
+# Ledger action kinds the live surfaces care about.
 WIKI_LEDGER_ALLOWLIST = frozenset({"wiki.revision.commit"})
+# Other mutations → which workspace domain (tab data) they invalidate. The
+# frontend's live-signals hook turns these `changed` signals into targeted
+# react-query invalidations, so every tab refreshes the instant something
+# writes instead of waiting for its poll interval.
+DOMAIN_LEDGER_KINDS: dict[str, str] = {
+    "note.create": "notes",
+    "note.update": "notes",
+    "note.section.create": "notes",
+    "note.section.update": "notes",
+    "hypothesis.create": "hypotheses",
+    "hypothesis.evidence.add": "hypotheses",
+    "hypothesis.version.create": "hypotheses",
+    "artifact.create": "artifacts",
+    "artifact.version.create": "artifacts",
+    "source.create": "wiki",
+    "source.status_change": "wiki",
+    "note.promote": "briefs",
+    "synthesis.proposal.create": "briefs",
+    "synthesis.proposal.approve": "briefs",
+    "synthesis.proposal.reject": "briefs",
+    "review_finding.resolve": "briefs",
+    "review_finding.dismiss": "briefs",
+    "card.pin": "briefs",
+    "card.unpin": "briefs",
+    "approval_request.create": "briefs",
+    "approval_request.approved": "briefs",
+    "approval_request.rejected": "briefs",
+}
+LEDGER_ALLOWLIST = WIKI_LEDGER_ALLOWLIST | frozenset(DOMAIN_LEDGER_KINDS)
 _PHASE_KINDS = ("phase_started", "phase_completed", "phase_failed")
 _COMPILE_PHASE = "compile_page"
 
 
 def ledger_rows_to_signals(rows: list[ActionLedgerEvent]) -> list[dict[str, Any]]:
-    """Map allowlisted ledger rows to `committed` signals (pure)."""
+    """Map allowlisted ledger rows to `committed` / `changed` signals (pure)."""
     out: list[dict[str, Any]] = []
     for r in rows:
-        if r.action_kind not in WIKI_LEDGER_ALLOWLIST:
-            continue
-        payload = r.payload_jsonb or {}
-        out.append(
-            {
-                "kind": "committed",
-                "action_kind": r.action_kind,
-                "page_id": str(r.target_id) if r.target_id else payload.get("page_id"),
-                "page_title": payload.get("page_title"),
-                "actor_kind": r.actor_kind,
-                "ts": r.timestamp.isoformat(),
-            }
-        )
+        if r.action_kind in WIKI_LEDGER_ALLOWLIST:
+            payload = r.payload_jsonb or {}
+            out.append(
+                {
+                    "kind": "committed",
+                    "action_kind": r.action_kind,
+                    "page_id": str(r.target_id) if r.target_id else payload.get("page_id"),
+                    "page_title": payload.get("page_title"),
+                    "actor_kind": r.actor_kind,
+                    "ts": r.timestamp.isoformat(),
+                }
+            )
+        elif r.action_kind in DOMAIN_LEDGER_KINDS:
+            out.append(
+                {
+                    "kind": "changed",
+                    "domain": DOMAIN_LEDGER_KINDS[r.action_kind],
+                    "action_kind": r.action_kind,
+                    "target_id": str(r.target_id) if r.target_id else None,
+                    "actor_kind": r.actor_kind,
+                    "ts": r.timestamp.isoformat(),
+                }
+            )
     return out
 
 
@@ -126,7 +165,7 @@ async def stream_changes(
                                 .where(
                                     ActionLedgerEvent.project_id == project_id,
                                     ActionLedgerEvent.timestamp > ledger_cursor,
-                                    ActionLedgerEvent.action_kind.in_(WIKI_LEDGER_ALLOWLIST),
+                                    ActionLedgerEvent.action_kind.in_(LEDGER_ALLOWLIST),
                                 )
                                 .order_by(ActionLedgerEvent.timestamp.asc())
                                 .limit(_BATCH_LIMIT)

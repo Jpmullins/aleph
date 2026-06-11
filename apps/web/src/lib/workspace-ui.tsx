@@ -24,6 +24,12 @@ export interface WorkspaceUIState {
   /** Title of the wiki page the analyst currently has open (if any). */
   openPageTitle: string | null;
   setOpenPageTitle: (title: string | null) => void;
+  /**
+   * Externally-requested wiki page to open (card "open" actions, agent
+   * navigation). WikiSurface consumes it and syncs its own selection.
+   */
+  openPageId: string | null;
+  setOpenPageId: (id: string | null) => void;
 }
 
 const WorkspaceUIContext = createContext<WorkspaceUIState | null>(null);
@@ -31,10 +37,18 @@ const WorkspaceUIContext = createContext<WorkspaceUIState | null>(null);
 export function WorkspaceUIProvider({ children }: { children: ReactNode }) {
   const [activeSurface, setActiveSurface] = useState<SurfaceTab>("Wiki");
   const [openPageTitle, setOpenPageTitle] = useState<string | null>(null);
+  const [openPageId, setOpenPageId] = useState<string | null>(null);
 
   const value = useMemo<WorkspaceUIState>(
-    () => ({ activeSurface, setActiveSurface, openPageTitle, setOpenPageTitle }),
-    [activeSurface, openPageTitle],
+    () => ({
+      activeSurface,
+      setActiveSurface,
+      openPageTitle,
+      setOpenPageTitle,
+      openPageId,
+      setOpenPageId,
+    }),
+    [activeSurface, openPageTitle, openPageId],
   );
 
   return <WorkspaceUIContext.Provider value={value}>{children}</WorkspaceUIContext.Provider>;

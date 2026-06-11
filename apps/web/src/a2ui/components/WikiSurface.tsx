@@ -1,10 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { renderChildCard, useSurface } from "../surface-context";
 import { WikiBodyMarkdown } from "@/components/WikiBodyMarkdown";
-import { useWikiLiveSignals, type WikiLiveSignals } from "@/hooks/useWikiLiveSignals";
+import { useLiveSignals } from "@/hooks/live-signals";
+import type { WikiLiveSignals } from "@/hooks/useWikiLiveSignals";
 import { api } from "@/lib/api";
+import { useWorkspaceUI } from "@/lib/workspace-ui";
 import { CardShell, FeedbackButton, Pill, SurfaceHeader, type RendererProps } from "./_shared";
 
 /** Is this page currently being compiled by an agent (by id or title)? */
@@ -42,11 +44,22 @@ export function WikiSurface({ component, onAction }: RendererProps) {
   const { projectId } = useSurface();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  const { openPageId, setOpenPageId } = useWorkspaceUI();
+
+  // Honor external open requests (card "open" actions, agent navigation):
+  // consume openPageId into the local selection, then clear it.
+  useEffect(() => {
+    if (openPageId) {
+      setSelectedId(openPageId);
+      setOpenPageId(null);
+    }
+  }, [openPageId, setOpenPageId]);
 
   // Live signals: instant index/page refresh + "✦ editing…" / "updated" presence
-  // as agents write. Freshness now comes from the push stream, so the query below
-  // only keeps a slow safety-net interval.
-  const live = useWikiLiveSignals(projectId);
+  // as agents write. One workspace-level subscription (LiveSignalsProvider);
+  // freshness comes from the push stream, so the query below only keeps a slow
+  // safety-net interval.
+  const live = useLiveSignals();
 
   // Embedded A2UI cards (charts / tables / graphs / maps the agent placed
   // on this surface) render above the page browser, per spec §7.4 —

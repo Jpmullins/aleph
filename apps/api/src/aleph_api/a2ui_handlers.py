@@ -392,13 +392,60 @@ async def _unpin(
     return {"card_id": str(card_id), "pinned_to": None}
 
 
-async def _open(*, request: CardActionRequest, **_: Any) -> dict[str, Any]:
-    return {
-        "navigate": {
-            "target_id": request.params["target_id"],
-            "target_kind": request.params["target_kind"],
-        }
+async def _open(
+    *,
+    session: AsyncSession,
+    project_id: UUID,
+    request: CardActionRequest,
+    **_: Any,
+) -> dict[str, Any]:
+    """Resolve an `open` target to a navigable workspace location.
+
+    Returns `{navigate: {tab, page_id?, target_id, target_kind}}` — the
+    frontend `adapt()` switches the right panel accordingly. Unknown kinds
+    keep the legacy echo shape (no `tab`), which the frontend ignores.
+    """
+    target_id = UUID(request.params["target_id"])
+    target_kind = str(request.params["target_kind"])
+    nav: dict[str, Any] = {
+        "target_id": str(target_id),
+        "target_kind": target_kind,
     }
+    if target_kind == "synthesis_proposal":
+        p = (
+            await session.execute(
+                select(SynthesisProposal).where(
+                    SynthesisProposal.id == target_id,
+                    SynthesisProposal.project_id == project_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if p is not None:
+            nav["tab"] = "Wiki"
+            nav["page_id"] = str(p.page_id)
+    elif target_kind == "review_finding":
+        finding = (
+            await session.execute(
+                select(ReviewFinding).where(
+                    ReviewFinding.id == target_id,
+                    ReviewFinding.project_id == project_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if finding is not None:
+            nav["tab"] = "Wiki"
+            if finding.target_page_id is not None:
+                nav["page_id"] = str(finding.target_page_id)
+    elif target_kind in ("wiki_page", "source_page"):
+        nav["tab"] = "Wiki"
+        nav["page_id"] = str(target_id)
+    elif target_kind == "hypothesis":
+        nav["tab"] = "Hypotheses"
+    elif target_kind in ("artifact", "artifact_version"):
+        nav["tab"] = "Artifacts"
+    elif target_kind == "note":
+        nav["tab"] = "Notes"
+    return {"navigate": nav}
 
 
 async def _navigate_wiki(*, request: CardActionRequest, **_: Any) -> dict[str, Any]:
