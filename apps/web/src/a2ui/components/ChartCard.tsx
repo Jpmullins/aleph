@@ -39,9 +39,13 @@ export function ChartCard({ component }: RendererProps) {
     let disposed = false;
     void import("vega-embed").then(({ default: embed }) => {
       if (disposed || !ref.current) return;
-      const fullSpec = rows
-        ? { ...spec, data: { values: rows } }
-        : spec;
+      // Normalize the schema to the installed Vega-Lite major version. Agents
+      // (and older specs) often emit a v5 `$schema`, which makes vega-embed warn
+      // about a version mismatch; the spec itself is forward-compatible.
+      const fullSpec = {
+        ...(rows ? { ...spec, data: { values: rows } } : spec),
+        $schema: "https://vega.github.io/schema/vega-lite/v6.json",
+      };
       embed(ref.current, fullSpec as never, {
         actions: false,
         renderer: "canvas",

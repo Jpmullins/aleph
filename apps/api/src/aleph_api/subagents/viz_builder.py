@@ -59,7 +59,7 @@ def build_viz_builder_subagent(*, settings: Any) -> dict[str, Any]:
         build_artifact.
         """
         spec: dict[str, Any] = {
-            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+            "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
             "title": title,
             "data": {"values": points},
             "mark": "bar",

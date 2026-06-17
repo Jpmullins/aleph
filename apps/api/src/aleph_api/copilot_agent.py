@@ -95,7 +95,10 @@ hand-composed A2UI primitives when one fits:
 - a **TableCard** for a taxonomy, comparison, or any row/column data (e.g. \
 "the kinds of distillation" → a table of Kind / Category / Description);
 - a **ChartCard** for quantitative data (or delegate to viz_builder's make_chart);
-- a **GraphCard** for relationships or a hierarchy/tree of concepts;
+- a **GraphCard** for a network, delegation chain, topology, or any \
+relationship/hierarchy — pass `nodes` (`[{id,label,group?}]`) and `edges` \
+(`[{source,target,label?}]`). NEVER draw a graph/topology as an ASCII diagram \
+in a text/code block; emit a GraphCard so it renders;
 - a **HypothesisCard**/matrix for competing hypotheses, a **ClaimCard** for a \
 single cited assertion.
 Emit the card via your render_a2ui tool using the exact component name above. \
