@@ -1163,3 +1163,56 @@ cursor/recompute logic is unchanged, so nothing is ever missed regardless of sig
 - **Hand-edits** write no ledger event → not live (out of scope; editor sees their own edit).
 - **SSE × OIDC** unchanged — all streams (this included) rely on `local` auth mode; documented.
 - The `changes` stream is general (allowlist) — Notes/Briefs can consume it later.
+
+## Host-memory protection: AIQ in-flight gate + compose memory caps (2026-06-12)
+
+**Context:** On 2026-06-11 the EC2 host (16 GiB / 4 vCPU) died of swap thrash —
+unclean reboot + ext4 recovery. Root cause: the Playwright suite created 7
+projects; each auto-bootstrap fanned out 3 AIQ shallow-research jobs; all 21
+ran concurrently as Dask workloads inside the single aiq-server container.
+No compose service had a memory limit, so the kernel paged the host to death
+before the OOM killer could act. Bootstrap-on-create stays ON — the fix is
+admission control + hard caps, not feature removal.
+
+### What was built
+
+- **`aleph_aiq.throttle.AIQThrottle`** — Redis sorted-set admission gate
+  bounding research jobs in flight inside aiq-server, shared by every
+  submitter (API `/synthesize` + workers). Rank-based acquire (never
+  over-admits under concurrency); TTL prune (45 min > the poller's 30-min
+  ceiling) self-heals slots leaked by a crashed poller.
+- **`_dispatch_core` gating** — with a free slot, inline dispatch exactly as
+  before; with the gate full, the submission is handed to the new deferred
+  **`aiq_submit_job`** (15s defer, 120 attempts ≈ 30 min max queue wait,
+  within the poll token's 1h TTL). The run is queued, never dropped; ledger
+  records `aiq.job.queued` vs `aiq.job.dispatched`. `StartedResearch` gains
+  `queued`.
+- **`aiq_submit_job`** (workers) — retries the gate; acquired → dispatch +
+  enqueue poll job; full / AIQ briefly down → requeue itself; exhausted →
+  AgentRun failed + `aiq.dispatch.failed`. Registered in arq.
+- **Slot release** in `aiq_synthesis_poll_job` on every exit from AIQ: any
+  terminal status and the poll-timeout give-up.
+- **Settings:** `AIQ_MAX_CONCURRENT_JOBS` (default 3; API + workers),
+  `ARQ_MAX_JOBS` (default 10, env-overridable; compose sets 4 locally).
+- **Compose memory caps** on all 10 services (`mem_limit` +
+  `memswap_limit` equal = container swap OFF, so a runaway is cgroup-OOM-
+  killed + restarted instead of thrashing the host): aiq-server 4g, workers
+  2g, api/web/postgres 1.5g, langfuse 1g, minio/copilot-runtime 512m,
+  redis/otel 256m. Caps total ~13g on the 16g host.
+
+### Tests
+- Unit (+20): throttle semantics (admit/reject/release/idempotent
+  re-acquire/TTL prune); dispatch-core gating (slot held, gate-full defers,
+  queued holds no slot); submit-core (dispatch/requeue/exhaust/health-blip
+  releases); `aiq_submit_job` wrapper (event + status writes); poll job slot
+  release (terminal + timeout, held while running); settings env overrides.
+
+### Honest scope / limits
+- The gate bounds **AIQ research jobs** only; other worker jobs are bounded
+  by `ARQ_MAX_JOBS`. aiq-server's own 4g cap is the backstop.
+- Rank-based acquire assumes one host clock (true locally: all containers
+  share the kernel clock). Cross-node deploys should keep the same gate via
+  shared Redis — clock skew can reorder fairness but the TTL prune bounds any
+  over-admission window.
+- If a poll job crashes hard (not timeout), its slot frees only via the
+  45-min TTL prune.

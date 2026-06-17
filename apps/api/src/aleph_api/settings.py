@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     # the AgentRun in 'pending' status and the dispatch is a no-op.
     aiq_base_url: str | None = None
 
+    # Cap on research jobs in flight inside aiq-server, shared across all
+    # submitters via a Redis gate (aleph_aiq.throttle). Submissions past the
+    # cap queue through the deferred aiq_submit_job instead of stampeding.
+    aiq_max_concurrent_jobs: int = 3
+
     # Self URL. Agent tools that re-enter the API over HTTP (ingest_source,
     # start_research) call this base so the agent never touches the DB or
     # asset store directly (architecture rule #3). Overridable via ALEPH_SELF_URL.

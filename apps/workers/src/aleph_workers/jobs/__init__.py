@@ -1,5 +1,6 @@
 """Background jobs registered with the Arq worker."""
 
+from aleph_workers.jobs.aiq_submit import aiq_submit_job
 from aleph_workers.jobs.aiq_synthesis import aiq_synthesis_poll_job
 from aleph_workers.jobs.assistant_turn import assistant_turn_job
 from aleph_workers.jobs.bootstrap import bootstrap_project_job
@@ -14,6 +15,7 @@ from aleph_workers.jobs.smoketest import smoke_llm_job
 from aleph_workers.jobs.wiki_ingest import wiki_ingest_job
 
 __all__ = [
+    "aiq_submit_job",
     "aiq_synthesis_poll_job",
     "assistant_turn_job",
     "bootstrap_project_job",

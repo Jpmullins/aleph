@@ -13,12 +13,18 @@ export interface ProjectOut {
   created_at: string;
 }
 
-/** Delete every active project (status != deleted). Use in beforeAll/afterAll. */
-export async function cleanupAllProjects(request: APIRequestContext): Promise<void> {
+/** Every project this suite creates carries this title prefix. */
+export const E2E_PREFIX = "[e2e] ";
+
+/**
+ * Soft-delete projects created by this suite — identified by the E2E_PREFIX
+ * title marker. NEVER deletes user projects (it used to wipe everything).
+ */
+export async function cleanupTestProjects(request: APIRequestContext): Promise<void> {
   const resp = await request.get(`${API_URL}/v1/projects`, { headers: AUTH });
   if (!resp.ok()) return;
   const projects = (await resp.json()) as ProjectOut[];
-  for (const p of projects) {
+  for (const p of projects.filter((p) => p.title.startsWith(E2E_PREFIX))) {
     await request.patch(`${API_URL}/v1/projects/${p.id}`, {
       headers: { ...AUTH, "Content-Type": "application/json" },
       data: { status: "deleted" },
@@ -30,10 +36,11 @@ export async function createProject(
   request: APIRequestContext,
   opts: { title: string; description?: string; budget_usd?: string } = { title: "Test" },
 ): Promise<ProjectOut> {
+  const title = opts.title.startsWith(E2E_PREFIX) ? opts.title : `${E2E_PREFIX}${opts.title}`;
   const resp = await request.post(`${API_URL}/v1/projects`, {
     headers: { ...AUTH, "Content-Type": "application/json" },
     data: {
-      title: opts.title,
+      title,
       description: opts.description ?? "Playwright test project",
       model_profile_name: "aleph-dev",
       budget_usd: opts.budget_usd ?? "100.00",
@@ -50,13 +57,18 @@ export async function openProjectWorkspace(page: Page, projectId: string): Promi
   await page.waitForSelector("text=Sessions", { timeout: 15_000 });
 }
 
+// W4/W6 replaced the bespoke composer with CopilotKit v2 components; the
+// stable testids come from upstream: copilot-chat-textarea / copilot-send-button /
+// copilot-message-list / copilot-user-message / copilot-assistant-message.
 export async function createSession(page: Page): Promise<void> {
   await page.getByRole("button", { name: "+ New" }).first().click();
-  // Wait for the composer to enable (means thread resolved).
-  await page.getByTestId("chat-composer").waitFor({ state: "visible" });
+  // Wait for the composer to enable (means the AG-UI thread resolved).
+  await page.getByTestId("copilot-chat-textarea").waitFor({ state: "visible" });
   await page.waitForFunction(
     () => {
-      const ta = document.querySelector('[data-testid="chat-composer"]') as HTMLTextAreaElement | null;
+      const ta = document.querySelector(
+        '[data-testid="copilot-chat-textarea"]',
+      ) as HTMLTextAreaElement | null;
       return !!ta && !ta.disabled;
     },
     null,
@@ -65,7 +77,7 @@ export async function createSession(page: Page): Promise<void> {
 }
 
 export async function sendChat(page: Page, text: string): Promise<void> {
-  const composer = page.getByTestId("chat-composer");
+  const composer = page.getByTestId("copilot-chat-textarea");
   await composer.fill(text);
   await composer.press("Enter");
 }

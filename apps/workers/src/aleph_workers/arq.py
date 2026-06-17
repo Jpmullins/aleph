@@ -23,6 +23,7 @@ from aleph_observability import (
 )
 from aleph_rks.asset_store import AssetStore
 from aleph_workers.jobs import (
+    aiq_submit_job,
     aiq_synthesis_poll_job,
     assistant_turn_job,
     bootstrap_project_job,
@@ -103,6 +104,7 @@ def _redis_from_url(url: str) -> RedisSettings:
 
 class WorkerSettings:
     functions: ClassVar = [
+        aiq_submit_job,
         smoke_llm_job,
         normalize_job,
         chunk_embed_job,
@@ -117,6 +119,6 @@ class WorkerSettings:
     on_startup = _startup
     on_shutdown = _shutdown
     redis_settings = _redis_from_url(get_worker_settings().redis_url)
-    max_jobs = 10
+    max_jobs = get_worker_settings().arq_max_jobs
     job_timeout = 600
     keep_result = 3600

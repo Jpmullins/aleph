@@ -57,3 +57,8 @@ tests/playwright/playwright-report/
 
 # uv lockfile is committed; per-app caches are not
 .uv/
+
+# Session screenshots (driver/verification output) — never commit
+/*.png
+/*.jpeg
+/*.jpg

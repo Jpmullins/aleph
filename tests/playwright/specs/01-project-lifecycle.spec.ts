@@ -1,11 +1,11 @@
 import { expect, test } from "@playwright/test";
 
 import { API_URL } from "../playwright.config";
-import { AUTH, cleanupAllProjects, createProject } from "./helpers";
+import { AUTH, cleanupTestProjects, createProject } from "./helpers";
 
 test.describe("Project lifecycle", () => {
   test.beforeAll(async ({ request }) => {
-    await cleanupAllProjects(request);
+    await cleanupTestProjects(request);
   });
 
   test("list shows empty state when no projects exist", async ({ page }) => {
@@ -46,6 +46,6 @@ test.describe("Project lifecycle", () => {
   });
 
   test.afterAll(async ({ request }) => {
-    await cleanupAllProjects(request);
+    await cleanupTestProjects(request);
   });
 });

@@ -1,19 +1,19 @@
 import { expect, test } from "@playwright/test";
 
 import { API_URL } from "../playwright.config";
-import { AUTH, cleanupAllProjects, createProject, openProjectWorkspace } from "./helpers";
+import { AUTH, cleanupTestProjects, createProject, openProjectWorkspace } from "./helpers";
 
 test.describe("Right-panel A2UI surfaces", () => {
   let projectId: string;
 
   test.beforeAll(async ({ request }) => {
-    await cleanupAllProjects(request);
+    await cleanupTestProjects(request);
     const p = await createProject(request, { title: "A2UI surfaces test" });
     projectId = p.id;
   });
 
   test.afterAll(async ({ request }) => {
-    await cleanupAllProjects(request);
+    await cleanupTestProjects(request);
   });
 
   test("each of the 5 tabs renders without console errors", async ({ page }) => {

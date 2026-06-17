@@ -9,6 +9,7 @@ lifespan (so the listener is started).
 
 from __future__ import annotations
 
+import asyncio
 from uuid import UUID
 
 import pytest
@@ -58,6 +59,9 @@ async def _write_agent_event(asgi_app, *, project_id: str, event_kind: str) -> N
 async def test_push_delivers_to_subscriber(http_client, asgi_app):
     pid = await _create_project(http_client, "push-e2e")
     broker = asgi_app.state.change_broker
+    # LISTEN is established asynchronously after startup; a write before it
+    # lands loses its NOTIFY (the historical ~1-in-3 flake in this test).
+    await asyncio.wait_for(asgi_app.state.notify_listener.wait_ready(), 10.0)
 
     # Subscribe BEFORE the write (the broker doesn't buffer for non-subscribers).
     async with broker.subscribe(UUID(pid)) as sub:
@@ -90,6 +94,7 @@ async def test_ledger_write_pushes_committed_signal(http_client, asgi_app):
     # hypothesis.* ledger event scoped to this project).
     pid = await _create_project(http_client, "push-ledger")
     broker = asgi_app.state.change_broker
+    await asyncio.wait_for(asgi_app.state.notify_listener.wait_ready(), 10.0)
 
     async with broker.subscribe(UUID(pid)) as sub:
         resp = await http_client.post(

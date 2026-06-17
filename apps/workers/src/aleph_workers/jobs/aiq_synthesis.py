@@ -16,6 +16,7 @@ from uuid import UUID
 from sqlalchemy import select
 
 from aleph_aiq.client import AIQClient, AIQJobStatus
+from aleph_aiq.throttle import AIQThrottle
 from aleph_core.time import utcnow
 from aleph_db.models.agent import AgentRun
 from aleph_observability.tracing import start_span
@@ -148,12 +149,21 @@ async def aiq_synthesis_poll_job(
             await _set_run_status(maker, agent_run_id, "running")
         client = AIQClient(base_url=settings.aiq_base_url, service_token=agent_token)
 
+        # The in-flight gate slot acquired at submission (aleph_aiq.throttle)
+        # is freed whenever the job leaves AIQ: any terminal status, or our
+        # give-up timeout. Constructed per-call — it's a stateless Redis view.
+        throttle = AIQThrottle(
+            ctx["redis_pool"],
+            max_concurrent=int(getattr(settings, "aiq_max_concurrent_jobs", 3)),
+        )
+
         # One status check; re-enqueue ourselves if the job is still running so
         # we never hold a worker through a multi-minute deep-research run.
         job = await client.get_job(aiq_job_id)
         status = job.status
         if status not in _TERMINAL:
             if attempt + 1 >= _MAX_ATTEMPTS:
+                await throttle.release(agent_run_id_str)
                 await _set_run_status(
                     maker,
                     agent_run_id,
@@ -172,6 +182,8 @@ async def aiq_synthesis_poll_job(
                 _defer_by=_DEFER_S,
             )
             return {"status": "polling", "attempt": attempt, "aiq_status": str(status)}
+
+        await throttle.release(agent_run_id_str)
 
         if status is not AIQJobStatus.SUCCEEDED:
             await _set_run_status(maker, agent_run_id, "failed", error=f"AIQ job {status}")

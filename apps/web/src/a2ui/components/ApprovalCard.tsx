@@ -52,13 +52,22 @@ export function ApprovalCard({ component, onAction }: RendererProps) {
         >
           Reject
         </button>
+        <button
+          type="button"
+          onClick={() =>
+            onAction("open", { target_id: p.target_id, target_kind: p.target_kind })
+          }
+          className="ml-auto text-xs text-slate-500 hover:text-slate-900"
+        >
+          Open →
+        </button>
         {p.diff_card_id && (
           <button
             type="button"
             onClick={() =>
               onAction("open", { target_id: p.diff_card_id!, target_kind: "diff_card" })
             }
-            className="ml-auto text-xs text-slate-500 hover:text-slate-900"
+            className="text-xs text-slate-500 hover:text-slate-900"
           >
             View diff →
           </button>

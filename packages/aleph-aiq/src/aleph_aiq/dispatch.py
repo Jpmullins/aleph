@@ -17,9 +17,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from aleph_aiq.auth_bridge import issue_service_token
 from aleph_aiq.client import AIQClient
 from aleph_aiq.job_service import append_aiq_event, create_aiq_agent_run
+from aleph_aiq.throttle import AIQThrottle
 from aleph_db.repos.ledger import LedgerWriter
 from aleph_rks.models import Connector, ConnectorBinding
 from aleph_security.agent_token import mint_agent_token
+
+# When the in-flight gate is full, the submission is retried by the deferred
+# aiq_submit_job on this cadence (bounded by SUBMIT_MAX_ATTEMPTS). 120 x 15s
+# = 30 min max queue wait, within the 1h TTL of the poll agent token the
+# queued submission carries.
+SUBMIT_DEFER_S = 15
+SUBMIT_MAX_ATTEMPTS = 120
 
 
 @dataclass
@@ -28,6 +36,9 @@ class StartedResearch:
     correlation_id: str
     aiq_job_id: str | None
     dispatched: bool
+    # True when the gate was full and the submission went to the deferred
+    # aiq_submit_job: the research WILL run, it just hasn't reached AIQ yet.
+    queued: bool = False
 
 
 async def _resolve_enabled_connectors(
@@ -83,21 +94,124 @@ async def _dispatch_core(
     client = AIQClient(base_url=aiq_base, service_token=service_token)
     if not await client.health():
         return StartedResearch(agent_run_id, correlation_id, None, False)
-    aiq_job_id = await client.dispatch_deep(
-        project_id=project_id,
-        topic=topic,
-        allowed_data_sources=enabled_connectors,
-        depth=depth,
+    throttle = AIQThrottle(
+        redis_pool, max_concurrent=int(getattr(settings, "aiq_max_concurrent_jobs", 3))
     )
-    await redis_pool.enqueue_job(
-        "aiq_synthesis_poll_job",
-        str(agent_run_id),
-        aiq_job_id,
-        str(project_id),
-        topic,
-        poll_agent_token,
-    )
+    if not await throttle.acquire(str(agent_run_id)):
+        # Gate full: hand the submission to the deferred submit job rather
+        # than stampeding aiq-server. The run is queued, not dropped.
+        await redis_pool.enqueue_job(
+            "aiq_submit_job",
+            str(agent_run_id),
+            str(project_id),
+            topic,
+            depth,
+            enabled_connectors,
+            poll_agent_token,
+            _defer_by=SUBMIT_DEFER_S,
+        )
+        return StartedResearch(agent_run_id, correlation_id, None, True, queued=True)
+    try:
+        aiq_job_id = await client.dispatch_deep(
+            project_id=project_id,
+            topic=topic,
+            allowed_data_sources=enabled_connectors,
+            depth=depth,
+        )
+        await redis_pool.enqueue_job(
+            "aiq_synthesis_poll_job",
+            str(agent_run_id),
+            aiq_job_id,
+            str(project_id),
+            topic,
+            poll_agent_token,
+        )
+    except Exception:
+        # The slot is released by the poll job on terminal states; a failed
+        # dispatch never reaches the poll job, so release here.
+        await throttle.release(str(agent_run_id))
+        raise
     return StartedResearch(agent_run_id, correlation_id, aiq_job_id, True)
+
+
+@dataclass
+class SubmitOutcome:
+    status: str  # "dispatched" | "requeued" | "exhausted"
+    aiq_job_id: str | None = None
+
+
+async def submit_core(
+    *,
+    settings: Any,
+    redis_pool: Any,
+    project_id: UUID,
+    principal_user_id: UUID,
+    agent_run_id: UUID,
+    topic: str,
+    depth: str,
+    enabled_connectors: list[str],
+    poll_agent_token: str,
+    attempt: int,
+) -> SubmitOutcome:
+    """Deferred-submission core for ``aiq_submit_job``: acquire a gate slot,
+    dispatch to AIQ, enqueue the poll job — or requeue itself if the gate is
+    still full (or AIQ is briefly down). Pure of DB writes, like
+    ``_dispatch_core``; the worker job translates the outcome into AgentRun
+    status + events.
+    """
+    throttle = AIQThrottle(
+        redis_pool, max_concurrent=int(getattr(settings, "aiq_max_concurrent_jobs", 3))
+    )
+
+    async def _requeue() -> SubmitOutcome:
+        if attempt + 1 >= SUBMIT_MAX_ATTEMPTS:
+            return SubmitOutcome("exhausted")
+        await redis_pool.enqueue_job(
+            "aiq_submit_job",
+            str(agent_run_id),
+            str(project_id),
+            topic,
+            depth,
+            enabled_connectors,
+            poll_agent_token,
+            attempt + 1,
+            _defer_by=SUBMIT_DEFER_S,
+        )
+        return SubmitOutcome("requeued")
+
+    if not await throttle.acquire(str(agent_run_id)):
+        return await _requeue()
+
+    service_token = issue_service_token(
+        secret=settings.aleph_agent_token_secret,
+        project_id=project_id,
+        agent_run_id=agent_run_id,
+        principal_user_id=principal_user_id,
+    )
+    aiq_base = getattr(settings, "aiq_base_url", None) or "http://aiq-server:8000"
+    client = AIQClient(base_url=aiq_base, service_token=service_token)
+    if not await client.health():
+        await throttle.release(str(agent_run_id))
+        return await _requeue()
+    try:
+        aiq_job_id = await client.dispatch_deep(
+            project_id=project_id,
+            topic=topic,
+            allowed_data_sources=enabled_connectors,
+            depth=depth,
+        )
+        await redis_pool.enqueue_job(
+            "aiq_synthesis_poll_job",
+            str(agent_run_id),
+            aiq_job_id,
+            str(project_id),
+            topic,
+            poll_agent_token,
+        )
+    except Exception:
+        await throttle.release(str(agent_run_id))
+        raise
+    return SubmitOutcome("dispatched", aiq_job_id)
 
 
 async def dispatch_research(
@@ -160,7 +274,14 @@ async def dispatch_research(
             payload={"error": str(exc)[:1024]},
         )
         return StartedResearch(started.agent_run_id, started.correlation_id, None, False)
-    if result.dispatched:
+    if result.queued:
+        await append_aiq_event(
+            session,
+            agent_run_id=started.agent_run_id,
+            event_kind="aiq.job.queued",
+            payload={"reason": "aiq_inflight_gate_full"},
+        )
+    elif result.dispatched:
         await append_aiq_event(
             session,
             agent_run_id=started.agent_run_id,

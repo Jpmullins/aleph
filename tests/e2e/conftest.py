@@ -12,6 +12,7 @@ real LLM gateway — the LiteLLMClient is monkey-patched per test.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import uuid
 from collections.abc import AsyncIterator
@@ -101,6 +102,10 @@ async def http_client(asgi_app) -> AsyncIterator[httpx.AsyncClient]:
 
     Auth is mocked by monkey-patching the auth middleware to inject a
     Principal directly. See `_TestAuthMiddleware` setup.
+
+    Every project a test creates through this client is tracked (response
+    hook on `POST /v1/projects`) and soft-deleted at teardown, so test runs
+    don't pollute the dev project list.
     """
 
     from aleph_api.middleware.auth import AuthMiddleware  # noqa: F401
@@ -109,9 +114,24 @@ async def http_client(asgi_app) -> AsyncIterator[httpx.AsyncClient]:
     # we monkey-patch `verify_user_jwt` to accept a fixed token. The
     # actual swap-out happens in `_BypassAuth` patched below.
 
+    created_project_ids: list[str] = []
+
+    async def _track_created_project(response: httpx.Response) -> None:
+        req = response.request
+        if req.method == "POST" and req.url.path == "/v1/projects" and response.status_code == 201:
+            await response.aread()
+            pid = response.json().get("id")
+            if isinstance(pid, str):
+                created_project_ids.append(pid)
+
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=asgi_app),
         base_url="http://testserver",
         headers={"Authorization": "Bearer test"},
+        event_hooks={"response": [_track_created_project]},
     ) as client:
         yield client
+        for pid in created_project_ids:
+            # Teardown is best-effort — a failing delete must not mask the test.
+            with contextlib.suppress(Exception):
+                await client.patch(f"/v1/projects/{pid}", json={"status": "deleted"})

@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import { API_URL } from "../playwright.config";
-import { cleanupAllProjects, createProject, waitForAgentRun } from "./helpers";
+import { cleanupTestProjects, createProject, waitForAgentRun } from "./helpers";
 
 const AUTH = { Authorization: "Bearer local-dev" } as const;
 
@@ -21,7 +21,7 @@ test.describe("Bootstrap-on-create — wiki starts building the moment a project
   let projectId: string;
 
   test.beforeAll(async ({ request }) => {
-    await cleanupAllProjects(request);
+    await cleanupTestProjects(request);
     // Creating a project auto-triggers the bootstrap job (no upload, no chat).
     const p = await createProject(request, {
       title: "Sandworm APT infrastructure",
@@ -31,7 +31,7 @@ test.describe("Bootstrap-on-create — wiki starts building the moment a project
   });
 
   test.afterAll(async ({ request }) => {
-    await cleanupAllProjects(request);
+    await cleanupTestProjects(request);
   });
 
   test("a bootstrap run reaches a terminal state and seeds an overview page", async ({

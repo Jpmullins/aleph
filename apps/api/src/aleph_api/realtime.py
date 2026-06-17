@@ -130,10 +130,21 @@ class NotifyListener:
         self._conn: asyncpg.Connection | None = None
         self._task: asyncio.Task[None] | None = None
         self._closing = False
+        self._ready = asyncio.Event()
 
     async def start(self) -> None:
         self._closing = False
         self._task = asyncio.create_task(self._run(), name="aleph-notify-listener")
+
+    async def wait_ready(self) -> None:
+        """Block until `LISTEN` is established.
+
+        `start()` intentionally does not block on the connection — the poll
+        fallback covers the gap. Writers that must not lose a NOTIFY (tests,
+        primarily) await this before writing, bounded by the caller
+        (`asyncio.wait_for` / `asyncio.timeout`).
+        """
+        await self._ready.wait()
 
     async def _run(self) -> None:
         backoff = 0.5
@@ -149,12 +160,14 @@ class NotifyListener:
                 await conn.add_listener(CHANNEL, self._on_notify)
                 logger.info("notify listener connected, LISTEN %s", CHANNEL)
                 backoff = 0.5
+                self._ready.set()
                 await terminated.wait()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("notify listener connection error; will reconnect")
             finally:
+                self._ready.clear()
                 await self._close_conn()
             if self._closing:
                 return

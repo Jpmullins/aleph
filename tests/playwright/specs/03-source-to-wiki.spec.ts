@@ -4,7 +4,7 @@ import { API_URL } from "../playwright.config";
 import {
   AUTH,
   SAMPLE_MARKDOWN_SOURCE,
-  cleanupAllProjects,
+  cleanupTestProjects,
   createProject,
   createSession,
   openProjectWorkspace,
@@ -17,7 +17,7 @@ test.describe("Source → wiki pipeline end-to-end", () => {
   let projectId: string;
 
   test.beforeAll(async ({ request }) => {
-    await cleanupAllProjects(request);
+    await cleanupTestProjects(request);
     const p = await createProject(request, {
       title: "Wiki pipeline test",
       description: "Tests the load-bearing upload→normalize→chunk→wiki flow",
@@ -26,7 +26,7 @@ test.describe("Source → wiki pipeline end-to-end", () => {
   });
 
   test.afterAll(async ({ request }) => {
-    await cleanupAllProjects(request);
+    await cleanupTestProjects(request);
   });
 
   test("upload a markdown source via API + watch Activity card", async ({ page, request }) => {
@@ -98,12 +98,12 @@ test.describe("Source → wiki pipeline end-to-end", () => {
     await sendChat(page, "What did Wei et al. find about chain-of-thought prompting?");
 
     // Wait for an assistant bubble with non-streaming status.
-    await expect(page.getByTestId("message-assistant").first()).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByTestId("copilot-assistant-message").first()).toBeVisible({ timeout: 60_000 });
     // The assistant either answers from the wiki (mentioning the upload's
     // key concepts) or reports a coverage gap. Either proves it ran.
     await expect.poll(
       async () => {
-        const bubble = page.getByTestId("message-assistant").first();
+        const bubble = page.getByTestId("copilot-assistant-message").first();
         const text = await bubble.innerText();
         return text;
       },

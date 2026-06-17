@@ -4,7 +4,7 @@ import { API_URL } from "../playwright.config";
 import {
   AUTH,
   SAMPLE_MARKDOWN_SOURCE,
-  cleanupAllProjects,
+  cleanupTestProjects,
   createProject,
   openProjectWorkspace,
   uploadSource,
@@ -23,19 +23,19 @@ test.describe("W1 — progress visibility + design tokens + activity card at top
   let projectId: string;
 
   test.beforeAll(async ({ request }) => {
-    await cleanupAllProjects(request);
+    await cleanupTestProjects(request);
     const p = await createProject(request, { title: "W1 progress test" });
     projectId = p.id;
   });
 
   test.afterAll(async ({ request }) => {
-    await cleanupAllProjects(request);
+    await cleanupTestProjects(request);
   });
 
   test("activity card renders above the chat composer", async ({ page }) => {
     await openProjectWorkspace(page, projectId);
     const activityToggle = page.getByTestId("activity-card-toggle");
-    const composer = page.getByTestId("chat-composer");
+    const composer = page.getByTestId("copilot-chat-textarea");
     await expect(activityToggle).toBeVisible();
     await expect(composer).toBeVisible();
 

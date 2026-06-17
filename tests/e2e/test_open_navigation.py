@@ -34,9 +34,7 @@ async def test_open_synthesis_proposal_navigates_to_draft_page(http_client, auth
     project_id = UUID(proj.json()["id"])
 
     # A real pending proposal via note-promote (draft page + SynthesisProposal).
-    note = await http_client.post(
-        f"/v1/projects/{project_id}/notes", json={"title": "Promote me"}
-    )
+    note = await http_client.post(f"/v1/projects/{project_id}/notes", json={"title": "Promote me"})
     note_id = note.json()["id"]
     sec = await http_client.post(
         f"/v1/projects/{project_id}/notes/{note_id}/sections",

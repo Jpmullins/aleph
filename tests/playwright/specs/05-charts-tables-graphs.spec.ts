@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import { API_URL } from "../playwright.config";
-import { AUTH, cleanupAllProjects, createProject } from "./helpers";
+import { AUTH, cleanupTestProjects, createProject } from "./helpers";
 
 /**
  * Synthetic A2UI surface served via a stub fetch override: lets us exercise
@@ -104,13 +104,13 @@ test.describe("Real visualization renderers", () => {
   let projectId: string;
 
   test.beforeAll(async ({ request }) => {
-    await cleanupAllProjects(request);
+    await cleanupTestProjects(request);
     const p = await createProject(request, { title: "Visualization renderers test" });
     projectId = p.id;
   });
 
   test.afterAll(async ({ request }) => {
-    await cleanupAllProjects(request);
+    await cleanupTestProjects(request);
   });
 
   test("Vega-Lite chart renders a real canvas", async ({ page }) => {
