@@ -183,8 +183,21 @@ Each stage is independently shippable and verified by driving the live UI in a b
 
 ---
 
-## 10. Open verification items (resolved during implementation, not assumptions)
+## 10. Open verification items — RESOLVED during implementation (2026-06-17)
 
-1. Exact protocol version `@a2ui/react@0.10.1` validates against (v0.9.1 vs v1.0) — confirm against the installed renderer before bumping `messages.py`.
-2. Whether `index_service.refresh_page` runs on **every** page-creation path (compile, note-promote, hand-edit commit) — the `search_wiki` fix depends on the answer.
-3. The catalog-id reconciliation (`aleph://v1` in copilot-runtime stamp vs `aleph-v1` in `catalog.py`) — pick one, update both emitters.
+1. **Protocol version.** `@a2ui/react@0.10.1` (and `@a2ui/web_core@0.10.1`) publish only `./v0_8` and `./v0_9` subpath exports — **there is no `v0_9_1` or `v1_0` renderer in the current package**. So `v0_9` *is* the latest the installed renderer supports; the spec's "bump to v1.0" is not actionable today, and Aleph is already on the latest available protocol. Revisit only when upstream publishes a v1.0 renderer subpath.
+2. **`search_wiki` empty — actual cause.** Not index freshness: all pages had populated `index_tsv`. `select_pages` is a hard FTS match (`index_tsv @@ plainto_tsquery`), so a generic/conceptual query (`"what is this project about"`) matched 0 rows even though `"distillation"` matched 3. Fixed in Stage 0 by a `list_pages` fallback in the `search_wiki` tool. `refresh_page` runs on commit and the index was correctly populated.
+3. **Catalog id — not a conflict.** The wire `createSurface.catalogId` is `aleph://v1` (`components/surfaces.py:ALEPH_V09_CATALOG_ID`, the copilot-runtime stamp, and the TS `ALEPH_V09_CATALOG_ID`). `catalog.py CATALOG_ID="aleph-v1"` is the *JSON-Schema document's* self-identifier (a different layer used for Python-side validation), not the wire id. They do not collide at runtime; renaming for clarity is optional, not load-bearing.
+
+## 11. Stage-1 scope correction (2026-06-17 — material finding)
+
+Investigation during execution found the A2UI **foundation is already on upstream primitives**, contradicting this spec's original premise:
+- The web app already renders through the **upstream** `@a2ui/web_core/v0_9` `MessageProcessor` + `@a2ui/react/v0_9` `A2uiSurface`, and `buildAlephCatalog()` already merges the upstream `basicCatalog` primitives (Row/Column/Card/Text/List/Tabs/TextField/CheckBox/ChoicePicker/Slider/Modal/Divider/Icon/Image/…) into the shared catalog. Agents can already compose from primitives.
+- The delta path already applies `updateDataModel` reactively (`A2UIStreamSurfaceView`); `SurfaceStreamer` already computes RFC-6902 diffs.
+
+So "adopt upstream primitives + data-binding + delta streaming + latest protocol" is **largely already in place**. The genuine remaining gaps are narrower:
+- (a) Aleph's bespoke domain cards take **literal props / self-fetch** rather than *binding* to a surface data model — they don't exploit reactive binding.
+- (b) `FormCard` is hand-rolled HTML (and is currently **defined-but-unused** — `form_card()` has no live call site), while the upstream input primitives are binder-bound `ComponentImplementation`s that must be emitted as a backend-composed primitive tree, not dropped into a React card.
+- (c) The 4 irreducible visualizations (Chart/Map/Graph/Matrix) correctly stay bespoke.
+
+A literal from-scratch rewrite of the working bespoke cards into backend-emitted primitive compositions is therefore high-churn, higher-risk, and low-payoff for components that already work. The recommended Stage-1 refocus is: **adopt reactive data-binding where it adds real value (live-updating surfaces/cards), and emit forms as upstream primitive compositions only where a form is actually needed (Stage 3 curation actions)** — rather than rewriting all 13 cards for their own sake.

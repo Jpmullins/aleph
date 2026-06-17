@@ -45,7 +45,7 @@ function pageSummary(id: string, title: string, slug: string) {
 
 const PAGES = [
   pageSummary(HUB_ID, "AI Distillation", "ai-distillation"),
-  pageSummary(TARGET_ID, "Target Page", "target-page"),
+  { ...pageSummary(TARGET_ID, "Target Page", "target-page"), status: "draft" },
 ];
 
 function detail(id: string, title: string, body: string, links: unknown[]) {
@@ -115,9 +115,35 @@ test.describe("Stage 0 — wiki links, navigation, scaling", () => {
     await expect(page.getByTestId("wiki-linkout")).toHaveCount(1);
     await expect(page.getByTestId("wiki-linkout-broken")).toHaveCount(1);
 
+    // Curation: the reader header shows the page's lifecycle status + provenance.
+    await expect(page.getByTestId("wiki-status-badge").first()).toHaveText("approved");
+    await expect(page.getByTestId("wiki-provenance")).toContainText("Revision 1");
+
     // Clicking an inline wikilink navigates the reader to the target page.
     await page.getByTestId("wikilink-chip").filter({ hasText: "Target Page" }).first().click();
     await expect(page.getByText("The target page body.")).toBeVisible();
+  });
+
+  test("draft pages are badged in the list; repair-links action fires", async ({ page }) => {
+    // The repair endpoint is mocked; capture that the action calls it.
+    let repairCalled = false;
+    await page.route(/\/wiki\/aliases\/repair-links/, (route) => {
+      repairCalled = true;
+      return route.fulfill({ json: { repaired: 1 } });
+    });
+
+    await openProjectWorkspace(page, projectId);
+
+    // The draft page carries a visible "draft" status badge in the list.
+    await expect(page.getByTestId("wiki-status-badge").filter({ hasText: "draft" })).toBeVisible();
+
+    // Open the hub (it has one broken link → repair affordance appears).
+    await page.getByTestId(`wiki-page-${HUB_ID}`).click();
+    const repairBtn = page.getByTestId("wiki-repair-links");
+    await expect(repairBtn).toBeVisible();
+    await expect(repairBtn).toContainText("Repair 1 broken link");
+    await repairBtn.click();
+    await expect.poll(() => repairCalled).toBe(true);
   });
 
   test("right panel fills its container (no fixed width)", async ({ page }) => {

@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
 import { renderChildCard, useSurface } from "../surface-context";
@@ -39,6 +39,21 @@ const CONFIDENCE_TONE: Record<string, "emerald" | "amber" | "red" | "slate"> = {
   contested: "amber",
   uncited: "red",
 };
+
+/** Lifecycle badge for a page's curation status. */
+const STATUS_TONE: Record<string, "emerald" | "amber" | "slate"> = {
+  approved: "emerald",
+  draft: "amber",
+  archived: "slate",
+};
+
+function StatusBadge({ status }: { status: string }) {
+  return (
+    <Pill tone={STATUS_TONE[status] ?? "slate"}>
+      <span data-testid="wiki-status-badge">{status}</span>
+    </Pill>
+  );
+}
 
 export function WikiSurface({ component, onAction }: RendererProps) {
   const { projectId } = useSurface();
@@ -208,7 +223,10 @@ function PageGroup({
                   ) : pulsing ? (
                     <Pill tone="emerald">updated</Pill>
                   ) : (
-                    p.is_stub && <Pill tone="amber">stub</Pill>
+                    <span className="flex items-center gap-1">
+                      {p.is_stub && <Pill tone="amber">stub</Pill>}
+                      {p.status !== "approved" && <StatusBadge status={p.status} />}
+                    </span>
                   )}
                 </div>
                 {p.summary && (
@@ -237,10 +255,22 @@ function WikiPageReader({
   onOpenPage: (id: string) => void;
 }) {
   const { surface } = useSurface();
+  const queryClient = useQueryClient();
   const detail = useQuery<WikiPageDetail>({
     queryKey: ["wiki-page", projectId, pageId],
     queryFn: () => api.get<WikiPageDetail>(`/v1/projects/${projectId}/wiki/pages/${pageId}`),
   });
+
+  const repair = useMutation({
+    mutationFn: () =>
+      api.post<{ repaired: number }>(`/v1/projects/${projectId}/wiki/aliases/repair-links`, {}),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["wiki-page", projectId, pageId] });
+      void queryClient.invalidateQueries({ queryKey: ["wiki-pages", projectId] });
+    },
+  });
+
+  const brokenCount = (detail.data?.wikilinks_out ?? []).filter((l) => !l.dst_page_id).length;
 
   // Resolve inline [[wikilinks]] + "Links out" entries by title → target page.
   // wikilinks_out is derived from this page's body, so every inline link is
@@ -273,6 +303,7 @@ function WikiPageReader({
             {detail.data.page.title}
           </span>
         )}
+        {detail.data && <StatusBadge status={detail.data.page.status} />}
         {detail.data && (
           <span className="ml-auto">
             <FeedbackButton
@@ -298,6 +329,13 @@ function WikiPageReader({
         {detail.isError && <p className="text-sm text-red-700">Failed to load page.</p>}
         {detail.data && (
           <>
+            <p className="mb-3 text-[11px] text-slate-400" data-testid="wiki-provenance">
+              {detail.data.revision
+                ? `Revision ${detail.data.revision.revision_no}`
+                : "No compiled revision"}
+              {detail.data.page.last_compiled_at &&
+                ` · compiled ${new Date(detail.data.page.last_compiled_at).toLocaleString()}`}
+            </p>
             {detail.data.revision ? (
               <WikiBodyMarkdown
                 body={detail.data.revision.body_md}
@@ -329,9 +367,24 @@ function WikiPageReader({
 
             {detail.data.wikilinks_out.length > 0 && (
               <section className="mt-5">
-                <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Links out ({detail.data.wikilinks_out.length})
-                </h4>
+                <div className="mb-2 flex items-center gap-2">
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    Links out ({detail.data.wikilinks_out.length})
+                  </h4>
+                  {brokenCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => repair.mutate()}
+                      disabled={repair.isPending}
+                      className="rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                      data-testid="wiki-repair-links"
+                    >
+                      {repair.isPending
+                        ? "Repairing…"
+                        : `Repair ${brokenCount} broken link${brokenCount === 1 ? "" : "s"}`}
+                    </button>
+                  )}
+                </div>
                 <div className="flex flex-wrap gap-1.5">
                   {detail.data.wikilinks_out.map((l, i) =>
                     l.dst_page_id ? (
