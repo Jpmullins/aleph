@@ -146,6 +146,21 @@ test.describe("Stage 0 — wiki links, navigation, scaling", () => {
     await expect.poll(() => repairCalled).toBe(true);
   });
 
+  test("needs-attention banner filters to draft pages", async ({ page }) => {
+    await openProjectWorkspace(page, projectId);
+
+    const banner = page.getByTestId("wiki-needs-attention");
+    await expect(banner).toContainText("1 draft awaiting review");
+
+    // Both pages visible before filtering.
+    await expect(page.getByTestId(`wiki-page-${HUB_ID}`)).toBeVisible();
+
+    // Click "Review" → only the draft page remains.
+    await banner.click();
+    await expect(page.getByTestId(`wiki-page-${TARGET_ID}`)).toBeVisible();
+    await expect(page.getByTestId(`wiki-page-${HUB_ID}`)).toHaveCount(0);
+  });
+
   test("right panel fills its container (no fixed width)", async ({ page }) => {
     await openProjectWorkspace(page, projectId);
     await page.getByTestId(`wiki-page-${HUB_ID}`).click();

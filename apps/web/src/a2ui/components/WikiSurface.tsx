@@ -59,6 +59,7 @@ export function WikiSurface({ component, onAction }: RendererProps) {
   const { projectId } = useSurface();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  const [draftsOnly, setDraftsOnly] = useState(false);
   const { openPageId, setOpenPageId } = useWorkspaceUI();
 
   // Honor external open requests (card "open" actions, agent navigation):
@@ -89,8 +90,14 @@ export function WikiSurface({ component, onAction }: RendererProps) {
     refetchInterval: 30_000,
   });
 
+  const draftCount = useMemo(
+    () => (pages.data ?? []).filter((p) => p.status === "draft").length,
+    [pages.data],
+  );
+
   const filtered = useMemo(() => {
-    const list = pages.data ?? [];
+    let list = pages.data ?? [];
+    if (draftsOnly) list = list.filter((p) => p.status === "draft");
     if (!filter) return list;
     const needle = filter.toLowerCase();
     return list.filter(
@@ -98,7 +105,7 @@ export function WikiSurface({ component, onAction }: RendererProps) {
         p.title.toLowerCase().includes(needle) ||
         p.summary.toLowerCase().includes(needle),
     );
-  }, [pages.data, filter]);
+  }, [pages.data, filter, draftsOnly]);
 
   const topicPages = filtered.filter((p) => p.page_kind !== "source");
   const sourcePages = filtered.filter((p) => p.page_kind === "source");
@@ -139,6 +146,21 @@ export function WikiSurface({ component, onAction }: RendererProps) {
           data-testid="wiki-filter"
         />
       </div>
+      {draftCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setDraftsOnly((v) => !v)}
+          className={`flex items-center justify-between gap-2 border-b border-amber-200 px-3 py-1.5 text-left text-xs ${
+            draftsOnly ? "bg-amber-100 text-amber-900" : "bg-amber-50 text-amber-800 hover:bg-amber-100"
+          }`}
+          data-testid="wiki-needs-attention"
+        >
+          <span>
+            ⚠ {draftCount} draft{draftCount === 1 ? "" : "s"} awaiting review
+          </span>
+          <span className="font-medium">{draftsOnly ? "Show all" : "Review"}</span>
+        </button>
+      )}
       <div className="flex-1 space-y-3 overflow-y-auto p-3">
         {embeds.length > 0 && (
           <section className="space-y-2" data-testid="wiki-embeds">
