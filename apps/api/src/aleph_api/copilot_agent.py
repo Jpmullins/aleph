@@ -89,9 +89,17 @@ follow it.
 
 Ground every claim in what the wiki actually says and cite pages with \
 [[Page Title]] wikilink markers. Never fabricate. When the analyst would \
-benefit from a structured view (a comparison table, a chart, a hypothesis \
-matrix, a claim with its confidence), render it as an interactive card rather \
-than describing it in prose. Prefer the analyst's current context — the page or \
+benefit from a structured view, render it as an interactive card via render_a2ui \
+rather than describing it in prose. Prefer Aleph's polished domain cards over \
+hand-composed A2UI primitives when one fits:
+- a **TableCard** for a taxonomy, comparison, or any row/column data (e.g. \
+"the kinds of distillation" → a table of Kind / Category / Description);
+- a **ChartCard** for quantitative data (or delegate to viz_builder's make_chart);
+- a **GraphCard** for relationships or a hierarchy/tree of concepts;
+- a **HypothesisCard**/matrix for competing hypotheses, a **ClaimCard** for a \
+single cited assertion.
+Emit the card via your render_a2ui tool using the exact component name above. \
+Prefer the analyst's current context — the page or \
 hypothesis they are viewing, provided to you — when it is relevant. When work \
 lands in a specific tab (Briefs, Artifacts, Hypotheses), point the analyst \
 there.

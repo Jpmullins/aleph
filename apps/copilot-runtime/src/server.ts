@@ -236,6 +236,84 @@ const ALEPH_A2UI_CATALOG = {
         required: ["from_revision_id", "to_revision_id", "page_id"],
       },
     },
+    // ----- Standard A2UI primitives -------------------------------------
+    // The upstream basic-catalog components the frontend renderer already
+    // merges into the shared `aleph://v1` catalog (`buildAlephCatalog` spreads
+    // `basicCatalog.components`). Declaring them here lets the agent COMPOSE
+    // layouts (a taxonomy as Cards in a Column) — and because we set
+    // `defaultCatalogId: "aleph://v1"` on the middleware below, the streamed
+    // surface is stamped `aleph://v1` (not the basic-catalog id the frontend
+    // never registered), so these primitives actually render. Schemas are
+    // permissive — the renderer validates the precise shapes.
+    Text: {
+      description: "A run of text. `text` is the string; `variant` sets heading/body style.",
+      props: {
+        type: "object",
+        properties: { text: { type: "string" }, variant: { type: "string" } },
+        required: ["text"],
+        additionalProperties: true,
+      },
+    },
+    Column: {
+      description: "A vertical stack of child components (referenced by id in `children`).",
+      props: {
+        type: "object",
+        properties: { children: { type: "array", items: { type: "string" } } },
+        additionalProperties: true,
+      },
+    },
+    Row: {
+      description: "A horizontal arrangement of child components (ids in `children`).",
+      props: {
+        type: "object",
+        properties: { children: { type: "array", items: { type: "string" } } },
+        additionalProperties: true,
+      },
+    },
+    Card: {
+      description: "A bordered container wrapping one child component (id in `child`).",
+      props: {
+        type: "object",
+        properties: { child: { type: "string" } },
+        additionalProperties: true,
+      },
+    },
+    List: {
+      description: "A list of child components (ids in `children`).",
+      props: {
+        type: "object",
+        properties: { children: { type: "array", items: { type: "string" } } },
+        additionalProperties: true,
+      },
+    },
+    Divider: {
+      description: "A separator between sections.",
+      props: { type: "object", additionalProperties: true },
+    },
+    Button: {
+      description: "A clickable button. `child` is the id of its label component.",
+      props: {
+        type: "object",
+        properties: { child: { type: "string" } },
+        additionalProperties: true,
+      },
+    },
+    Image: {
+      description: "An image. `url` is the source.",
+      props: {
+        type: "object",
+        properties: { url: { type: "string" } },
+        additionalProperties: true,
+      },
+    },
+    Icon: {
+      description: "A named icon (`name`).",
+      props: {
+        type: "object",
+        properties: { name: { type: "string" } },
+        additionalProperties: true,
+      },
+    },
   },
 };
 
@@ -248,7 +326,17 @@ const runtime = new CopilotRuntime({
   // `catalogId: "aleph"` on createSurface. The middleware intercepts A2UI
   // operations in the event stream; the frontend a2ui-renderer draws them
   // against the matching "aleph" catalog.
-  a2ui: { injectA2UITool: true, schema: ALEPH_A2UI_CATALOG },
+  // `defaultCatalogId` is critical: the A2UI middleware stamps this catalog id
+  // on every STREAMED render_a2ui surface. Without it the middleware falls back
+  // to the upstream basic-catalog id, which the frontend never registers — so
+  // any agent-composed primitive surface (Column/Card/Text/…) fails with
+  // "Catalog not found". Pointing it at "aleph://v1" — the shared catalog that
+  // already merges the basic primitives in — makes those surfaces render.
+  a2ui: {
+    injectA2UITool: true,
+    schema: ALEPH_A2UI_CATALOG,
+    defaultCatalogId: "aleph://v1",
+  },
 });
 
 const listener = createCopilotNodeListener({

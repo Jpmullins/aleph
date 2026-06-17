@@ -149,6 +149,14 @@ class WikiFirstRetrievalRouter:
                     query=query,
                     top_k=top_k_pages * 3,
                 )
+                # Fallback: a generic/conceptual query can share no tokens with
+                # any title/summary, so FTS returns nothing even when the wiki
+                # covers the topic. Give the page-selector the project's actual
+                # pages to choose from rather than reporting no coverage.
+                if not candidates:
+                    candidates = await index.list_pages(
+                        project_id=project_id, top_k=top_k_pages * 3
+                    )
 
             # Step 1b — LLM page-selector picks from the candidates.
             selected = await self._select_pages_llm(
