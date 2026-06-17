@@ -13,6 +13,11 @@ dependencies = [
     "aleph-security",
 ]
 
+[project.optional-dependencies]
+# A2UI-over-MCP server (`python -m aleph_a2ui.mcp_server`). Optional so core
+# imports of the catalog never pull the MCP server SDK.
+mcp = ["mcp>=1.28,<2"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
