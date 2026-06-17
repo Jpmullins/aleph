@@ -48,9 +48,9 @@ const PAGES = [
   { ...pageSummary(TARGET_ID, "Target Page", "target-page"), status: "draft" },
 ];
 
-function detail(id: string, title: string, body: string, links: unknown[]) {
+function detail(id: string, title: string, body: string, links: unknown[], status = "approved") {
   return {
-    page: pageSummary(id, title, title.toLowerCase().replace(/\s+/g, "-")),
+    page: { ...pageSummary(id, title, title.toLowerCase().replace(/\s+/g, "-")), status },
     revision: { body_md: body, revision_no: 1, created_at: new Date(0).toISOString() },
     claims: [],
     wikilinks_out: links,
@@ -82,9 +82,9 @@ test.describe("Stage 0 — wiki links, navigation, scaling", () => {
         ]),
       }),
     );
-    await page.route(new RegExp(`/wiki/pages/${TARGET_ID}`), (route) =>
+    await page.route(new RegExp(`/wiki/pages/${TARGET_ID}(\\?.*)?$`), (route) =>
       route.fulfill({
-        json: detail(TARGET_ID, "Target Page", "# Target Page\n\nThe target page body.", []),
+        json: detail(TARGET_ID, "Target Page", "# Target Page\n\nThe target page body.", [], "draft"),
       }),
     );
   });
@@ -144,6 +144,27 @@ test.describe("Stage 0 — wiki links, navigation, scaling", () => {
     await expect(repairBtn).toContainText("Repair 1 broken link");
     await repairBtn.click();
     await expect.poll(() => repairCalled).toBe(true);
+  });
+
+  test("a draft page exposes Approve/Reject; Approve calls the endpoint", async ({ page }) => {
+    let approveCalled = false;
+    await page.route(new RegExp(`/wiki/pages/${TARGET_ID}/approve`), (route) => {
+      approveCalled = true;
+      return route.fulfill({
+        json: { id: TARGET_ID, title: "Target Page", status: "approved" },
+      });
+    });
+
+    await openProjectWorkspace(page, projectId);
+    await page.getByTestId(`wiki-page-${TARGET_ID}`).click();
+
+    // The draft page's reader header shows the curation actions.
+    await expect(page.getByTestId("wiki-status-badge").first()).toHaveText("draft");
+    await expect(page.getByTestId("wiki-approve")).toBeVisible();
+    await expect(page.getByTestId("wiki-reject")).toBeVisible();
+
+    await page.getByTestId("wiki-approve").click();
+    await expect.poll(() => approveCalled).toBe(true);
   });
 
   test("needs-attention banner filters to draft pages", async ({ page }) => {

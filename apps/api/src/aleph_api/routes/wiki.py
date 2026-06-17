@@ -10,9 +10,15 @@ from fastapi import APIRouter, Body, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
-from aleph_api.deps import SessionDep
+from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
-from aleph_core.errors import NotFound
+from aleph_connectors.models import ApprovalDecision
+from aleph_core.errors import NotFound, ValidationFailed
+from aleph_core.ids import uuid7
+from aleph_core.time import utcnow
+from aleph_observability.tracing import current_trace_id
+from aleph_security.roles import ProjectRole, require_at_least
+from aleph_wiki.feedback_service import write_feedback
 from aleph_wiki.index_service import IndexService
 from aleph_wiki.models import WikiClaim, WikiLink, WikiPage, WikiRevision
 
@@ -182,6 +188,128 @@ async def get_page_by_slug(
         msg = f"wiki page not found: {slug}"
         raise NotFound(msg)
     return await get_page(project_id, page.id, session, revision=None)
+
+
+class RejectPageIn(BaseModel):
+    reason: str = Field(default="", max_length=2048)
+
+
+async def _load_draft_page(project_id: UUID, page_id: UUID, session: SessionDep) -> WikiPage:
+    page = (
+        await session.execute(
+            select(WikiPage).where(WikiPage.id == page_id, WikiPage.project_id == project_id)
+        )
+    ).scalar_one_or_none()
+    if page is None:
+        msg = f"wiki page not found: {page_id}"
+        raise NotFound(msg)
+    return page
+
+
+@router.post("/{project_id}/wiki/pages/{page_id}/approve", response_model=WikiPageSummaryOut)
+async def approve_page(
+    project_id: ProjectScopeDep,
+    page_id: UUID,
+    session: SessionDep,
+    ledger: LedgerDep,
+    principal: PrincipalDep,
+) -> WikiPageSummaryOut:
+    """Approve a draft wiki page directly (draft → approved).
+
+    The curation counterpart to the Briefs synthesis-proposal approval: an
+    agent-compiled draft has no proposal, so this transitions the page itself,
+    records an ApprovalDecision, and writes an Action Ledger event.
+    """
+    require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
+    page = await _load_draft_page(project_id, page_id, session)
+    if page.status == "approved":
+        msg = "page already approved"
+        raise ValidationFailed(msg)
+    prior = page.status
+    decision = ApprovalDecision(
+        id=uuid7(),
+        project_id=project_id,
+        target_kind="wiki_page",
+        target_id=page_id,
+        decision="approved",
+        reason=None,
+        decided_by=principal.user_id,
+        decided_at=utcnow(),
+        created_by=principal.user_id,
+        access_scope="project",
+    )
+    session.add(decision)
+    page.status = "approved"
+    await session.flush()
+    await ledger.append(
+        project_id=project_id,
+        actor_id=principal.user_id,
+        actor_kind=principal.actor_kind,
+        action_kind="wiki.page.approve",
+        target_id=page_id,
+        target_kind="wiki_page",
+        payload={"prior_status": prior},
+        trace_id=current_trace_id(),
+    )
+    return WikiPageSummaryOut.model_validate(page)
+
+
+@router.post("/{project_id}/wiki/pages/{page_id}/reject", response_model=WikiPageSummaryOut)
+async def reject_page(
+    project_id: ProjectScopeDep,
+    page_id: UUID,
+    body: Annotated[RejectPageIn, Body()],
+    session: SessionDep,
+    ledger: LedgerDep,
+    principal: PrincipalDep,
+) -> WikiPageSummaryOut:
+    """Reject a draft wiki page (→ archived) and record rejection feedback.
+
+    The feedback (reason + the rejected revision) is what the wiki agent reads
+    on the next compile to avoid repeating the rejected content.
+    """
+    require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
+    page = await _load_draft_page(project_id, page_id, session)
+    if page.status == "archived":
+        msg = "page already archived"
+        raise ValidationFailed(msg)
+    prior = page.status
+    decision = ApprovalDecision(
+        id=uuid7(),
+        project_id=project_id,
+        target_kind="wiki_page",
+        target_id=page_id,
+        decision="rejected",
+        reason=body.reason or None,
+        decided_by=principal.user_id,
+        decided_at=utcnow(),
+        created_by=principal.user_id,
+        access_scope="project",
+    )
+    session.add(decision)
+    page.status = "archived"
+    if body.reason:
+        await write_feedback(
+            session,
+            project_id=project_id,
+            page_id=page_id,
+            concept_name=page.title,
+            rejected_revision_id=page.current_revision_id,
+            reason=body.reason,
+            rejected_by=principal.user_id,
+        )
+    await session.flush()
+    await ledger.append(
+        project_id=project_id,
+        actor_id=principal.user_id,
+        actor_kind=principal.actor_kind,
+        action_kind="wiki.page.reject",
+        target_id=page_id,
+        target_kind="wiki_page",
+        payload={"prior_status": prior, "reason": body.reason or ""},
+        trace_id=current_trace_id(),
+    )
+    return WikiPageSummaryOut.model_validate(page)
 
 
 @router.get(

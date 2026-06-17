@@ -283,13 +283,27 @@ function WikiPageReader({
     queryFn: () => api.get<WikiPageDetail>(`/v1/projects/${projectId}/wiki/pages/${pageId}`),
   });
 
+  const invalidatePage = () => {
+    void queryClient.invalidateQueries({ queryKey: ["wiki-page", projectId, pageId] });
+    void queryClient.invalidateQueries({ queryKey: ["wiki-pages", projectId] });
+  };
+
   const repair = useMutation({
     mutationFn: () =>
       api.post<{ repaired: number }>(`/v1/projects/${projectId}/wiki/aliases/repair-links`, {}),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["wiki-page", projectId, pageId] });
-      void queryClient.invalidateQueries({ queryKey: ["wiki-pages", projectId] });
-    },
+    onSuccess: invalidatePage,
+  });
+
+  const approve = useMutation({
+    mutationFn: () =>
+      api.post(`/v1/projects/${projectId}/wiki/pages/${pageId}/approve`, {}),
+    onSuccess: invalidatePage,
+  });
+
+  const reject = useMutation({
+    mutationFn: () =>
+      api.post(`/v1/projects/${projectId}/wiki/pages/${pageId}/reject`, { reason: "" }),
+    onSuccess: invalidatePage,
   });
 
   const brokenCount = (detail.data?.wikilinks_out ?? []).filter((l) => !l.dst_page_id).length;
@@ -326,6 +340,28 @@ function WikiPageReader({
           </span>
         )}
         {detail.data && <StatusBadge status={detail.data.page.status} />}
+        {detail.data?.page.status === "draft" && (
+          <span className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => approve.mutate()}
+              disabled={approve.isPending}
+              className="rounded border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-800 hover:bg-emerald-100 disabled:opacity-50"
+              data-testid="wiki-approve"
+            >
+              {approve.isPending ? "Approving…" : "Approve"}
+            </button>
+            <button
+              type="button"
+              onClick={() => reject.mutate()}
+              disabled={reject.isPending}
+              className="rounded border border-red-300 bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
+              data-testid="wiki-reject"
+            >
+              {reject.isPending ? "Rejecting…" : "Reject"}
+            </button>
+          </span>
+        )}
         {detail.data && (
           <span className="ml-auto">
             <FeedbackButton
