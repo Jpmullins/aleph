@@ -96,9 +96,13 @@ hypothesis they are viewing, provided to you — when it is relevant. When work 
 lands in a specific tab (Briefs, Artifacts, Hypotheses), point the analyst \
 there.
 
-You can also list connectors and enable/disable them, and report or change the \
-project's model profile, when the analyst asks about data sources or model \
-settings — these are light config tools you hold directly. Enabling/disabling a \
+When the analyst asks how the wiki is doing, what needs review, or which links \
+are broken, call `wiki_curation_status` for a quick read of draft pages awaiting \
+review and unresolved wikilinks, then point them to the Wiki tab (where they can \
+approve drafts and repair links). You can also list connectors and enable/disable \
+them, and report or change the project's model profile, when the analyst asks \
+about data sources or model settings — these are light config tools you hold \
+directly. Enabling/disabling a \
 connector is consequential and approval-gated: render the ApprovalCard it \
 returns and let the analyst approve before the change applies.
 
@@ -242,6 +246,65 @@ async def search_wiki(query: str, config: RunnableConfig, top_k: int = 6) -> str
         else "Relevant wiki pages:"
     )
     return header + "\n" + "\n".join(lines)
+
+
+@tool
+async def wiki_curation_status(config: RunnableConfig) -> str:
+    """Report what in the project's wiki needs curation attention.
+
+    Returns the page counts by lifecycle status (draft/approved/archived), the
+    titles of draft pages awaiting review, and the number of unresolved
+    (broken) wikilinks. Call this when the analyst asks how the wiki is doing,
+    what needs review, or before proposing curation actions.
+    """
+    from sqlalchemy import func, select
+
+    from aleph_wiki.models import WikiLink, WikiPage
+
+    session_maker = _runtime.get("session_maker")
+    project_id = _project_id_from_config(config)
+    if session_maker is None or project_id is None:
+        return "Wiki curation status is unavailable (no project scope on this run)."
+    async with session_maker() as session:  # type: AsyncSession
+        status_rows = (
+            await session.execute(
+                select(WikiPage.status, func.count())
+                .where(WikiPage.project_id == project_id)
+                .group_by(WikiPage.status)
+            )
+        ).all()
+        draft_titles = list(
+            (
+                await session.execute(
+                    select(WikiPage.title)
+                    .where(WikiPage.project_id == project_id, WikiPage.status == "draft")
+                    .order_by(WikiPage.title)
+                    .limit(25)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        broken = (
+            await session.execute(
+                select(func.count()).where(
+                    WikiLink.project_id == project_id, WikiLink.dst_page_id.is_(None)
+                )
+            )
+        ).scalar_one()
+    counts: dict[str, int] = dict(status_rows)
+    total = sum(counts.values())
+    if total == 0:
+        return "The wiki has no pages yet for this project."
+    parts = [
+        f"Wiki curation status — {total} page{'s' if total != 1 else ''}: "
+        + ", ".join(f"{n} {status}" for status, n in sorted(counts.items())),
+        f"Unresolved (broken) wikilinks: {broken}"
+        + (" — these can be fixed with the Repair-links action." if broken else "."),
+    ]
+    if draft_titles:
+        parts.append("Drafts awaiting review:\n" + "\n".join(f"- [[{t}]]" for t in draft_titles))
+    return "\n".join(parts)
 
 
 async def _read_wiki_impl(query: str, config: RunnableConfig) -> str:
@@ -955,6 +1018,7 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
         model=model,
         tools=[
             search_wiki,
+            wiki_curation_status,
             list_connectors,
             set_connector_enabled,
             set_model_profile,
