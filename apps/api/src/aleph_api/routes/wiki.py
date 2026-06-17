@@ -126,10 +126,37 @@ async def get_page(
             .scalars()
             .all()
         )
+        # Read-time resolution: wikilinks compiled before their target page
+        # existed are stored with a null dst_page_id (an ordering artifact of
+        # incremental compile). Resolve those by exact title match so the
+        # reader's links are navigable immediately and self-heal as pages
+        # appear. Durable stored repair is the `…/aliases/repair-links` route.
+        unresolved = {lk.dst_title for lk in link_rows if lk.dst_page_id is None}
+        resolved_by_title: dict[str, UUID] = {}
+        if unresolved:
+            resolved_by_title = {
+                title: pid
+                for pid, title in (
+                    await session.execute(
+                        select(WikiPage.id, WikiPage.title).where(
+                            WikiPage.project_id == project_id,
+                            WikiPage.title.in_(unresolved),
+                        )
+                    )
+                ).all()
+            }
         links = [
             {
                 "dst_title": lk.dst_title,
-                "dst_page_id": str(lk.dst_page_id) if lk.dst_page_id else None,
+                "dst_page_id": (
+                    str(lk.dst_page_id)
+                    if lk.dst_page_id
+                    else (
+                        str(resolved_by_title[lk.dst_title])
+                        if lk.dst_title in resolved_by_title
+                        else None
+                    )
+                ),
                 "occurrences": lk.occurrences,
             }
             for lk in link_rows

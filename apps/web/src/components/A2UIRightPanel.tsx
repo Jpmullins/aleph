@@ -30,7 +30,7 @@ function RealPanel({ projectId }: Props) {
   const streamUrl = `${baseUrl}/v1/projects/${projectId}/surfaces/${tab.toLowerCase()}/stream`;
 
   return (
-    <aside className="flex h-full min-h-0 w-[28rem] flex-col border-l border-slate-200 bg-white">
+    <aside className="flex h-full min-h-0 w-full min-w-0 flex-col border-l border-slate-200 bg-white">
       <nav className="flex border-b border-slate-200">
         {TABS.map((t) => (
           <button

@@ -99,7 +99,7 @@ export function HypothesisMatrix({ projectId }: { projectId: string }) {
           {targets.map((t) => (
             <tr key={t.target_id} className="border-t border-[var(--border-muted,#e2e8f0)]">
               <td
-                className="sticky left-0 z-10 max-w-[16rem] truncate bg-[var(--surface-raised,#fff)] px-2 py-1 text-[var(--text-primary,#0f172a)]"
+                className="sticky left-0 z-10 max-w-[12rem] truncate bg-[var(--surface-raised,#fff)] px-2 py-1 text-[var(--text-primary,#0f172a)]"
                 title={t.label}
               >
                 {t.label}

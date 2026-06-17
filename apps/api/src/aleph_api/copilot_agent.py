@@ -216,21 +216,32 @@ async def search_wiki(query: str, config: RunnableConfig, top_k: int = 6) -> str
     project_id = _project_id_from_config(config)
     if session_maker is None or project_id is None:
         return "Wiki search is unavailable (no project scope on this run)."
+    limit = max(1, min(top_k, 20))
     async with session_maker() as session:  # type: AsyncSession
         svc = IndexService(session)
-        hits = await svc.select_pages(
-            project_id=project_id, query=query, top_k=max(1, min(top_k, 20))
-        )
+        hits = await svc.select_pages(project_id=project_id, query=query, top_k=limit)
+        fallback = False
+        if not hits:
+            # Keyword search missed (e.g. a generic/conceptual query). Fall back
+            # to the project's actual pages so the agent sees the wiki exists
+            # rather than reporting it empty.
+            hits = await svc.list_pages(project_id=project_id, top_k=limit)
+            fallback = True
     if not hits:
-        return "No wiki pages matched. The wiki may not cover this topic yet."
+        return "The wiki has no pages yet for this project."
     lines = []
     for h in hits:
         stub = " (stub)" if h.is_stub else ""
+        score = "" if fallback else f" · score={h.score:.2f}"
         lines.append(
-            f"- [[{h.title}]]{stub} · {h.page_kind} · score={h.score:.2f}\n"
-            f"  {h.summary or '(no summary)'}"
+            f"- [[{h.title}]]{stub} · {h.page_kind}{score}\n  {h.summary or '(no summary)'}"
         )
-    return "Relevant wiki pages:\n" + "\n".join(lines)
+    header = (
+        f'No page directly matched "{query}", but the wiki covers these pages:'
+        if fallback
+        else "Relevant wiki pages:"
+    )
+    return header + "\n" + "\n".join(lines)
 
 
 async def _read_wiki_impl(query: str, config: RunnableConfig) -> str:

@@ -98,6 +98,7 @@ export function WikiSurface({ component, onAction }: RendererProps) {
         pageId={selectedId}
         compiling={compiling}
         onBack={() => setSelectedId(null)}
+        onOpenPage={setSelectedId}
       />
     );
   }
@@ -227,17 +228,35 @@ function WikiPageReader({
   pageId,
   compiling,
   onBack,
+  onOpenPage,
 }: {
   projectId: string;
   pageId: string;
   compiling: boolean;
   onBack: () => void;
+  onOpenPage: (id: string) => void;
 }) {
   const { surface } = useSurface();
   const detail = useQuery<WikiPageDetail>({
     queryKey: ["wiki-page", projectId, pageId],
     queryFn: () => api.get<WikiPageDetail>(`/v1/projects/${projectId}/wiki/pages/${pageId}`),
   });
+
+  // Resolve inline [[wikilinks]] + "Links out" entries by title → target page.
+  // wikilinks_out is derived from this page's body, so every inline link is
+  // present here with its resolution (dst_page_id null = broken).
+  const linkMap = useMemo(() => {
+    const map = new Map<string, string | null>();
+    for (const l of detail.data?.wikilinks_out ?? []) map.set(l.dst_title, l.dst_page_id);
+    return map;
+  }, [detail.data]);
+
+  const navigateByTitle = (title: string) => {
+    const dst = linkMap.get(title);
+    if (dst) onOpenPage(dst);
+  };
+  const resolveLink = (title: string): boolean | null =>
+    linkMap.has(title) ? linkMap.get(title) !== null : null;
 
   return (
     <div className="flex flex-col">
@@ -280,7 +299,11 @@ function WikiPageReader({
         {detail.data && (
           <>
             {detail.data.revision ? (
-              <WikiBodyMarkdown body={detail.data.revision.body_md} />
+              <WikiBodyMarkdown
+                body={detail.data.revision.body_md}
+                onNavigate={navigateByTitle}
+                resolveLink={resolveLink}
+              />
             ) : (
               <p className="text-sm italic text-slate-500">
                 This page is a stub — no compiled revision yet.
@@ -310,17 +333,34 @@ function WikiPageReader({
                   Links out ({detail.data.wikilinks_out.length})
                 </h4>
                 <div className="flex flex-wrap gap-1.5">
-                  {detail.data.wikilinks_out.map((l, i) => (
-                    <span
-                      key={`${l.dst_title}-${i}`}
-                      className="inline-flex items-center rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-700"
-                    >
-                      [[{l.dst_title}]]
-                      {l.occurrences > 1 && (
-                        <span className="ml-1 text-slate-400">×{l.occurrences}</span>
-                      )}
-                    </span>
-                  ))}
+                  {detail.data.wikilinks_out.map((l, i) =>
+                    l.dst_page_id ? (
+                      <button
+                        key={`${l.dst_title}-${i}`}
+                        type="button"
+                        onClick={() => onOpenPage(l.dst_page_id as string)}
+                        className="inline-flex items-center rounded border border-slate-300 bg-slate-100 px-2 py-0.5 text-xs text-slate-700 hover:bg-slate-200"
+                        data-testid="wiki-linkout"
+                      >
+                        [[{l.dst_title}]]
+                        {l.occurrences > 1 && (
+                          <span className="ml-1 text-slate-400">×{l.occurrences}</span>
+                        )}
+                      </button>
+                    ) : (
+                      <span
+                        key={`${l.dst_title}-${i}`}
+                        title="Unresolved link — no page with this title yet"
+                        className="inline-flex items-center rounded border border-dashed border-amber-400 bg-amber-50 px-2 py-0.5 text-xs text-amber-700"
+                        data-testid="wiki-linkout-broken"
+                      >
+                        [[{l.dst_title}]]
+                        {l.occurrences > 1 && (
+                          <span className="ml-1 text-amber-500">×{l.occurrences}</span>
+                        )}
+                      </span>
+                    ),
+                  )}
                 </div>
               </section>
             )}

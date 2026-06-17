@@ -123,6 +123,44 @@ class IndexService:
             stmt.on_conflict_do_update(index_elements=["page_id"], set_=update_cols)
         )
 
+    async def list_pages(self, *, project_id: UUID, top_k: int = 8) -> list[PageSelectionResult]:
+        """List a project's indexed pages without a query.
+
+        Used as a fallback when a keyword search yields no FTS hits: a generic
+        or conceptual query ("what is this project about") shares no tokens with
+        any title/summary, so `select_pages` returns empty even when a wiki
+        exists. Returning the real pages (substantive first, then most recently
+        indexed) lets a caller see the wiki rather than conclude it is empty.
+        """
+        stmt = (
+            select(
+                WikiIndex.page_id,
+                WikiIndex.title,
+                WikiIndex.slug,
+                WikiIndex.summary,
+                WikiIndex.page_kind,
+                WikiIndex.is_stub,
+                WikiIndex.wikilinks_out_jsonb,
+            )
+            .where(WikiIndex.project_id == project_id)
+            .order_by(WikiIndex.is_stub.asc(), WikiIndex.indexed_at.desc())
+            .limit(top_k)
+        )
+        rows = list((await self._session.execute(stmt)).all())
+        return [
+            PageSelectionResult(
+                page_id=row.page_id,
+                title=row.title,
+                slug=row.slug,
+                summary=row.summary,
+                score=0.0,
+                wikilinks_out=row.wikilinks_out_jsonb,
+                page_kind=row.page_kind,
+                is_stub=row.is_stub,
+            )
+            for row in rows
+        ]
+
     async def select_pages(
         self, *, project_id: UUID, query: str, top_k: int = 8
     ) -> list[PageSelectionResult]:

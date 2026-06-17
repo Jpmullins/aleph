@@ -47,8 +47,13 @@ export function GraphCard({ component }: RendererProps) {
 
   return (
     <CardShell title={p.title || "Graph"} subtitle={`${layout.length} nodes, ${p.edges?.length ?? 0} edges`}>
-      <div className="overflow-auto rounded bg-slate-50 p-2" data-testid="graph-card">
-        <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="block">
+      <div className="overflow-x-auto rounded bg-slate-50 p-2" data-testid="graph-card">
+        <svg
+          viewBox={`0 0 ${w} ${h}`}
+          preserveAspectRatio="xMidYMid meet"
+          className="block h-auto w-full"
+          style={{ maxWidth: w }}
+        >
           {(p.edges ?? []).map((e, i) => {
             const a = byId.get(e.source);
             const b = byId.get(e.target);

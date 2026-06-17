@@ -4,11 +4,20 @@
 # Before first run on a fresh machine:
 #   docker login nvcr.io       # username: $oauthtoken, password: NGC_API_KEY
 # (required for the aiq-server image)
+#
+# Every service carries mem_limit + an equal memswap_limit (= no swap for the
+# container): a runaway service gets OOM-killed inside its cgroup and
+# restarted by its restart policy, instead of paging the whole host to death
+# (which is what an unthrottled bootstrap research stampede did on
+# 2026-06-11). Caps total ~13g on a 16g host, leaving headroom for the OS and
+# host-side Playwright browsers; normal idle usage is far below the caps.
 
 services:
   postgres:
     image: pgvector/pgvector:0.8.2-pg18
     restart: unless-stopped
+    mem_limit: 1.5g
+    memswap_limit: 1.5g
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -28,6 +37,8 @@ services:
   minio:
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     restart: unless-stopped
+    mem_limit: 512m
+    memswap_limit: 512m
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
@@ -46,6 +57,8 @@ services:
   redis:
     image: redis:8.8-alpine
     restart: unless-stopped
+    mem_limit: 256m
+    memswap_limit: 256m
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
@@ -62,6 +75,8 @@ services:
     # later when we decide to host ClickHouse.
     image: langfuse/langfuse:2
     restart: unless-stopped
+    mem_limit: 1g
+    memswap_limit: 1g
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/langfuse
       NEXTAUTH_URL: http://localhost:3000
@@ -82,6 +97,8 @@ services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.153.0
     restart: unless-stopped
+    mem_limit: 256m
+    memswap_limit: 256m
     command: ["--config=/etc/otel/config.yaml"]
     volumes:
       - ./otel-collector-config.yaml:/etc/otel/config.yaml:ro
@@ -97,8 +114,14 @@ services:
       - langfuse
 
   aiq-server:
+    # The biggest cap in the stack: research jobs run in here as Dask
+    # workloads. Concurrency is bounded host-wide by AIQ_MAX_CONCURRENT_JOBS
+    # (Redis gate in aleph_aiq.throttle, enforced by submitters) so this
+    # limit holds under bootstrap fan-out.
     image: nvcr.io/nvidia/blueprint/aiq-agent:2.1.0
     restart: unless-stopped
+    mem_limit: 4g
+    memswap_limit: 4g
     environment:
       APP_ENV: ${ALEPH_ENV}
       LOG_LEVEL: INFO
@@ -135,7 +158,10 @@ services:
       context: ../..
       dockerfile: apps/api/Dockerfile
     restart: unless-stopped
+    mem_limit: 1.5g
+    memswap_limit: 1.5g
     environment:
+      AIQ_MAX_CONCURRENT_JOBS: "3"
       ALEPH_ENV: ${ALEPH_ENV}
       ALEPH_DEFAULT_MODEL_PROFILE: ${ALEPH_DEFAULT_MODEL_PROFILE}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
@@ -171,7 +197,12 @@ services:
       context: ../..
       dockerfile: apps/workers/Dockerfile
     restart: unless-stopped
+    mem_limit: 2g
+    memswap_limit: 2g
     environment:
+      # Lowered from the code default (10) for the 16g local host.
+      ARQ_MAX_JOBS: "4"
+      AIQ_MAX_CONCURRENT_JOBS: "3"
       ALEPH_ENV: ${ALEPH_ENV}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379/0
@@ -199,6 +230,11 @@ services:
       context: ../..
       dockerfile: apps/web/Dockerfile.dev
     restart: unless-stopped
+    # Vite 8's dep pre-optimizer is memory-heavy; at 1.5g it gets OOM-killed
+    # (SIGKILL) mid-bundle on a cold start and never converges, leaving the dev
+    # server in a restart loop. 2.5g clears the optimize; idle usage stays low.
+    mem_limit: 2.5g
+    memswap_limit: 2.5g
     environment:
       VITE_API_BASE_URL: http://localhost:8000
       # Browser → Node CopilotRuntime (published on the host at :4000).
@@ -219,6 +255,8 @@ services:
       context: ../..
       dockerfile: apps/copilot-runtime/Dockerfile
     restart: unless-stopped
+    mem_limit: 512m
+    memswap_limit: 512m
     environment:
       PORT: "4000"
       COPILOT_BASE_PATH: /api/copilotkit
