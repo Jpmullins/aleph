@@ -5,7 +5,7 @@ description = "Aleph auth, JWT verify, Principal, role gates, agent tokens"
 requires-python = ">=3.13"
 dependencies = [
     "pyjwt[crypto]>=2.10.1",
-    "cryptography==48.0.0",
+    "cryptography==48.0.1",
     "httpx==0.28.1",
     "pydantic==2.13.4",
     "aleph-core",
