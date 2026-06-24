@@ -28,6 +28,13 @@ services:
       # PG18+ wants the mount at /var/lib/postgresql (parent of the data
       # dir) so it can manage major-version-specific subdirectories.
       - postgres-data:/var/lib/postgresql
+      # First-init bootstrap (fresh volume / `down -v` only): create the aux
+      # DBs (langfuse + aiq_*) and apply the AIQ schema before the TCP port /
+      # healthcheck open. The aiq-init-*.sql files are read by the hook from
+      # /aleph-init. See postgres-initdb.sh.
+      - ./postgres-initdb.sh:/docker-entrypoint-initdb.d/00-aleph-aux.sh:ro
+      - ./aiq-init-jobs.sql:/aleph-init/aiq-init-jobs.sql:ro
+      - ./aiq-init-checkpoints.sql:/aleph-init/aiq-init-checkpoints.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 2s
@@ -53,6 +60,25 @@ services:
       interval: 5s
       timeout: 3s
       retries: 12
+
+  # One-shot: create the bucket Aleph writes rendered assets / uploads to,
+  # then exit. Reuses the minio image (it ships `mc`) so there's no extra
+  # version to track. Idempotent via `mc mb --ignore-existing`.
+  minio-init:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" &&
+        mc mb --ignore-existing "local/$${ALEPH_S3_BUCKET}"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      ALEPH_S3_BUCKET: ${ALEPH_S3_BUCKET}
+    depends_on:
+      minio:
+        condition: service_healthy
 
   redis:
     image: redis:8.8-alpine
@@ -153,6 +179,26 @@ services:
       otel-collector:
         condition: service_started
 
+  # One-shot: apply Alembic migrations to the main `aleph` database, then
+  # exit. aleph-api / aleph-workers gate on this completing so they never
+  # serve against an unmigrated schema — the `relation "users" does not exist`
+  # class of failure after a fresh volume / `down -v`. Idempotent: running
+  # `alembic upgrade head` is a no-op when already at head, so this also picks
+  # up new migrations on every `up`.
+  aleph-migrate:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    restart: "no"
+    mem_limit: 1g
+    memswap_limit: 1g
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    command: ["sh", "-c", "cd apps/api && uv run alembic upgrade head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   aleph-api:
     build:
       context: ../..
@@ -189,6 +235,10 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      aleph-migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
     ports:
       - "127.0.0.1:8000:8000"
 
@@ -222,6 +272,8 @@ services:
     depends_on:
       aleph-api:
         condition: service_started
+      aleph-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
 

@@ -14,68 +14,27 @@ fi
 
 DC=(docker compose -f deploy/compose/docker-compose.yml --env-file "$ENV_FILE")
 
-# Load .env so we can read POSTGRES_USER/etc. on the host. The compose
-# stack reads it via --env-file; we need it here for the host-side
-# alembic run and the psql commands below.
-set -o allexport
-# shellcheck source=/dev/null
-. "$ENV_FILE"
-set +o allexport
+# The stack is now self-bootstrapping — `docker compose up` is sufficient on a
+# fresh volume. This script is a thin convenience wrapper that adds --build, a
+# readiness wait, and the gateway check. The bootstrap steps live in compose:
+#   - aux DBs (langfuse, aiq_*) + AIQ schema  → postgres first-init hook
+#     (deploy/compose/postgres-initdb.sh, runs only on an empty volume)
+#   - Alembic migrations on the main DB        → aleph-migrate one-shot service
+#   - MinIO bucket                             → minio-init one-shot service
+# aleph-api / aleph-workers gate on the one-shots via service_completed_successfully.
 
-PG_USER="${POSTGRES_USER:-aleph}"
-PG_PASS="${POSTGRES_PASSWORD:-changeme-local}"
-PG_DB="${POSTGRES_DB:-aleph}"
-DATABASE_URL_HOST="postgresql+asyncpg://${PG_USER}:${PG_PASS}@localhost:5432/${PG_DB}"
+echo "→ Building + starting the Aleph stack (docker compose up -d --build)"
+echo "   First run pulls nvcr.io/nvidia/blueprint/aiq-agent:2.1.0. If it fails:"
+echo "   docker login nvcr.io  (user: \$oauthtoken, pass: \$NGC_API_KEY)"
+"${DC[@]}" up -d --build
 
-echo "→ Bringing up infra services (postgres, minio, redis, langfuse, otel-collector)"
-"${DC[@]}" up -d postgres minio redis langfuse otel-collector
-
-echo "→ Waiting for Postgres"
-until "${DC[@]}" exec -T postgres pg_isready -U "${PG_USER}" >/dev/null 2>&1; do
+echo "→ Waiting for aleph-api (migrations apply before it starts)"
+until curl -fsS http://localhost:8000/healthz >/dev/null 2>&1; do
   sleep 1
 done
 
-# Create the auxiliary DBs (langfuse + the three AIQ ones) on the
-# shared Postgres instance. Idempotent.
-ensure_db() {
-  local name=$1
-  "${DC[@]}" exec -T postgres psql -U "${PG_USER}" -d postgres -tc \
-    "SELECT 1 FROM pg_database WHERE datname='${name}'" | grep -q 1 \
-    || "${DC[@]}" exec -T postgres psql -U "${PG_USER}" -d postgres -c \
-         "CREATE DATABASE ${name}"
-}
-echo "→ Ensuring auxiliary DBs (langfuse, aiq_jobs, aiq_checkpoints, aiq_summary)"
-ensure_db langfuse
-ensure_db aiq_jobs
-ensure_db aiq_checkpoints
-ensure_db aiq_summary
-
-# AIQ's job-store + checkpoint tables are NOT auto-created by the
-# aiq-agent image (only job_events is). Without job_info, every research
-# job submission 500s. Apply the vendored schema idempotently.
-echo "→ Applying AIQ job-store + checkpoint schema"
-"${DC[@]}" exec -T postgres psql -U "${PG_USER}" -d aiq_jobs -v ON_ERROR_STOP=1 \
-  < "$ROOT/deploy/compose/aiq-init-jobs.sql"
-"${DC[@]}" exec -T postgres psql -U "${PG_USER}" -d aiq_checkpoints -v ON_ERROR_STOP=1 \
-  < "$ROOT/deploy/compose/aiq-init-checkpoints.sql"
-
-echo "→ Running Alembic migrations"
-(cd apps/api && DATABASE_URL="${DATABASE_URL_HOST}" uv run alembic upgrade head)
-
-echo "→ Initializing MinIO bucket"
-"${DC[@]}" exec -T minio sh -c \
-  "mc alias set local http://localhost:9000 \"${MINIO_ROOT_USER:-aleph}\" \"${MINIO_ROOT_PASSWORD:-changeme-local}\" >/dev/null && \
-   mc mb --ignore-existing local/${ALEPH_S3_BUCKET:-aleph-local} >/dev/null"
-
 echo "→ Verifying LiteLLM gateway"
 "$ROOT/scripts/verify-gateway.sh"
-
-echo "→ Starting aiq-server (pulling nvcr.io/nvidia/blueprint/aiq-agent:2.0.0)"
-echo "   If pull fails: docker login nvcr.io  (user: \$oauthtoken, pass: \$NGC_API_KEY)"
-"${DC[@]}" up -d aiq-server
-
-echo "→ Building + starting aleph-api, aleph-workers, aleph-web"
-"${DC[@]}" up -d aleph-api aleph-workers aleph-web
 
 echo "✓ Aleph stack up:"
 echo "    web      http://localhost:5173"
