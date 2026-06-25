@@ -101,6 +101,7 @@ class SynthesisState(TypedDict, total=False):
     normalized_topic: str
     verified_markers: dict[str, AIQReportSourceRef]
     committed_revision_ids: list[UUID]
+    committed_page_ids: list[UUID]
     proposal_ids: list[UUID]
     verification_failures: list[str]
 
@@ -287,6 +288,7 @@ async def _node_commit_revision(state: SynthesisState) -> dict:
             await session.commit()
             return {
                 "committed_revision_ids": [result.revision_id],
+                "committed_page_ids": [result.page_id],
                 "proposal_ids": [proposal.id],
             }
 

@@ -236,6 +236,13 @@ async def wiki_ingest_job(
                         str(rev.page_id),
                         review_token,
                     )
+                    # Knit the wiki graph now that this page exists: repair
+                    # broken links project-wide + register its title alias.
+                    await redis_pool.enqueue_job(
+                        "curate_page_job",
+                        str(normalized.project_id),
+                        str(rev.page_id),
+                    )
 
     return {
         "ok": status == "succeeded",

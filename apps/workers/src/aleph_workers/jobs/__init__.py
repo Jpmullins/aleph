@@ -6,6 +6,7 @@ from aleph_workers.jobs.assistant_turn import assistant_turn_job
 from aleph_workers.jobs.bootstrap import bootstrap_project_job
 from aleph_workers.jobs.builder import builder_job
 from aleph_workers.jobs.chunk_embed import chunk_embed_job
+from aleph_workers.jobs.curate import curate_page_job
 from aleph_workers.jobs.normalize import normalize_job
 from aleph_workers.jobs.reviewers import (
     editorial_review_job,
@@ -21,6 +22,7 @@ __all__ = [
     "bootstrap_project_job",
     "builder_job",
     "chunk_embed_job",
+    "curate_page_job",
     "editorial_review_job",
     "mechanical_review_job",
     "normalize_job",

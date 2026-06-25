@@ -29,6 +29,7 @@ from aleph_workers.jobs import (
     bootstrap_project_job,
     builder_job,
     chunk_embed_job,
+    curate_page_job,
     editorial_review_job,
     mechanical_review_job,
     normalize_job,
@@ -115,6 +116,7 @@ class WorkerSettings:
         builder_job,
         aiq_synthesis_poll_job,
         bootstrap_project_job,
+        curate_page_job,
     ]
     on_startup = _startup
     on_shutdown = _shutdown

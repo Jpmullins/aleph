@@ -212,6 +212,17 @@ async def aiq_synthesis_poll_job(
             raise
 
         proposal_ids = out.get("proposal_ids") or []
+
+        # Knit the wiki graph now that the synthesis page exists: repair broken
+        # links project-wide + register its title alias (curate_page_job →
+        # CuratorService). Best-effort — never fails the synthesis run.
+        for page_id in out.get("committed_page_ids") or []:
+            await ctx["redis_pool"].enqueue_job(
+                "curate_page_job",
+                project_id_str,
+                str(page_id),
+            )
+
         await _set_run_status(maker, agent_run_id, "succeeded")
         return {
             "status": "succeeded",
