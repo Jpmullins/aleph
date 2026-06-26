@@ -209,3 +209,24 @@ class WikiIndex(Base):
     is_stub: Mapped[bool] = mapped_column(Boolean, nullable=False)
     indexed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     index_tsv: Mapped[TSVECTOR] = mapped_column(TSVECTOR, nullable=False)
+
+
+class PageMergeProposal(CommonColumns, Base):
+    """A curator-detected near-duplicate: ``source`` should merge into ``target``.
+
+    Human-gated (ApprovalCard) — the curator never merges automatically. On
+    approval, ``CuratorService.apply_merge`` redirects inbound links
+    source→target, aliases the source title to the target, and soft-deletes the
+    source page. Reject leaves both pages. Approval is recorded as a generic
+    ``ApprovalDecision`` (``target_kind="page_merge_proposal"``).
+    """
+
+    __tablename__ = "page_merge_proposals"
+
+    project_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    source_page_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    target_page_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    rationale: Mapped[str] = mapped_column(String(2048), nullable=False, server_default="")
+    similarity: Mapped[float] = mapped_column(Float, nullable=False, server_default="0")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
+    approval_decision_id: Mapped[UUID | None] = mapped_column(nullable=True)

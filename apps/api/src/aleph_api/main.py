@@ -36,6 +36,7 @@ from aleph_api.routes import (
     hypotheses,
     ledger,
     me,
+    merge_proposals,
     model_profile,
     notes,
     projects,
@@ -94,6 +95,7 @@ def create_app() -> FastAPI:
     app.include_router(assistant.router)
     # Inc 3
     app.include_router(synthesize.router)
+    app.include_router(merge_proposals.router)
     app.include_router(connector_credentials.router)
     app.include_router(aiq_internal.router)
     # Inc 4

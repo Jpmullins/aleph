@@ -101,6 +101,27 @@ async def curate_page_job(ctx: dict[str, Any], project_id: str, page_id: str) ->
             except Exception as exc:  # best-effort: recuration must not fail the job
                 _log.warning("wiki.curate.recurate_failed", page_id=page_id, error=str(exc))
 
+            # Stage 3: near-duplicate detection — proposes a (human-gated) merge.
+            try:
+                async with maker() as session:
+                    merge_proposal_id = await CuratorService(session).dedup_detect(
+                        project_id=pid,
+                        page_id=page,
+                        litellm=litellm,
+                        profile_bindings=profile.bindings_jsonb,
+                        principal=principal,
+                        agent_run_id=run_id,
+                    )
+                    await session.commit()
+                if merge_proposal_id is not None:
+                    _log.info(
+                        "wiki.curate.merge_proposed",
+                        page_id=page_id,
+                        proposal_id=str(merge_proposal_id),
+                    )
+            except Exception as exc:  # best-effort: dedup must not fail the job
+                _log.warning("wiki.curate.dedup_failed", page_id=page_id, error=str(exc))
+
         async with maker() as session:
             run = (
                 await session.execute(select(AgentRun).where(AgentRun.id == run_id))

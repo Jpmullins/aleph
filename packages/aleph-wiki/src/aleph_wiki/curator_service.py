@@ -32,15 +32,16 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select, text, update
 
+from aleph_core.ids import uuid7
 from aleph_core.schemas.model_profile import Capability
 from aleph_db.models.project import Project
 from aleph_db.repos.ledger import LedgerWriter
 from aleph_models.client import ChatMessage
-from aleph_observability.tracing import start_span
+from aleph_observability.tracing import current_trace_id, start_span
 from aleph_wiki.alias_service import AliasService
-from aleph_wiki.models import WikiPage, WikiRevision
+from aleph_wiki.models import PageMergeProposal, WikiIndex, WikiLink, WikiPage, WikiRevision
 from aleph_wiki.wiki_service import WikiLinkDraft, WikiService
 
 if TYPE_CHECKING:
@@ -73,6 +74,22 @@ def _overview_user(overview_md: str, new_title: str, new_summary: str) -> str:
         f"Current overview markdown:\n\n{overview_md}\n\n---\n"
         f"New topic page title: {new_title}\n"
         f"New topic summary: {new_summary or '(no summary)'}"
+    )
+
+
+_DEDUP_SYS = (
+    "You judge whether two research-wiki pages cover the SAME underlying concept, "
+    "such that one should be merged into the other — not merely related or "
+    "overlapping. Reply with a single line: 'YES: <short reason>' if they are the "
+    "same concept and should be merged, or 'NO: <short reason>' otherwise. Be "
+    "conservative — prefer NO unless the two are clearly redundant."
+)
+
+
+def _dedup_user(a_title: str, a_summary: str, b_title: str, b_summary: str) -> str:
+    return (
+        f"Page A title: {a_title}\nPage A summary: {a_summary or '(none)'}\n\n"
+        f"Page B title: {b_title}\nPage B summary: {b_summary or '(none)'}"
     )
 
 
@@ -217,6 +234,191 @@ class CuratorService:
                 origin="curator",
             )
             return not result.was_noop
+
+    async def dedup_detect(
+        self,
+        *,
+        project_id: UUID,
+        page_id: UUID,
+        litellm: LiteLLMClient,
+        profile_bindings: dict[str, Any],
+        principal: Principal,
+        agent_run_id: UUID,
+        top_k: int = 5,
+        min_rank: float = 0.05,
+    ) -> UUID | None:
+        """Detect a near-duplicate of the new page and, if confirmed, propose a merge.
+
+        Candidate retrieval is Postgres full-text over ``wiki_index`` (the GIN
+        ``index_tsv``); the single top candidate is confirmed by an LLM judge.
+        On a YES, creates a pending ``PageMergeProposal`` (source = the new page,
+        target = the existing page) and returns its id — never merges
+        automatically. Returns None when there is no confident duplicate.
+        """
+        with start_span(
+            "wiki.curate.dedup_detect",
+            **{"aleph.project_id": str(project_id), "aleph.page_id": str(page_id)},
+        ):
+            page = await self._get_page(project_id=project_id, page_id=page_id)
+            if page is None:
+                return None
+            rev = await self._current_revision(page)
+            summary = (rev.summary if rev else "") or ""
+            project = (
+                await self._session.execute(select(Project).where(Project.id == project_id))
+            ).scalar_one_or_none()
+            overview_title = project.title if project is not None else None
+
+            query_text = f"{page.title} {summary}".strip()
+            if not query_text:
+                return None
+            tsq = func.plainto_tsquery("english", query_text)
+            stmt = (
+                select(
+                    WikiIndex.page_id,
+                    WikiIndex.title,
+                    WikiIndex.summary,
+                    func.ts_rank(WikiIndex.index_tsv, tsq).label("rank"),
+                )
+                .where(
+                    WikiIndex.project_id == project_id,
+                    WikiIndex.page_id != page_id,
+                    WikiIndex.status != "deleted",
+                    # Rank by overlap rather than a strict boolean @@ match:
+                    # plainto_tsquery ANDs every term, so the new page's unique
+                    # words would exclude a genuine near-duplicate. ts_rank
+                    # scores partial overlap; min_rank gates out the noise.
+                    func.ts_rank(WikiIndex.index_tsv, tsq) >= min_rank,
+                )
+                .order_by(text("rank DESC"))
+                .limit(top_k)
+            )
+            rows = (await self._session.execute(stmt)).all()
+            candidates = [
+                r
+                for r in rows
+                if (overview_title is None or r.title != overview_title)
+                and float(r.rank or 0.0) >= min_rank
+            ]
+            if not candidates:
+                return None
+            top = candidates[0]
+
+            # Don't re-propose a pair that's already pending/approved.
+            existing = (
+                await self._session.execute(
+                    select(PageMergeProposal).where(
+                        PageMergeProposal.project_id == project_id,
+                        PageMergeProposal.source_page_id == page_id,
+                        PageMergeProposal.target_page_id == top.page_id,
+                        PageMergeProposal.status.in_(["pending", "approved"]),
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                return existing.id
+
+            resp = await litellm.chat(
+                principal=principal,
+                project_id=project_id,
+                agent_run_id=agent_run_id,
+                capability=Capability.JUDGE,
+                profile_bindings=profile_bindings,
+                messages=[
+                    ChatMessage(role="system", content=_DEDUP_SYS),
+                    ChatMessage(
+                        role="user",
+                        content=_dedup_user(page.title, summary, top.title, top.summary),
+                    ),
+                ],
+                temperature=0.0,
+                max_tokens=200,
+                purpose="wiki.curate.dedup",
+            )
+            verdict = ((resp.choices[0].message.content if resp.choices else "") or "").strip()
+            if not verdict.upper().startswith("YES"):
+                return None
+            reason = verdict.split(":", 1)[1].strip() if ":" in verdict else verdict
+
+            proposal = PageMergeProposal(
+                id=uuid7(),
+                project_id=project_id,
+                source_page_id=page_id,
+                target_page_id=top.page_id,
+                rationale=reason[:2048],
+                similarity=float(top.rank or 0.0),
+                status="pending",
+                created_by=page.created_by,
+            )
+            self._session.add(proposal)
+            await self._session.flush()
+            return proposal.id
+
+    async def apply_merge(
+        self, *, proposal: PageMergeProposal, principal: Principal, ledger: LedgerWriter
+    ) -> int:
+        """Execute an approved merge: redirect inbound links, alias, soft-delete source.
+
+        Redirecting links and aliasing only ever point at the target; soft-
+        deleting an already-deleted source is a no-op. Returns the number of
+        inbound links redirected.
+        """
+        with start_span(
+            "wiki.curate.apply_merge",
+            **{
+                "aleph.project_id": str(proposal.project_id),
+                "aleph.source_page_id": str(proposal.source_page_id),
+                "aleph.target_page_id": str(proposal.target_page_id),
+            },
+        ):
+            source = await self._get_page(
+                project_id=proposal.project_id, page_id=proposal.source_page_id
+            )
+            target = await self._get_page(
+                project_id=proposal.project_id, page_id=proposal.target_page_id
+            )
+            if source is None or target is None:
+                return 0
+
+            res = await self._session.execute(
+                update(WikiLink)
+                .where(
+                    WikiLink.project_id == proposal.project_id,
+                    WikiLink.dst_page_id == source.id,
+                )
+                .values(dst_page_id=target.id)
+            )
+            redirected = res.rowcount or 0
+
+            # [[source title]] should now resolve to the target page.
+            await self._aliases.upsert(
+                project_id=proposal.project_id,
+                surface_form=source.title,
+                canonical_name=target.title,
+                canonical_page_id=target.id,
+                created_by=principal.user_id,
+            )
+
+            source.status = "deleted"
+            await self._session.execute(delete(WikiIndex).where(WikiIndex.page_id == source.id))
+
+            await ledger.append(
+                project_id=proposal.project_id,
+                actor_id=principal.user_id,
+                actor_kind=principal.actor_kind,
+                action_kind="wiki.page.merge",
+                target_id=source.id,
+                target_kind="wiki_page",
+                payload={
+                    "source_page_id": str(source.id),
+                    "target_page_id": str(target.id),
+                    "proposal_id": str(proposal.id),
+                    "links_redirected": redirected,
+                },
+                trace_id=current_trace_id(),
+            )
+            await self._session.flush()
+            return redirected
 
     async def _resolve_body_links(self, *, project_id: UUID, body_md: str) -> list[WikiLinkDraft]:
         counts: dict[str, int] = {}
