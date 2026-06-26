@@ -173,6 +173,7 @@ class WikiService:
         wikilinks: list[WikiLinkDraft],
         commit_message: str,
         respect_hand_edits: bool = True,
+        origin: str = "agent",
     ) -> CommitResult:
         with start_span(
             "wiki.commit_revision",
@@ -252,6 +253,7 @@ class WikiService:
                     "body_sha256": body_hash,
                     "page_kind": page_kind,
                     "commit_message": commit_message,
+                    "origin": origin,
                 },
                 trace_id=current_trace_id(),
             )

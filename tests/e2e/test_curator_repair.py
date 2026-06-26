@@ -128,3 +128,136 @@ async def test_curator_repairs_overview_link_to_existing_page(
         again = await CuratorService(session).curate(project_id=pid, page_id=topic_id)
         await session.commit()
     assert again.links_repaired == 0
+
+
+class _FakeMessage:
+    def __init__(self, content: str) -> None:
+        self.content = content
+
+
+class _FakeChoice:
+    def __init__(self, content: str) -> None:
+        self.message = _FakeMessage(content)
+
+
+class _FakeResponse:
+    def __init__(self, content: str) -> None:
+        self.choices = [_FakeChoice(content)]
+
+
+class _FakeLLM:
+    """Duck-typed stand-in for LiteLLMClient.chat (curator only reads .choices)."""
+
+    def __init__(self, content: str) -> None:
+        self._content = content
+
+    async def chat(self, **_kwargs: object) -> _FakeResponse:
+        return _FakeResponse(self._content)
+
+
+async def test_curator_recurates_overview_with_new_topic(
+    http_client, auth_bypass, asgi_app, monkeypatch
+):
+    from aleph_core.ids import uuid7
+    from aleph_db.models.project import Project
+    from aleph_db.repos.ledger import LedgerWriter
+    from aleph_security.principal import Principal
+    from aleph_wiki.curator_service import CuratorService
+    from aleph_wiki.models import WikiLink, WikiPage
+    from aleph_wiki.wiki_service import WikiService
+
+    monkeypatch.setattr(asgi_app.state.settings, "bootstrap_auto_enabled", False)
+
+    title = "Curator Overview Project"
+    proj = await http_client.post(
+        "/v1/projects", json={"title": title, "description": "x", "budget_usd": "1.00"}
+    )
+    assert proj.status_code == 201, proj.text
+    pid = UUID(proj.json()["id"])
+
+    maker = asgi_app.state.session_maker
+
+    async with maker() as session:
+        owner = (
+            await session.execute(select(Project.created_by).where(Project.id == pid))
+        ).scalar_one()
+        principal = Principal(user_id=owner, subject="seed", email="", actor_kind="user")
+        svc = WikiService(session)
+        ledger = LedgerWriter(session)
+        # Overview page: title MUST equal the project title (how the curator
+        # finds the overview). No link to the topic yet.
+        await svc.commit_revision(
+            principal=principal,
+            ledger=ledger,
+            project_id=pid,
+            page_id=None,
+            title=title,
+            slug=None,
+            page_kind="topic",
+            body_md="# Overview\n\nResearch overview for this project.\n",
+            summary="overview",
+            claims=[],
+            wikilinks=[],
+            commit_message="seed overview",
+        )
+        topic = await svc.commit_revision(
+            principal=principal,
+            ledger=ledger,
+            project_id=pid,
+            page_id=None,
+            title="Curator Topic Z",
+            slug=None,
+            page_kind="topic",
+            body_md="# Curator Topic Z\n\nDetails about Z.\n",
+            summary="A topic about Z.",
+            claims=[],
+            wikilinks=[],
+            commit_message="seed topic",
+        )
+        await session.commit()
+        topic_id = topic.page_id
+
+    fake_overview = (
+        "# Overview\n\nResearch overview for this project.\n\n"
+        "## Topics\n\n- [[Curator Topic Z]] — covers Z.\n"
+    )
+    fake_llm = _FakeLLM(fake_overview)
+
+    async with maker() as session:
+        recurated = await CuratorService(session).recurate_overview(
+            project_id=pid,
+            new_page_id=topic_id,
+            litellm=fake_llm,  # type: ignore[arg-type]
+            profile_bindings={},
+            principal=Principal(user_id=owner, subject="agent", email="", actor_kind="aleph_agent"),
+            agent_run_id=uuid7(),
+        )
+        await session.commit()
+
+    assert recurated is True
+
+    # The overview now contains the wikilink, and it resolves to the topic page.
+    async with maker() as session:
+        overview = (
+            await session.execute(
+                select(WikiPage).where(WikiPage.project_id == pid, WikiPage.title == title)
+            )
+        ).scalar_one()
+        from aleph_wiki.models import WikiRevision
+
+        rev = (
+            await session.execute(
+                select(WikiRevision).where(WikiRevision.id == overview.current_revision_id)
+            )
+        ).scalar_one()
+        assert "[[Curator Topic Z]]" in rev.body_md
+
+        link = (
+            await session.execute(
+                select(WikiLink).where(
+                    WikiLink.src_page_id == overview.id,
+                    WikiLink.dst_title == "Curator Topic Z",
+                )
+            )
+        ).scalar_one()
+        assert link.dst_page_id == topic_id
