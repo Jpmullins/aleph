@@ -98,6 +98,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 secret_key=settings.minio_root_password,
                 bucket=settings.aleph_s3_bucket,
                 secure=False,
+                public_endpoint=settings.minio_public_endpoint,
             )
         except Exception:
             asset_store = None

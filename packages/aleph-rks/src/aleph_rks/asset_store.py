@@ -39,6 +39,7 @@ class AssetStore:
         secret_key: str,
         bucket: str,
         secure: bool = False,
+        public_endpoint: str | None = None,
     ) -> None:
         ep = endpoint.replace("http://", "").replace("https://", "")
         self._client = Minio(
@@ -47,6 +48,29 @@ class AssetStore:
             secret_key=secret_key,
             secure=secure,
         )
+        # Presigned URLs are handed to the BROWSER, which can't resolve the
+        # internal compose hostname (e.g. `minio:9000`). Presign against a
+        # browser-reachable public endpoint when configured (e.g.
+        # `localhost:9000` in dev); the SigV4 signature is computed for that
+        # host, so the browser's request to it validates. Falls back to the
+        # internal client when no public endpoint is set.
+        if public_endpoint:
+            pep = public_endpoint.replace("http://", "").replace("https://", "")
+            pub_secure = public_endpoint.startswith("https://")
+            # `region` is REQUIRED here: presigned_get_object otherwise makes a
+            # live `_get_region` call to the (public) endpoint to discover the
+            # bucket region — but the public host (localhost:9000) isn't
+            # reachable from inside this container. Pinning the region keeps URL
+            # generation fully offline. MinIO's default region is us-east-1.
+            self._presign_client = Minio(
+                endpoint=pep,
+                access_key=access_key,
+                secret_key=secret_key,
+                secure=pub_secure,
+                region="us-east-1",
+            )
+        else:
+            self._presign_client = self._client
         self._bucket = bucket
         self._ensure_bucket()
 
@@ -140,7 +164,8 @@ class AssetStore:
 
     def presigned_get_url(self, storage_uri: str, *, ttl: timedelta = timedelta(minutes=10)) -> str:
         bucket, key = self._parse(storage_uri)
-        return self._client.presigned_get_object(bucket, key, expires=ttl)
+        # Presign against the browser-reachable endpoint (see __init__).
+        return self._presign_client.presigned_get_object(bucket, key, expires=ttl)
 
     @staticmethod
     def _parse(storage_uri: str) -> tuple[str, str]:

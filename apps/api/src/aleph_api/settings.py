@@ -39,6 +39,10 @@ class Settings(BaseSettings):
 
     # MinIO. Inc 1 routes use it for source asset storage.
     minio_endpoint: str | None = None
+    # Browser-reachable MinIO endpoint for presigned source-asset URLs (the
+    # internal `minio:9000` host isn't resolvable from the browser). Dev:
+    # http://localhost:9000.
+    minio_public_endpoint: str | None = None
     aleph_s3_bucket: str | None = None
     minio_root_user: str | None = None
     minio_root_password: str | None = None
