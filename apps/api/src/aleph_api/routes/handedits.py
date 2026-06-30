@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict
 
 from aleph_api.deps import PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
+from aleph_db.repos.ledger import LedgerWriter
 from aleph_security.roles import ProjectRole, require_at_least
 from aleph_wiki.handedit_service import clear_section, mark_section
 
@@ -47,6 +48,8 @@ async def mark_handedit(
         page_id=page_id,
         section_anchor=anchor,
         applied_by=principal.user_id,
+        ledger=LedgerWriter(session),
+        actor_kind=principal.actor_kind,
     )
     return HandEditMarkOut.model_validate(m)
 
@@ -69,4 +72,6 @@ async def clear_handedit(
         page_id=page_id,
         section_anchor=anchor,
         cleared_by=principal.user_id,
+        ledger=LedgerWriter(session),
+        actor_kind=principal.actor_kind,
     )

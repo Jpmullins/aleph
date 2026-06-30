@@ -11,6 +11,8 @@ from sqlalchemy import select
 from aleph_core.errors import NotFound
 from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
+from aleph_db.repos.ledger import LedgerWriter
+from aleph_observability import current_trace_id
 from aleph_wiki.models import HandEditMark, WikiPage, WikiRevision
 
 if TYPE_CHECKING:
@@ -24,6 +26,8 @@ async def mark_section(
     page_id: UUID,
     section_anchor: str | None,
     applied_by: UUID,
+    ledger: LedgerWriter | None = None,
+    actor_kind: str = "user",
 ) -> HandEditMark:
     page = (
         await session.execute(select(WikiPage).where(WikiPage.id == page_id))
@@ -59,6 +63,17 @@ async def mark_section(
     )
     session.add(mark)
     await session.flush()
+    if ledger is not None:
+        await ledger.append(
+            project_id=project_id,
+            actor_id=applied_by,
+            actor_kind=actor_kind,
+            action_kind="wiki.handedit.mark",
+            target_id=page_id,
+            target_kind="wiki_page",
+            payload={"page_id": str(page_id), "section_anchor": section_anchor},
+            trace_id=current_trace_id(),
+        )
     return mark
 
 
@@ -69,6 +84,8 @@ async def clear_section(
     page_id: UUID,
     section_anchor: str | None,
     cleared_by: UUID,
+    ledger: LedgerWriter | None = None,
+    actor_kind: str = "user",
 ) -> int:
     """Clears all active hand-edit marks for the given (page, anchor)."""
     stmt = select(HandEditMark).where(
@@ -84,6 +101,21 @@ async def clear_section(
         m.cleared_at = now
         m.cleared_by = cleared_by
     await session.flush()
+    if rows and ledger is not None:
+        await ledger.append(
+            project_id=project_id,
+            actor_id=cleared_by,
+            actor_kind=actor_kind,
+            action_kind="wiki.handedit.clear",
+            target_id=page_id,
+            target_kind="wiki_page",
+            payload={
+                "page_id": str(page_id),
+                "section_anchor": section_anchor,
+                "cleared": len(rows),
+            },
+            trace_id=current_trace_id(),
+        )
     return len(rows)
 
 

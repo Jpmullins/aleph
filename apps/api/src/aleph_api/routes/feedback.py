@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from aleph_api.deps import PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
+from aleph_db.repos.ledger import LedgerWriter
 from aleph_security.roles import ProjectRole, require_at_least
 from aleph_wiki.feedback_service import pending_for_concept, write_feedback
 from aleph_wiki.models import RejectionFeedback
@@ -59,6 +60,8 @@ async def post_feedback(
         rejected_revision_id=body.rejected_revision_id,
         reason=body.reason,
         rejected_by=principal.user_id,
+        ledger=LedgerWriter(session),
+        actor_kind=principal.actor_kind,
     )
     return RejectionFeedbackOut.model_validate(fb)
 

@@ -15,6 +15,8 @@ from sqlalchemy import select
 
 from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
+from aleph_db.repos.ledger import LedgerWriter
+from aleph_observability import current_trace_id
 from aleph_wiki.models import RejectionFeedback
 
 if TYPE_CHECKING:
@@ -30,6 +32,8 @@ async def write_feedback(
     rejected_revision_id: UUID | None,
     reason: str,
     rejected_by: UUID,
+    ledger: LedgerWriter | None = None,
+    actor_kind: str = "user",
 ) -> RejectionFeedback:
     fb = RejectionFeedback(
         id=uuid7(),
@@ -46,6 +50,20 @@ async def write_feedback(
     )
     session.add(fb)
     await session.flush()
+    if ledger is not None:
+        await ledger.append(
+            project_id=project_id,
+            actor_id=rejected_by,
+            actor_kind=actor_kind,
+            action_kind="wiki.feedback.write",
+            target_id=fb.id,
+            target_kind="rejection_feedback",
+            payload={
+                "concept_name": fb.concept_name,
+                "page_id": str(page_id) if page_id else None,
+            },
+            trace_id=current_trace_id(),
+        )
     return fb
 
 
