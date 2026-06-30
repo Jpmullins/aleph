@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Body, status
+from arq import create_pool
+from arq.connections import RedisSettings
+from fastapi import APIRouter, Body, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
@@ -230,6 +232,7 @@ async def promote_note(
     session: SessionDep,
     ledger: LedgerDep,
     principal: PrincipalDep,
+    request: Request,
 ) -> PromoteOut:
     """Promote a note to a draft wiki page + pending proposal (Briefs).
 
@@ -303,6 +306,21 @@ async def promote_note(
         payload={"note_id": str(note_id), "page_id": str(result.page_id)},
         trace_id=current_trace_id(),
     )
+
+    # Knit the graph for the promoted page (repair links, register alias,
+    # cross-link siblings, recurate the overview). Commit first so the page is
+    # durably visible before the curate job runs; best-effort enqueue.
+    await session.commit()
+    try:
+        settings = request.app.state.settings
+        pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+        try:
+            await pool.enqueue_job("curate_page_job", str(project_id), str(result.page_id))
+        finally:
+            await pool.aclose()
+    except Exception:  # curation is eventual; a failed enqueue never blocks promote
+        pass
+
     return PromoteOut(
         proposal_id=proposal.id, page_id=result.page_id, revision_id=result.revision_id
     )

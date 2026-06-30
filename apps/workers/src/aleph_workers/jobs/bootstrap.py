@@ -202,7 +202,7 @@ async def bootstrap_project_job(
                     page_id=None,
                     title=title,
                     slug=None,
-                    page_kind="topic",
+                    page_kind="overview",
                     body_md=overview_md,
                     summary=(description or overview_md)[:2048],
                     claims=[],
@@ -218,6 +218,12 @@ async def bootstrap_project_job(
                     payload={"page_id": str(result.page_id)},
                 )
                 await session.commit()
+                overview_page_id = result.page_id
+
+            # Knit the overview (register its alias + cross-link) now that it
+            # exists. Seed-topic links repair as each topic page lands via its
+            # own synthesis-triggered curate.
+            await redis_pool.enqueue_job("curate_page_job", str(project_id), str(overview_page_id))
 
             # --- Phase 3: dispatch research per seed topic ---
             dispatched = 0

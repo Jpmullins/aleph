@@ -81,6 +81,14 @@ async def curate_page_job(ctx: dict[str, Any], project_id: str, page_id: str) ->
 
         # Stage 2: LLM overview recuration — best-effort, isolated transaction.
         recurated = False
+        if profile is None:
+            _log.warning(
+                "wiki.curate.llm_steps_skipped_no_profile",
+                project_id=project_id,
+                page_id=page_id,
+                detail="no ModelProfile for project; overview recuration + dedup skipped "
+                "(deterministic knit still ran)",
+            )
         if profile is not None:
             principal = Principal(
                 user_id=owner,

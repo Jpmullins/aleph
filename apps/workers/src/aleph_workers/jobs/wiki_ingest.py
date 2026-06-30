@@ -203,6 +203,15 @@ async def wiki_ingest_job(
                     ).scalar_one_or_none()
                     if rev is None:
                         continue
+                    # Knit the wiki graph for EVERY committed revision, independent
+                    # of whether a mechanical-review run was dispatched: repair
+                    # broken links project-wide, register the title alias, and
+                    # cross-link siblings (curate_page_job -> CuratorService).
+                    await redis_pool.enqueue_job(
+                        "curate_page_job",
+                        str(normalized.project_id),
+                        str(rev.page_id),
+                    )
                     pending = (
                         (
                             await session.execute(
@@ -235,13 +244,6 @@ async def wiki_ingest_job(
                         str(rev_id),
                         str(rev.page_id),
                         review_token,
-                    )
-                    # Knit the wiki graph now that this page exists: repair
-                    # broken links project-wide + register its title alias.
-                    await redis_pool.enqueue_job(
-                        "curate_page_job",
-                        str(normalized.project_id),
-                        str(rev.page_id),
                     )
 
     return {

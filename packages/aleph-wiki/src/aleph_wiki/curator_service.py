@@ -19,10 +19,11 @@ stale after research: links resolved only at write time, and neither
 ``repair_broken_links`` nor any overview update was on the research/bootstrap
 path. See ``docs/superpowers/specs/2026-06-25-wiki-curator-design.md`` §1, §4.
 
-The curator commits the overview through ``WikiService.commit_revision`` with
-``origin="curator"``. Curation is enqueued only at the authoring *job* sites
-(wiki ingest + AIQ synthesis), never inside ``commit_revision``, so the
-curator's own overview commit cannot re-trigger curation — no loop.
+The curator commits the overview/cross-linked pages through
+``WikiService.commit_revision`` with ``origin="curator"``. Curation is enqueued
+only at the authoring *job/route* sites (wiki ingest, AIQ synthesis, bootstrap
+overview, notes promote), never inside ``commit_revision`` or the curate job
+itself, so the curator's own commits cannot re-trigger curation — no loop.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+import structlog
 from sqlalchemy import delete, func, select, text, update
 
 from aleph_core.ids import uuid7
@@ -40,21 +42,84 @@ from aleph_db.models.project import Project
 from aleph_db.repos.ledger import LedgerWriter
 from aleph_models.client import ChatMessage
 from aleph_observability.tracing import current_trace_id, start_span
+from aleph_security.principal import Principal
 from aleph_wiki.alias_service import AliasService
-from aleph_wiki.models import PageMergeProposal, WikiIndex, WikiLink, WikiPage, WikiRevision
+from aleph_wiki.models import (
+    Alias,
+    PageMergeProposal,
+    WikiIndex,
+    WikiLink,
+    WikiPage,
+    WikiRevision,
+)
 from aleph_wiki.wiki_service import WikiLinkDraft, WikiService
+
+_log = structlog.get_logger(__name__)
 
 # Fallback actor for curator-originated ledger events when the job did not
 # supply one (should not happen in production — the worker passes the owner).
 _NIL_ACTOR = UUID(int=0)
 
+# cross_link bounds (no silent caps — logged per run when hit).
+_CROSS_LINK_MAX_TARGETS = 20
+_CROSS_LINK_MIN_LEN = 4
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from aleph_models.client import LiteLLMClient
-    from aleph_security.principal import Principal
 
 _WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
+_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+_INLINE_CODE_RE = re.compile(r"`[^`]*`")
+
+
+def _protected_ranges(body: str) -> list[tuple[int, int]]:
+    """Char ranges that must not be touched: fenced code, inline code, existing links."""
+    ranges: list[tuple[int, int]] = []
+    for rex in (_FENCE_RE, _INLINE_CODE_RE, _WIKILINK_RE):
+        for m in rex.finditer(body):
+            ranges.append((m.start(), m.end()))
+    return ranges
+
+
+def _overlaps(s: int, e: int, ranges: list[tuple[int, int]]) -> bool:
+    return any(s < re_ and e > rs for (rs, re_) in ranges)
+
+
+def inject_cross_links(
+    body: str, surfaces: list[str], *, max_targets: int = _CROSS_LINK_MAX_TARGETS
+) -> tuple[str, list[str]]:
+    """Wrap the first un-linked, plain-text occurrence of each surface form in
+    ``[[ ]]``. Pure + idempotent: existing links / code spans are protected, so
+    re-running over the output is a no-op. Longer surface forms win ties.
+
+    Returns the new body and the list of surfaces that were linked.
+    """
+    used = _protected_ranges(body)
+    linked: list[str] = []
+    insertions: list[tuple[int, int, str]] = []
+    for surface in sorted(set(surfaces), key=len, reverse=True):
+        if len(linked) >= max_targets:
+            break
+        # Word-boundary match that also refuses to sit just inside an existing
+        # bracket (``[`` / ``]``), so we never double-wrap.
+        pat = re.compile(rf"(?<![\w\[]){re.escape(surface)}(?![\w\]])")
+        for m in pat.finditer(body):
+            s, e = m.start(), m.end()
+            if _overlaps(s, e, used):
+                continue
+            insertions.append((s, e, surface))
+            used.append((s, e))
+            linked.append(surface)
+            break
+    if not insertions:
+        return body, []
+    new_body = body
+    for s, e, surface in sorted(insertions, key=lambda x: x[0], reverse=True):
+        new_body = f"{new_body[:s]}[[{surface}]]{new_body[e:]}"
+    return new_body, linked
+
 
 _OVERVIEW_SYS = (
     "You maintain the overview/index page of a research wiki. You are given the "
@@ -101,6 +166,7 @@ def _dedup_user(a_title: str, a_summary: str, b_title: str, b_summary: str) -> s
 class CurationResult:
     links_repaired: int
     aliases_registered: int
+    cross_links_added: int = 0
 
 
 class CuratorService:
@@ -132,9 +198,11 @@ class CuratorService:
                 project_id=project_id, page_id=page_id
             )
             links_repaired = await self._repair_links(project_id=project_id)
+            cross_links_added = await self._cross_link(project_id=project_id, page_id=page_id)
             return CurationResult(
                 links_repaired=links_repaired,
                 aliases_registered=aliases_registered,
+                cross_links_added=cross_links_added,
             )
 
     async def _register_aliases(self, *, project_id: UUID, page_id: UUID) -> int:
@@ -158,6 +226,84 @@ class CuratorService:
                 project_id=project_id, actor_id=self._actor_id, actor_kind="agent"
             )
 
+    async def _link_targets(self, *, project_id: UUID, exclude_page_id: UUID) -> list[str]:
+        """Surface forms (page titles + aliases) that the new page can link to."""
+        out: dict[str, None] = {}
+        pages = (
+            await self._session.execute(
+                select(WikiPage.title).where(
+                    WikiPage.project_id == project_id,
+                    WikiPage.id != exclude_page_id,
+                    WikiPage.status != "deleted",
+                )
+            )
+        ).all()
+        for (title,) in pages:
+            if title and len(title) >= _CROSS_LINK_MIN_LEN:
+                out[title] = None
+        aliases = (
+            await self._session.execute(
+                select(Alias.surface_form).where(
+                    Alias.project_id == project_id,
+                    Alias.canonical_page_id.isnot(None),
+                    Alias.canonical_page_id != exclude_page_id,
+                )
+            )
+        ).all()
+        for (sf,) in aliases:
+            if sf and len(sf) >= _CROSS_LINK_MIN_LEN:
+                out[sf] = None
+        return list(out.keys())
+
+    async def _cross_link(self, *, project_id: UUID, page_id: UUID) -> int:
+        """Connect siblings (fixes audit problem B): scan the committed page's
+        prose for existing page titles/aliases not already wikilinked and inject
+        ``[[ ]]`` markup, then commit a curator revision so the ``WikiLink`` rows
+        are written. Bounded to the new page, idempotent, hand-edit-respecting.
+        """
+        with start_span("wiki.curate.cross_link", **{"aleph.page_id": str(page_id)}):
+            page = await self._get_page(project_id=project_id, page_id=page_id)
+            if page is None:
+                return 0
+            rev = await self._current_revision(page)
+            if rev is None:
+                return 0
+            targets = await self._link_targets(project_id=project_id, exclude_page_id=page_id)
+            if not targets:
+                return 0
+            new_body, linked = inject_cross_links(
+                rev.body_md, targets, max_targets=_CROSS_LINK_MAX_TARGETS
+            )
+            if not linked:
+                return 0
+            if len(linked) >= _CROSS_LINK_MAX_TARGETS:
+                _log.info(
+                    "wiki.curate.cross_link_capped",
+                    page_id=str(page_id),
+                    cap=_CROSS_LINK_MAX_TARGETS,
+                )
+            links = await self._resolve_body_links(project_id=project_id, body_md=new_body)
+            principal = Principal(
+                user_id=page.created_by, subject="agent", email="", actor_kind="aleph_agent"
+            )
+            await WikiService(self._session).commit_revision(
+                principal=principal,
+                ledger=self._ledger or LedgerWriter(self._session),
+                project_id=project_id,
+                page_id=page.id,
+                title=page.title,
+                slug=page.slug,
+                page_kind=page.page_kind,
+                body_md=new_body,
+                summary=(rev.summary or "")[:2048],
+                claims=[],
+                wikilinks=links,
+                commit_message=f"Curator: cross-link {len(linked)} sibling page(s)",
+                respect_hand_edits=True,
+                origin="curator",
+            )
+            return len(linked)
+
     async def recurate_overview(
         self,
         *,
@@ -179,19 +325,7 @@ class CuratorService:
             "wiki.curate.recurate_overview",
             **{"aleph.project_id": str(project_id), "aleph.page_id": str(new_page_id)},
         ):
-            project = (
-                await self._session.execute(select(Project).where(Project.id == project_id))
-            ).scalar_one_or_none()
-            if project is None:
-                return False
-            overview = (
-                await self._session.execute(
-                    select(WikiPage).where(
-                        WikiPage.project_id == project_id,
-                        WikiPage.title == project.title,
-                    )
-                )
-            ).scalar_one_or_none()
+            overview = await self._find_overview(project_id=project_id)
             if overview is None or overview.id == new_page_id:
                 return False
             new_page = await self._get_page(project_id=project_id, page_id=new_page_id)
@@ -238,7 +372,7 @@ class CuratorService:
                 page_id=overview.id,
                 title=overview.title,
                 slug=overview.slug,
-                page_kind="topic",
+                page_kind=overview.page_kind,
                 body_md=updated,
                 summary=(overview_rev.summary or "")[:2048],
                 claims=[],
@@ -278,10 +412,8 @@ class CuratorService:
                 return None
             rev = await self._current_revision(page)
             summary = (rev.summary if rev else "") or ""
-            project = (
-                await self._session.execute(select(Project).where(Project.id == project_id))
-            ).scalar_one_or_none()
-            overview_title = project.title if project is not None else None
+            overview = await self._find_overview(project_id=project_id)
+            overview_page_id = overview.id if overview is not None else None
 
             query_text = f"{page.title} {summary}".strip()
             if not query_text:
@@ -311,7 +443,7 @@ class CuratorService:
             candidates = [
                 r
                 for r in rows
-                if (overview_title is None or r.title != overview_title)
+                if (overview_page_id is None or r.page_id != overview_page_id)
                 and float(r.rank or 0.0) >= min_rank
             ]
             if not candidates:
@@ -451,6 +583,46 @@ class CuratorService:
                 )
             )
         return links
+
+    async def _find_overview(self, *, project_id: UUID) -> WikiPage | None:
+        """Locate the project's overview page robustly.
+
+        Prefers the stable ``page_kind == "overview"`` marker (set by bootstrap),
+        so renaming the project never breaks recuration. Falls back to a
+        title-match against the project title for legacy projects bootstrapped
+        before the marker existed.
+        """
+        ov = (
+            (
+                await self._session.execute(
+                    select(WikiPage)
+                    .where(
+                        WikiPage.project_id == project_id,
+                        WikiPage.page_kind == "overview",
+                        WikiPage.status != "deleted",
+                    )
+                    .order_by(WikiPage.created_at.asc())
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if ov is not None:
+            return ov
+        project = (
+            await self._session.execute(select(Project).where(Project.id == project_id))
+        ).scalar_one_or_none()
+        if project is None:
+            return None
+        return (
+            await self._session.execute(
+                select(WikiPage).where(
+                    WikiPage.project_id == project_id,
+                    WikiPage.title == project.title,
+                    WikiPage.status != "deleted",
+                )
+            )
+        ).scalar_one_or_none()
 
     async def _get_page(self, *, project_id: UUID, page_id: UUID) -> WikiPage | None:
         return (
