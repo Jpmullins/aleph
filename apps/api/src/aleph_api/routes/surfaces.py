@@ -300,6 +300,7 @@ async def _briefs_messages(session: Any, project_id: UUID) -> list[dict[str, Any
     """
     from aleph_connectors.models import SynthesisProposal
     from aleph_reviewer.models import ReviewFinding
+    from aleph_wiki.models import PageMergeProposal, WikiPage
 
     rows = list(
         (
@@ -325,6 +326,47 @@ async def _briefs_messages(session: Any, project_id: UUID) -> list[dict[str, Any
                     severity="info",
                 ),
                 card_id=f"synth-{p.id}",
+            )
+        )
+    # Pending page-merge proposals (curator dedup) — human-gated ApprovalCards.
+    merges = list(
+        (
+            await session.execute(
+                select(PageMergeProposal).where(
+                    PageMergeProposal.project_id == project_id,
+                    PageMergeProposal.status == "pending",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for mp in merges:
+        titles = dict(
+            (
+                await session.execute(
+                    select(WikiPage.id, WikiPage.title).where(
+                        WikiPage.id.in_([mp.source_page_id, mp.target_page_id])
+                    )
+                )
+            ).all()
+        )
+        src = titles.get(mp.source_page_id, "source")
+        tgt = titles.get(mp.target_page_id, "target")
+        cards.append(
+            approval_card(
+                ApprovalCardProps(
+                    target_id=mp.id,
+                    target_kind="page_merge_proposal",
+                    title=f"Merge: “{src}” → “{tgt}”",
+                    summary=(
+                        f"The curator thinks “{src}” duplicates “{tgt}”. Approve to merge "
+                        f"(redirect links, rewrite references, retire the duplicate). "
+                        f"{mp.rationale}"
+                    )[:1000],
+                    severity="high",
+                ),
+                card_id=f"merge-{mp.id}",
             )
         )
     findings = list(

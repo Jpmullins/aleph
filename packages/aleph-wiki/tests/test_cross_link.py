@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from aleph_wiki.curator_service import inject_cross_links
+from aleph_wiki.curator_service import inject_cross_links, rewrite_wikilink_target
 
 
 def test_links_first_plain_occurrence() -> None:
@@ -57,3 +57,22 @@ def test_respects_max_targets() -> None:
     new, linked = inject_cross_links(body, ["Alpha", "Beta", "Gamma", "Delta"], max_targets=2)
     assert len(linked) == 2
     assert new.count("[[") == 2
+
+
+def test_rewrite_wikilink_target_plain() -> None:
+    new, n = rewrite_wikilink_target("See [[Old Page]] here.", "Old Page", "New Page")
+    assert n == 1
+    assert new == "See [[New Page]] here."
+
+
+def test_rewrite_wikilink_target_preserves_label() -> None:
+    new, n = rewrite_wikilink_target("See [[Old Page|the label]].", "Old Page", "New Page")
+    assert n == 1
+    assert new == "See [[New Page|the label]]."
+
+
+def test_rewrite_wikilink_target_no_partial_match() -> None:
+    # "[[Old Pages]]" must NOT be rewritten when old_title is "Old Page".
+    new, n = rewrite_wikilink_target("[[Old Pages]] and [[Old Page]]", "Old Page", "New Page")
+    assert n == 1
+    assert new == "[[Old Pages]] and [[New Page]]"

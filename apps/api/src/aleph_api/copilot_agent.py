@@ -303,6 +303,16 @@ async def wiki_curation_status(config: RunnableConfig) -> str:
                 )
             )
         ).scalar_one()
+        from aleph_wiki.models import PageMergeProposal
+
+        pending_merges = (
+            await session.execute(
+                select(func.count()).where(
+                    PageMergeProposal.project_id == project_id,
+                    PageMergeProposal.status == "pending",
+                )
+            )
+        ).scalar_one()
     counts: dict[str, int] = dict(status_rows)
     total = sum(counts.values())
     if total == 0:
@@ -313,6 +323,11 @@ async def wiki_curation_status(config: RunnableConfig) -> str:
         f"Unresolved (broken) wikilinks: {broken}"
         + (" — these can be fixed with the Repair-links action." if broken else "."),
     ]
+    if pending_merges:
+        parts.append(
+            f"Pending page-merge proposals awaiting approval: {pending_merges} "
+            "— review them on the Briefs tab (Approve to merge the duplicate, or Reject)."
+        )
     if draft_titles:
         parts.append("Drafts awaiting review:\n" + "\n".join(f"- [[{t}]]" for t in draft_titles))
     return "\n".join(parts)

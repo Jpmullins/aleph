@@ -121,6 +121,18 @@ def inject_cross_links(
     return new_body, linked
 
 
+def rewrite_wikilink_target(body: str, old_title: str, new_title: str) -> tuple[str, int]:
+    """Rewrite ``[[old_title]]`` / ``[[old_title|label]]`` to point at ``new_title``,
+    preserving any display label. Pure. Returns the new body and the count rewritten.
+    """
+    pat = re.compile(r"\[\[" + re.escape(old_title) + r"(\|[^\]]*)?\]\]")
+
+    def _sub(m: re.Match[str]) -> str:
+        return f"[[{new_title}{m.group(1) or ''}]]"
+
+    return pat.subn(_sub, body)
+
+
 _OVERVIEW_SYS = (
     "You maintain the overview/index page of a research wiki. You are given the "
     "current overview markdown and a newly-added topic page. Return an updated "
@@ -526,6 +538,58 @@ class CuratorService:
             if source is None or target is None:
                 return 0
 
+            # Rewrite [[source]] -> [[target]] in the prose of inbound pages, so
+            # the merge is reflected in body text — not only via the alias
+            # redirect. Bounded to pages that actually link the source.
+            inbound_ids = [
+                pid
+                for (pid,) in (
+                    await self._session.execute(
+                        select(WikiLink.src_page_id)
+                        .where(
+                            WikiLink.project_id == proposal.project_id,
+                            WikiLink.dst_page_id == source.id,
+                        )
+                        .distinct()
+                    )
+                ).all()
+                if pid != source.id
+            ]
+            bodies_rewritten = 0
+            wiki_svc = WikiService(self._session)
+            for src_pid in inbound_ids:
+                page = await self._get_page(project_id=proposal.project_id, page_id=src_pid)
+                if page is None or page.status == "deleted":
+                    continue
+                rev = await self._current_revision(page)
+                if rev is None:
+                    continue
+                new_body, n = rewrite_wikilink_target(rev.body_md, source.title, target.title)
+                if n == 0:
+                    continue
+                links = await self._resolve_body_links(
+                    project_id=proposal.project_id, body_md=new_body
+                )
+                await wiki_svc.commit_revision(
+                    principal=principal,
+                    ledger=ledger,
+                    project_id=proposal.project_id,
+                    page_id=page.id,
+                    title=page.title,
+                    slug=page.slug,
+                    page_kind=page.page_kind,
+                    body_md=new_body,
+                    summary=(rev.summary or "")[:2048],
+                    claims=[],
+                    wikilinks=links,
+                    commit_message=f"Merge: redirect [[{source.title}]] -> [[{target.title}]]",
+                    respect_hand_edits=True,
+                    origin="curator",
+                )
+                bodies_rewritten += 1
+
+            # Redirect any remaining structural links (e.g. links with no body
+            # markup, or pages skipped above) source -> target.
             res = await self._session.execute(
                 update(WikiLink)
                 .where(
@@ -543,6 +607,7 @@ class CuratorService:
                 canonical_name=target.title,
                 canonical_page_id=target.id,
                 created_by=principal.user_id,
+                actor_kind=principal.actor_kind,
             )
 
             source.status = "deleted"
@@ -560,11 +625,12 @@ class CuratorService:
                     "target_page_id": str(target.id),
                     "proposal_id": str(proposal.id),
                     "links_redirected": redirected,
+                    "bodies_rewritten": bodies_rewritten,
                 },
                 trace_id=current_trace_id(),
             )
             await self._session.flush()
-            return redirected
+            return redirected + bodies_rewritten
 
     async def _resolve_body_links(self, *, project_id: UUID, body_md: str) -> list[WikiLinkDraft]:
         counts: dict[str, int] = {}

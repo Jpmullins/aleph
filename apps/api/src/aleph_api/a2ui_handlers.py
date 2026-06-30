@@ -28,9 +28,10 @@ from aleph_core.time import utcnow
 from aleph_notes.note_service import update_section as update_note_section
 from aleph_observability.tracing import current_trace_id
 from aleph_reviewer.models import ApprovalRequest, ReviewFinding
+from aleph_wiki.curator_service import CuratorService
 from aleph_wiki.feedback_service import write_feedback
 from aleph_wiki.handedit_service import clear_section, mark_section
-from aleph_wiki.models import WikiPage
+from aleph_wiki.models import PageMergeProposal, WikiPage
 
 # Agent actions an approval may execute on approve. The approve handler
 # dispatches via this fixed map (route + how to shape the request body), never
@@ -125,6 +126,43 @@ async def _approve(
         page = await session.get(WikiPage, p.page_id)
         if page is not None:
             page.status = "approved"
+        await session.flush()
+        return {"target": str(target_id), "new_status": "approved"}
+    if target_kind == "page_merge_proposal":
+        mp = (
+            await session.execute(
+                select(PageMergeProposal).where(
+                    PageMergeProposal.id == target_id,
+                    PageMergeProposal.project_id == project_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if mp is None:
+            msg = f"merge proposal {target_id} not found"
+            raise NotFound(msg)
+        if mp.status != "pending":
+            msg = f"merge proposal already {mp.status}"
+            raise ValidationFailed(msg)
+        decision = ApprovalDecision(
+            id=uuid7(),
+            project_id=project_id,
+            target_kind="page_merge_proposal",
+            target_id=target_id,
+            decision="approved",
+            reason=None,
+            decided_by=principal.user_id,
+            decided_at=utcnow(),
+            created_by=principal.user_id,
+            access_scope="project",
+        )
+        session.add(decision)
+        # apply_merge redirects links, rewrites inbound bodies, aliases the
+        # source, soft-deletes it, and appends its own wiki.page.merge event.
+        await CuratorService(session, ledger=ledger).apply_merge(
+            proposal=mp, principal=principal, ledger=ledger
+        )
+        mp.status = "approved"
+        mp.approval_decision_id = decision.id
         await session.flush()
         return {"target": str(target_id), "new_status": "approved"}
     if target_kind == "agent_action":
@@ -279,6 +317,50 @@ async def _reject(
             rejected_revision_id=p.revision_id,
             reason=reason,
             rejected_by=principal.user_id,
+            ledger=ledger,
+            actor_kind=principal.actor_kind,
+        )
+        return {"target": str(target_id), "new_status": "rejected"}
+    if target_kind == "page_merge_proposal":
+        mp = (
+            await session.execute(
+                select(PageMergeProposal).where(
+                    PageMergeProposal.id == target_id,
+                    PageMergeProposal.project_id == project_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if mp is None:
+            msg = f"merge proposal {target_id} not found"
+            raise NotFound(msg)
+        if mp.status != "pending":
+            msg = f"merge proposal already {mp.status}"
+            raise ValidationFailed(msg)
+        decision = ApprovalDecision(
+            id=uuid7(),
+            project_id=project_id,
+            target_kind="page_merge_proposal",
+            target_id=target_id,
+            decision="rejected",
+            reason=reason,
+            decided_by=principal.user_id,
+            decided_at=utcnow(),
+            created_by=principal.user_id,
+            access_scope="project",
+        )
+        session.add(decision)
+        mp.status = "rejected"
+        mp.approval_decision_id = decision.id
+        await session.flush()
+        await ledger.append(
+            project_id=project_id,
+            actor_id=principal.user_id,
+            actor_kind=principal.actor_kind,
+            action_kind="wiki.page.merge.reject",
+            target_id=target_id,
+            target_kind="page_merge_proposal",
+            payload={"proposal_id": str(target_id), "reason": reason},
+            trace_id=current_trace_id(),
         )
         return {"target": str(target_id), "new_status": "rejected"}
     if target_kind == "agent_action":
