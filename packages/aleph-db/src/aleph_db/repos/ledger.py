@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -134,3 +136,63 @@ class LedgerWriter:
         self._session.add(head)
         await self._session.flush()
         return head
+
+
+@dataclass(frozen=True)
+class Divergence:
+    event_id: UUID
+    expected: str
+    actual: str
+
+
+@dataclass(frozen=True)
+class ChainVerification:
+    ok: bool
+    count: int
+    first_divergence: Divergence | None
+
+
+def verify_event_chain(
+    events: Sequence[Any],
+    *,
+    genesis_hash: str = "0" * 64,
+) -> ChainVerification:
+    """Recompute the hash chain over `events` (in chain order) and report the
+    first event whose stored `chain_hash` does not match the recomputation.
+
+    Each event must expose: id, action_kind, target_id, payload_jsonb,
+    timestamp, chain_hash.
+    """
+    prev = genesis_hash
+    for e in events:
+        expected = _compute_chain_hash(
+            prev_hash=prev,
+            action_kind=e.action_kind,
+            target_id=e.target_id,
+            payload=e.payload_jsonb,
+            timestamp_iso=e.timestamp.isoformat(),
+        )
+        if expected != e.chain_hash:
+            return ChainVerification(
+                ok=False,
+                count=len(events),
+                first_divergence=Divergence(event_id=e.id, expected=expected, actual=e.chain_hash),
+            )
+        prev = e.chain_hash
+    return ChainVerification(ok=True, count=len(events), first_divergence=None)
+
+
+async def verify_project_chain(session: AsyncSession, project_id: UUID) -> ChainVerification:
+    """Load a project's events in chain order and verify the hash chain."""
+    rows = list(
+        (
+            await session.execute(
+                select(ActionLedgerEvent)
+                .where(ActionLedgerEvent.project_id == project_id)
+                .order_by(ActionLedgerEvent.timestamp.asc(), ActionLedgerEvent.id.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return verify_event_chain(rows)
