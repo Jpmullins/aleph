@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from aleph_db.repos.ledger import _compute_chain_hash, verify_event_chain
@@ -23,7 +23,7 @@ def _build_chain(n: int) -> list[_Link]:
     links: list[_Link] = []
     prev = "0" * 64
     for i in range(n):
-        ts = datetime(2026, 6, 30, 12, 0, i, tzinfo=timezone.utc)
+        ts = datetime(2026, 6, 30, 12, 0, i, tzinfo=UTC)
         tid = uuid4()
         payload = {"i": i}
         ch = _compute_chain_hash(

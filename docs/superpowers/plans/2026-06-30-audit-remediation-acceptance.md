@@ -59,13 +59,17 @@ pnpm -C tests/playwright test            # → all specs green incl. the phase's
 
 ## 3. Per-phase acceptance criteria + validation
 
-### Phase 1 — Ledger holes + chain verify  `[F08, F09]`
-- [ ] Every wiki mutation writes an `ActionLedgerEvent` in-txn: `wiki.alias.upsert`,
+### Phase 1 — Ledger holes + chain verify  `[F08, F09]` ✅ DONE (2026-06-30)
+- [x] Every wiki mutation writes an `ActionLedgerEvent` in-txn: `wiki.alias.upsert`,
   `wiki.links.repair` (when ≥1 repaired), `wiki.handedit.mark`, `wiki.handedit.clear`,
-  `wiki.feedback.write`.
-- [ ] `GET /v1/projects/{id}/ledger/verify` → `{ok:true}` on a clean chain; pinpoints first
-  divergence on a tampered (hand-built) chain.
-- [ ] Unit: `test_chain_verify.py`. Integration: `test_{alias,handedit,feedback}_ledger.py`.
+  `wiki.feedback.write`. — integration tests assert each kind appears.
+- [x] `GET /v1/projects/{id}/ledger/verify` → `{ok:true}` on a clean chain; pinpoints first
+  divergence on a tampered (hand-built) chain. — `verify_event_chain`/`verify_project_chain`.
+- [x] Unit: `test_chain_verify.py` (3). Integration: `test_ledger_verify.py`,
+  `test_alias_ledger.py`, `test_handedit_feedback_ledger.py` (all green); `test_curator_repair.py`
+  (4) stays green.
+- Evidence: `ruff check .` clean; `ruff format --check .` 0 reformat; `pytest -m "not integration"`
+  152 passed; pyright (touched) 0 errors; `alembic check` no new ops (no migration).
 
 ### Phase 2 — Curator chokepoint + `cross_link` + robustness  `[F03, F04, F22, F24]`
 - [ ] Curation enqueued from **every** authoring path (bootstrap, notes-promote, synthesis,

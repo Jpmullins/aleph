@@ -1216,3 +1216,40 @@ admission control + hard caps, not feature removal.
   over-admission window.
 - If a poll job crashes hard (not timeout), its slot frees only via the
   45-min TTL prune.
+
+## Audit remediation — Phase 1: ledger holes + chain verify (2026-06-30)
+
+Branch `audit-remediation`. Closes audit findings F08 (rule-#4 ledger holes) and
+F09 (no runtime chain verification). See
+`docs/superpowers/plans/2026-06-30-audit-remediation-acceptance.md`.
+
+### What shipped
+- **Runtime chain verification.** `verify_event_chain` (pure, recomputes the
+  sha256 chain over a sequence of events — unit-tested for intact/tampered/empty)
+  + `verify_project_chain` (loads a project's events in chain order) in
+  `aleph_db.repos.ledger`; exposed at `GET /v1/projects/{id}/ledger/verify`
+  (`{ok, count, first_divergence_event_id}`). Tamper detection is unit-tested on
+  hand-built events (the Postgres immutability triggers block real-row tampering).
+- **Closed the four ledger holes.** `AliasService.upsert` → `wiki.alias.upsert`;
+  `AliasService.repair_broken_links` → `wiki.links.repair` (only when ≥1 repaired
+  — the worst prior blind spot, the curator's main action, was rewriting link
+  targets unaudited); `handedit_service.mark_section`/`clear_section` →
+  `wiki.handedit.mark`/`wiki.handedit.clear`; `feedback_service.write_feedback`
+  → `wiki.feedback.write`. `AliasService` gained an optional `LedgerWriter`
+  (read-only `resolve` callers unaffected); the function-style services gained
+  `ledger`/`actor_kind` params. Threaded through `routes/{aliases,handedits,
+  feedback}`, `CuratorService` (+ `curate_page_job` passes the project owner as
+  actor), and the ingest workflow's alias-register + repair sites.
+- Hand-edits now emit a ledger event, which also closes the prior
+  "hand-edits write no ledger event → not pushed live" honest-limit.
+
+### Tests
+- Unit: `packages/aleph-db/tests/test_chain_verify.py` (3).
+- Integration: `tests/e2e/test_ledger_verify.py`, `test_alias_ledger.py`,
+  `test_handedit_feedback_ledger.py`. Existing `test_curator_repair.py` (4) stays
+  green (the new `CuratorService(session)` ledger/actor params default to None).
+
+### Gates (evidence)
+- `ruff check .` → All checks passed. `ruff format --check .` → 0 reformat.
+- `pytest -m "not integration"` → 152 passed. Pyright (touched files) → 0 errors.
+- `alembic check` → No new upgrade operations (no migration this phase).
