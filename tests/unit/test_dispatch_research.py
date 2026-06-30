@@ -118,15 +118,20 @@ async def test_dispatch_core_dispatches_and_enqueues(monkeypatch: pytest.MonkeyP
     assert pool.calls and pool.calls[0][0] == "aiq_synthesis_poll_job"
 
 
-async def test_dispatch_core_aiq_down_no_enqueue(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_dispatch_core_aiq_down_requeues_for_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AIQ unreachable at dispatch must NOT strand the run — it defers to the
+    submit job (queued, retried when AIQ recovers), like the throttle-full path."""
     import aleph_aiq.dispatch as d
 
     monkeypatch.setattr(d, "AIQClient", _FakeAIQDown)
     pool = _FakePool()
     result = await _run_dispatch_core(d, pool, _settings(), uuid4())
-    assert result.dispatched is False
+    # Same semantics as the throttle-full path: in flight (dispatched) but queued
+    # via the deferred submit job — nothing reached aiq-server, NOT stranded.
+    assert result.dispatched is True
+    assert result.queued is True
     assert result.aiq_job_id is None
-    assert pool.calls == []
+    assert pool.calls and pool.calls[0][0] == "aiq_submit_job"
 
 
 async def test_dispatch_core_holds_a_throttle_slot(monkeypatch: pytest.MonkeyPatch) -> None:
