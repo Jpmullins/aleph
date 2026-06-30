@@ -6,7 +6,7 @@
 # this default for real research jobs; this file just lets the container
 # boot.
 #
-# Telemetry is intentionally omitted from this boot config — AIQ 2.0.0
+# Telemetry is intentionally omitted from this boot config — AIQ 2.1.0
 # rejects unknown discriminator values, and Aleph already receives OTEL
 # spans from aleph-api/aleph-workers via the otel-collector. AIQ's own
 # traces can be wired later via the `nat.plugins.opentelemetry/otelcollector`

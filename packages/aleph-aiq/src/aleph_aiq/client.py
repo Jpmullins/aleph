@@ -1,6 +1,6 @@
 """AIQ REST client.
 
-Wraps the NVIDIA AI-Q Blueprint (`aiq-agent:2.0.0`) HTTP API as deployed by
+Wraps the NVIDIA AI-Q Blueprint (`aiq-agent:2.1.0`) HTTP API as deployed by
 the `aiq-server` compose service. The endpoints this client depends on (from
 the image's OpenAPI):
 
