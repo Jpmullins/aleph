@@ -311,7 +311,6 @@ export const ApprovalCardApi = {
     severity: CommonSchemas.DynamicString.optional(),
     // evidence_refs is a whole-object literal — passthrough.
     evidence_refs: z3.array(z3.any()).optional(),
-    diff_card_id: CommonSchemas.DynamicString.optional(),
     approve_action: CommonSchemas.Action.optional(),
     reject_action: CommonSchemas.Action.optional(),
     view_diff_action: CommonSchemas.Action.optional(),

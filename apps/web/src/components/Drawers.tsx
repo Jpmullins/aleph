@@ -81,8 +81,6 @@ function SettingsBody({ projectId }: { projectId: string }) {
           <>
             <Row label="Cap (USD)" value={`$${Number(cost.data.cap_usd).toFixed(2)}`} />
             <Row label="Spent" value={`$${Number(cost.data.spent_usd).toFixed(4)}`} />
-            <Row label="Soft cap %" value={`${Number(cost.data.soft_pct).toFixed(0)}%`} />
-            <Row label="Hard cap %" value={`${Number(cost.data.hard_pct).toFixed(0)}%`} />
           </>
         ) : (
           <p className="text-slate-400">Loading cost…</p>

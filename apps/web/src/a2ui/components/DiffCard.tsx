@@ -1,6 +1,6 @@
 import { CardShell, type RendererProps } from "./_shared";
 
-export function DiffCard({ component, onAction }: RendererProps) {
+export function DiffCard({ component }: RendererProps) {
   const p = component.props as {
     from_revision_id: string;
     to_revision_id: string;
@@ -15,18 +15,9 @@ export function DiffCard({ component, onAction }: RendererProps) {
         </span>
       }
     >
-      <button
-        type="button"
-        onClick={() =>
-          onAction("open", {
-            target_id: p.page_id,
-            target_kind: "wiki_revision_diff",
-          })
-        }
-        className="text-xs text-slate-500 hover:text-slate-900"
-      >
-        Open side-by-side diff →
-      </button>
+      <p className="text-xs text-slate-500">
+        Revisions {p.from_revision_id.slice(0, 8)} → {p.to_revision_id.slice(0, 8)}.
+      </p>
     </CardShell>
   );
 }

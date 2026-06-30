@@ -39,6 +39,8 @@ export const ACTION_NAMES = [
   "clarify",
   "mark_handedit",
   "clear_handedit",
+  "unpin",
+  "dismiss",
 ] as const;
 
 export type ActionName = (typeof ACTION_NAMES)[number];

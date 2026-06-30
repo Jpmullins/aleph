@@ -10,7 +10,6 @@ export function ApprovalCard({ component, onAction }: RendererProps) {
     summary: string;
     severity?: "info" | "low" | "medium" | "high";
     evidence_refs?: Array<{ kind: string; id: string; label?: string }>;
-    diff_card_id?: string | null;
   };
   const [reason, setReason] = useState("");
   const [showReject, setShowReject] = useState(false);
@@ -61,17 +60,6 @@ export function ApprovalCard({ component, onAction }: RendererProps) {
         >
           Open →
         </button>
-        {p.diff_card_id && (
-          <button
-            type="button"
-            onClick={() =>
-              onAction("open", { target_id: p.diff_card_id!, target_kind: "diff_card" })
-            }
-            className="text-xs text-slate-500 hover:text-slate-900"
-          >
-            View diff →
-          </button>
-        )}
       </div>
       {showReject && (
         <div className="mt-3 rounded border border-slate-200 bg-slate-50 p-2">
