@@ -40,7 +40,6 @@ from aleph_a2ui.surface_streamer import (
 from aleph_api.deps import PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep, assert_stream_access
 from aleph_core.errors import NotFound, ValidationFailed
-from aleph_notes.models import Note, NoteSection
 from aleph_wiki.models import WikiClaim, WikiPage
 
 if TYPE_CHECKING:
@@ -255,43 +254,15 @@ async def _wiki_messages(
 
 
 async def _notes_messages(session: Any, project_id: UUID) -> list[dict[str, Any]]:
-    """v0.9 message list for the Notes tab — a single `NotesSurface`.
+    """v0.9 message list for the Notes tab — a single self-fetching `NotesSurface`.
 
-    The surface view fetches its own note list + editor; we forward up to 10
-    notes' sections as `NotebookCellCard` children for any agent/embedded use.
+    The surface view fetches its own note list + editor, so the surface stream
+    only needs to emit the structural component. (We previously forwarded each
+    note's sections as `NotebookCellCard` children, but `NotesSurface` ignores
+    surface children — that was an N+1 query per load building a discarded
+    payload, so it's been removed.)
     """
-    rows = list(
-        (
-            await session.execute(
-                select(Note).where(Note.project_id == project_id).order_by(Note.created_at.desc())
-            )
-        )
-        .scalars()
-        .all()
-    )
-    cards: list[dict[str, Any]] = []
-    for n in rows[:10]:
-        sec_stmt = (
-            select(NoteSection)
-            .where(NoteSection.note_id == n.id)
-            .order_by(NoteSection.ordinal.asc())
-            .limit(5)
-        )
-        sec_rows = list((await session.execute(sec_stmt)).scalars().all())
-        for s in sec_rows:
-            cards.append(
-                {
-                    "type": "NotebookCellCard",
-                    "id": f"section-{s.id}",
-                    "props": {
-                        "section_id": str(s.id),
-                        "body_md": s.body_md,
-                        "ordinal": s.ordinal,
-                        "edit_action": "edit_note",
-                    },
-                }
-            )
-    return notes_surface_v09(children=cards)
+    return notes_surface_v09(children=[])
 
 
 async def _briefs_messages(session: Any, project_id: UUID) -> list[dict[str, Any]]:

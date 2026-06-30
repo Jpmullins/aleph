@@ -12,9 +12,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+import structlog
 from sqlalchemy import func, select
 
 from aleph_rks.models import DocumentChunk, RetrievalIndexRecord
+
+_log = structlog.get_logger(__name__)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -170,6 +173,21 @@ async def reembed_for_project(
             purpose=purpose,
         )
         if len(result.embeddings) != len(chunks):
+            continue
+        # Dimension guard: the `document_chunks.embedding` column is a fixed
+        # pgvector size (1024 for the default titan-embed-v2). If the new
+        # embedder emits a different dimension, writing it would fail the whole
+        # flush — skip this source and log loudly rather than abort the job.
+        existing_dim = len(chunks[0].embedding)
+        new_dim = len(result.embeddings[0]) if result.embeddings else existing_dim
+        if new_dim != existing_dim:
+            _log.warning(
+                "rks.reembed.dim_mismatch_skipped",
+                source_id=str(rec.source_id),
+                existing_dim=existing_dim,
+                new_dim=new_dim,
+                model=result.model,
+            )
             continue
         for chunk, emb in zip(chunks, result.embeddings, strict=True):
             chunk.embedding = emb

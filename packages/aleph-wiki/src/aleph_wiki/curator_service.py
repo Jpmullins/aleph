@@ -635,6 +635,48 @@ class CuratorService:
                 actor_kind=principal.actor_kind,
             )
 
+            # Fold the source's own claims/citations into the target before
+            # retiring it, so a "merge" preserves the source's provenance
+            # (claims + citations) rather than just redirecting links and
+            # dropping the page's content ("provenance is structural"). We attach
+            # the source's unique claims directly to the target's CURRENT
+            # revision (a body-unchanged commit would no-op and never persist
+            # them); a later target recommit carries them forward via
+            # `_carry_claims`. The `wiki.page.merge` ledger event records the count.
+            source_claims = await self._carry_claims(page=source)
+            claims_folded = 0
+            if source_claims and target.current_revision_id is not None:
+                seen = {c.text for c in await self._carry_claims(page=target)}
+                for c in source_claims:
+                    if c.text in seen:
+                        continue
+                    claim = WikiClaim(
+                        id=uuid7(),
+                        project_id=proposal.project_id,
+                        page_id=target.id,
+                        revision_id=target.current_revision_id,
+                        section_anchor=c.section_anchor,
+                        text=c.text[:2048],
+                        confidence=c.confidence,
+                        status="active",
+                        created_by=principal.user_id,
+                        access_scope="project",
+                    )
+                    self._session.add(claim)
+                    await self._session.flush()
+                    for cite in c.citations:
+                        self._session.add(
+                            Citation(
+                                id=uuid7(),
+                                project_id=proposal.project_id,
+                                claim_id=claim.id,
+                                chunk_ids=[str(x) for x in cite.chunk_ids],
+                                source_page_id=cite.source_page_id,
+                                citation_marker=cite.citation_marker[:16],
+                            )
+                        )
+                    claims_folded += 1
+
             source.status = "deleted"
             await self._session.execute(delete(WikiIndex).where(WikiIndex.page_id == source.id))
 
@@ -651,6 +693,7 @@ class CuratorService:
                     "proposal_id": str(proposal.id),
                     "links_redirected": redirected,
                     "bodies_rewritten": bodies_rewritten,
+                    "claims_folded": claims_folded,
                 },
                 trace_id=current_trace_id(),
             )

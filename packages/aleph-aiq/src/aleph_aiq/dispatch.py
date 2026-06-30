@@ -93,7 +93,21 @@ async def _dispatch_core(
     aiq_base = getattr(settings, "aiq_base_url", None) or "http://aiq-server:8000"
     client = AIQClient(base_url=aiq_base, service_token=service_token)
     if not await client.health():
-        return StartedResearch(agent_run_id, correlation_id, None, False)
+        # AIQ unreachable at dispatch — do NOT strand the AgentRun in `pending`
+        # with no retry/event. Defer the submission (the deferred submit job
+        # retries when AIQ is back), exactly like the throttle-full path below,
+        # so the run is QUEUED, not silently dropped.
+        await redis_pool.enqueue_job(
+            "aiq_submit_job",
+            str(agent_run_id),
+            str(project_id),
+            topic,
+            depth,
+            enabled_connectors,
+            poll_agent_token,
+            _defer_by=SUBMIT_DEFER_S,
+        )
+        return StartedResearch(agent_run_id, correlation_id, None, True, queued=True)
     throttle = AIQThrottle(
         redis_pool, max_concurrent=int(getattr(settings, "aiq_max_concurrent_jobs", 3))
     )
