@@ -224,11 +224,13 @@ def _project_id_from_config(config: RunnableConfig | None) -> UUID | None:
 
 @tool
 async def search_wiki(query: str, config: RunnableConfig, top_k: int = 6) -> str:
-    """Search the current project's compiled wiki for pages relevant to a query.
+    """Quickly SCAN the project's wiki for which pages exist on a topic.
 
-    Returns the top matching wiki pages (title, kind, summary, relevance
-    score). Call this before answering any question about the project's
-    subject matter.
+    Returns matching page titles + one-line summaries — a scan to help you
+    decide what to retrieve, NOT enough to answer from. To actually ANSWER a
+    substantive question, delegate to the `retriever` subagent (it reads the
+    page bodies and returns a cited answer); do not compose a substantive answer
+    from these summaries alone.
     """
     session_maker = _runtime.get("session_maker")
     project_id = _project_id_from_config(config)
@@ -259,7 +261,12 @@ async def search_wiki(query: str, config: RunnableConfig, top_k: int = 6) -> str
         if fallback
         else "Relevant wiki pages:"
     )
-    return header + "\n" + "\n".join(lines)
+    footer = (
+        "\n\n(Scan only — these are titles + summaries. To answer a substantive "
+        "question, delegate to the `retriever` subagent for a grounded, cited "
+        "answer rather than replying from these summaries.)"
+    )
+    return header + "\n" + "\n".join(lines) + footer
 
 
 @tool

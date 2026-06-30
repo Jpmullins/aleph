@@ -153,6 +153,7 @@ class WikiFirstRetrievalRouter:
                 # any title/summary, so FTS returns nothing even when the wiki
                 # covers the topic. Give the page-selector the project's actual
                 # pages to choose from rather than reporting no coverage.
+                fts_empty = not candidates
                 if not candidates:
                     candidates = await index.list_pages(
                         project_id=project_id, top_k=top_k_pages * 3
@@ -168,6 +169,7 @@ class WikiFirstRetrievalRouter:
                 prior_messages=prior_messages,
                 candidates=candidates,
                 top_k=top_k_pages,
+                from_fallback=fts_empty,
             )
 
             # Hydrate body_md from the current revision for each selected page.
@@ -270,6 +272,7 @@ class WikiFirstRetrievalRouter:
         prior_messages: list[AssistantMessage],
         candidates: list[PageSelectionResult],
         top_k: int,
+        from_fallback: bool = False,
     ) -> _SelectionOutcome:
         if not candidates:
             return _SelectionOutcome(pages=[], reason="no candidates")
@@ -341,10 +344,15 @@ class WikiFirstRetrievalRouter:
                     score=cand.score,
                 )
             )
-        # Fallback: if the LLM returned nothing usable, fall back to top FTS hits
-        # tagged primary. We deliberately don't hide this — coverage_judgment
-        # will still reflect reality downstream.
-        if not out:
+        # Fallback when the LLM returned nothing usable.
+        # - If the candidates came from the empty-FTS fallback (`from_fallback`),
+        #   they are arbitrary most-recent pages, NOT topical matches — do NOT
+        #   confidently ground on them. Return no pages so the composer reports
+        #   the wiki lacks coverage (audit F31).
+        # - Otherwise the candidates are real FTS hits; surface the top few as
+        #   "supporting" (never "primary", so they aren't 1-hop-expanded or
+        #   treated as authoritative grounding).
+        if not out and not from_fallback:
             for c in candidates[: min(top_k, 3)]:
                 out.append(
                     SelectedPage(
@@ -353,10 +361,12 @@ class WikiFirstRetrievalRouter:
                         slug=c.slug,
                         summary=c.summary,
                         body_md="",
-                        relevance_label="primary",
+                        relevance_label="supporting",
                         score=c.score,
                     )
                 )
+        if not out and from_fallback:
+            reason = "no confident match (FTS empty; not grounding on unrelated recent pages)"
         return _SelectionOutcome(pages=out, reason=str(reason))
 
     async def _expand(
