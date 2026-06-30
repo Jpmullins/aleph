@@ -248,28 +248,25 @@ async def test_agent_events_stream_is_project_scoped(http_client, auth_bypass, a
         await reader.aclose()
 
 
-async def test_surfaces_notes_stream_pushes_update(http_client, auth_bypass, asgi_app):
+async def test_surfaces_stream_emits_initial_surface_then_idles(http_client, auth_bypass, asgi_app):
+    """The surface delta-stream emits the full v0.9 surface on connect, then idles.
+
+    All five right-panel tabs are self-fetching React views (they pull their own
+    data via react-query), so the stream binds no data into the surface model and
+    emits no per-mutation deltas — its job is the initial surface + a push-driven
+    recompute that self-heals a dropped listener. (The push/wake mechanism itself
+    is covered by the agent-events and changes streams below.)
+    """
     from aleph_api.routes.surfaces import stream_surface
 
-    # Real flow: create a note + section → the ledger event fires the push → the
-    # surface stream wakes, recomputes, and the structural change (a new
-    # NotebookCellCard child) is emitted as a v0.9 updateComponents.
     pid, principal = await _scoped_project(http_client, asgi_app)
 
     resp = await stream_surface(pid, "notes", _fake_request(asgi_app), principal, page_id=None)
     reader = _StreamReader(resp)
     try:
-        await reader.settle()  # consume the initial full surface; gen parks on wait
-        r = await http_client.post(f"/v1/projects/{pid}/notes", json={"title": "Stream note"})
-        assert r.status_code == 201, r.text
-        note_id = r.json()["id"]
-        r = await http_client.post(
-            f"/v1/projects/{pid}/notes/{note_id}/sections", json={"body_md": "live cell"}
-        )
-        assert r.status_code == 201, r.text
-        delta = await reader.next_json(deadline=5.0)
-        assert delta.get("version") == "v0.9"
-        assert "updateComponents" in delta or "updateDataModel" in delta
+        first = await reader.next_json(deadline=5.0)
+        assert first.get("version") == "v0.9"
+        assert "createSurface" in first or "updateComponents" in first
     finally:
         await reader.aclose()
 
