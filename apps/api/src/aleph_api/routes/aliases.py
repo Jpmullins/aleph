@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from aleph_api.deps import PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
+from aleph_db.repos.ledger import LedgerWriter
 from aleph_security.roles import ProjectRole, require_at_least
 from aleph_wiki.alias_service import AliasService
 from aleph_wiki.models import Alias
@@ -62,7 +63,7 @@ async def add_alias(
     principal: PrincipalDep,
 ) -> AliasOut:
     require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
-    svc = AliasService(session)
+    svc = AliasService(session, LedgerWriter(session))
     a = await svc.upsert(
         project_id=project_id,
         surface_form=body.surface_form,
@@ -70,6 +71,7 @@ async def add_alias(
         canonical_page_id=body.canonical_page_id,
         confidence=body.confidence,
         created_by=principal.user_id,
+        actor_kind=principal.actor_kind,
     )
     return AliasOut.model_validate(a)
 
@@ -81,6 +83,10 @@ async def repair_links(
     principal: PrincipalDep,
 ) -> dict[str, int]:
     require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
-    svc = AliasService(session)
-    n = await svc.repair_broken_links(project_id=project_id)
+    svc = AliasService(session, LedgerWriter(session))
+    n = await svc.repair_broken_links(
+        project_id=project_id,
+        actor_id=principal.user_id,
+        actor_kind=principal.actor_kind,
+    )
     return {"repaired": n}

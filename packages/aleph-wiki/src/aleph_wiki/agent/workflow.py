@@ -39,6 +39,7 @@ from aleph_core.ids import uuid7
 from aleph_core.schemas.model_profile import Capability
 from aleph_core.time import utcnow
 from aleph_db.repos.agent_events import emit_phase_completed, emit_phase_started, with_phase
+from aleph_db.repos.ledger import LedgerWriter
 from aleph_models.client import ChatMessage
 from aleph_observability.tracing import start_span
 from aleph_wiki.alias_service import AliasService
@@ -308,7 +309,7 @@ async def _node_alias_extraction(state: WikiIngestState) -> dict:
         # Persist via AliasService.
         ctx = _ctx()
         async with ctx.session_maker() as session:
-            svc = AliasService(session)
+            svc = AliasService(session, LedgerWriter(session))
             for a in aliases:
                 if a.confidence < 0.5:
                     continue
@@ -318,6 +319,7 @@ async def _node_alias_extraction(state: WikiIngestState) -> dict:
                     canonical_name=a.canonical_name,
                     confidence=a.confidence,
                     created_by=ctx.principal.user_id,
+                    actor_kind=ctx.principal.actor_kind,
                 )
             # Also record surface_form ↔ canonical_name pairs from concept lists.
             for c in concepts:
@@ -329,6 +331,7 @@ async def _node_alias_extraction(state: WikiIngestState) -> dict:
                             canonical_name=c.canonical_name,
                             confidence=c.confidence,
                             created_by=ctx.principal.user_id,
+                            actor_kind=ctx.principal.actor_kind,
                         )
             await session.commit()
         return {"aliases": aliases}
@@ -582,8 +585,6 @@ async def _node_commit_revision(state: WikiIngestState) -> dict:
         committed: list[UUID] = []
 
         async with ctx.session_maker() as session:
-            from aleph_db.repos.ledger import LedgerWriter
-
             ledger = LedgerWriter(session)
             svc = WikiService(session)
 
@@ -656,7 +657,11 @@ async def _node_commit_revision(state: WikiIngestState) -> dict:
                 committed.append(r.revision_id)
 
             # Repair any broken links now that the new pages exist.
-            await AliasService(session).repair_broken_links(project_id=state["project_id"])
+            await AliasService(session, LedgerWriter(session)).repair_broken_links(
+                project_id=state["project_id"],
+                actor_id=ctx.principal.user_id,
+                actor_kind=ctx.principal.actor_kind,
+            )
 
             # Mark addressed rejection feedback.
             if sd.addressed_feedback_ids:

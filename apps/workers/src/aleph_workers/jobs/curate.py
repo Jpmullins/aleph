@@ -26,6 +26,7 @@ from aleph_core.time import utcnow
 from aleph_db.models.agent import AgentRun
 from aleph_db.models.model_profile import ModelProfile
 from aleph_db.models.project import Project
+from aleph_db.repos.ledger import LedgerWriter
 from aleph_observability.tracing import start_span
 from aleph_security.principal import Principal
 from aleph_wiki.curator_service import CuratorService
@@ -73,7 +74,9 @@ async def curate_page_job(ctx: dict[str, Any], project_id: str, page_id: str) ->
 
         # Stage 1: deterministic knit — always commits.
         async with maker() as session:
-            result = await CuratorService(session).curate(project_id=pid, page_id=page)
+            result = await CuratorService(
+                session, ledger=LedgerWriter(session), actor_id=owner
+            ).curate(project_id=pid, page_id=page)
             await session.commit()
 
         # Stage 2: LLM overview recuration — best-effort, isolated transaction.

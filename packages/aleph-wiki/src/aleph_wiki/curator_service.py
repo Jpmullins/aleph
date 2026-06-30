@@ -44,6 +44,10 @@ from aleph_wiki.alias_service import AliasService
 from aleph_wiki.models import PageMergeProposal, WikiIndex, WikiLink, WikiPage, WikiRevision
 from aleph_wiki.wiki_service import WikiLinkDraft, WikiService
 
+# Fallback actor for curator-originated ledger events when the job did not
+# supply one (should not happen in production — the worker passes the owner).
+_NIL_ACTOR = UUID(int=0)
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -108,9 +112,16 @@ class CuratorService:
     deterministic path stays cheap and side-effect-light.
     """
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        ledger: LedgerWriter | None = None,
+        actor_id: UUID | None = None,
+    ) -> None:
         self._session = session
-        self._aliases = AliasService(session)
+        self._ledger = ledger
+        self._actor_id = actor_id or _NIL_ACTOR
+        self._aliases = AliasService(session, ledger=ledger)
 
     async def curate(self, *, project_id: UUID, page_id: UUID) -> CurationResult:
         with start_span(
@@ -137,12 +148,15 @@ class CuratorService:
                 canonical_name=page.title,
                 canonical_page_id=page.id,
                 created_by=page.created_by,
+                actor_kind="agent",
             )
             return 1
 
     async def _repair_links(self, *, project_id: UUID) -> int:
         with start_span("wiki.curate.repair_links", **{"aleph.project_id": str(project_id)}):
-            return await self._aliases.repair_broken_links(project_id=project_id)
+            return await self._aliases.repair_broken_links(
+                project_id=project_id, actor_id=self._actor_id, actor_kind="agent"
+            )
 
     async def recurate_overview(
         self,
