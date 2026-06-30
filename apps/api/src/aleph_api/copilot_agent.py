@@ -999,7 +999,7 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
     persistence) while all other agent files stay ephemeral per-thread.
     """
     from copilotkit import CopilotKitMiddleware
-    from deepagents import SubAgent, create_deep_agent
+    from deepagents import create_deep_agent
     from deepagents.backends import (
         BackendProtocol,
         CompositeBackend,
