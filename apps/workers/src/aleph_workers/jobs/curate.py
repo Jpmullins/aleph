@@ -115,7 +115,9 @@ async def curate_page_job(ctx: dict[str, Any], project_id: str, page_id: str) ->
             # Stage 3: near-duplicate detection — proposes a (human-gated) merge.
             try:
                 async with maker() as session:
-                    merge_proposal_id = await CuratorService(session).dedup_detect(
+                    merge_proposal_id = await CuratorService(
+                        session, ledger=LedgerWriter(session), actor_id=owner
+                    ).dedup_detect(
                         project_id=pid,
                         page_id=page,
                         litellm=litellm,

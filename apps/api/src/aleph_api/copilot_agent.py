@@ -102,7 +102,7 @@ single cited assertion.
 Emit the card via your render_a2ui tool using the exact component name above. \
 Prefer the analyst's current context — the page or \
 hypothesis they are viewing, provided to you — when it is relevant. When work \
-lands in a specific tab (Briefs, Artifacts, Hypotheses), point the analyst \
+lands in a specific tab (Briefs, Library, Hypotheses), point the analyst \
 there.
 
 When the analyst asks how the wiki is doing, what needs review, or which links \

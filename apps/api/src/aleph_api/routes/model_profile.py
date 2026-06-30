@@ -69,16 +69,19 @@ async def update_project_profile(
     session: SessionDep,
     ledger: LedgerDep,
     principal: PrincipalDep,
+    request: Request,
 ) -> ModelProfileOut:
     require_at_least(principal, project_id, at_least=ProjectRole.OWNER)
     p = await profile_repo.get_project_profile(session, project_id)
     if p is None:
         msg = f"project {project_id} has no profile"
         raise NotFound(msg)
+    old_embed = _embed_model(p.bindings_jsonb)
     new_bindings = dict(p.bindings_jsonb)
     for cap, binding in body.bindings.items():
         new_bindings[cap.value] = ModelBindingIn.model_validate(binding).model_dump(mode="json")
     p.bindings_jsonb = new_bindings
+    embed_changed = _embed_model(new_bindings) != old_embed
     await session.flush()
     await ledger.append(
         project_id=project_id,
@@ -87,10 +90,26 @@ async def update_project_profile(
         action_kind="model_profile.update",
         target_id=p.id,
         target_kind="model_profile",
-        payload={"capabilities": sorted(body.bindings.keys()) if body.bindings else []},
+        payload={
+            "capabilities": sorted(body.bindings.keys()) if body.bindings else [],
+            "reembed_enqueued": embed_changed,
+        },
         trace_id=current_trace_id(),
     )
-    return _to_out(p)
+    result = _to_out(p)
+    await session.commit()
+    # If the embedding model changed via a per-capability edit, repair drift too
+    # (mirrors the named-profile switch route).
+    if embed_changed:
+        try:
+            pool = await create_pool(RedisSettings.from_dsn(request.app.state.settings.redis_url))
+            try:
+                await pool.enqueue_job("reembed_job", str(project_id))
+            finally:
+                await pool.aclose()
+        except Exception:  # reembed is eventual; a failed enqueue never blocks the edit
+            pass
+    return result
 
 
 @router.post("/projects/{project_id}/model-profile/switch", response_model=ModelProfileOut)

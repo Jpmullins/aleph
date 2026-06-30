@@ -524,7 +524,7 @@ async def _open(
     elif target_kind == "hypothesis":
         nav["tab"] = "Hypotheses"
     elif target_kind in ("artifact", "artifact_version"):
-        nav["tab"] = "Artifacts"
+        nav["tab"] = "Library"
     elif target_kind == "note":
         nav["tab"] = "Notes"
     return {"navigate": nav}

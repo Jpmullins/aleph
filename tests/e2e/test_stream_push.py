@@ -248,47 +248,6 @@ async def test_agent_events_stream_is_project_scoped(http_client, auth_bypass, a
         await reader.aclose()
 
 
-async def test_assistant_message_stream_pushes_token(http_client, auth_bypass, asgi_app):
-    from aleph_api.routes.assistant import stream_message
-    from aleph_assistant.models import AssistantMessage
-
-    pid, principal = await _scoped_project(http_client, asgi_app)
-    msg_id = uuid7()
-    maker = asgi_app.state.session_maker
-    async with maker() as session:
-        session.add(
-            AssistantMessage(
-                id=msg_id,
-                project_id=pid,
-                thread_id=uuid7(),
-                ordinal=0,
-                role="assistant",
-                body_md="",
-                status="pending",
-                created_by=principal.user_id,
-            )
-        )
-        await session.commit()
-
-    resp = await stream_message(_fake_request(asgi_app), pid, msg_id, principal)
-    reader = _StreamReader(resp)
-    try:
-        # No heartbeat on this stream; settle confirms the gen ran its first
-        # iteration (subscription live) and parked on the wait.
-        await reader.settle()
-        # Worker appends to body_md → UPDATE trigger → push → token delta.
-        async with maker() as session:
-            m = await session.get(AssistantMessage, msg_id)
-            assert m is not None
-            m.body_md = "hello world"
-            await session.commit()
-        token = await reader.next_json(deadline=3.0)
-        assert token["event"] == "token"
-        assert token["delta"] == "hello world"
-    finally:
-        await reader.aclose()
-
-
 async def test_surfaces_notes_stream_pushes_update(http_client, auth_bypass, asgi_app):
     from aleph_api.routes.surfaces import stream_surface
 

@@ -46,13 +46,15 @@ from aleph_security.principal import Principal
 from aleph_wiki.alias_service import AliasService
 from aleph_wiki.models import (
     Alias,
+    Citation,
     PageMergeProposal,
+    WikiClaim,
     WikiIndex,
     WikiLink,
     WikiPage,
     WikiRevision,
 )
-from aleph_wiki.wiki_service import WikiLinkDraft, WikiService
+from aleph_wiki.wiki_service import CitationDraft, ClaimDraft, WikiLinkDraft, WikiService
 
 _log = structlog.get_logger(__name__)
 
@@ -295,6 +297,7 @@ class CuratorService:
                     cap=_CROSS_LINK_MAX_TARGETS,
                 )
             links = await self._resolve_body_links(project_id=project_id, body_md=new_body)
+            carried_claims = await self._carry_claims(page=page)
             principal = Principal(
                 user_id=page.created_by, subject="agent", email="", actor_kind="aleph_agent"
             )
@@ -308,7 +311,7 @@ class CuratorService:
                 page_kind=page.page_kind,
                 body_md=new_body,
                 summary=(rev.summary or "")[:2048],
-                claims=[],
+                claims=carried_claims,
                 wikilinks=links,
                 commit_message=f"Curator: cross-link {len(linked)} sibling page(s)",
                 respect_hand_edits=True,
@@ -376,6 +379,7 @@ class CuratorService:
                 updated = f"{updated.rstrip()}\n\n- [[{new_page.title}]]\n"
 
             links = await self._resolve_body_links(project_id=project_id, body_md=updated)
+            carried_claims = await self._carry_claims(page=overview)
 
             result = await WikiService(self._session).commit_revision(
                 principal=principal,
@@ -387,7 +391,7 @@ class CuratorService:
                 page_kind=overview.page_kind,
                 body_md=updated,
                 summary=(overview_rev.summary or "")[:2048],
-                claims=[],
+                claims=carried_claims,
                 wikilinks=links,
                 commit_message=f"Curator: fold in [[{new_page.title}]]",
                 respect_hand_edits=True,
@@ -510,6 +514,21 @@ class CuratorService:
             )
             self._session.add(proposal)
             await self._session.flush()
+            if self._ledger is not None:
+                await self._ledger.append(
+                    project_id=project_id,
+                    actor_id=self._actor_id,
+                    actor_kind="agent",
+                    action_kind="wiki.page.merge.propose",
+                    target_id=proposal.id,
+                    target_kind="page_merge_proposal",
+                    payload={
+                        "source_page_id": str(page_id),
+                        "target_page_id": str(top.page_id),
+                        "similarity": float(top.rank or 0.0),
+                    },
+                    trace_id=current_trace_id(),
+                )
             return proposal.id
 
     async def apply_merge(
@@ -570,6 +589,7 @@ class CuratorService:
                 links = await self._resolve_body_links(
                     project_id=proposal.project_id, body_md=new_body
                 )
+                carried = await self._carry_claims(page=page)
                 await wiki_svc.commit_revision(
                     principal=principal,
                     ledger=ledger,
@@ -580,7 +600,7 @@ class CuratorService:
                     page_kind=page.page_kind,
                     body_md=new_body,
                     summary=(rev.summary or "")[:2048],
-                    claims=[],
+                    claims=carried,
                     wikilinks=links,
                     commit_message=f"Merge: redirect [[{source.title}]] -> [[{target.title}]]",
                     respect_hand_edits=True,
@@ -631,6 +651,53 @@ class CuratorService:
             )
             await self._session.flush()
             return redirected + bodies_rewritten
+
+    async def _carry_claims(self, *, page: WikiPage) -> list[ClaimDraft]:
+        """Reconstruct the page's current claims + citations as drafts.
+
+        A curator recommit (cross-link, overview recurate, merge body-rewrite)
+        writes a NEW revision, which moves ``current_revision_id``. Without
+        carrying the claims forward, the page's structural provenance (the
+        WikiClaim + Citation rows the UI reads by current-revision) would vanish.
+        This preserves it. Returns [] when the page has no current revision.
+        """
+        if page.current_revision_id is None:
+            return []
+        claims = list(
+            (
+                await self._session.execute(
+                    select(WikiClaim).where(WikiClaim.revision_id == page.current_revision_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        drafts: list[ClaimDraft] = []
+        for c in claims:
+            cites = list(
+                (await self._session.execute(select(Citation).where(Citation.claim_id == c.id)))
+                .scalars()
+                .all()
+            )
+            drafts.append(
+                ClaimDraft(
+                    text=c.text,
+                    confidence=c.confidence,
+                    section_anchor=c.section_anchor,
+                    citations=[
+                        CitationDraft(
+                            chunk_ids=[
+                                x if isinstance(x, UUID) else UUID(str(x))
+                                for x in (cite.chunk_ids or [])
+                            ],
+                            source_page_id=cite.source_page_id,
+                            citation_marker=cite.citation_marker,
+                        )
+                        for cite in cites
+                    ],
+                )
+            )
+        return drafts
 
     async def _resolve_body_links(self, *, project_id: UUID, body_md: str) -> list[WikiLinkDraft]:
         counts: dict[str, int] = {}

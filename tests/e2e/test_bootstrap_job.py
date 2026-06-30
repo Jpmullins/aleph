@@ -17,6 +17,11 @@ from sqlalchemy import select
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 
+async def _noop_enqueue(*_args: object, **_kwargs: object) -> None:
+    """Stand-in for ArqRedis.enqueue_job (bootstrap enqueues curate_page_job)."""
+    return None
+
+
 @pytest.fixture
 async def auth_bypass(monkeypatch):
     from aleph_api.middleware import auth as auth_mod
@@ -132,7 +137,9 @@ async def test_bootstrap_job_seeds_overview_and_caps_dispatch(
         "session_maker": maker,
         "litellm_client": asgi_app.state.litellm,
         "settings": settings,
-        "redis_pool": SimpleNamespace(),  # unused — dispatch_research is mocked
+        # dispatch_research is mocked, but bootstrap also enqueues curate_page_job
+        # for the seeded overview, so the fake pool needs an async enqueue_job.
+        "redis_pool": SimpleNamespace(enqueue_job=_noop_enqueue),
         "agent_token_secret": settings.aleph_agent_token_secret,
     }
 

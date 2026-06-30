@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from aleph_security.principal import Principal
 
 
-_PROMPT_DIR = Path(__file__).parent.parent / "agent" / "prompts"
+_PROMPT_DIR = Path(__file__).parent / "prompts"
 
 
 def _prompt(name: str) -> str:
