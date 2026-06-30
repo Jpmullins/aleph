@@ -1,13 +1,16 @@
 """Batched embedding for chunks via the LiteLLM gateway.
 
-Cohere embed v3/v4 batch limit is 96 inputs per call; we use 64 by default
-to leave headroom. Every call routes through the same `LiteLLMClient` that
+We batch at 64 inputs per call (headroom under typical provider batch limits).
+The embedding model is whatever the project's `ModelProfile.embedding` binding
+resolves to (the default profiles use `titan-embed-v2`, 1024-dim — matching the
+`Vector(1024)` chunk column). Every call routes through the same `LiteLLMClient`
 the rest of Aleph uses, so cost is ledgered and OTEL spans are emitted.
 
-If `ModelProfile.embedding` for a project changes (e.g. cohere v3 → v4),
-the resulting chunks will have a different `embedder_model`. A separate
-re-embed worker (`aleph_rks.retrieval.reembed_for_project`) detects the
-mismatch via `RetrievalIndexRecord` and re-embeds the source's chunks.
+If `ModelProfile.embedding` for a project changes, the resulting chunks would
+have a different `embedder_model`. The re-embed worker
+(`aleph_rks.retrieval.reembed_for_project`, enqueued by the model-profile
+switch/update routes on embed-model change) detects the mismatch via
+`RetrievalIndexRecord` and re-embeds the source's chunks.
 """
 
 from __future__ import annotations

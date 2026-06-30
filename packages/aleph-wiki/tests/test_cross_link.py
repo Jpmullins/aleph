@@ -21,6 +21,14 @@ def test_idempotent_on_already_linked() -> None:
     assert new == body
 
 
+def test_skips_markdown_links_and_urls() -> None:
+    # The surface form appears only inside a markdown link target/text and a URL.
+    body = "See [the Attention Mechanisms paper](https://x.com/Attention Mechanisms) here."
+    new, linked = inject_cross_links(body, ["Attention Mechanisms"])
+    assert linked == []
+    assert new == body
+
+
 def test_skips_code_spans() -> None:
     body = "Use `Attention Mechanisms` inline and\n```\nAttention Mechanisms\n```\nfence."
     new, linked = inject_cross_links(body, ["Attention Mechanisms"])

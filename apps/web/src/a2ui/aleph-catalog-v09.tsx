@@ -313,7 +313,6 @@ export const ApprovalCardApi = {
     evidence_refs: z3.array(z3.any()).optional(),
     approve_action: CommonSchemas.Action.optional(),
     reject_action: CommonSchemas.Action.optional(),
-    view_diff_action: CommonSchemas.Action.optional(),
   }),
 };
 export const ApprovalCardImpl = createComponentImplementation(

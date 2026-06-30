@@ -74,12 +74,17 @@ if TYPE_CHECKING:
 _WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`[^`]*`")
+# Markdown links `[text](url)` / `[text][ref]` and bare URLs — never inject a
+# wikilink inside their text or target (would corrupt the markup / link).
+_MD_LINK_RE = re.compile(r"\[[^\]]*\]\([^)]*\)|\[[^\]]*\]\[[^\]]*\]")
+_URL_RE = re.compile(r"https?://\S+")
 
 
 def _protected_ranges(body: str) -> list[tuple[int, int]]:
-    """Char ranges that must not be touched: fenced code, inline code, existing links."""
+    """Char ranges cross_link must not touch: fenced/inline code, existing
+    wikilinks, markdown links, and bare URLs."""
     ranges: list[tuple[int, int]] = []
-    for rex in (_FENCE_RE, _INLINE_CODE_RE, _WIKILINK_RE):
+    for rex in (_FENCE_RE, _INLINE_CODE_RE, _WIKILINK_RE, _MD_LINK_RE, _URL_RE):
         for m in rex.finditer(body):
             ranges.append((m.start(), m.end()))
     return ranges

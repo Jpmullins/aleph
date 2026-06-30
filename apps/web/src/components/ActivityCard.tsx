@@ -75,7 +75,6 @@ const KIND_LABELS: Record<string, string> = {
   wiki: "Compiling wiki",
   wiki_ingest: "Compiling wiki",
   assistant: "Assistant turn",
-  assistant_turn: "Assistant turn",
   aiq_deep: "Deep research",
   aiq_shallow: "Shallow research",
   mechanical_review: "Mechanical review",
