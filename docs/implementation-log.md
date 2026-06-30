@@ -1350,3 +1350,23 @@ Closes F06 (rule #7 bypass), F07 (rule #5 best-effort cost), F10 (env-cred leak)
 
 Tests: `apps/api/tests/unit/test_agent_model_resolution.py` (4). 166 unit pass;
 pyright (touched) 0 errors; ruff/format clean; app boots.
+
+## Audit remediation — Phase 4b + Phase 5 (2026-06-30)
+
+**Phase 4b — retrieval quality (F31, F32).** Router no longer tags arbitrary
+most-recent pages 'primary' when FTS is empty and the page-selector picks nothing
+(returns no-confident-match; real FTS hits with no pick → 'supporting', never
+'primary' → not 1-hop-expanded). `search_wiki` reframed scan-only (docstring +
+footer) steering substantive answers to the retriever subagent.
+
+**Phase 5 — re-embed worker + model-profile switch (F17, F18, F33).** No migration
+needed — `DocumentChunk.embedder_model` already existed.
+- `aleph_rks.retrieval.reembed_for_project` re-embeds only sources whose
+  `RetrievalIndexRecord.embedder_model` is stale vs the project's current embedding
+  binding (bounded, idempotent; writes `ModelCall`+`CostLedgerEvent`). Wrapped by
+  `reembed_job` (registered in arq), which writes `embeddings.reembedded`.
+- `POST /projects/{id}/model-profile/switch` applies a named template's bindings
+  (ledger `model_profile.switch`) and enqueues `reembed_job` on embedder change; the
+  `set_model_profile` agent tool now actually switches (was a non-functional reporter).
+- Tests: `test_model_profile_switch.py` (switch route + reembed_for_project-only-stale);
+  4b/5 → 166 unit pass, ruff/format/pyright/alembic clean.
