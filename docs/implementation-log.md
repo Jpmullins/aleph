@@ -1325,3 +1325,28 @@ Closes F05 (merge proposals invisible end-to-end) and F23 (apply_merge left
 - The ApprovalCard render + approve/reject is generic frontend that already works;
   the dedicated Playwright `merge-proposal.spec.ts` + live drive ride the stack
   rebuild batched with the other UI phases (6, 9).
+
+## Audit remediation — Phase 4: agent ModelProfile + robust cost + env-cred gate (2026-06-30)
+
+Closes F06 (rule #7 bypass), F07 (rule #5 best-effort cost), F10 (env-cred leak).
+
+- **F06** — the agent's model is resolved from the **default named ModelProfile**
+  (`aleph_default_model_profile`) bindings, loaded once at lifespan via
+  `get_template` and bound into the agent runtime (`bind_runtime(agent_bindings=)`).
+  `_gateway_chat_model`/`subagent_model` take a `Capability` and resolve per role
+  (orchestrator/retriever/researcher/wiki_builder/analyst → synthesis, viz_builder
+  → code, reviewer → judge). Falls back to the `_AGENT_MODEL` constant only when no
+  bindings are bound. `aleph-production` now applies Opus to the conversational
+  surface. **Scope note:** resolution is from the default profile at build time
+  (the agent graph is compiled once at lifespan); per-project per-turn override
+  would require per-turn model rebinding — a Deep-Agents limitation, sequenced.
+- **F07** — `AgentCostCallbackHandler` logs a WARNING on every skip (no scope / no
+  usage / no session / write failure) instead of silently dropping; records real
+  `latency_ms` (monotonic); wraps the write in an OTEL span `assistant.cost.record`;
+  populates `agent_run_id` from run metadata when the turn supplied one (else None —
+  the orchestrator does not currently mint a per-turn AgentRun; best-effort, honest).
+- **F10** — the container-env credential fallback (`aiq_internal`) is gated to
+  `ALEPH_AUTH_MODE == "local"`; under oidc a missing `ConnectorCredential` raises.
+
+Tests: `apps/api/tests/unit/test_agent_model_resolution.py` (4). 166 unit pass;
+pyright (touched) 0 errors; ruff/format clean; app boots.
