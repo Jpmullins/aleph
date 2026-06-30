@@ -111,7 +111,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # /copilotkit/agent/assistant) access to the shared session_maker.
     from aleph_api.copilot_agent import bind_runtime
 
-    bind_runtime(session_maker=session_maker, settings=settings, litellm=litellm)
+    # Rule #7: resolve the agent's model from the default named ModelProfile
+    # (aleph-dev / aleph-production) rather than a hardcoded id, so the
+    # conversational surface uses the configured tier (e.g. Opus in production).
+    agent_bindings: dict | None = None
+    try:
+        from aleph_db.repos.model_profile import get_template
+
+        async with session_maker() as _session:
+            _tmpl = await get_template(_session, settings.aleph_default_model_profile)
+            if _tmpl is not None:
+                agent_bindings = dict(_tmpl.bindings_jsonb)
+    except Exception:
+        agent_bindings = None
+
+    bind_runtime(
+        session_maker=session_maker,
+        settings=settings,
+        litellm=litellm,
+        agent_bindings=agent_bindings,
+    )
     app.state.litellm = litellm
     app.state.redis = redis_client
     app.state.gateway_http = gateway_http

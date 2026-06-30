@@ -35,6 +35,7 @@ def build_reviewer_subagent(*, settings: Any) -> dict[str, Any]:
         _project_id_from_config,  # pyright: ignore[reportPrivateUsage] — shared scope resolver reused (DRY); module-private to the api
         subagent_model,
     )
+    from aleph_core.schemas.model_profile import Capability
 
     @tool
     async def review_wiki_page(page_title: str, config: RunnableConfig) -> str:
@@ -86,5 +87,5 @@ def build_reviewer_subagent(*, settings: Any) -> dict[str, Any]:
             "appear as approval requests/findings. Don't wait."
         ),
         "tools": [review_wiki_page],
-        "model": subagent_model(settings, "reviewer"),
+        "model": subagent_model(settings, "reviewer", capability=Capability.JUDGE),
     }

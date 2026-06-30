@@ -39,6 +39,7 @@ def build_viz_builder_subagent(*, settings: Any) -> dict[str, Any]:
         _pin_to_briefs_impl,  # pyright: ignore[reportPrivateUsage]
         subagent_model,
     )
+    from aleph_core.schemas.model_profile import Capability
 
     @tool
     async def make_chart(
@@ -122,5 +123,5 @@ def build_viz_builder_subagent(*, settings: Any) -> dict[str, Any]:
             "concise render instructions, never raw specs as prose."
         ),
         "tools": [make_chart, build_artifact],
-        "model": subagent_model(settings, "viz_builder"),
+        "model": subagent_model(settings, "viz_builder", capability=Capability.CODE),
     }

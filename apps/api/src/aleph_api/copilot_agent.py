@@ -158,12 +158,15 @@ def bind_runtime(
     session_maker: async_sessionmaker[AsyncSession],
     settings: Settings | None = None,
     litellm: LiteLLMClient | None = None,
+    agent_bindings: dict[str, Any] | None = None,
 ) -> None:
     _runtime["session_maker"] = session_maker
     if settings is not None:
         _runtime["settings"] = settings
     if litellm is not None:
         _runtime["litellm"] = litellm
+    if agent_bindings is not None:
+        _runtime["agent_bindings"] = agent_bindings
 
 
 def get_runtime() -> dict[str, Any]:
@@ -887,8 +890,31 @@ def build_agent_store(
     return pool, store
 
 
-# The single agent model id, shared by the orchestrator and its subagents.
+# Fallback agent model id, used only when no ModelProfile bindings are bound to
+# the runtime (e.g. the named template row is missing). Normally the model is
+# resolved per capability from the default profile's bindings (rule #7).
 _AGENT_MODEL = "claude-sonnet-4-6"
+
+
+def _resolve_agent_model(capability: Any) -> str:
+    """Resolve capability → model from the runtime-bound default profile bindings.
+
+    Honors rule #7: the conversational surface uses the project's selected
+    ``ModelProfile`` (the default named profile, loaded at lifespan) instead of a
+    hardcoded id, so ``aleph-production`` actually applies Opus to the agent.
+    Falls back to ``_AGENT_MODEL`` when no bindings are bound or the capability
+    is unmapped.
+    """
+    from aleph_models.profile import resolve_binding
+
+    bindings = _runtime.get("agent_bindings")
+    if not bindings:
+        return _AGENT_MODEL
+    try:
+        return resolve_binding(bindings, capability).model
+    except Exception:
+        return _AGENT_MODEL
+
 
 # SKILL.md skills live in `skills/<name>/SKILL.md` alongside this module. The
 # Deep Agent reads them through its backend, so a FilesystemBackend rooted here
@@ -897,27 +923,30 @@ _AGENT_MODEL = "claude-sonnet-4-6"
 _SKILLS_DIR = pathlib.Path(__file__).parent / "skills"
 
 
-def _gateway_chat_model(settings: Settings, *, purpose: str) -> ChatOpenAI:
-    """Build a gateway-pointed `ChatOpenAI` with cost attribution (rules #2, #5).
+def _gateway_chat_model(settings: Settings, *, purpose: str, capability: Any = None) -> ChatOpenAI:
+    """Build a gateway-pointed `ChatOpenAI` with cost attribution (rules #2, #5, #7).
 
     All agent LLM traffic (orchestrator + every subagent) is constructed here so
-    it is configured identically — same model, gateway `base_url`/`api_key`,
-    temperature, and `stream_usage=True` — and so each gets its own
-    `AgentCostCallbackHandler` tagged with a `purpose`. The callback is attached
-    ONLY to the agent model (never to `LiteLLMClient`), so the LiteLLMClient
-    retrieval path is not double-counted; it writes a `ModelCall` +
-    `CostLedgerEvent` per turn (rule #5) and never crashes the turn on failure.
+    it is configured identically — gateway `base_url`/`api_key`, temperature, and
+    `stream_usage=True` — and so each gets its own `AgentCostCallbackHandler`
+    tagged with a `purpose`. The model is resolved from the default profile's
+    bindings for `capability` (rule #7), falling back to `_AGENT_MODEL`. The
+    callback is attached ONLY to the agent model (never to `LiteLLMClient`), so
+    the LiteLLMClient retrieval path is not double-counted; it writes a
+    `ModelCall` + `CostLedgerEvent` per call (rule #5) and never crashes the turn.
     """
     from aleph_api.copilot_cost_callback import AgentCostCallbackHandler
+    from aleph_core.schemas.model_profile import Capability
 
+    model = _resolve_agent_model(capability or Capability.SYNTHESIS)
     return ChatOpenAI(
-        model=_AGENT_MODEL,
+        model=model,
         base_url=settings.litellm_base_url,
         api_key=settings.insights_litellm_api_key,
         temperature=0.2,
         timeout=60,
         max_retries=2,
-        callbacks=[AgentCostCallbackHandler(model=_AGENT_MODEL, purpose=purpose)],
+        callbacks=[AgentCostCallbackHandler(model=model, purpose=purpose)],
         # A streaming OpenAI-compatible response omits the `usage` block unless
         # `stream_options.include_usage` is set. Without this the on_llm_end
         # AIMessage has `usage_metadata=None` and the cost callback has nothing
@@ -927,14 +956,17 @@ def _gateway_chat_model(settings: Settings, *, purpose: str) -> ChatOpenAI:
     )
 
 
-def subagent_model(settings: Settings, name: str) -> ChatOpenAI:
+def subagent_model(settings: Settings, name: str, *, capability: Any = None) -> ChatOpenAI:
     """Build a subagent's gateway `ChatOpenAI`, cost-tagged per subagent.
 
     Identical to the orchestrator's model but the cost callback's `purpose` is
     `assistant.subagent.<name>`, so each subagent's LLM calls write a
-    `ModelCall` + `CostLedgerEvent` attributed to that subagent (rule #5).
+    `ModelCall` + `CostLedgerEvent` attributed to that subagent (rule #5). The
+    model is resolved for `capability` from the default profile (rule #7).
     """
-    return _gateway_chat_model(settings, purpose=f"assistant.subagent.{name}")
+    return _gateway_chat_model(
+        settings, purpose=f"assistant.subagent.{name}", capability=capability
+    )
 
 
 def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore):

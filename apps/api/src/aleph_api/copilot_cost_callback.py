@@ -19,6 +19,7 @@ and skipped — the agent turn proceeds regardless.
 from __future__ import annotations
 
 import logging
+import time
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -62,6 +63,19 @@ def _project_id_from_metadata(metadata: dict[str, Any] | None) -> UUID | None:
             parts = thread_id.split(":", 2)
             if len(parts) >= 2:
                 raw = parts[1]
+    if not raw:
+        return None
+    try:
+        return UUID(str(raw))
+    except (ValueError, TypeError):
+        return None
+
+
+def _agent_run_id_from_metadata(metadata: dict[str, Any] | None) -> UUID | None:
+    """Best-effort agent-run id from a run's metadata (when the turn minted one)."""
+    if not metadata:
+        return None
+    raw = metadata.get("agent_run_id") or metadata.get("agentRunId")
     if not raw:
         return None
     try:
@@ -154,10 +168,11 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
         self._pricing = pricing
         self._model = model
         self._purpose = purpose
-        # run_id -> project_id resolved at start, consumed at end. Ordered so
-        # the oldest entries can be evicted when the size cap is exceeded (a
-        # CANCELLED run never reaches on_llm_end/on_llm_error to pop itself).
-        self._pending: OrderedDict[UUID, UUID] = OrderedDict()
+        # run_id -> (project_id, agent_run_id, start_monotonic) resolved at start,
+        # consumed at end. Ordered so the oldest entries can be evicted when the
+        # size cap is exceeded (a CANCELLED run never reaches
+        # on_llm_end/on_llm_error to pop itself).
+        self._pending: OrderedDict[UUID, tuple[UUID, UUID | None, float]] = OrderedDict()
 
     # ---- runtime resolution (lazy) ----------------------------------------
 
@@ -207,33 +222,50 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
     def _remember_project(self, run_id: UUID, metadata: dict[str, Any] | None) -> None:
         project_id = _project_id_from_metadata(metadata)
         if project_id is not None:
-            self._pending[run_id] = project_id
+            agent_run_id = _agent_run_id_from_metadata(metadata)
+            self._pending[run_id] = (project_id, agent_run_id, time.monotonic())
             # Evict oldest entries left behind by CANCELLED runs (which fire
             # neither on_llm_end nor on_llm_error), keeping _pending bounded.
             while len(self._pending) > _MAX_PENDING:
                 self._pending.popitem(last=False)
 
     async def on_llm_end(self, response: LLMResult, *, run_id: UUID, **kwargs: Any) -> None:
-        project_id = self._pending.pop(run_id, None)
-        if project_id is None:
-            # No resolvable project scope — skip writing (don't crash the agent).
-            logger.debug("agent cost attribution skipped: no project scope (run_id=%s)", run_id)
+        entry = self._pending.pop(run_id, None)
+        if entry is None:
+            # No resolvable project scope — skip writing, but log WHY (rule #5:
+            # never a silent drop) without crashing the agent turn.
+            logger.warning(
+                "agent cost attribution skipped: no project scope resolved (run_id=%s, purpose=%s)",
+                run_id,
+                self._purpose,
+            )
             return
+        project_id, agent_run_id, t0 = entry
         usage = _extract_usage(response)
         if usage is None:
+            logger.warning(
+                "agent cost attribution skipped: no token usage on response "
+                "(run_id=%s, purpose=%s) — is stream_usage=True set?",
+                run_id,
+                self._purpose,
+            )
             return
         input_tokens, cached_tokens, completion_tokens = usage
+        latency_ms = max(int((time.monotonic() - t0) * 1000), 0)
         try:
             await self._write(
                 project_id=project_id,
+                agent_run_id=agent_run_id,
                 input_tokens=input_tokens,
                 cached_tokens=cached_tokens,
                 completion_tokens=completion_tokens,
+                latency_ms=latency_ms,
             )
         except Exception:
             logger.warning(
-                "agent cost attribution write failed (run_id=%s)",
+                "agent cost attribution write failed (run_id=%s, purpose=%s)",
                 run_id,
+                self._purpose,
                 exc_info=True,
             )
 
@@ -247,13 +279,18 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
         self,
         *,
         project_id: UUID,
+        agent_run_id: UUID | None,
         input_tokens: int,
         cached_tokens: int,
         completion_tokens: int,
+        latency_ms: int,
     ) -> None:
         session_maker = self._resolve_session_maker()
         if session_maker is None:
-            logger.debug("agent cost attribution skipped: no session_maker bound")
+            logger.warning(
+                "agent cost attribution skipped: no session_maker bound (purpose=%s)",
+                self._purpose,
+            )
             return
         pricing = self._resolve_pricing()
         cost, savings = pricing.cost_for(
@@ -271,22 +308,31 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
             trace_id = None
 
         from aleph_db.repos.cost import CostWriter
+        from aleph_observability.tracing import start_span
 
-        async with session_maker() as session:
-            writer = CostWriter(session)
-            await writer.record_call(
-                project_id=project_id,
-                agent_run_id=None,
-                capability="chat",
-                model=self._model,
-                purpose=self._purpose,
-                input_tokens=input_tokens,
-                cached_tokens=cached_tokens,
-                completion_tokens=completion_tokens,
-                cost_usd=cost,
-                cache_savings_usd=savings,
-                latency_ms=0,
-                trace_id=trace_id,
-                timestamp=utcnow(),
-            )
-            await session.commit()
+        with start_span(
+            "assistant.cost.record",
+            **{
+                "aleph.project_id": str(project_id),
+                "aleph.purpose": self._purpose,
+                "aleph.model": self._model,
+            },
+        ):
+            async with session_maker() as session:
+                writer = CostWriter(session)
+                await writer.record_call(
+                    project_id=project_id,
+                    agent_run_id=agent_run_id,
+                    capability="chat",
+                    model=self._model,
+                    purpose=self._purpose,
+                    input_tokens=input_tokens,
+                    cached_tokens=cached_tokens,
+                    completion_tokens=completion_tokens,
+                    cost_usd=cost,
+                    cache_savings_usd=savings,
+                    latency_ms=latency_ms,
+                    trace_id=trace_id,
+                    timestamp=utcnow(),
+                )
+                await session.commit()

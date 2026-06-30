@@ -92,14 +92,21 @@ async def get_credential(
         import os
 
         cipher = LibsodiumSealedBoxCipher(master_secret=_master_secret(request))
-        defaults = {
-            "tavily": os.environ.get("TAVILY_API_KEY", "") or "",
-            "exa": os.environ.get("EXA_API_KEY", "") or "",
-            "serper": os.environ.get("SERPER_API_KEY", "") or "",
-            "semantic_scholar": os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "") or "",
-            "huggingface_hub": os.environ.get("HUGGINGFACE_API_KEY", "") or "",
-            "lens": os.environ.get("LENS_API_KEY", "") or "",
-        }
+        # Container-env API keys are a DEV-ONLY convenience and must never be the
+        # credential source in a real deployment (rule: credentials come from
+        # ConnectorCredential, never container env). Gate the fallback on local
+        # auth mode; under oidc a missing per-project credential raises.
+        if request.app.state.settings.aleph_auth_mode == "local":
+            defaults = {
+                "tavily": os.environ.get("TAVILY_API_KEY", "") or "",
+                "exa": os.environ.get("EXA_API_KEY", "") or "",
+                "serper": os.environ.get("SERPER_API_KEY", "") or "",
+                "semantic_scholar": os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "") or "",
+                "huggingface_hub": os.environ.get("HUGGINGFACE_API_KEY", "") or "",
+                "lens": os.environ.get("LENS_API_KEY", "") or "",
+            }
+        else:
+            defaults = {}
         svc = ConnectorCredentialService(session, cipher=cipher, dev_default_for=defaults)
         plaintext = await svc.decrypt_for_callback(
             project_id=claims.project_id,
