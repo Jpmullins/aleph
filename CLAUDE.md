@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Aleph is a multi-agent research environment built around three layers:
 1. **RKS** (Raw Knowledge Store) — ingested sources, normalized text, chunks. Upstream of the wiki.
 2. **Compiled Wiki** — the **primary retrieval surface** for both assistant and analyst. Wikilinked, revisioned, multi-agent-maintained.
-3. **A2UI workspace** — 3-panel UI; right panel is 5 A2UI surface tabs (Wiki / Artifacts / Notes / Hypotheses / Briefs).
+3. **A2UI workspace** — 3-panel UI; right panel is 5 A2UI surface tabs (Wiki / Library / Notes / Hypotheses / Briefs). The **Library** tab (formerly "Artifacts") shows ingested **Sources** — raw PDFs/webpages/docs, viewable in their own card — alongside built **Artifacts**.
 
 Authoritative spec: `docs/superpowers/specs/2026-05-26-aleph-design.md`. Per-increment specs: `docs/superpowers/specs/2026-05-27-inc-{0..8}-*-design.md`. Build is **complete through Increment 8**, plus post-Inc-8 **Waves** (all merged to `main`): W1 (progress + tokens), W2 (CopilotKit + AG-UI + A2UI Live agent), W5 (ACH matrix, notes promote-to-wiki, readable sources), the AIQ research→wiki pipeline + conversational research, **W6** (conversational completion — Live is the only chat surface; agent tool suite; ApprovalCard-gated actions; agent cost attribution; per-project cross-session memory; cost UI in Profile), **W4** (A2UI **v0_9** shared catalog — right panel + chat render via one upstream `@a2ui` catalog; backend emits v0_9 messages + SSE delta `SurfaceStreamer`), and **W3** (the Live assistant is now a Deep-Agents **orchestrator** that plans via `write_todos` and delegates to 6 purpose-built subagents — retriever/researcher/wiki_builder/viz_builder/analyst/reviewer — each wrapping existing services in isolated context; + SKILL.md skills + todos-in-Activity-card), and the **Real-time push + Live Wiki** wave (every SSE stream — agent-events, surfaces, assistant, and a new `changes` stream — now wakes on a Postgres **LISTEN/NOTIFY** push with a self-healing poll fallback instead of idle polling; the wiki tab updates the instant an agent writes, with "✦ editing…" presence + an "updated" pulse and the open page refreshing in place; see `docs/superpowers/specs/2026-05-29-live-wiki-design.md`). Refreshed designs: `docs/superpowers/specs/2026-05-29-wave-{3,4}-*-refresh-design.md` + `2026-05-29-wave-6-conversational-completion-design.md` (the original `wave-{3,4}-*-design.md` are **superseded**). The canonical record (what shipped vs. honest gaps) is `docs/implementation-log.md`; the latest system review + prioritized gaps is `docs/system-assessment.md`.
 
@@ -66,7 +66,7 @@ Monorepo: `uv` workspace (Python 3.13, pyright strict) + `pnpm` workspace (only 
 apps/
   api/      FastAPI — request/response + SSE; hosts WikiIndex page-selector; owns Alembic
   web/      React 19 + Vite + Tailwind + @a2ui/react + CopilotKit
-  workers/  Arq workers — wiki agent, reviewers, builder, normalization, intra-source chunk+embed, Playwright render
+  workers/  Arq workers — wiki agent, reviewers, builder, normalization, intra-source chunk+embed, curator, re-embed (NOTE: a Playwright JS-page **render worker** is specced but NOT yet built — URL ingest is raw-HTTP, so JS/SPA pages capture as static HTML)
 packages/
   aleph-core              shared primitives, Pydantic schemas, UUIDv7. LEAF — imports nothing else.
   aleph-db                SQLAlchemy ORM + repositories + Alembic models
@@ -78,7 +78,7 @@ packages/
   aleph-assistant         chat orchestration, wiki retrieval router
   aleph-aiq               AIQ subsystem client (HTTP boundary)
   aleph-a2ui              A2UI catalog + Python SDK glue
-  aleph-connectors        typed connector plugins (document / dataset_rows)
+  aleph-connectors        typed connector plugins (document / dataset_rows) — NOTE: the `ConnectorBase`/`ConnectorRegistry` suite is currently **orphaned** (its `search`/`fetch` are not on the live research path). Research runs against AIQ's own built-in `data_source_registry` tools (effectively Tavily web search). Wiring the typed connectors in requires a custom AIQ image with NAT plugins (sequenced infra)
   aleph-reviewer          MechanicalReviewer + EditorialReviewer
   aleph-hypotheses        analyst-authored hypotheses
   aleph-datasets          Dataset / DatasetVersion / Observation
