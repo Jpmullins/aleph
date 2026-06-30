@@ -2,22 +2,18 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
 from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Path, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Body, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
-from aleph_api.middleware.project_scope import ProjectScopeDep, assert_stream_access
-from aleph_assistant.models import AssistantMessage, AssistantSession
+from aleph_api.middleware.project_scope import ProjectScopeDep
+from aleph_assistant.models import AssistantSession
 from aleph_assistant.thread_service import (
-    append_message,
     create_session,
     fork_thread,
     get_message,
@@ -28,18 +24,11 @@ from aleph_assistant.thread_service import (
 )
 from aleph_core.errors import NotFound, ValidationFailed
 from aleph_core.ids import uuid7
-from aleph_db.models.agent import AgentRun
 from aleph_db.repos import model_profile as profile_repo
 from aleph_observability.tracing import current_trace_id
-from aleph_security.agent_token import mint_agent_token
 from aleph_security.roles import ProjectRole, require_at_least
 
 router = APIRouter(prefix="/v1/projects", tags=["assistant"])
-
-# Poll-fallback window for the message stream: it wakes instantly on the
-# assistant_messages UPDATE push; absent any push it re-reads after this many
-# seconds (self-healing). Short, since token streaming wants snappy updates.
-_ASSISTANT_FALLBACK_SEC = 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -90,15 +79,6 @@ class MessageOut(BaseModel):
     latency_ms: int | None
     error_text: str | None
     created_at: datetime
-
-
-class PostMessageIn(BaseModel):
-    body_md: str = Field(min_length=1, max_length=64_000)
-
-
-class PostMessageOut(BaseModel):
-    user_message: MessageOut
-    assistant_message: MessageOut
 
 
 class ForkIn(BaseModel):
@@ -263,114 +243,6 @@ async def get_thread_messages(
     return [MessageOut.model_validate(r) for r in rows]
 
 
-@router.post(
-    "/{project_id}/threads/{thread_id}/messages",
-    status_code=status.HTTP_201_CREATED,
-    response_model=PostMessageOut,
-)
-async def post_message(
-    request: Request,
-    project_id: ProjectScopeDep,
-    thread_id: UUID,
-    body: Annotated[PostMessageIn, Body()],
-    session: SessionDep,
-    ledger: LedgerDep,
-    principal: PrincipalDep,
-) -> PostMessageOut:
-    require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
-    t = await get_thread(session, project_id=project_id, thread_id=thread_id)
-    if t is None:
-        msg = f"thread {thread_id} not found"
-        raise NotFound(msg)
-
-    user_msg = await append_message(
-        session,
-        project_id=project_id,
-        thread_id=thread_id,
-        role="user",
-        body_md=body.body_md,
-        created_by=principal.user_id,
-        status="complete",
-    )
-
-    # Create assistant message placeholder (status=streaming) + AgentRun.
-    agent_run_id = uuid7()
-    correlation_id = f"chat-{agent_run_id.hex}"
-    run = AgentRun(
-        id=agent_run_id,
-        project_id=project_id,
-        agent_kind="assistant",
-        correlation_id=correlation_id,
-        status="pending",
-        input_payload={
-            "thread_id": str(thread_id),
-            "user_message_id": str(user_msg.id),
-        },
-        created_by=principal.user_id,
-        access_scope="project",
-    )
-    session.add(run)
-    await session.flush()
-
-    assistant_msg = await append_message(
-        session,
-        project_id=project_id,
-        thread_id=thread_id,
-        role="assistant",
-        body_md="",
-        created_by=principal.user_id,
-        status="streaming",
-        agent_run_id=agent_run_id,
-    )
-
-    await ledger.append(
-        project_id=project_id,
-        actor_id=principal.user_id,
-        actor_kind=principal.actor_kind,
-        action_kind="assistant.message.user_posted",
-        target_id=user_msg.id,
-        target_kind="assistant_message",
-        payload={"thread_id": str(thread_id), "ordinal": user_msg.ordinal},
-        trace_id=current_trace_id(),
-    )
-
-    # Mint agent token; enqueue assistant_turn_job.
-    token = mint_agent_token(
-        secret=request.app.state.settings.aleph_agent_token_secret,
-        user_id=principal.user_id,
-        project_id=project_id,
-        agent_run_id=agent_run_id,
-        actor_kind="aleph_agent",
-        correlation_id=correlation_id,
-        ttl_seconds=3600,
-    )
-    try:
-        from arq import create_pool
-        from arq.connections import RedisSettings
-
-        pool = await create_pool(RedisSettings.from_dsn(request.app.state.settings.redis_url))
-        try:
-            await pool.enqueue_job(
-                "assistant_turn_job",
-                str(project_id),
-                str(thread_id),
-                str(user_msg.id),
-                str(assistant_msg.id),
-                token,
-            )
-        finally:
-            await pool.aclose()
-    except Exception as exc:
-        # Mark assistant message failed so the UI sees consistent state.
-        assistant_msg.status = "failed"
-        assistant_msg.error_text = f"failed to enqueue assistant turn: {exc}"[:4096]
-
-    return PostMessageOut(
-        user_message=MessageOut.model_validate(user_msg),
-        assistant_message=MessageOut.model_validate(assistant_msg),
-    )
-
-
 @router.get("/{project_id}/messages/{message_id}", response_model=MessageOut)
 async def get_one_message(
     project_id: ProjectScopeDep, message_id: UUID, session: SessionDep
@@ -380,53 +252,6 @@ async def get_one_message(
         msg = f"message {message_id} not found"
         raise NotFound(msg)
     return MessageOut.model_validate(m)
-
-
-@router.get("/{project_id}/messages/{message_id}/stream")
-async def stream_message(
-    request: Request,
-    project_id: Annotated[UUID, Path(...)],
-    message_id: UUID,
-    principal: PrincipalDep,
-) -> StreamingResponse:
-    """SSE stream of the in-progress assistant message, emitting incremental
-    `body_md` deltas as Server-Sent Events.
-
-    Wakes on LISTEN/NOTIFY push the instant the worker updates `body_md`/`status`
-    (the `assistant_messages` UPDATE trigger), with a short `_ASSISTANT_FALLBACK_SEC`
-    poll fallback so a dropped listener self-heals. The composer's token-streaming
-    is approximated by re-reading `body_md` length on each wake."""
-    # Membership check WITHOUT pinning a pool connection for the stream's life.
-    await assert_stream_access(request, project_id, principal)
-
-    async def events() -> Any:
-        last_len = 0
-        maker = request.app.state.session_maker
-        broker = request.app.state.change_broker
-        loop = asyncio.get_event_loop()
-        deadline = loop.time() + 300.0  # ~5 min cap
-        async with broker.subscribe(project_id) as sub:
-            while loop.time() < deadline:
-                async with maker() as s:
-                    msg = await s.get(AssistantMessage, message_id)
-                    if msg is None or msg.project_id != project_id:
-                        yield 'data: {"event":"error","reason":"not_found"}\n\n'
-                        return
-                    if len(msg.body_md) > last_len:
-                        delta = msg.body_md[last_len:]
-                        last_len = len(msg.body_md)
-                        yield ("data: " + json.dumps({"event": "token", "delta": delta}) + "\n\n")
-                    if msg.status in ("complete", "failed", "budget_blocked"):
-                        yield ('data: {"event":"done","status":"' + msg.status + '"}\n\n')
-                        return
-                await sub.wait(timeout=_ASSISTANT_FALLBACK_SEC)
-        yield 'data: {"event":"timeout"}\n\n'
-
-    return StreamingResponse(
-        events(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
 
 
 # ---------------------------------------------------------------------------

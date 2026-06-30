@@ -69,8 +69,6 @@ a draft wiki page.
 weigh evidence, score consistency).
 - `reviewer` — review/critique a wiki page (contradiction / weak-source / \
 coverage-gap checks).
-- `echo` — a test subagent; delegate to it only when explicitly asked to test \
-delegation, and relay its reply.
 
 When a subagent returns a render instruction (a SourceCard, ChartCard, \
 HypothesisCard, ApprovalCard, …), render it exactly as instructed. For \
@@ -1074,20 +1072,6 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
     # the AgentCostCallbackHandler that `_gateway_chat_model` attaches (rule #5).
     model = _gateway_chat_model(settings, purpose="assistant.turn")
 
-    # Trivial exemplar subagent proving the in-process sync-subagent (`task`
-    # tool) delegation path. Its LLM calls are cost-attributed to
-    # `assistant.subagent.echo` via `subagent_model` (rule #5).
-    echo_subagent: SubAgent = {
-        "name": "echo",
-        "description": (
-            "Test subagent: echoes back a one-line confirmation. "
-            "Use only when asked to test delegation."
-        ),
-        "system_prompt": (
-            "Return a single short line confirming you ran as the echo subagent. Nothing else."
-        ),
-        "model": subagent_model(settings, "echo"),
-    }
     # In-memory checkpointer keeps per-thread conversation state for the AG-UI
     # runtime. Cross-SESSION durability rides the `store` instead: the
     # CompositeBackend routes `/memories/` to a StoreBackend over the
@@ -1104,7 +1088,6 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
         ],
         system_prompt=SYSTEM_PROMPT,
         subagents=[
-            echo_subagent,
             build_retriever_subagent(settings=settings),
             build_researcher_subagent(settings=settings),
             build_wiki_builder_subagent(settings=settings),

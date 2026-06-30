@@ -25,7 +25,6 @@ from aleph_rks.asset_store import AssetStore
 from aleph_workers.jobs import (
     aiq_submit_job,
     aiq_synthesis_poll_job,
-    assistant_turn_job,
     bootstrap_project_job,
     builder_job,
     chunk_embed_job,
@@ -111,7 +110,6 @@ class WorkerSettings:
         normalize_job,
         chunk_embed_job,
         wiki_ingest_job,
-        assistant_turn_job,
         mechanical_review_job,
         editorial_review_job,
         builder_job,
