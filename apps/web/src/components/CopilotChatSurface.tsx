@@ -82,7 +82,7 @@ export function CopilotChatSurface({ projectId, threadId }: Props) {
       "Switch the analyst's right-hand panel to one of the surface tabs: " +
       `${SURFACE_TABS.join(", ")}. Call this when your answer is best explored ` +
       "in a specific panel (e.g. open Hypotheses to show the ACH matrix, or " +
-      "Artifacts to show a generated chart).",
+      "Library to show ingested sources and built artifacts).",
     parameters: z.object({ tab: z.enum(SURFACE_TABS) }),
     handler: async ({ tab }) => {
       setActiveSurface(tab);

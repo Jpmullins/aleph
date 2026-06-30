@@ -78,7 +78,10 @@ async def _build_tab_messages(
     and the delta stream so both compute identical surfaces."""
     if tab_lc == "wiki":
         return await _wiki_messages(session, project_id, page_id)
-    if tab_lc == "artifacts":
+    # "library" is the renamed Artifacts tab — the same self-fetching surface
+    # component (now showing ingested Sources + built Artifacts). "artifacts" is
+    # kept as an alias for any older client / agent navigation.
+    if tab_lc in ("library", "artifacts"):
         return artifacts_surface_v09()
     if tab_lc == "notes":
         return await _notes_messages(session, project_id)

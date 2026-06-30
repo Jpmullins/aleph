@@ -14,7 +14,7 @@
  */
 import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 
-export const SURFACE_TABS = ["Wiki", "Artifacts", "Notes", "Hypotheses", "Briefs"] as const;
+export const SURFACE_TABS = ["Wiki", "Library", "Notes", "Hypotheses", "Briefs"] as const;
 export type SurfaceTab = (typeof SURFACE_TABS)[number];
 
 export interface WorkspaceUIState {
