@@ -9,7 +9,7 @@ intra-source-only.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -108,3 +108,75 @@ async def needs_reembed(
     if rec is None:
         return True
     return rec.embedder_model != current_embedder_model
+
+
+async def reembed_for_project(
+    session: AsyncSession,
+    *,
+    project_id: UUID,
+    client: Any,
+    principal: Any,
+    profile_bindings: dict,
+    purpose: str = "rks.reembed",
+) -> tuple[int, int]:
+    """Re-embed chunks of any source whose stored embedder model differs from
+    the project's current `embedding` binding (embedder-model drift repair).
+
+    Bounded + idempotent: only sources whose `RetrievalIndexRecord.embedder_model`
+    is stale are touched; once re-embedded they match and are skipped on re-run.
+    Re-embedding goes through `embed_texts` → `LiteLLMClient.embed`, so it writes
+    `ModelCall` + `CostLedgerEvent`. Returns (sources_reembedded, chunks_reembedded).
+    """
+    from aleph_core.time import utcnow
+    from aleph_models.profile import resolve_binding
+    from aleph_rks.embedding import embed_texts
+
+    current_model = resolve_binding(profile_bindings, "embedding").model
+    stale = list(
+        (
+            await session.execute(
+                select(RetrievalIndexRecord).where(
+                    RetrievalIndexRecord.project_id == project_id,
+                    RetrievalIndexRecord.embedder_model != current_model,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    sources_done = 0
+    chunks_done = 0
+    for rec in stale:
+        chunks = list(
+            (
+                await session.execute(
+                    select(DocumentChunk)
+                    .where(DocumentChunk.source_id == rec.source_id)
+                    .order_by(DocumentChunk.ordinal)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not chunks:
+            continue
+        result = await embed_texts(
+            client=client,
+            principal=principal,
+            project_id=project_id,
+            agent_run_id=None,
+            profile_bindings=profile_bindings,
+            texts=[c.text for c in chunks],
+            purpose=purpose,
+        )
+        if len(result.embeddings) != len(chunks):
+            continue
+        for chunk, emb in zip(chunks, result.embeddings, strict=True):
+            chunk.embedding = emb
+            chunk.embedder_model = result.model
+        rec.embedder_model = result.model
+        rec.indexed_at = utcnow()
+        await session.flush()
+        sources_done += 1
+        chunks_done += len(chunks)
+    return sources_done, chunks_done

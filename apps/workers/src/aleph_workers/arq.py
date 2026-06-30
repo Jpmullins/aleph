@@ -33,6 +33,7 @@ from aleph_workers.jobs import (
     editorial_review_job,
     mechanical_review_job,
     normalize_job,
+    reembed_job,
     smoke_llm_job,
     wiki_ingest_job,
 )
@@ -117,6 +118,7 @@ class WorkerSettings:
         aiq_synthesis_poll_job,
         bootstrap_project_job,
         curate_page_job,
+        reembed_job,
     ]
     on_startup = _startup
     on_shutdown = _shutdown

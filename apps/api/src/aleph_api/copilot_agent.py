@@ -809,12 +809,13 @@ async def set_connector_enabled(connector_id: str, enabled: bool, config: Runnab
 
 @tool
 async def set_model_profile(profile_name: str, config: RunnableConfig) -> str:
-    """Report or change the project's model profile by name.
+    """Switch the project's model profile to a named template, or report it.
 
-    `profile_name` is one of "aleph-dev" or "aleph-production". Reads the
-    project's current profile and the available named templates. Switching the
-    project's profile by name is not yet exposed as an endpoint, so this reports
-    the current and available profiles rather than performing a switch.
+    `profile_name` is one of "aleph-dev" (Sonnet/Haiku) or "aleph-production"
+    (Opus/Sonnet). Pass a name to switch; the project's per-capability bindings
+    are replaced with that template's. If the embedding model changes, the
+    project's chunks are re-embedded in the background. Pass an empty string to
+    just report the current + available profiles.
     """
     import httpx
 
@@ -823,8 +824,25 @@ async def set_model_profile(profile_name: str, config: RunnableConfig) -> str:
     if settings is None or project_id is None:
         return "Model profile is unavailable (no project scope on this run)."
     base = settings.aleph_self_url
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+    name = (profile_name or "").strip()
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        if name:
+            try:
+                resp = await client.post(
+                    f"{base}/v1/projects/{project_id}/model-profile/switch",
+                    headers={"Authorization": "Bearer local-dev"},
+                    json={"profile_name": name},
+                )
+            except Exception as exc:
+                return f"Could not switch the model profile: {exc}"
+            if resp.status_code >= 400:
+                return f"Could not switch to '{name}' ({resp.status_code}): {resp.text[:200]}"
+            return (
+                f"Switched the project's model profile to '{name}'. New LLM/agent "
+                "calls use that profile's models; if the embedding model changed, "
+                "the project's sources are re-embedding in the background."
+            )
+        try:
             current_resp = await client.get(
                 f"{base}/v1/projects/{project_id}/model-profile",
                 headers={"Authorization": "Bearer local-dev"},
@@ -833,8 +851,8 @@ async def set_model_profile(profile_name: str, config: RunnableConfig) -> str:
                 f"{base}/v1/model-profile-templates",
                 headers={"Authorization": "Bearer local-dev"},
             )
-    except Exception as exc:
-        return f"Could not read the model profile: {exc}"
+        except Exception as exc:
+            return f"Could not read the model profile: {exc}"
     current_name = "unknown"
     if current_resp.status_code < 400:
         current_name = current_resp.json().get("name", "unknown")
@@ -845,11 +863,7 @@ async def set_model_profile(profile_name: str, config: RunnableConfig) -> str:
             available = names
     return (
         f"The project's current model profile is '{current_name}'. "
-        f"Available profiles: {', '.join(available)}. "
-        f"Switching the profile by name (you asked for '{profile_name}') is not "
-        "yet exposed as an endpoint, so I can't change it from here yet. Per-"
-        "capability binding edits go through the model-profile PATCH route, but "
-        "there is no named-template switch route to call."
+        f"Available profiles: {', '.join(available)}. Pass a name to switch."
     )
 
 
