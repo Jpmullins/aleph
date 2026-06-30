@@ -71,19 +71,21 @@ pnpm -C tests/playwright test            # → all specs green incl. the phase's
 - Evidence: `ruff check .` clean; `ruff format --check .` 0 reformat; `pytest -m "not integration"`
   152 passed; pyright (touched) 0 errors; `alembic check` no new ops (no migration).
 
-### Phase 2 — Curator chokepoint + `cross_link` + robustness  `[F03, F04, F22, F24]`
-- [ ] Curation enqueued from **every** authoring path (bootstrap, notes-promote, synthesis,
-  ingest) via the injected `enqueue_curate` hook on `commit_revision`; `curator`-origin does
-  **not** re-enqueue (loop guard).
-- [ ] A page mentioning an existing sibling's title/alias **in prose** (no `[[ ]]`) gets a
-  resolved `WikiLink` after curation (problem B); re-run is a no-op. `[F03]`
-- [ ] `[F22]` Overview page is resolved robustly (e.g. by `page_kind`/a stable marker, not solely
-  `title == project.title`); renaming the project does not silently break recuration.
-- [ ] `[F24]` When a project has no `ModelProfile`, the deterministic knit still runs and the
-  skipped LLM steps (dedup/recurate) **log a warning** (no silent disable).
-- [ ] Unit: `_cross_link` + idempotency; hook origin matrix; overview-resolution. Integration:
-  note-promote prose → cross-link row + ledger counts; bootstrap-only → overview links resolve.
-- [ ] Eval: graph-connectivity scorer added to the gate ≥ target.
+### Phase 2 — Curator chokepoint + `cross_link` + robustness  `[F03, F04, F22, F24]` ✅ DONE (2026-06-30)
+- [x] Curation enqueued from **every** authoring path (bootstrap overview, notes-promote, synthesis,
+  ingest). Transaction-safe **post-commit** enqueue at each path (not an in-commit hook — that would
+  race the curate job ahead of the caller's commit); the curate job never re-enqueues → no loop.
+  Ingest enqueue moved out of the mechanical-review `if pending is None` guard.
+- [x] A page mentioning an existing sibling's title/alias **in prose** (no `[[ ]]`) gets a
+  resolved `WikiLink` after curation (problem B); re-run is a no-op. `[F03]` — `inject_cross_links`.
+- [x] `[F22]` Overview resolved by a stable `page_kind == "overview"` marker (bootstrap sets it),
+  title fallback; recurate preserves `page_kind`; dedup excludes overview by id.
+- [x] `[F24]` Curate job logs `wiki.curate.llm_steps_skipped_no_profile` when no ModelProfile.
+- [x] Unit: `test_cross_link.py` (7). Integration: `test_cross_link_curate.py`; `test_curator_repair`
+  (4) green. Evidence: ruff/format clean, `pytest -m "not integration"` **159 passed**, pyright
+  (touched) 0 errors, `alembic check` no new ops.
+- [ ] Eval: graph-connectivity scorer → deferred to Phase 7 (eval-gate batch). Live enqueue→worker
+  validation rides the Phase 3 stack rebuild + Playwright.
 
 ### Phase 3 — Merge-proposal surface + real `apply_merge`  `[F05, F23]`
 - [ ] Pending `PageMergeProposal` renders as an ApprovalCard in the wiki "needs-attention" banner;

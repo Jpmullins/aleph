@@ -1253,3 +1253,43 @@ F09 (no runtime chain verification). See
 - `ruff check .` → All checks passed. `ruff format --check .` → 0 reformat.
 - `pytest -m "not integration"` → 152 passed. Pyright (touched files) → 0 errors.
 - `alembic check` → No new upgrade operations (no migration this phase).
+
+## Audit remediation — Phase 2: curator chokepoint + cross_link + robustness (2026-06-30)
+
+Closes F03 (siblings never cross-linked), F04 (curator not enqueued from every
+authoring path), F22 (brittle overview identification), F24 (silent skip with no
+ModelProfile).
+
+### What shipped
+- **F04 — every authoring path knits.** `curate_page_job` is now enqueued from
+  bootstrap (overview), notes-promote (route, ad-hoc arq pool, post-commit),
+  wiki-ingest (moved OUT of the `if pending is None` mechanical-review guard so
+  it fires for every committed revision), and synthesis (already). No in-commit
+  hook (would race the job ahead of the caller's commit) — post-commit enqueue at
+  each path instead.
+- **F03 — cross_link.** `CuratorService._cross_link` + the pure
+  `inject_cross_links(body, surfaces)`: wraps the first un-linked prose
+  occurrence of an existing sibling title/alias in `[[ ]]` (protects fenced/inline
+  code + existing links, longest-surface-wins, word-boundary, idempotent, bounded
+  to `_CROSS_LINK_MAX_TARGETS=20`, min surface len 4), then commits a curator
+  revision so `WikiLink` rows are written. Runs in `curate()` after repair.
+- **F22 — robust overview.** `_find_overview` prefers a stable
+  `page_kind == "overview"` marker (bootstrap now sets it; recurate preserves
+  `page_kind`); dedup excludes the overview by id. Title-match fallback for legacy
+  projects. Renaming a project no longer silently breaks recuration.
+- **F24** — the curate job logs `wiki.curate.llm_steps_skipped_no_profile` when a
+  project has no ModelProfile (deterministic knit still runs).
+
+### Tests
+- Unit: `packages/aleph-wiki/tests/test_cross_link.py` (7).
+- Integration: `tests/e2e/test_cross_link_curate.py` (prose→resolved link,
+  idempotent). Existing `test_curator_repair.py` (4) stays green.
+
+### Gates
+- `ruff check .` clean; `ruff format --check .` clean; `pytest -m "not integration"`
+  **159 passed**; pyright (touched) 0 errors; `alembic check` no new ops.
+
+### Note
+- Curator logic is validated in-process (the integration tests build the ASGI app
+  locally). The enqueue→worker→curate path through the running `aleph-workers`
+  container will be re-validated live during the Phase 3 stack rebuild + Playwright.
