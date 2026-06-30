@@ -1370,3 +1370,29 @@ needed — `DocumentChunk.embedder_model` already existed.
   `set_model_profile` agent tool now actually switches (was a non-functional reporter).
 - Tests: `test_model_profile_switch.py` (switch route + reembed_for_project-only-stale);
   4b/5 → 166 unit pass, ruff/format/pyright/alembic clean.
+
+## Audit remediation — Phases 7a/7b + 9 (Library) + presign fix (2026-06-30)
+
+- **7a (F16/F20/F30):** deleted the legacy `assistant_turn` pipeline — worker job,
+  `AssistantTurnWorkflow` (with `budget_gate` + regex `query_rewrite`), and the dead
+  `post_message`/message-stream routes. Removed the `echo` subagent. Live (CopilotKit)
+  is the sole chat surface; session/thread CRUD kept (the web uses it).
+- **7b (F28/F12/F29-partial):** Settings shows only Cap + Spent (no soft/hard cap rows);
+  removed handler-less "View diff" actions from ApprovalCard + DiffCard; added unpin/dismiss
+  to the frontend ACTION_NAMES.
+- **9 (raw-source feature):** "Artifacts" tab renamed **Library** with **Sources**
+  (ingested PDFs/webpages/docs) + **Artifacts** sections; a source viewer card renders the
+  raw asset (Raw = presigned object URL in an iframe; Text = normalized markdown). Backend
+  surface dispatch handles the `library` tab.
+- **presign fix (live-validation bug):** presigned source-asset URLs were signed for the
+  internal `minio:9000` host (unreachable from the browser → blank Raw viewer). `AssetStore`
+  now presigns via `MINIO_PUBLIC_ENDPOINT` (dev localhost:9000) with a pinned region (so
+  `presigned_get_object` doesn't make a live `_get_region` call to the unreachable host).
+  **Verified live in-browser:** Library → Sources → Open → Raw renders the ingested webpage.
+
+### Still open (honest)
+- Phase 8 full connectors (custom AIQ image with arxiv/semantic_scholar/… as NAT plugins) —
+  large infra; the submit-time `data_sources` per-project filter mechanism is the feasible part.
+- Phase 9 Playwright **render worker** for JS-heavy page capture fidelity — infra (browser in
+  the worker image); current URL ingest is raw-HTTP (renders fine for static pages).
+- Phase 6 Hypotheses A2UI delta wiring (F11); dormant-surface cleanups (F13/F14/F15/F19).
