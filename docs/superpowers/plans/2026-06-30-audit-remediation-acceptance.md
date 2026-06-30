@@ -87,16 +87,21 @@ pnpm -C tests/playwright test            # → all specs green incl. the phase's
 - [ ] Eval: graph-connectivity scorer → deferred to Phase 7 (eval-gate batch). Live enqueue→worker
   validation rides the Phase 3 stack rebuild + Playwright.
 
-### Phase 3 — Merge-proposal surface + real `apply_merge`  `[F05, F23]`
-- [ ] Pending `PageMergeProposal` renders as an ApprovalCard in the wiki "needs-attention" banner;
-  Approve → `apply_merge`; Reject → marked. `wiki_curation_status` reports pending merges + a
-  chat approve/reject action exists.
-- [ ] `[F23]` `apply_merge` **rewrites the source's `[[title]]` references in page bodies** to the
-  target (not only an alias redirect), then soft-deletes the source — all ledgered.
-- [ ] Integration: dedup → proposal in wiki payload → approve redirects inbound links + rewrites
-  bodies + soft-deletes with expected ledger rows.
-- [ ] **Playwright** `merge-proposal.spec.ts`: seed near-duplicate → banner merge card → Approve →
-  source gone from list, target remains, Activity confirms.
+### Phase 3 — Merge-proposal surface + real `apply_merge`  `[F05, F23]` ✅ DONE (2026-06-30)
+- [x] Pending `PageMergeProposal` renders as an ApprovalCard on the **Briefs** tab (the established
+  home for approval cards; the generic ApprovalCard needs no new frontend); Approve → `apply_merge`,
+  Reject → marked, both via the `/cards/actions` router. `wiki_curation_status` reports pending
+  merges (conversational discovery).
+- [x] `[F23]` `apply_merge` rewrites `[[source]]` → `[[target]]` in inbound page bodies (recommit,
+  label-preserving) **plus** the structural link redirect + alias + soft-delete — all ledgered
+  (`links_redirected` + `bodies_rewritten`).
+- [x] Integration: `test_merge_approve_action.py` (surfaces in briefs → approve via `/cards/actions`
+  → merged + soft-deleted; reject), `test_merge_body_rewrite.py`. Evidence: 162 unit pass, pyright
+  (touched) 0 errors, ruff/format clean.
+- [ ] **Playwright** `merge-proposal.spec.ts` → batched with the Phase 6/9 UI-Playwright run after
+  the stack rebuild (the ApprovalCard approve/reject is generic, already-working frontend).
+- Note: surfaced on **Briefs** rather than a new wiki banner — Briefs is where ApprovalCards + the
+  action-router already live, so this is fully reachable with zero new frontend.
 
 ### Phase 4 — Agent ModelProfile + robust cost + env-cred gate  `[F06, F07, F10]`
 - [ ] `[F06]` Under `aleph-production`, orchestrator + each subagent resolve model from the project

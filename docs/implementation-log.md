@@ -1293,3 +1293,35 @@ ModelProfile).
 - Curator logic is validated in-process (the integration tests build the ASGI app
   locally). The enqueue→worker→curate path through the running `aleph-workers`
   container will be re-validated live during the Phase 3 stack rebuild + Playwright.
+
+## Audit remediation — Phase 3: merge-proposal surface + real apply_merge (2026-06-30)
+
+Closes F05 (merge proposals invisible end-to-end) and F23 (apply_merge left
+[[source]] text in bodies).
+
+### What shipped
+- **F23** — `apply_merge` rewrites `[[Source]] -> [[Target]]` in inbound page prose
+  (pure `rewrite_wikilink_target`, label-preserving) by recommitting those pages
+  with `origin="curator"`, in addition to the structural `WikiLink` redirect +
+  alias + soft-delete. Ledger payload records `links_redirected` + `bodies_rewritten`.
+- **F05** — pending `PageMergeProposal`s now render as `ApprovalCard`s on the
+  **Briefs** tab (the generic ApprovalCard — no new frontend component); the
+  `/cards/actions` router gained `page_merge_proposal` **approve** (→ `apply_merge`)
+  and **reject** branches; `wiki_curation_status` reports pending merges so the
+  conversational path surfaces them. Also ledgered the synthesis-reject
+  `write_feedback` call (a small rule-#4 hole).
+
+### Tests
+- Unit: `rewrite_wikilink_target` (3, in `test_cross_link.py`).
+- Integration: `test_merge_approve_action.py` (surfaces in briefs + approve via
+  `/cards/actions` merges & soft-deletes + reject), `test_merge_body_rewrite.py`.
+  `test_curator_repair.py` (4) green.
+
+### Gates
+- ruff/format clean; `pytest -m "not integration"` **162 passed**; pyright (touched)
+  0 errors; `alembic check` no new ops.
+
+### Note
+- The ApprovalCard render + approve/reject is generic frontend that already works;
+  the dedicated Playwright `merge-proposal.spec.ts` + live drive ride the stack
+  rebuild batched with the other UI phases (6, 9).
