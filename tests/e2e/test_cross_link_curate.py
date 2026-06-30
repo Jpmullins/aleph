@@ -123,3 +123,103 @@ async def test_curate_cross_links_sibling_mentioned_in_prose(
         )
         await session.commit()
     assert again.cross_links_added == 0
+
+
+async def test_cross_link_preserves_page_claims(http_client, auth_bypass, asgi_app, monkeypatch):
+    """Cross-linking a page must NOT drop its claims/citations (provenance regression)."""
+    from aleph_db.models.project import Project
+    from aleph_db.repos.ledger import LedgerWriter
+    from aleph_security.principal import Principal
+    from aleph_wiki.curator_service import CuratorService
+    from aleph_wiki.models import WikiClaim, WikiPage
+    from aleph_wiki.wiki_service import ClaimDraft, WikiService
+
+    monkeypatch.setattr(asgi_app.state.settings, "bootstrap_auto_enabled", False)
+    proj = await http_client.post(
+        "/v1/projects", json={"title": "Claims XLink", "description": "x", "budget_usd": "1.00"}
+    )
+    pid = UUID(proj.json()["id"])
+    maker = asgi_app.state.session_maker
+
+    async with maker() as session:
+        owner = (
+            await session.execute(select(Project.created_by).where(Project.id == pid))
+        ).scalar_one()
+        principal = Principal(user_id=owner, subject="seed", email="", actor_kind="user")
+        svc = WikiService(session)
+        ledger = LedgerWriter(session)
+        await svc.commit_revision(
+            principal=principal,
+            ledger=ledger,
+            project_id=pid,
+            page_id=None,
+            title="Teacher Networks",
+            slug=None,
+            page_kind="topic",
+            body_md="# Teacher Networks\n\nThe teacher.\n",
+            summary="t",
+            claims=[],
+            wikilinks=[],
+            commit_message="seed sibling",
+        )
+        # New page HAS a claim AND mentions the sibling in prose.
+        new = await svc.commit_revision(
+            principal=principal,
+            ledger=ledger,
+            project_id=pid,
+            page_id=None,
+            title="Student Networks",
+            slug=None,
+            page_kind="topic",
+            body_md="# Student Networks\n\nA student learns from Teacher Networks.\n",
+            summary="s",
+            claims=[ClaimDraft(text="Students learn from teachers.", confidence="cited")],
+            wikilinks=[],
+            commit_message="seed new",
+        )
+        await session.commit()
+        new_page_id = new.page_id
+
+    # Pre: the page has 1 claim on its current revision.
+    async with maker() as session:
+        page = (
+            await session.execute(select(WikiPage).where(WikiPage.id == new_page_id))
+        ).scalar_one()
+        claims_before = (
+            (
+                await session.execute(
+                    select(WikiClaim).where(WikiClaim.revision_id == page.current_revision_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(list(claims_before)) == 1
+
+    async with maker() as session:
+        owner = (
+            await session.execute(select(Project.created_by).where(Project.id == pid))
+        ).scalar_one()
+        result = await CuratorService(session, ledger=LedgerWriter(session), actor_id=owner).curate(
+            project_id=pid, page_id=new_page_id
+        )
+        await session.commit()
+    assert result.cross_links_added >= 1  # the prose mention got linked
+
+    # Post: the cross-linked NEW current revision STILL carries the claim.
+    async with maker() as session:
+        page = (
+            await session.execute(select(WikiPage).where(WikiPage.id == new_page_id))
+        ).scalar_one()
+        claims_after = (
+            (
+                await session.execute(
+                    select(WikiClaim).where(WikiClaim.revision_id == page.current_revision_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(list(claims_after)) == 1, (
+            "cross_link dropped the page's claims (provenance regression)"
+        )
