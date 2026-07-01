@@ -1,0 +1,341 @@
+# Aleph intent claims — one per intended user-facing capability.
+# status is always `unverified` here; audit/run.sh + audit/checks/ set pass/fail.
+# `wired` is the auditor's judgment (is the feature connected end-to-end?).
+# check_type ∈ {e2e, http, route, dataflow, build, static}.
+
+- id: projects-list
+  intent: "The landing page lists the user's projects (and shows an empty state when there are none), each openable."
+  evidence:
+    - apps/web/src/components/ProjectList.tsx
+    - apps/web/src/App.tsx
+    - apps/api/src/aleph_api/routes/projects.py
+  check_type: e2e
+  status: unverified
+  wired: true
+  notes: "GET /v1/projects backs the list; clicking a project navigates to /projects/:id."
+
+- id: project-create
+  intent: "A user can create a new project from the UI and land in its 3-panel workspace."
+  evidence:
+    - apps/web/src/components/ProjectList.tsx
+    - apps/api/src/aleph_api/routes/projects.py
+    - apps/web/src/components/ProjectWorkspace.tsx
+  check_type: e2e
+  status: unverified
+  wired: true
+  notes: "POST /v1/projects (title, description, model_profile_name, budget_usd) → 201; UI routes to workspace."
+
+- id: project-soft-delete
+  intent: "A project can be soft-deleted (status=deleted) and disappears from the active list."
+  evidence:
+    - apps/api/src/aleph_api/routes/projects.py
+    - apps/web/src/components/ProjectList.tsx
+  check_type: dataflow
+  status: unverified
+  wired: true
+  notes: "PATCH /v1/projects/{id} {status:deleted}; subsequent GET list must not contain it."
+
+- id: workspace-three-panel-shell
+  intent: "Opening a project shows the 3-panel shell: left rail (sessions/drawers), center chat+activity, right 5 surface tabs."
+  evidence:
+    - apps/web/src/components/ProjectWorkspace.tsx
+    - apps/web/src/components/LeftPanel.tsx
+    - apps/web/src/components/A2UIRightPanel.tsx
+  check_type: e2e
+  status: unverified
+  wired: true
+  notes: "Panels + the 5 tab labels (Wiki/Library/Notes/Hypotheses/Briefs) must be visible."
+
+- id: session-create
+  intent: "The '+ New' button creates a chat session and enables the chat composer."
+  evidence:
+    - apps/web/src/components/LeftPanel.tsx
+    - apps/api/src/aleph_api/routes/assistant.py
+  check_type: e2e
+  status: unverified
+  wired: true
+  notes: "POST /v1/projects/{id}/sessions; composer (copilot-chat-textarea) becomes enabled."
+
+- id: chat-streams-response
+  intent: "A user can send a chat message to the Live agent and receive a streamed assistant response in the transcript."
+  evidence:
+    - apps/web/src/components/CopilotChatSurface.tsx
+    - apps/web/src/lib/copilot.tsx
+    - apps/copilot-runtime/src/server.ts
+    - apps/api/src/aleph_api/copilot_agent.py
+  check_type: e2e
+  status: unverified
+  wired: true
+  notes: "Browser→runtime(:4000)→API /copilotkit/agent/assistant→Deep-Agents orchestrator. Assert an assistant message with non-empty text appears."
+
+- id: copilot-runtime-agent-wired
+  intent: "The Node CopilotRuntime exposes the 'assistant' agent with A2UI enabled, and the API AG-UI endpoint exists."
+  evidence:
+    - apps/copilot-runtime/src/server.ts
+    - apps/api/src/aleph_api/copilotkit_endpoint.py
+    - apps/api/src/aleph_api/lifespan.py
+  check_type: http
+  status: unverified
+  wired: true
+  notes: "GET :4000/api/copilotkit/info → agents.assistant + a2uiEnabled; API /copilotkit/agent/assistant responds (405/422 = mounted)."
+
+- id: wiki-first-retrieval
+  intent: "The wiki-first retrieval router answers a question by composing an answer from wiki pages (not first-line vector RAG)."
+  evidence:
+    - apps/api/src/aleph_api/routes/assistant.py
+    - packages/aleph-assistant/src/aleph_assistant
+  check_type: http
+  status: unverified
+  wired: true
+  notes: "POST /v1/projects/{id}/retrieval/debug {query} → non-empty composed_body_md relevant to the query."
+
+- id: wiki-pages-list-and-read
+  intent: "The Wiki surface lists pages and a page opens into a readable revision body."
+  evidence:
+    - apps/web/src/a2ui/components/WikiSurface.tsx
+    - apps/api/src/aleph_api/routes/wiki.py
+  check_type: http
+  status: unverified
+  wired: true
+  notes: "GET /wiki/pages non-empty; GET /wiki/pages/{id} returns a revision with body markdown."
+
+- id: wiki-approve-reject
+  intent: "A draft wiki page exposes Approve/Reject; approving flips its status to approved."
+  evidence:
+    - apps/api/src/aleph_api/routes/wiki.py
+    - apps/web/src/a2ui/components/WikiSurface.tsx
+    - tests/playwright/specs/10-wiki-links-and-scaling.spec.ts
+  check_type: dataflow
+  status: unverified
+  wired: true
+  notes: "Promote a note → draft page; POST /wiki/pages/{id}/approve → status becomes approved."
+
+- id: wikilink-navigation
+  intent: "Wikilinks render as navigable chips when resolved and a distinct broken-link state when unresolved."
+  evidence:
+    - apps/web/src/components/WikilinkChip.tsx
+    - apps/web/src/components/WikiBodyMarkdown.tsx
+    - tests/playwright/specs/10-wiki-links-and-scaling.spec.ts
+  check_type: e2e
+  status: unverified
+  wired: true
+  notes: "Seed one page linking to an existing page (resolved) and one missing (broken); assert resolved chip navigates + broken chip is badged."
+
+- id: wiki-repair-links
+  intent: "A repair-broken-links action re-resolves wikilinks whose target now exists."
+  evidence:
+    - apps/api/src/aleph_api/routes/aliases.py
+    - packages/aleph-wiki/src/aleph_wiki/alias_service.py
+  check_type: http
+  status: unverified
+  wired: true
+  notes: "POST /wiki/aliases/repair-links → 200 with a repaired-count payload."
+
+- id: source-ingest-pipeline
+  intent: "Uploading a source runs normalize → chunk+embed → wiki-ingest as background workers, ending with the source indexed and wiki content produced."
+  evidence:
+    - apps/api/src/aleph_api/routes/sources.py
+    - apps/workers/src/aleph_workers/jobs/normalize.py
+    - apps/workers/src/aleph_workers/jobs/chunk_embed.py
+    - apps/workers/src/aleph_workers/jobs/wiki_ingest.py
+  check_type: dataflow
+  status: unverified
+  wired: true
+  notes: "POST /sources/upload; poll /agent-runs until normalize/wiki reach a terminal state; assert source status advances past 'normalized'."
+
+- id: library-source-viewer
+  intent: "The Library surface shows ingested sources, each with a viewable raw asset and normalized text."
+  evidence:
+    - apps/web/src/a2ui/components/SourceCard.tsx
+    - apps/api/src/aleph_api/routes/sources.py
+  check_type: http
+  status: unverified
+  wired: true
+  notes: "GET /sources non-empty (AI Distillation); GET /sources/{id}/asset → presigned URL; GET /sources/{id}/normalized → markdown."
+
+- id: notes-crud-roundtrip
+  intent: "A user can create a note and add/edit sections; the content survives a round trip."
+  evidence:
+    - apps/web/src/a2ui/components/NotesSurface.tsx
+    - apps/api/src/aleph_api/routes/notes.py
+  check_type: dataflow
+  status: unverified
+  wired: true
+  notes: "POST /notes, POST /notes/{id}/sections {body_md:<marker>}; GET /notes/{id} must contain the marker."
+
+- id: notes-promote-to-wiki
+  intent: "Promoting a note creates a draft wiki page and a pending Briefs proposal."
+  evidence:
+    - apps/web/src/a2ui/components/NotesSurface.tsx
+    - apps/api/src/aleph_api/routes/notes.py
+  check_type: dataflow
+  status: unverified
+  wired: true
+  notes: "POST /notes/{id}/promote → 202; a new draft/synthesis wiki page + a pending synthesis-proposal appear."
+
+- id: hypotheses-create
+  intent: "A user can create a hypothesis via the Hypotheses surface and see it listed."
+  evidence:
+    - apps/web/src/a2ui/components/HypothesesSurface.tsx
+    - apps/api/src/aleph_api/routes/hypotheses.py
+  check_type: dataflow
+  status: unverified
+  wired: true
+  notes: "POST /hypotheses {title, statement} → 201; appears in GET /hypotheses."
+
+- id: hypotheses-ach-matrix
+  intent: "The Hypotheses surface renders an ACH (Analysis of Competing Hypotheses) matrix."
+  evidence:
+    - apps/web/src/a2ui/components/HypothesisMatrix.tsx
+    - apps/api/src/aleph_api/routes/hypotheses.py
+  check_type: http
+  status: unverified
+  wired: true
+  notes: "GET /hypotheses/ach returns {hypotheses, targets, cells, fewest_disconfirming_id} arrays."
+
+- id: briefs-pending-proposals
+  intent: "The Briefs surface renders pending synthesis proposals as approval cards."
+  evidence:
+    - apps/web/src/a2ui/components/BriefsSurface.tsx
+    - apps/api/src/aleph_api/routes/briefs.py
+    - apps/api/src/aleph_api/routes/surfaces.py
+  check_type: dataflow
+  status: unverified
+  wired: true
+  notes: "After promoting a note (creates a pending proposal), GET /briefs badge_count>=1 and its surface contains an ApprovalCard."
+
+- id: approval-card-action
+  intent: "Approving an ApprovalCard routes through the ActionRouter, executes, and writes a ledger event (human-in-the-loop)."
+  evidence:
+    - apps/web/src/a2ui/components/ApprovalCard.tsx
+    - apps/api/src/aleph_api/routes/cards.py
+    - apps/api/src/aleph_api/a2ui_handlers.py
+  check_type: dataflow
+  status: unverified
+  wired: true
+  notes: "POST /cards/actions {approve, target=synthesis_proposal} → proposal status approved + ledger event count increases."
+
+- id: aiq-research-to-wiki
+  intent: "AIQ web research produces a committed wiki page linked to a synthesis proposal and an agent run (research → wiki)."
+  evidence:
+    - packages/aleph-aiq/src/aleph_aiq/client.py
+    - apps/workers/src/aleph_workers/jobs/aiq_synthesis.py
+    - packages/aleph-wiki/src/aleph_wiki/synthesis_workflow.py
+  check_type: dataflow
+  status: unverified
+  wired: true
+  notes: "Over existing real data: each synthesis-proposal references a real page_id (a committed wiki page) + agent_run_id. Non-destructive proof the pipeline ran end-to-end."
+
+- id: bootstrap-on-create
+  intent: "Creating a project auto-bootstraps a wiki: a bootstrap agent run seeds an overview page."
+  evidence:
+    - apps/api/src/aleph_api/routes/projects.py
+    - apps/workers/src/aleph_workers/jobs/bootstrap.py
+  check_type: dataflow
+  status: unverified
+  wired: true
+  notes: "Create a project with a real title/description; poll /agent-runs for a bootstrap run reaching terminal + an overview wiki page. Gated by bootstrap_auto_enabled (enabled in this stack)."
+
+- id: artifacts-build
+  intent: "A user/agent can build an artifact (e.g. markdown bundle) from wiki pages and download the rendered asset."
+  evidence:
+    - apps/web/src/a2ui/components/ArtifactsSurface.tsx
+    - apps/api/src/aleph_api/routes/artifacts.py
+    - apps/workers/src/aleph_workers/jobs
+  check_type: dataflow
+  status: unverified
+  wired: false
+  notes: "BUILD is wired (builder agent succeeds, artifact + version created) but DOWNLOAD is not: the UI's Download button (ArtifactsSurface.tsx:266) links to /artifacts/{id}/versions/{ver}/download, which is NOT a registered route (artifacts.py has no download endpoint) → 404. Broken end-to-end at the download step."
+
+- id: cost-tracking
+  intent: "Per-project cost is tracked and rolled up (cap, spent, by-phase, by-model) and shown in Profile."
+  evidence:
+    - apps/api/src/aleph_api/routes/cost.py
+    - apps/web/src/components/Drawers.tsx
+  check_type: http
+  status: unverified
+  wired: true
+  notes: "GET /cost on a project that ran agents → spent_usd>0 with non-empty by_phase."
+
+- id: action-ledger-hashchain
+  intent: "Every mutation writes an append-only, hash-chained ledger event; the chain verifies."
+  evidence:
+    - apps/api/src/aleph_api/routes/ledger.py
+    - packages/aleph-db/src/aleph_db
+  check_type: http
+  status: unverified
+  wired: true
+  notes: "GET /ledger/verify → {ok:true, count>0, first_divergence_event_id:null}."
+
+- id: realtime-sse-streams
+  intent: "The workspace receives realtime push via SSE streams (agent-events, changes, surfaces) backed by Postgres LISTEN/NOTIFY."
+  evidence:
+    - apps/api/src/aleph_api/realtime.py
+    - apps/api/src/aleph_api/routes/changes.py
+    - apps/api/src/aleph_api/routes/agent_events.py
+    - apps/api/src/aleph_api/routes/surfaces.py
+  check_type: http
+  status: unverified
+  wired: true
+  notes: "Each of changes/stream, agent-events/stream, surfaces/wiki/stream must emit at least one SSE frame on connect within a timeout."
+
+- id: viz-renderers
+  intent: "Chart (Vega-Lite), Table, Graph (SVG), and Map (MapLibre) cards render real visual output."
+  evidence:
+    - apps/web/src/a2ui/components/ChartCard.tsx
+    - apps/web/src/a2ui/components/TableCard.tsx
+    - apps/web/src/a2ui/components/GraphCard.tsx
+    - apps/web/src/a2ui/components/MapCard.tsx
+    - tests/playwright/specs/05-charts-tables-graphs.spec.ts
+  check_type: e2e
+  status: unverified
+  wired: true
+  notes: "Mount each card via the workspace and assert a real canvas/SVG/DOM container appears (not just that a component mounted)."
+
+- id: model-profile-switch
+  intent: "A project's model profile can be switched between named profiles (aleph-dev/aleph-production)."
+  evidence:
+    - apps/api/src/aleph_api/routes/model_profile.py
+  check_type: dataflow
+  status: unverified
+  wired: true
+  notes: "POST /model-profile/switch {profile_name} → 200; GET model-profile reflects it; ledger records the switch."
+
+- id: evals-suite
+  intent: "An eval suite with datasets and runs exists (gate CI runs)."
+  evidence:
+    - apps/api/src/aleph_api/routes/evals.py
+    - packages/aleph-evals/src/aleph_evals
+  check_type: http
+  status: unverified
+  wired: false
+  notes: "Backend-only: /v1/eval-datasets and /v1/eval-runs respond, but NO frontend references them. Not a user-facing capability; wired only as a CI gate."
+
+- id: route-reachability
+  intent: "Every client route resolves to a real component reachable from a UI entry point; API routers all mount; orphan endpoints are flagged."
+  evidence:
+    - apps/web/src/App.tsx
+    - apps/api/src/aleph_api/main.py
+  check_type: route
+  status: unverified
+  wired: true
+  notes: "Assert App.tsx's 4 routes map to components and the workspace route is reachable via ProjectList navigation; assert all main.py routers import; flag evals/merge-proposals/reviews-trigger/datasets as UI-orphan endpoints."
+
+- id: web-typecheck
+  intent: "The web app typechecks cleanly (tsc --noEmit), i.e. no unresolved imports or type errors in the UI."
+  evidence:
+    - apps/web/tsconfig.json
+    - apps/web/package.json
+  check_type: static
+  status: unverified
+  wired: true
+  notes: "pnpm -C apps/web typecheck exits 0."
+
+- id: api-imports-resolve
+  intent: "The API app factory and its routers import cleanly (no unresolved imports / broken modules)."
+  evidence:
+    - apps/api/src/aleph_api/main.py
+  check_type: static
+  status: unverified
+  wired: true
+  notes: "Importing aleph_api.main and calling create_app() succeeds (executed inside the running api container)."
