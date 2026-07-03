@@ -38,24 +38,20 @@ async def record_render(
     width_px: int | None = None,
     height_px: int | None = None,
 ) -> RenderedAsset:
-    """Upload bytes to MinIO and write the RenderedAsset row."""
+    """Upload bytes via the AssetStore and write the RenderedAsset row."""
     sha = hashlib.sha256(data).hexdigest()
     ext = output_format.lower()
     key = f"projects/{project_id}/renders/{source_id}/{sha[:12]}.{ext}"
-    from io import BytesIO
-
-    asset_store._client.put_object(
-        asset_store._bucket,
-        key,
-        data=BytesIO(data),
-        length=len(data),
-        content_type={
+    stored = asset_store.put_bytes(
+        key=key,
+        data=data,
+        mime_type={
             "png": "image/png",
             "svg": "image/svg+xml",
             "pdf": "application/pdf",
         }.get(ext, "application/octet-stream"),
     )
-    storage_uri = f"s3://{asset_store._bucket}/{key}"
+    storage_uri = stored.storage_uri
     asset = RenderedAsset(
         id=uuid7(),
         project_id=project_id,

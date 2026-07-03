@@ -5,13 +5,12 @@ source "$(dirname "$0")/lib.sh"
 pid=$(pick_project_with sources) || skip "no project has ingested sources"
 sid=$(api GET "/v1/projects/$pid/sources" | jq -r '.[0].id')
 
-# Raw asset -> presigned URL
-asset=$(api GET "/v1/projects/$pid/sources/$sid/asset")
-url=$(echo "$asset" | jq -r '.url // .asset_url // empty')
-[ -n "$url" ] || fail "source $sid has no downloadable asset URL: $(echo "$asset" | head -c 160)"
+# Raw asset streams through the authenticated route (no URL hop)
+assetcode=$(api_code GET "/v1/projects/$pid/assets/source/$sid")
+[ "$assetcode" = "200" ] || fail "asset stream for source $sid returned HTTP $assetcode"
 
 # Normalized text
 normcode=$(api_code GET "/v1/projects/$pid/sources/$sid/normalized")
 [ "$normcode" = "200" ] || fail "normalized text for source $sid returned HTTP $normcode"
 
-pass "source $sid exposes asset URL + normalized text (HTTP 200)"
+pass "source $sid streams raw bytes + normalized text (HTTP 200)"

@@ -26,5 +26,8 @@ RUN uv sync --no-dev --all-packages
 
 EXPOSE 8000
 
-CMD ["uv", "run", "uvicorn", "aleph_api.main:create_app", "--factory", \
+# Invoke the venv binary directly: the container may run as an arbitrary uid
+# (compose sets user: for the shared asset bind mount), and `uv run` would
+# need a writable cache/HOME that uid doesn't have.
+CMD ["/app/.venv/bin/uvicorn", "aleph_api.main:create_app", "--factory", \
      "--host", "0.0.0.0", "--port", "8000"]

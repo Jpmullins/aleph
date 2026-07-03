@@ -37,15 +37,16 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str
 
-    # MinIO. Inc 1 routes use it for source asset storage.
-    minio_endpoint: str | None = None
-    # Browser-reachable MinIO endpoint for presigned source-asset URLs (the
-    # internal `minio:9000` host isn't resolvable from the browser). Dev:
-    # http://localhost:9000.
-    minio_public_endpoint: str | None = None
+    # Asset storage (WP-1). `fs` (default) keeps bytes under aleph_asset_root
+    # and serves them only through the authenticated streaming route; `s3`
+    # targets any S3-compatible endpoint (opt-in `s3` compose profile locally).
+    aleph_asset_backend: Literal["fs", "s3"] = "fs"
+    aleph_asset_root: str = "data/assets"
+    aleph_s3_endpoint: str | None = None
+    aleph_s3_access_key: str | None = None
+    aleph_s3_secret_key: str | None = None
     aleph_s3_bucket: str | None = None
-    minio_root_user: str | None = None
-    minio_root_password: str | None = None
+    aleph_s3_secure: bool = False
 
     # Langfuse
     langfuse_host: str

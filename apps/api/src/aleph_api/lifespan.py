@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import redis.asyncio as aioredis
@@ -24,7 +24,7 @@ from aleph_observability import (
     shutdown_langfuse,
     shutdown_otel,
 )
-from aleph_rks.asset_store import AssetStore
+from aleph_rks.asset_store import AssetStore, create_asset_store
 from aleph_security.jwt import JWKSCache
 
 if TYPE_CHECKING:
@@ -84,24 +84,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         redis_client=redis_client,
     )
 
-    asset_store: AssetStore | None = None
-    if (
-        settings.minio_endpoint
-        and settings.minio_root_user
-        and settings.minio_root_password
-        and settings.aleph_s3_bucket
-    ):
-        try:
-            asset_store = AssetStore(
-                endpoint=settings.minio_endpoint,
-                access_key=settings.minio_root_user,
-                secret_key=settings.minio_root_password,
-                bucket=settings.aleph_s3_bucket,
-                secure=False,
-                public_endpoint=settings.minio_public_endpoint,
-            )
-        except Exception:
-            asset_store = None
+    # Fail fast on a misconfigured asset backend — no silent None fallback;
+    # every asset byte flows through this store (and, browser-side, through
+    # the authenticated streaming route).
+    asset_store: AssetStore = create_asset_store(
+        backend=settings.aleph_asset_backend,
+        root=settings.aleph_asset_root,
+        endpoint=settings.aleph_s3_endpoint,
+        access_key=settings.aleph_s3_access_key,
+        secret_key=settings.aleph_s3_secret_key,
+        bucket=settings.aleph_s3_bucket,
+        secure=settings.aleph_s3_secure,
+    )
 
     app.state.settings = settings
     app.state.db_engine = engine
@@ -115,7 +109,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Rule #7: resolve the agent's model from the default named ModelProfile
     # (aleph-dev / aleph-production) rather than a hardcoded id, so the
     # conversational surface uses the configured tier (e.g. Opus in production).
-    agent_bindings: dict | None = None
+    agent_bindings: dict[str, Any] | None = None
     try:
         from aleph_db.repos.model_profile import get_template
 

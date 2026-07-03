@@ -30,7 +30,14 @@ deploy/compose/.env
 API_keys.txt
 secrets/
 
-# MinIO / data dirs
+# Local data dirs (fs asset store lives under /data/assets). The tracked
+# .gitkeep guarantees data/assets exists user-owned on a fresh clone — if the
+# Docker daemon creates the bind-mount source instead, it's root-owned and the
+# uid-mapped api/workers containers can't write assets.
+/data/*
+!/data/assets
+/data/assets/*
+!/data/assets/.gitkeep
 deploy/compose/data/
 **/.minio.sys/
 

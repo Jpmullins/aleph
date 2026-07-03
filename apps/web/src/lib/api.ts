@@ -47,6 +47,12 @@ async function request<T>(method: string, path: string, body?: Json): Promise<T>
   return (await resp.json()) as T;
 }
 
+/** Absolute API URL for browser-native loads (iframe/img src) that can't go
+ * through `api.get` — e.g. the authenticated asset streaming route. */
+export function apiUrl(path: string): string {
+  return `${baseUrl}${path}`;
+}
+
 export const api = {
   get<T>(path: string): Promise<T> {
     return request("GET", path);

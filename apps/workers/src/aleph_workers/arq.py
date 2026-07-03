@@ -21,7 +21,7 @@ from aleph_observability import (
     shutdown_langfuse,
     shutdown_otel,
 )
-from aleph_rks.asset_store import AssetStore
+from aleph_rks.asset_store import create_asset_store
 from aleph_workers.jobs import (
     aiq_submit_job,
     aiq_synthesis_poll_job,
@@ -72,12 +72,14 @@ async def _startup(ctx: dict[str, Any]) -> None:
         session_maker=maker,
         redis_client=redis,
     )
-    asset_store = AssetStore(
-        endpoint=s.minio_endpoint,
-        access_key=s.minio_root_user,
-        secret_key=s.minio_root_password,
+    asset_store = create_asset_store(
+        backend=s.aleph_asset_backend,
+        root=s.aleph_asset_root,
+        endpoint=s.aleph_s3_endpoint,
+        access_key=s.aleph_s3_access_key,
+        secret_key=s.aleph_s3_secret_key,
         bucket=s.aleph_s3_bucket,
-        secure=False,
+        secure=s.aleph_s3_secure,
     )
     ctx["settings"] = s
     ctx["db_engine"] = engine

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -23,11 +24,15 @@ class WorkerSettings(BaseSettings):
     database_url: str
     redis_url: str
 
-    # MinIO / S3 for the asset store used by normalize/chunk_embed jobs.
-    minio_endpoint: str = "http://minio:9000"
-    minio_root_user: str = "aleph"
-    minio_root_password: str = "changeme-local"
-    aleph_s3_bucket: str = "aleph-local"
+    # Asset storage (WP-1) — same selection as the API; workers read/write
+    # the identical root (shared bind mount in compose).
+    aleph_asset_backend: Literal["fs", "s3"] = "fs"
+    aleph_asset_root: str = "data/assets"
+    aleph_s3_endpoint: str | None = None
+    aleph_s3_access_key: str | None = None
+    aleph_s3_secret_key: str | None = None
+    aleph_s3_bucket: str | None = None
+    aleph_s3_secure: bool = False
 
     langfuse_host: str
     langfuse_public_key: str

@@ -1,7 +1,7 @@
 """Aleph integration with NVIDIA AIQ (research subsystem).
 
 Aleph runs AIQ as a separate worker process (`aiq-server`) and talks to
-it over HTTP. AIQ never writes to Aleph's Postgres or MinIO directly —
+it over HTTP. AIQ never writes to Aleph's Postgres or asset storage directly —
 all tool calls re-enter `aleph-api` via the `/internal/v1/aiq/*`
 callbacks (auth bridge below).
 """

@@ -261,25 +261,17 @@ async def _put_artifact_bytes(
 ) -> str:
     """Upload via the AssetStore. Path: artifacts/{id}/{version_no}.{ext}."""
     ctx = _ctx()
-    # Reuse the AssetStore helper. We can't use `put_source_asset`
-    # because that's keyed by source_id; minor inline write here.
-    from io import BytesIO
-
     key = f"projects/{project_id}/artifacts/{artifact_id}/{version_no}.{ext}"
-    bucket = ctx.asset_store._bucket
-    client = ctx.asset_store._client
-    client.put_object(
-        bucket,
-        key,
-        data=BytesIO(data),
-        length=len(data),
-        content_type={
+    stored = ctx.asset_store.put_bytes(
+        key=key,
+        data=data,
+        mime_type={
             "pdf": "application/pdf",
             "zip": "application/zip",
             "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         }.get(ext, "application/octet-stream"),
     )
-    return f"s3://{bucket}/{key}"
+    return stored.storage_uri
 
 
 class BuilderWorkflow:

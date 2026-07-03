@@ -151,7 +151,7 @@
   check_type: http
   status: unverified
   wired: true
-  notes: "GET /sources non-empty (AI Distillation); GET /sources/{id}/asset → presigned URL; GET /sources/{id}/normalized → markdown."
+  notes: "GET /sources non-empty (AI Distillation); GET /assets/source/{id} streams the raw bytes; GET /sources/{id}/normalized → markdown."
 
 - id: notes-crud-roundtrip
   intent: "A user can create a note and add/edit sections; the content survives a round trip."

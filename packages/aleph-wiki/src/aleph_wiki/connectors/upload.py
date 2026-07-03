@@ -1,7 +1,7 @@
 """Upload connector — file ingest. The only connector in Inc 1.
 
 `search` is not supported (uploads are pushed, not searched). `fetch`
-reads the previously-uploaded asset bytes from MinIO/S3 by storage_uri.
+reads the previously-uploaded asset bytes from the AssetStore by storage_uri.
 Inc 3 re-registers this as a `nat` function inside AIQ's data_source_registry.
 """
 

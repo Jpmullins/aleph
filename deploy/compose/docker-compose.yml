@@ -41,15 +41,19 @@ services:
       timeout: 3s
       retries: 30
 
+  # Opt-in: the default asset backend is the local filesystem (fs). Boot the
+  # s3 profile (`docker compose --profile s3 up -d`) only when testing the s3
+  # asset backend: ALEPH_ASSET_BACKEND=s3 + the ALEPH_S3_* keys in .env.
   minio:
+    profiles: ["s3"]
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     restart: unless-stopped
     mem_limit: 512m
     memswap_limit: 512m
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
     ports:
       - "127.0.0.1:9000:9000"
       - "127.0.0.1:9001:9001"
@@ -65,6 +69,7 @@ services:
   # then exit. Reuses the minio image (it ships `mc`) so there's no extra
   # version to track. Idempotent via `mc mb --ignore-existing`.
   minio-init:
+    profiles: ["s3"]
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     restart: "no"
     entrypoint: ["/bin/sh", "-c"]
@@ -73,9 +78,9 @@ services:
         mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" &&
         mc mb --ignore-existing "local/$${ALEPH_S3_BUCKET}"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      ALEPH_S3_BUCKET: ${ALEPH_S3_BUCKET}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
+      ALEPH_S3_BUCKET: ${ALEPH_S3_BUCKET:-}
     depends_on:
       minio:
         condition: service_healthy
@@ -204,6 +209,10 @@ services:
       context: ../..
       dockerfile: apps/api/Dockerfile
     restart: unless-stopped
+    # Run as the host's first user so files written to the data/assets bind
+    # mount stay owned by the developer (host-run integration tests write to
+    # the same directory). Override if your uid differs.
+    user: "${ALEPH_UID:-1000}:${ALEPH_GID:-1000}"
     mem_limit: 1.5g
     memswap_limit: 1.5g
     environment:
@@ -211,11 +220,16 @@ services:
       ALEPH_ENV: ${ALEPH_ENV}
       ALEPH_DEFAULT_MODEL_PROFILE: ${ALEPH_DEFAULT_MODEL_PROFILE}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      MINIO_ENDPOINT: http://minio:9000
-      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-http://localhost:9000}
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      ALEPH_S3_BUCKET: ${ALEPH_S3_BUCKET}
+      # Asset storage: fs default; bytes on the shared bind mount below (the
+      # workers mount the same host dir, so normalize/chunk jobs read what
+      # the API wrote).
+      ALEPH_ASSET_BACKEND: ${ALEPH_ASSET_BACKEND:-fs}
+      ALEPH_ASSET_ROOT: /data/assets
+      # Only read when ALEPH_ASSET_BACKEND=s3 (see the s3 profile).
+      ALEPH_S3_ENDPOINT: ${ALEPH_S3_ENDPOINT:-}
+      ALEPH_S3_ACCESS_KEY: ${ALEPH_S3_ACCESS_KEY:-}
+      ALEPH_S3_SECRET_KEY: ${ALEPH_S3_SECRET_KEY:-}
+      ALEPH_S3_BUCKET: ${ALEPH_S3_BUCKET:-}
       REDIS_URL: redis://redis:6379/0
       LANGFUSE_HOST: http://langfuse:3000
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
@@ -229,16 +243,14 @@ services:
       ALEPH_AUTH_JWKS_URL: ${ALEPH_AUTH_JWKS_URL:-}
       ALEPH_AGENT_TOKEN_SECRET: ${ALEPH_AGENT_TOKEN_SECRET}
       AIQ_BASE_URL: http://aiq-server:8000
+    volumes:
+      - ../../data/assets:/data/assets
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio:
-        condition: service_healthy
       aleph-migrate:
-        condition: service_completed_successfully
-      minio-init:
         condition: service_completed_successfully
     ports:
       - "127.0.0.1:8000:8000"
@@ -248,6 +260,8 @@ services:
       context: ../..
       dockerfile: apps/workers/Dockerfile
     restart: unless-stopped
+    # Same uid rationale as aleph-api: shared asset bind mount, one owner.
+    user: "${ALEPH_UID:-1000}:${ALEPH_GID:-1000}"
     mem_limit: 2g
     memswap_limit: 2g
     environment:
@@ -257,11 +271,13 @@ services:
       ALEPH_ENV: ${ALEPH_ENV}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379/0
-      MINIO_ENDPOINT: http://minio:9000
-      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-http://localhost:9000}
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      ALEPH_S3_BUCKET: ${ALEPH_S3_BUCKET}
+      ALEPH_ASSET_BACKEND: ${ALEPH_ASSET_BACKEND:-fs}
+      ALEPH_ASSET_ROOT: /data/assets
+      # Only read when ALEPH_ASSET_BACKEND=s3 (see the s3 profile).
+      ALEPH_S3_ENDPOINT: ${ALEPH_S3_ENDPOINT:-}
+      ALEPH_S3_ACCESS_KEY: ${ALEPH_S3_ACCESS_KEY:-}
+      ALEPH_S3_SECRET_KEY: ${ALEPH_S3_SECRET_KEY:-}
+      ALEPH_S3_BUCKET: ${ALEPH_S3_BUCKET:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       LANGFUSE_HOST: http://langfuse:3000
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
@@ -271,6 +287,8 @@ services:
       ALEPH_API_INTERNAL_URL: http://aleph-api:8000
       ALEPH_AGENT_TOKEN_SECRET: ${ALEPH_AGENT_TOKEN_SECRET}
       AIQ_BASE_URL: http://aiq-server:8000
+    volumes:
+      - ../../data/assets:/data/assets
     depends_on:
       aleph-api:
         condition: service_started

@@ -1,4 +1,6 @@
-"""Sources API: upload, list, detail, signed asset URL, reingest, delete.
+"""Sources API: upload, ingest-url, list, detail, normalized text.
+
+Raw asset bytes are served by the streaming route in `routes/assets.py`.
 
 Upload kicks off the normalize_job in the Arq queue. A short-lived agent
 token is minted in-process (matching the /v1/agent-tokens path) and used
@@ -23,12 +25,7 @@ from aleph_core.errors import NotFound, ValidationFailed
 from aleph_core.ids import uuid7
 from aleph_db.models.agent import AgentRun
 from aleph_observability.tracing import current_trace_id
-from aleph_rks.models import (
-    NormalizedDocument,
-    Source,
-    SourceAsset,
-    SourceVersion,
-)
+from aleph_rks.models import NormalizedDocument, Source
 from aleph_rks.source_service import register_uploaded_source
 from aleph_security.agent_token import mint_agent_token
 from aleph_security.roles import ProjectRole, require_at_least
@@ -72,10 +69,6 @@ async def upload_source(
     ledger: LedgerDep = None,  # type: ignore[assignment]
 ) -> SourceOut:
     require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
-
-    if request.app.state.asset_store is None:
-        msg = "asset store is not configured"
-        raise ValidationFailed(msg)
 
     data = await file.read()
     mime_type = file.content_type or "application/octet-stream"
@@ -224,10 +217,6 @@ async def ingest_url(
     """
     require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
 
-    if request.app.state.asset_store is None:
-        msg = "asset store is not configured"
-        raise ValidationFailed(msg)
-
     url = str(body.url)
     try:
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as c:
@@ -294,48 +283,6 @@ async def get_source(
     return SourceOut.model_validate(s)
 
 
-class AssetURLOut(BaseModel):
-    url: str
-    ttl_seconds: int
-
-
-@router.get("/{project_id}/sources/{source_id}/asset", response_model=AssetURLOut)
-async def get_source_asset(
-    request: Request,
-    project_id: ProjectScopeDep,
-    source_id: UUID,
-    session: SessionDep,
-) -> AssetURLOut:
-    src = (
-        await session.execute(
-            select(Source).where(Source.id == source_id, Source.project_id == project_id)
-        )
-    ).scalar_one_or_none()
-    if src is None or src.current_version_id is None:
-        msg = "source asset not available"
-        raise NotFound(msg)
-    version = (
-        await session.execute(
-            select(SourceVersion).where(SourceVersion.id == src.current_version_id)
-        )
-    ).scalar_one_or_none()
-    if version is None:
-        msg = "source version missing"
-        raise NotFound(msg)
-    asset = (
-        await session.execute(select(SourceAsset).where(SourceAsset.id == version.asset_id))
-    ).scalar_one_or_none()
-    if asset is None:
-        msg = "source asset row missing"
-        raise NotFound(msg)
-    store = request.app.state.asset_store
-    if store is None:
-        msg = "asset store not configured"
-        raise ValidationFailed(msg)
-    url = store.presigned_get_url(asset.storage_uri)
-    return AssetURLOut(url=url, ttl_seconds=600)
-
-
 class NormalizedOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -374,11 +321,7 @@ async def get_normalized(
     if nd is None:
         msg = "normalized document not yet available"
         raise NotFound(msg)
-    store = request.app.state.asset_store
-    if store is None:
-        msg = "asset store not configured"
-        raise ValidationFailed(msg)
-    md = store.get(nd.markdown_uri).decode("utf-8")
+    md = request.app.state.asset_store.get(nd.markdown_uri).decode("utf-8")
     return NormalizedOut(
         id=nd.id,
         source_id=nd.source_id,

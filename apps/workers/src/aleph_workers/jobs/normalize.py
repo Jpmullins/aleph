@@ -3,7 +3,7 @@
 1. Fetch SourceVersion + asset bytes; verify sha256.
 2. Pick normalizer by mime_type.
 3. Produce markdown + structure + quality_flags.
-4. Store markdown to MinIO; insert NormalizedDocument row.
+4. Store markdown via the AssetStore; insert NormalizedDocument row.
 5. Update Source.status="normalized"; set version.normalized_document_id.
 6. Enqueue chunk_embed_job + wiki_ingest_job.
 7. Ledger normalization.completed.

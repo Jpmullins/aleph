@@ -66,7 +66,7 @@ confirm real data end-to-end.
 
 ### Backbone (verified live)
 - **API** mounts ~33 routers (`apps/api/src/aleph_api/main.py:77-116`). `/healthz`, `/readyz`
-  (postgres+redis+minio+litellm all `ok`), `/v1/me` (JIT `dev@aleph.local` principal),
+  (postgres+redis+litellm all `ok`; the minio check became `asset_store` when WP-1 moved storage to the fs backend), `/v1/me` (JIT `dev@aleph.local` principal),
   `/v1/projects` all respond with real data.
 - **Two real projects exist** ("Sovereign AI", "AI Distillation") with committed wiki pages,
   cost ledgers, agent runs, and synthesis proposals — i.e. the pipelines have actually run.

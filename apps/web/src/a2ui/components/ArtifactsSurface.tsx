@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { useSurface } from "../surface-context";
-import { api } from "@/lib/api";
+import { api, apiUrl } from "@/lib/api";
 import { CardShell, Pill, SurfaceHeader, type RendererProps } from "./_shared";
 
 interface ArtifactOut {
@@ -163,8 +163,8 @@ function SourceRow({ s, onView }: { s: SourceOut; onView: () => void }) {
 }
 
 /** Renders a raw source asset in its own card: PDF / webpage / document via the
- * presigned object URL (browsers render PDF + HTML inline in an iframe), with a
- * fallback to the normalized text. */
+ * authenticated asset streaming route (browsers render PDF + HTML inline in an
+ * iframe), with a fallback to the normalized text. */
 function SourceViewer({
   projectId,
   source,
@@ -175,11 +175,6 @@ function SourceViewer({
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<"raw" | "text">("raw");
-  const asset = useQuery<{ url: string; ttl_seconds: number }>({
-    queryKey: ["source-asset", projectId, source.id],
-    queryFn: () => api.get(`/v1/projects/${projectId}/sources/${source.id}/asset`),
-    enabled: tab === "raw",
-  });
   const normalized = useQuery<{ markdown: string }>({
     queryKey: ["source-normalized", projectId, source.id],
     queryFn: () => api.get(`/v1/projects/${projectId}/sources/${source.id}/normalized`),
@@ -218,19 +213,14 @@ function SourceViewer({
           </div>
         </div>
         <div className="min-h-0 flex-1 overflow-auto bg-slate-50">
-          {tab === "raw" &&
-            (asset.isPending ? (
-              <p className="p-4 text-sm text-slate-400">Loading asset…</p>
-            ) : asset.data ? (
-              <iframe
-                title={source.title}
-                src={asset.data.url}
-                className="h-full w-full"
-                data-testid="source-viewer-frame"
-              />
-            ) : (
-              <p className="p-4 text-sm text-slate-500">No raw asset available for this source.</p>
-            ))}
+          {tab === "raw" && (
+            <iframe
+              title={source.title}
+              src={apiUrl(`/v1/projects/${projectId}/assets/source/${source.id}`)}
+              className="h-full w-full"
+              data-testid="source-viewer-frame"
+            />
+          )}
           {tab === "text" &&
             (normalized.isPending ? (
               <p className="p-4 text-sm text-slate-400">Loading text…</p>

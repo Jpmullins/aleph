@@ -37,13 +37,12 @@ def _set_defaults() -> None:
         "postgresql+asyncpg://aleph:changeme-ci@localhost:5432/aleph",
     )
     os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
-    # MinIO / asset store. The ingest-url + upload source routes 422 with
-    # "asset store is not configured" unless the lifespan can build an
-    # AssetStore, which requires all four of these. Endpoint defaults to the
-    # host-published port; credentials/bucket must be supplied via env (same
-    # pattern as DATABASE_URL) so no secret is baked into the repo.
-    os.environ.setdefault("MINIO_ENDPOINT", "http://localhost:9000")
-    os.environ.setdefault("ALEPH_S3_BUCKET", "aleph-local")
+    # Asset store: fs backend rooted at the repo-level data/assets — the same
+    # host dir the compose stack bind-mounts at /data/assets, so uploads made
+    # through the in-process app are readable by the compose workers and
+    # vice versa. No MinIO needed.
+    _repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    os.environ.setdefault("ALEPH_ASSET_ROOT", os.path.join(_repo_root, "data", "assets"))
     os.environ.setdefault("LANGFUSE_HOST", "http://localhost:3000")
     os.environ.setdefault("LANGFUSE_PUBLIC_KEY", "pk-ci")
     os.environ.setdefault("LANGFUSE_SECRET_KEY", "sk-ci")

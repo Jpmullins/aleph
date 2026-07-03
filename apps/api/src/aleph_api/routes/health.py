@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
 from fastapi import APIRouter, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
@@ -37,15 +36,13 @@ async def readyz(request: Request) -> JSONResponse:
     except Exception as exc:
         checks["redis"] = {"ok": False, "error": str(exc)}
 
-    # ---- MinIO ----
-    s = request.app.state.settings
-    if s.minio_endpoint:
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(f"{s.minio_endpoint}/minio/health/live")
-                checks["minio"] = {"ok": resp.status_code == 200}
-        except Exception as exc:
-            checks["minio"] = {"ok": False, "error": str(exc)}
+    # ---- Asset store (writes a probe blob through the configured backend) ----
+    try:
+        store = request.app.state.asset_store
+        probe = store.put_bytes(key=".readyz/probe", data=b"ok", mime_type="text/plain")
+        checks["asset_store"] = {"ok": store.get(probe.storage_uri) == b"ok"}
+    except Exception as exc:
+        checks["asset_store"] = {"ok": False, "error": str(exc)}
 
     # ---- LiteLLM gateway ----
     try:

@@ -136,7 +136,7 @@ async def commit_version(
     parquet_uri: str | None = None,
 ) -> DatasetVersion:
     """Inline path only in Inc 6's first commit. Parquet path is plumbed:
-    callers pass parquet_uri when they have a parquet snapshot in MinIO."""
+    callers pass parquet_uri when they have a parquet snapshot in the AssetStore."""
     ds = await get_dataset(session, project_id=project_id, dataset_id=dataset_id)
     if ds is None:
         msg = f"dataset {dataset_id} not found"

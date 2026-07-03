@@ -1396,3 +1396,63 @@ needed — `DocumentChunk.embedder_model` already existed.
 - Phase 9 Playwright **render worker** for JS-heavy page capture fidelity — infra (browser in
   the worker image); current URL ingest is raw-HTTP (renders fine for static pages).
 - Phase 6 Hypotheses A2UI delta wiring (F11); dormant-surface cleanups (F13/F14/F15/F19).
+
+## WP-1 — Storage: FS default, S3 optional, one streaming route (2026-07-03)
+
+**Spec:** `docs/specs/2026-07-02-wp1-storage.md` (Final State §, falsifiable; Security §
+amended 2026-07-03 during adversarial review — see below). **Proves GOAL.md F1.**
+
+**Shipped.**
+- `aleph_rks.asset_store`: `AssetStore` is a `typing.Protocol`; `FsAssetStore` (default:
+  atomic tmp+`os.replace` writes, strict root-confinement incl. symlink resolution, eager-open
+  `stream()`) + `S3AssetStore` (no presign client, `S3Error` normalized to `AssetStoreError`,
+  name-mangled internals) + `create_asset_store()` factory keyed by `ALEPH_ASSET_BACKEND`
+  (`fs` default; incomplete s3 config fails fast — the `asset_store is None` fallbacks are gone).
+- One authenticated byte route: `GET /v1/projects/{pid}/assets/{source|rendered|artifact-version}/{id}`
+  — inside AuthMiddleware + ProjectScopeDep, project-scoped row lookups (cross-project → 404),
+  `ETag`/`If-None-Match` 304, sanitized `Content-Disposition`, `nosniff`, and
+  `Content-Security-Policy: sandbox` on every non-PDF response. Missing bytes → clean 404
+  (stores raise before the 200 commits). `rendered`/`artifact-version` are wired for WP-4's
+  artifact consumers (written reason in the route docstring) and integration-tested positive-path.
+- Presign machinery deleted: `presigned_get_url`, dual MinIO clients, `MINIO_PUBLIC_ENDPOINT`,
+  the `/sources/{id}/asset` JSON route + `AssetURLOut` + the web `useQuery` hop. The Library
+  viewer iframe hits the streaming route directly. `render_service`/`builder` use `put_bytes`
+  (no `_client`/`_bucket` reach-ins).
+- Compose: `minio`/`minio-init` behind `profiles: ["s3"]`; api/workers run as
+  `${ALEPH_UID:-1000}:${ALEPH_GID:-1000}` with shared `../../data/assets:/data/assets` bind
+  mount; Dockerfile CMDs exec `/app/.venv/bin/*` directly (uv needs no writable HOME at
+  runtime). `data/assets/.gitkeep` is tracked + `bootstrap-local.sh` mkdirs and exports
+  ALEPH_UID/GID pre-`up` so a fresh clone boots as the invoking user. `.env.example`/settings:
+  `minio_*` keys deleted; `ALEPH_ASSET_BACKEND`/`ALEPH_ASSET_ROOT`/`ALEPH_S3_*` added
+  (s3 block commented, opt-in). CI runs the fs backend, MinIO steps deleted. `/readyz`
+  probes the store with a put/get roundtrip (`asset_store` check replaces `minio`).
+
+**Adversarial review (3 passes, fresh subagents).** Pass 1 (spec conformance): findings —
+dormant `rendered`/`artifact-version` kinds, cross-project 404 untested with real fixtures,
+no-args factory untested, lazy `stream()` → truncated 200 on missing bytes. Pass 2 (security/
+rules): blocker — fresh-clone uid-1000 boot failure (root-owned bind-mount source); concern —
+the spec's accepted-residual rationale for API-origin active content was **false in local auth
+mode** (ambient auth ⇒ uploaded HTML script had full API reach; a regression vs the old
+separate-origin MinIO reads); concern — s3 missing object leaked `S3Error` as 500; notes —
+write-side key hygiene. All fixed (spec Security § amended explicitly; CSP `sandbox` chosen
+over an iframe attribute after an empirical check showed Chromium's PDF viewer refuses
+sandboxed documents — PDFs exempt, everything else neutralized, direct URL opens covered).
+Pass 3 (verification): every fix confirmed genuine, mime-trick bypass hunt found nothing,
+**FINAL-STATE VIOLATIONS: 0**.
+
+**Verification commands (all green, 2026-07-03).**
+- `uv run pytest -m integration -q` → **61 passed** against the compose stack with **no MinIO
+  container** (`docker ps`: no minio; `readyz` asset_store ok).
+- `uv run pytest -m "not integration" -q` → 183 passed pre-additions; asset suites
+  `test_asset_store.py` + `test_asset_stream_auth.py` → 19 passed (traversal/symlink escape,
+  eager-stream, factory no-args, ext sanitization, oidc 401 short-circuit).
+- `uv run ruff check .` / `ruff format --check` → clean (312 files). `uv run pyright` →
+  0 errors, 1,757 warnings (< 1,758 baseline). `alembic check` → no drift (no schema change).
+- `pnpm -C apps/web typecheck && lint && build` → green.
+- Greps: `presigned|minio_public_endpoint` over apps/packages/deploy/scripts/audit/tests →
+  empty; `presigned|9000` over apps/web/src → empty; `_client|_bucket` asset-store reach-ins →
+  none.
+- **In-browser (fs backend, no MinIO):** Playwright `08-wp1-asset-streaming.spec.ts` passed —
+  real UI upload → Library → viewer iframe = streaming route, 200 + application/pdf + exact
+  byte round-trip; full-Chromium screenshot shows the PDF rendered in the viewer; live curl:
+  HTML source carries `content-security-policy: sandbox`, PDF exempt.

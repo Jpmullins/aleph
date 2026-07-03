@@ -26,4 +26,7 @@ COPY apps/workers /app/apps/workers
 # including arq's CLI). The root pyproject has no direct dependencies.
 RUN uv sync --no-dev --all-packages
 
-CMD ["uv", "run", "arq", "aleph_workers.arq.WorkerSettings"]
+# Invoke the venv binary directly: the container may run as an arbitrary uid
+# (compose sets user: for the shared asset bind mount), and `uv run` would
+# need a writable cache/HOME that uid doesn't have.
+CMD ["/app/.venv/bin/arq", "aleph_workers.arq.WorkerSettings"]

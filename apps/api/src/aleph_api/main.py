@@ -20,6 +20,7 @@ from aleph_api.routes import (
     aiq_internal,
     aliases,
     artifacts,
+    assets,
     assistant,
     briefs,
     cards,
@@ -85,6 +86,7 @@ def create_app() -> FastAPI:
     app.include_router(smoketest.router)
     # Inc 1
     app.include_router(sources.router)
+    app.include_router(assets.router)
     app.include_router(chunks.router)
     app.include_router(wiki.router)
     app.include_router(handedits.router)
