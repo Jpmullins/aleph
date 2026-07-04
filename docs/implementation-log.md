@@ -1526,3 +1526,87 @@ pyright `0 errors, 1,754 warnings` (< 1,758 baseline); web typecheck/lint/build 
 self-call pattern (WP-5/F5 fixes it); quota units are consumed by reconnect/failed searches;
 `token_endpoint` is owner-writable with no egress allowlist (owner-only threat model);
 venv runs Python 3.14 vs the 3.13 pin (WP-5).
+
+## WP-3 — Native research loop; AIQ deleted (2026-07-04)
+
+**Spec:** `docs/specs/2026-07-03-wp3-research.md` (§6 amended 2026-07-04 to state arq
+interruption/retry semantics precisely). **Proves GOAL.md F2 (loop half + deletion).**
+
+**Shipped.**
+- `packages/aleph-research` — `ResearchWorkflow` LangGraph loop
+  (plan → search → ingest → reflect ⟲ → compose → synthesize) run in-process by the new
+  `deep_research_job` arq worker. ContextVar ctx (concurrency-safe), every node `@with_phase`
+  so Activity streams progress. Bounds from worker settings (deep=3/shallow=1 iterations,
+  ≤6/iter, ≤15 total) + plateau cutoff (0 new sources → stop). All LLM calls via
+  `LiteLLMClient.chat` with `purpose="research.{plan,triage,reflect,compose}"` + the run's
+  `agent_run_id` → automatic `ModelCall`+`CostLedgerEvent`. Compose fails honestly on 0
+  sources, sanitizes out-of-range `[cN]` markers, applies `aleph_scholar.style_pass`, builds
+  the renamed `ResearchReport` and hands it to the **unchanged** `SynthesisWorkflow`
+  (`AIQReport`→`ResearchReport`, `aiq_report`→`report`; a pure rename — graph/verification/
+  commit logic byte-identical).
+- **Tool binding by allowlist** (`tools.py`): resolves `Connector ⋈ ConnectorBinding` (explicit
+  binding beats `enabled_by_default`), instantiates ONLY enabled kinds directly from
+  `RESEARCH_CONNECTOR_FACTORIES` (the 8 document connectors: tavily/openalex/arxiv/
+  semantic_scholar/exa/serper/rss/lens — previously written but unregistered); credentials
+  decrypt in-process via `ConnectorCredentialService` (the local-mode env fallback re-homed
+  from the deleted `aiq_internal.get_credential`); a missing credential skips with a warning
+  event, never fatal; a disabled kind is never constructed. Consensus is deliberately not
+  bound (it is the Live researcher's quota-metered screening tool).
+- **No-strand failure semantics** across three interruption paths: in-graph exception →
+  `failed`+`error_text`; `asyncio.CancelledError` (arq `job_timeout`/shutdown) → mark failed
+  best-effort + re-raise; hard kill → arq re-enqueue → the job's retry-guard (`status !=
+  "pending"`) converges the run to `failed` without re-running (no duplicate sources), and an
+  already-terminal re-delivery is an idempotent no-op (never flips a `succeeded` run). Dispatch
+  commits the run+ledger **before** enqueue (worker never sees a missing run) and, if enqueue
+  itself fails, marks the committed run failed so it never strands `pending`.
+- `POST /synthesize` re-targeted (native `dispatch_research`, no `aleph_aiq` import,
+  `aiq_job_id` gone from the response; proposal approve/reject routes untouched);
+  `bootstrap_project_job` fan-out and `copilot_agent._start_research_impl` re-targeted;
+  `ActivityCard` `KIND_LABELS` → `deep_research`/`shallow_research`.
+- **AIQ deleted** (full §4 inventory): `packages/aleph-aiq/`, the two aiq jobs,
+  `routes/aiq_internal.py`, the `aiq-server` compose service (image
+  `nvcr.io/nvidia/blueprint/aiq-agent:2.1.0`, `mem_limit: 4g`) + `aiq-data` volume, the three
+  compose init files, five aiq unit tests; `aiq_*` settings keys, the `/internal/v1/aiq/`
+  self-auth prefix, `NGC_API_KEY`/`AIQ_BASE_URL` env, nvcr login in bootstrap, the aiq_* DB
+  creation in `postgres-initdb.sh`, `"aiq_agent"` actor-kind literals, and AIQ docstring
+  mentions. `aleph-evals` adapters re-pointed at the native `/synthesize` round-trip. The
+  `audit` check rewritten as `research-to-wiki.sh`. Migration
+  `20260527_1900_inc3_aiq_synthesis.py` kept verbatim (rule 6; it creates the still-used
+  proposal/credential tables, not AIQ infra).
+
+**Adversarial review (3 passes, fresh subagents, all reports in-session).** Security/rules
+pass: `FINAL-STATE VIOLATIONS: 0` (credentials never leak to logs/events/ledger/report/
+metadata; AIQ self-auth hole closed; prompt-injected content cannot fabricate citations —
+markers sanitized + `SynthesisWorkflow` citation-verification blocks commit; caps enforced
+server-side; SSRF/size-cap noted as within the spec's explicitly-accepted ingest posture).
+Spec-conformance pass found **1 violation** — `except Exception` missed `asyncio.CancelledError`
+so an arq `job_timeout` stranded the run `running` — plus findings (enqueue-before-commit race,
+dormant `register_research_connectors`, untested `dispatch_research`). All fixed; verification
+pass confirmed every fix genuine with no regressions and `FINAL-STATE VIOLATIONS: 0`, then the
+two low-severity residuals it raised (succeeded→failed flip; pending-strand on enqueue failure)
+were also hardened with tests.
+
+**Verification (final tree, all green, 2026-07-04).**
+- Live fresh-stack round-trips (compose stack, no `aiq-server`): a deep run → **10** Sources
+  `connector_kind=openalex` + DOIs, full phase trace (plan → 3×search/ingest/reflect → compose
+  → synthesize incl. citation_verification/commit_revision), pending Briefs proposal → approve
+  (HTTP 200, `status=approved`) → `curate_page_job` ran; a shallow run → **13/13** provenanced
+  Sources, pending proposal. Both `succeeded`.
+- Cost attribution (psql): deep run 7 `ModelCall`s (`research.plan|triage|reflect|compose`),
+  **7/7** paired `CostLedgerEvent`; shallow run **3/3** paired.
+- Binding: live `arxiv` disabled → next run's `research.tools` event = `["openalex","rss",
+  "semantic_scholar"]`; factory-spy unit test proves a disabled kind is never instantiated.
+- Deletion greps (verbatim empty): `grep -ri aiq apps packages deploy scripts audit tests
+  .github .claude/skills --exclude-dir=alembic` → empty (tracked source; only gitignored
+  `apps/web/dist` build bytes coincidentally match, absent on a fresh clone); `nvcr.io` →
+  empty; `NGC_API_KEY` → empty.
+- mem_limit: long-running sum 13.5g → **9.5g** (aiq-server's 4g removed) — arithmetic in the
+  compose header.
+- Gates: ruff + format clean (332 files); unit `278 passed`; pyright `0 errors, 1664 warnings`
+  (well under the 1,758 baseline — −94, aleph-aiq's warnings gone); integration `68 passed`;
+  web typecheck/lint/build green; `alembic check` clean; `docker compose config` valid.
+
+**Honest notes (out of WP-3 scope):** SSRF-to-metadata + post-download size cap on connector
+fetch are hardening gaps within the spec-accepted "same posture as ingest-url" (recommend a
+follow-up scheme allowlist + streaming cap); `_start_research_impl`/bootstrap still use
+`Bearer local-dev` self-calls (WP-5/F5); venv Python is 3.14 vs the 3.13 pin (WP-5).

@@ -21,7 +21,7 @@ path. See ``docs/superpowers/specs/2026-06-25-wiki-curator-design.md`` §1, §4.
 
 The curator commits the overview/cross-linked pages through
 ``WikiService.commit_revision`` with ``origin="curator"``. Curation is enqueued
-only at the authoring *job/route* sites (wiki ingest, AIQ synthesis, bootstrap
+only at the authoring *job/route* sites (wiki ingest, research synthesis, bootstrap
 overview, notes promote), never inside ``commit_revision`` or the curate job
 itself, so the curator's own commits cannot re-trigger curation — no loop.
 """

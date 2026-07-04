@@ -1,15 +1,10 @@
-"""Citation verification — Aleph-side wrapper around AIQ's verify_citations.
+"""Citation verification for research reports.
 
-In production, this delegates to AIQ's `aiq_agent.common.citation_verification`
-once the AIQ submodule is checked out. Until then this module ships a
-correct, AIQ-compatible implementation that:
+Standalone implementation used by the synthesis path:
 
   * Extracts every `[cN]` marker from `body_md`.
   * Looks up each marker in `source_registry` (a dict of marker → source ref).
   * Returns the verified mapping, or raises with the list of missing markers.
-
-The behavior matches AIQ's contract for `verify_citations(report, registry)`
-documented in NVIDIA AI-Q Blueprint v2.1.0.
 """
 
 from __future__ import annotations
@@ -44,9 +39,9 @@ def verify_citations[T](
 ) -> dict[str, T]:
     """Return the verified marker→source mapping; raise if any marker is missing.
 
-    `source_registry` keys are `c1`, `c2`, … (without brackets) — same
-    shape AIQ uses. Markers in `body_md` that aren't in the registry are
-    collected and reported as missing.
+    `source_registry` keys are `c1`, `c2`, … (without brackets). Markers
+    in `body_md` that aren't in the registry are collected and reported
+    as missing.
     """
     found_markers: list[str] = []
     for m in CITATION_RE.finditer(body_md):
@@ -70,8 +65,8 @@ def verify_citations[T](
 def sanitize_report(*, body_md: str, verified: dict[str, object]) -> str:
     """Strip unverified `[cN]` markers from `body_md`. Verified markers are kept.
 
-    Mirrors AIQ's `sanitize_report` behavior — used when the agent
-    decides to land a partial draft rather than block on missing citations.
+    Used when the agent decides to land a partial draft rather than
+    block on missing citations.
     """
 
     def _replace(match: re.Match[str]) -> str:

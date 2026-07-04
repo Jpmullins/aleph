@@ -84,7 +84,7 @@ export interface MeOut {
   user_id: string;
   subject: string;
   email: string;
-  actor_kind: "user" | "aleph_agent" | "aiq_agent" | "system";
+  actor_kind: "user" | "aleph_agent" | "system";
 }
 
 export interface CostRollupOut {

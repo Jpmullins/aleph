@@ -45,14 +45,9 @@ class WorkerSettings(BaseSettings):
     aleph_api_internal_url: str
     aleph_agent_token_secret: str
 
-    aiq_base_url: str = "http://aiq-server:8000"
-
-    # Concurrency bounds. arq_max_jobs caps concurrent jobs per worker
-    # process; aiq_max_concurrent_jobs caps research jobs in flight inside
-    # aiq-server across ALL submitters (shared Redis gate — see
-    # aleph_aiq.throttle). Lower both on memory-constrained hosts.
+    # Concurrency bound: arq_max_jobs caps concurrent jobs per worker
+    # process. Lower it on memory-constrained hosts.
     arq_max_jobs: int = 10
-    aiq_max_concurrent_jobs: int = 3
 
     # Bootstrap-on-create (mirrors aleph_api.settings.Settings). The
     # bootstrap_project_job reads these to bound the fan-out.
@@ -65,6 +60,17 @@ class WorkerSettings(BaseSettings):
     # mailto + Consensus quota cap the API uses.
     aleph_scholar_mailto: str = "dev@aleph.local"
     aleph_consensus_monthly_search_cap: int = 200
+
+    # Native research loop bounds (WP-3). The plateau cutoff (an iteration
+    # ingesting 0 new sources stops the loop) applies regardless.
+    research_max_iterations_deep: int = 3
+    research_max_iterations_shallow: int = 1
+    research_max_sources_per_iter: int = 6
+    research_max_total_sources: int = 15
+
+    # Credential env fallback gate (mirrors aleph_api.settings.Settings):
+    # container-env API keys are honored only under local auth mode.
+    aleph_auth_mode: str = "local"
 
 
 @lru_cache(maxsize=1)

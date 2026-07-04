@@ -1,6 +1,6 @@
 """Short-lived agent tokens.
 
-Issued by `aleph-api` to authorize a worker (Aleph or AIQ) to call back
+Issued by `aleph-api` to authorize a worker to call back
 into the API on behalf of a specific `AgentRun`. Signed HS256 with
 ALEPH_AGENT_TOKEN_SECRET. Verifying side is `verify_agent_token`.
 """
@@ -17,7 +17,7 @@ from jwt import PyJWTError
 
 from aleph_core.errors import PermissionDenied
 
-AgentActorKind = Literal["aleph_agent", "aiq_agent"]
+AgentActorKind = Literal["aleph_agent"]
 
 _DEFAULT_TTL_SECONDS = 3600
 

@@ -5,26 +5,41 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from aleph_evals.adapters._research_round_trip import ResearchRoundTripDriver
+
 
 class DeepResearchBenchAdapter:
-    """AIQ DeepResearch Bench wrapper. Same vendor-dependent shape as FreshQA."""
+    """DeepResearch Bench → native research round-trip wrapper.
+
+    Same live-stack-dependent shape as FreshQA, but dispatches at
+    `depth="deep"` so the loop exercises its full iteration budget.
+    """
 
     kind = "deepresearch"
 
+    def __init__(
+        self,
+        *,
+        api_base_url: str | None = None,
+        project_id: str | None = None,
+        auth_token: str | None = None,
+    ) -> None:
+        self._driver = ResearchRoundTripDriver(
+            api_base_url=api_base_url,
+            project_id=project_id,
+            auth_token=auth_token,
+            depth="deep",
+        )
+
     def run_cases(self, cases: Iterable[dict[str, Any]]) -> Iterable[dict[str, Any]]:
-        try:
-            import aiq_agent.evals.deepresearch_bench as dr_mod  # type: ignore[import-not-found]
-        except ImportError as exc:
-            msg = (
-                "DeepResearch Bench adapter requires the AIQ submodule at "
-                "vendor/aiq. See docs/operations/aiq-runbook.md."
-            )
-            raise RuntimeError(msg) from exc
+        self._driver.require_configured("DeepResearch Bench adapter")
         for case in cases:
-            score = dr_mod.score_case(case)  # type: ignore[attr-defined]
+            topic = str(case.get("topic") or case.get("prompt") or case.get("question") or "")
+            result = self._driver.run_case(topic)
+            passed = result["status"] == "completed"
             yield {
                 "case_key": case.get("id"),
-                "passed": bool(score.get("passed")),
-                "score": float(score.get("score", 0)),
-                "actual": score,
+                "passed": passed,
+                "score": 1.0 if passed else 0.0,
+                "actual": result,
             }

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 from uuid import UUID
 
-ActorKind = Literal["user", "aleph_agent", "aiq_agent", "system"]
+ActorKind = Literal["user", "aleph_agent", "system"]
 
 
 @dataclass
@@ -14,7 +14,7 @@ class Principal:
     """Resolved authenticated identity.
 
     Construct via the auth middleware (`verify_user_jwt`) for users
-    or `verify_agent_token` for worker/AIQ agents. Role lookups
+    or `verify_agent_token` for worker agents. Role lookups
     happen in the project-scope middleware and are cached on this
     instance for the request's lifetime.
     """

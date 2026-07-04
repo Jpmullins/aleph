@@ -1,9 +1,8 @@
-"""Concurrency-bound settings: arq worker slots + in-flight AIQ job cap.
+"""Concurrency-bound settings: arq worker slots.
 
-Both exist so a local 16 GiB host can run the full stack with bootstrap-on-
-create enabled: ARQ_MAX_JOBS bounds worker-side parallelism, and
-AIQ_MAX_CONCURRENT_JOBS bounds how many research jobs run inside aiq-server
-at once (the 2026-06-11 host crash was an unthrottled 21-job stampede).
+ARQ_MAX_JOBS bounds worker-side parallelism so a local 16 GiB host can run
+the full stack with bootstrap-on-create enabled (the 2026-06-11 host crash
+was an unthrottled 21-job stampede).
 """
 
 from __future__ import annotations
@@ -33,7 +32,6 @@ def test_worker_settings_concurrency_defaults(monkeypatch: pytest.MonkeyPatch) -
 
     s = WorkerSettings()  # type: ignore[call-arg]
     assert s.arq_max_jobs == 10
-    assert s.aiq_max_concurrent_jobs == 3
 
 
 def test_worker_settings_concurrency_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -41,19 +39,7 @@ def test_worker_settings_concurrency_env_override(monkeypatch: pytest.MonkeyPatc
         monkeypatch.setenv(k, v)
     monkeypatch.setenv("ALEPH_API_INTERNAL_URL", "http://aleph-api:8000")
     monkeypatch.setenv("ARQ_MAX_JOBS", "4")
-    monkeypatch.setenv("AIQ_MAX_CONCURRENT_JOBS", "2")
     from aleph_workers.settings import WorkerSettings
 
     s = WorkerSettings()  # type: ignore[call-arg]
     assert s.arq_max_jobs == 4
-    assert s.aiq_max_concurrent_jobs == 2
-
-
-def test_api_settings_aiq_concurrency(monkeypatch: pytest.MonkeyPatch) -> None:
-    for k, v in _base_env().items():
-        monkeypatch.setenv(k, v)
-    from aleph_api.settings import Settings
-
-    assert Settings().aiq_max_concurrent_jobs == 3  # type: ignore[call-arg]
-    monkeypatch.setenv("AIQ_MAX_CONCURRENT_JOBS", "5")
-    assert Settings().aiq_max_concurrent_jobs == 5  # type: ignore[call-arg]

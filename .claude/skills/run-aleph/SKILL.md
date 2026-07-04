@@ -6,8 +6,8 @@ description: Run, start, screenshot, or drive the Aleph stack — boot the docke
 # Run Aleph
 
 Aleph is a docker-compose stack: FastAPI (`aleph-api` :8000), React/Vite web
-(`aleph-web` :5173), arq workers, CopilotKit runtime (:4000), NVIDIA AIQ
-(:8001), plus postgres/minio/redis/langfuse/otel. The agent path to drive it is
+(`aleph-web` :5173), arq workers, CopilotKit runtime (:4000), plus
+postgres/minio/redis/langfuse/otel. The agent path to drive it is
 **`node .claude/skills/run-aleph/driver.mjs <cmd>`** — a Playwright CLI that
 reuses the install at `tests/playwright/node_modules`. All paths below are
 relative to the repo root.
@@ -18,9 +18,7 @@ Docker + compose, `uv`, Node 24. The compose `.env` must exist at
 `deploy/compose/.env` (gitignored; on this machine it was generated 2026-05-28
 with real gateway keys — if missing, `cp deploy/compose/.env.example
 deploy/compose/.env` and set `INSIGHTS_LITELLM_API_KEY`). All images are cached
-locally; a clean machine additionally needs
-`echo "$NGC_API_KEY" | docker login nvcr.io -u '$oauthtoken' --password-stdin`
-for the aiq-server pull.
+locally.
 
 Playwright deps (once):
 
@@ -31,7 +29,7 @@ cd tests/playwright && npm install        # @playwright/test; browsers already c
 ## Boot
 
 ```bash
-./scripts/bootstrap-local.sh   # infra + DBs + alembic + gateway check + aiq + api/workers/web (~1 min, images cached)
+./scripts/bootstrap-local.sh   # infra + DBs + alembic + gateway check + api/workers/web (~1 min, images cached)
 # bootstrap does NOT start the chat bridge — without it the Live agent is dead:
 docker compose -f deploy/compose/docker-compose.yml --env-file deploy/compose/.env up -d aleph-copilot-runtime
 ```
@@ -40,13 +38,13 @@ Verify everything is up:
 
 ```bash
 node .claude/skills/run-aleph/driver.mjs smoke
-# ✓ api /healthz -> 200      ✓ web -> 200      ✓ aiq /health -> 200
+# ✓ api /healthz -> 200      ✓ web -> 200
 # ✓ copilot-runtime -> 404   (404 is OK — no health route; any HTTP status = process up)
 # ✓ api auth (Bearer local-dev) -> N projects
 ```
 
 `smoke` polls each endpoint for up to 90s — containers report Started ~20–30s
-before the api/aiq apps actually listen, so run it right after boot and let it
+before the api app actually listens, so run it right after boot and let it
 wait.
 
 ## Drive the UI (agent path)
@@ -126,7 +124,7 @@ docker compose -f deploy/compose/docker-compose.yml --env-file deploy/compose/.e
 ## Troubleshooting
 
 - `✗ Missing deploy/compose/.env` from bootstrap → copy `.env.example`, set
-  `INSIGHTS_LITELLM_API_KEY` (and on a fresh machine, NGC login for aiq pull).
+  `INSIGHTS_LITELLM_API_KEY`.
 - `chat` exits 1 / empty transcript → check the bridge:
   `docker compose -f deploy/compose/docker-compose.yml --env-file deploy/compose/.env logs --tail=20 aleph-copilot-runtime`
   (healthy = `listening on :4000/api/copilotkit → agent http://aleph-api:8000/...`),

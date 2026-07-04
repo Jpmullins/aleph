@@ -8,9 +8,7 @@
 #
 # Responsibilities:
 #   - create the auxiliary logical databases that share Aleph's Postgres
-#     instance (langfuse + the three AIQ stores)
-#   - apply the AIQ job-store + checkpoint schema, which the aiq-agent image
-#     does NOT self-create (only job_events is auto-created)
+#     instance (langfuse)
 #
 # The main `aleph` database is created by the postgres entrypoint from
 # POSTGRES_DB; its schema is applied by the `aleph-migrate` service (Alembic),
@@ -21,16 +19,8 @@
 # to run host-side. Keep the two in sync.
 set -e
 
-for db in langfuse aiq_jobs aiq_checkpoints aiq_summary; do
+for db in langfuse; do
   echo "  creating database $db"
   psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres \
     -c "CREATE DATABASE $db"
 done
-
-echo "  applying AIQ job-store schema -> aiq_jobs"
-psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname aiq_jobs \
-  -f /aleph-init/aiq-init-jobs.sql
-
-echo "  applying AIQ checkpoint schema -> aiq_checkpoints"
-psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname aiq_checkpoints \
-  -f /aleph-init/aiq-init-checkpoints.sql

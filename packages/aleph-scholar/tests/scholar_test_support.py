@@ -6,7 +6,7 @@ from __future__ import annotations
 class FakeRedis:
     """In-memory stand-in for the redis.asyncio subset the package uses.
 
-    Mirrors the codebase pattern (cf. tests/unit/test_aiq_throttle.py's
+    Mirrors the codebase pattern (cf. tests/unit/test_settings_concurrency.py's
     FakeZSetRedis): a tiny stub matching only the commands under test.
     """
 

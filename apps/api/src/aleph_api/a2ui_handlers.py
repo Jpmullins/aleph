@@ -605,7 +605,7 @@ async def _create_hypothesis(*, request: CardActionRequest, **_: Any) -> dict[st
 
 
 async def _clarify(*, request: CardActionRequest, **_: Any) -> dict[str, Any]:
-    # Inc 3 wires the AIQ clarifier loop; this handler is the surface end.
+    # Inc 3 wired the research clarifier loop; this handler is the surface end.
     return {
         "agent_run_id": request.params["agent_run_id"],
         "answer_length": len(request.params["answer"]),

@@ -1,7 +1,7 @@
 """Connector registry.
 
-In-process registry keyed by `kind`. AIQ's `data_source_registry` is
-populated from this when the AIQ config is emitted (see aleph_aiq).
+In-process registry keyed by `kind`. The native research loop resolves
+each project's enabled connectors from this registry at job start.
 """
 
 from __future__ import annotations

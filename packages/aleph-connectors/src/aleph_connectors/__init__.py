@@ -1,8 +1,8 @@
 """Aleph connectors: framework + the Inc 3 plugin roster.
 
-Connectors are typed source-kind plugins. Each one is also registered
-inside AIQ's `data_source_registry` so the AIQ DeepResearcher can pick
-from the same set the analyst allowlists.
+Connectors are typed source-kind plugins. The document-output research
+set is registered into the shared registry at worker startup and feeds
+the native research loop, bound per-project by the analyst's allowlist.
 """
 
 from aleph_connectors.base import (

@@ -2,7 +2,7 @@
 
 `search` is not supported (uploads are pushed, not searched). `fetch`
 reads the previously-uploaded asset bytes from the AssetStore by storage_uri.
-Inc 3 re-registers this as a `nat` function inside AIQ's data_source_registry.
+`aleph_connectors.upload` re-exposes it under the unified ConnectorBase Protocol.
 """
 
 from __future__ import annotations

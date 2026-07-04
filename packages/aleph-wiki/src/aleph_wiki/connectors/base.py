@@ -1,7 +1,8 @@
 """Connector framework — typed source-kind plugin protocol.
 
-Inc 1 only registers the Upload connector. Inc 3 introduces the AIQ
-`data_source_registry` integration; the connectors land then.
+Inc 1 only registers the Upload connector. The typed research
+connector set lives in `aleph_connectors` and feeds the native
+research loop.
 """
 
 from __future__ import annotations

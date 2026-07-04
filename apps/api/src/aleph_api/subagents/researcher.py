@@ -1,4 +1,4 @@
-"""The `researcher` subagent — AIQ research dispatch + verified scholarship (WP-2).
+"""The `researcher` subagent — native research dispatch + verified scholarship (WP-2).
 
 Delegating "research X" to this subagent keeps the dispatch logic (and the
 fire-and-return chatter) in an isolated context, so the orchestrator's thread
@@ -105,7 +105,7 @@ def build_researcher_subagent(*, settings: Any) -> dict[str, Any]:
 
     @tool
     async def start_research(query: str, config: RunnableConfig, depth: str = "shallow") -> str:
-        """Kick off background research (AIQ) on a topic; returns immediately.
+        """Kick off background research on a topic; returns immediately.
 
         `depth` is 'shallow' (fast) or 'deep' (thorough).
         """
@@ -306,7 +306,8 @@ def build_researcher_subagent(*, settings: Any) -> dict[str, Any]:
         "name": "researcher",
         "description": (
             "Research + verified scholarship. Kicks off background research on a topic (web "
-            "search via AIQ) that grows the wiki, and works the scholarly literature directly: "
+            "search via the native research loop) that grows the wiki, and works the "
+            "scholarly literature directly: "
             "OpenAlex discovery, Consensus evidence search, citation-graph expansion, DOI "
             "verification, and provenance-carrying paper ingestion. Delegate when the analyst "
             "asks to research/look into/synthesize a topic, or asks a literature question."

@@ -1,12 +1,11 @@
 """Tavily web-search connector implementation.
 
-Used by AIQ DeepResearcher for general web search. `search` returns
-top-K results; `fetch` retrieves the raw HTML, which the
+Used by the native research loop for general web search. `search`
+returns top-K results; `fetch` retrieves the raw HTML, which the
 normalization worker turns into Markdown via readability.
 
-Auth: API key. The key is fetched via the credential callback when
-running inside AIQ; for in-process use (tests / dev tools) the caller
-supplies the key in `ConnectorContext.credential_value`.
+Auth: API key, resolved from the project's ConnectorCredential (or the
+dev env fallback) and supplied in `ConnectorContext.credential_value`.
 """
 
 from __future__ import annotations

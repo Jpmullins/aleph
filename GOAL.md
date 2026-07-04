@@ -18,7 +18,7 @@ Stages: `—` (not started) → `spec` → `spec-approved` → `implementing` �
 |------|-------|------------------|
 | WP-1 | closed (impl-log §WP-1 2026-07-03) | spec: `docs/specs/2026-07-02-wp1-storage.md`; 3-pass adversarial review, 0 violations; integration 61 passed w/o MinIO; in-browser upload→viewer proven |
 | WP-2 | closed (impl-log §WP-2 2026-07-03) | spec: `docs/specs/2026-07-03-wp2-scholar.md`; 3-pass adversarial review, 0 violations; live OAuth + rotation + reconnect + 20-hit search + lit-question ingest proven |
-| WP-3 | — | |
+| WP-3 | closed (impl-log §WP-3 2026-07-04) | spec: `docs/specs/2026-07-03-wp3-research.md`; 3-pass adversarial review, 0 violations; live round-trips (10+13 provenanced sources → proposal → approve → curator); cost 7/7 & 3/3 paired; empty aiq grep; mem −4g |
 | WP-4 | — | |
 | WP-5 | — | |
 | WP-6 | — | |

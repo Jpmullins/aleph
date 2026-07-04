@@ -1,15 +1,11 @@
 # Local Aleph stack. All services bind to localhost.
 # Secrets via .env (copy .env.example to .env first).
 #
-# Before first run on a fresh machine:
-#   docker login nvcr.io       # username: $oauthtoken, password: NGC_API_KEY
-# (required for the aiq-server image)
-#
 # Every service carries mem_limit + an equal memswap_limit (= no swap for the
 # container): a runaway service gets OOM-killed inside its cgroup and
 # restarted by its restart policy, instead of paging the whole host to death
 # (which is what an unthrottled bootstrap research stampede did on
-# 2026-06-11). Caps total ~13g on a 16g host, leaving headroom for the OS and
+# 2026-06-11). Caps total ~9.5g on a 16g host, leaving headroom for the OS and
 # host-side Playwright browsers; normal idle usage is far below the caps.
 
 services:
@@ -29,12 +25,9 @@ services:
       # dir) so it can manage major-version-specific subdirectories.
       - postgres-data:/var/lib/postgresql
       # First-init bootstrap (fresh volume / `down -v` only): create the aux
-      # DBs (langfuse + aiq_*) and apply the AIQ schema before the TCP port /
-      # healthcheck open. The aiq-init-*.sql files are read by the hook from
-      # /aleph-init. See postgres-initdb.sh.
+      # langfuse DB before the TCP port / healthcheck open. See
+      # postgres-initdb.sh.
       - ./postgres-initdb.sh:/docker-entrypoint-initdb.d/00-aleph-aux.sh:ro
-      - ./aiq-init-jobs.sql:/aleph-init/aiq-init-jobs.sql:ro
-      - ./aiq-init-checkpoints.sql:/aleph-init/aiq-init-checkpoints.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 2s
@@ -144,46 +137,6 @@ services:
     depends_on:
       - langfuse
 
-  aiq-server:
-    # The biggest cap in the stack: research jobs run in here as Dask
-    # workloads. Concurrency is bounded host-wide by AIQ_MAX_CONCURRENT_JOBS
-    # (Redis gate in aleph_aiq.throttle, enforced by submitters) so this
-    # limit holds under bootstrap fan-out.
-    image: nvcr.io/nvidia/blueprint/aiq-agent:2.1.0
-    restart: unless-stopped
-    mem_limit: 4g
-    memswap_limit: 4g
-    environment:
-      APP_ENV: ${ALEPH_ENV}
-      LOG_LEVEL: INFO
-      HOST: 0.0.0.0
-      PORT: "8000"
-      CONFIG_FILE: /app/configs/config.yml
-      # AIQ persistence — three logical DBs on the shared Postgres,
-      # created by bootstrap-local.sh.
-      NAT_JOB_STORE_DB_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/aiq_jobs
-      AIQ_CHECKPOINT_DB: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/aiq_checkpoints
-      AIQ_SUMMARY_DB: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/aiq_jobs
-      AIQ_CHROMA_DIR: /app/data/chroma_data
-      # LLM transport — same Insights gateway the rest of Aleph uses.
-      LITELLM_BASE_URL: ${LITELLM_BASE_URL}
-      INSIGHTS_LITELLM_API_KEY: ${INSIGHTS_LITELLM_API_KEY}
-      # Web search for the research agents (tavily_web_search tool).
-      TAVILY_API_KEY: ${TAVILY_API_KEY}
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-      DASK_NWORKERS: "1"
-      DASK_NTHREADS: "4"
-    volumes:
-      - ./aiq-config-default.yml:/app/configs/config.yml:ro
-      - aiq-data:/app/data
-    ports:
-      - "127.0.0.1:8001:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      otel-collector:
-        condition: service_started
-
   # One-shot: apply Alembic migrations to the main `aleph` database, then
   # exit. aleph-api / aleph-workers gate on this completing so they never
   # serve against an unmigrated schema — the `relation "users" does not exist`
@@ -216,7 +169,6 @@ services:
     mem_limit: 1.5g
     memswap_limit: 1.5g
     environment:
-      AIQ_MAX_CONCURRENT_JOBS: "3"
       ALEPH_ENV: ${ALEPH_ENV}
       ALEPH_DEFAULT_MODEL_PROFILE: ${ALEPH_DEFAULT_MODEL_PROFILE}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
@@ -242,7 +194,6 @@ services:
       ALEPH_AUTH_AUDIENCE: ${ALEPH_AUTH_AUDIENCE:-aleph}
       ALEPH_AUTH_JWKS_URL: ${ALEPH_AUTH_JWKS_URL:-}
       ALEPH_AGENT_TOKEN_SECRET: ${ALEPH_AGENT_TOKEN_SECRET}
-      AIQ_BASE_URL: http://aiq-server:8000
       # Scholar (WP-2)
       ALEPH_SCHOLAR_MAILTO: ${ALEPH_SCHOLAR_MAILTO:-dev@aleph.local}
       ALEPH_CONSENSUS_MONTHLY_SEARCH_CAP: ${ALEPH_CONSENSUS_MONTHLY_SEARCH_CAP:-200}
@@ -270,7 +221,6 @@ services:
     environment:
       # Lowered from the code default (10) for the 16g local host.
       ARQ_MAX_JOBS: "4"
-      AIQ_MAX_CONCURRENT_JOBS: "3"
       ALEPH_ENV: ${ALEPH_ENV}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379/0
@@ -289,7 +239,6 @@ services:
       INSIGHTS_LITELLM_API_KEY: ${INSIGHTS_LITELLM_API_KEY}
       ALEPH_API_INTERNAL_URL: http://aleph-api:8000
       ALEPH_AGENT_TOKEN_SECRET: ${ALEPH_AGENT_TOKEN_SECRET}
-      AIQ_BASE_URL: http://aiq-server:8000
       # Scholar (WP-2; workers run the reviewer's doi_verification pass in WP-3)
       ALEPH_SCHOLAR_MAILTO: ${ALEPH_SCHOLAR_MAILTO:-dev@aleph.local}
       ALEPH_CONSENSUS_MONTHLY_SEARCH_CAP: ${ALEPH_CONSENSUS_MONTHLY_SEARCH_CAP:-200}
@@ -348,4 +297,3 @@ volumes:
   postgres-data:
   minio-data:
   redis-data:
-  aiq-data:

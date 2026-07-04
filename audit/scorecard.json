@@ -99,7 +99,7 @@
     "result": "pass",
     "reason": "ApprovalCard approve: proposal -> approved + ledger grew (10 -> 11)"
   },
-  "aiq-research-to-wiki": {
+  "research-to-wiki": {
     "check_type": "dataflow",
     "result": "pass",
     "reason": "3 proposal(s); proposal->page 019f18ce-2924-7db1-b98c-9267f2414a8a (body ~8389 chars)->run 019f18cc-e9ea-722d-b599-3cdbb19d583d all resolve"

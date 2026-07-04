@@ -4,8 +4,8 @@ Inc 1 had a Protocol in aleph-wiki/connectors. Inc 3 promotes it into
 its own package and extends it with:
   * `ConnectorContext` — carries the agent_token + project scope + the
     credential resolver. Inc 1 didn't need this since the Upload
-    connector ran in-process; now AIQ runs the connector, so the
-    context plumbs identity through to the callback.
+    connector ran in-process; the research worker constructs it per
+    job so identity plumbs through to every fetch.
 """
 
 from __future__ import annotations

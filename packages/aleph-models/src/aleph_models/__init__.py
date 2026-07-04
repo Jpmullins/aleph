@@ -1,8 +1,7 @@
 """LiteLLM transport + ModelProfile resolver + pricing.
 
 Every LLM and embedding call in Aleph routes through `LiteLLMClient`.
-There is no other path. AIQ also routes through this client via the
-gateway URL exposed by deployment env.
+There is no other path.
 """
 
 from aleph_models.client import (

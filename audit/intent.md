@@ -2,7 +2,7 @@
 
 *Audit date: 2026-07-01 · Branch: `audit-remediation` · Method: code read + 3 parallel
 subsystem traces + live probes against the running compose stack (api/web/copilot-runtime/
-aiq/postgres/minio/redis all up).*
+postgres/minio/redis all up).*
 
 This document reconstructs (1) what Aleph is **supposed** to do, (2) what it **actually** does
 as observed from code and a live stack, and (3) where the **gaps** are. Companion machine-checkable
@@ -14,8 +14,8 @@ claims are in `audit/claims.yaml`; the executable harness is in `audit/checks/` 
 
 Aleph is a **multi-agent research environment**. An analyst opens a *project* (a research
 question), and a fleet of LLM agents builds and maintains a **compiled wiki** as the primary
-knowledge surface, drawing on ingested **sources** and external **web research** (via an NVIDIA
-AIQ subsystem). The analyst works almost entirely **conversationally** through a single Live
+knowledge surface, drawing on ingested **sources** and external **web research** (via the
+native in-worker research loop). The analyst works almost entirely **conversationally** through a single Live
 chat agent, which plans and delegates to purpose-built subagents; the agent can drive a 3-panel
 workspace UI. Everything is **provenance-first**: every mutation is hash-chain-ledgered, every
 LLM call is cost-tracked, every row is project-scoped.
@@ -39,11 +39,11 @@ Intended user-facing capabilities:
 - **Notes**: create/edit a notebook, **promote** a note to a draft wiki page + Briefs proposal.
 - **Hypotheses**: create hypotheses, attach evidence, view an **ACH matrix** (analysis of
   competing hypotheses).
-- **Briefs**: pending synthesis proposals (from AIQ research or note-promotion), page-merge
+- **Briefs**: pending synthesis proposals (from research or note-promotion), page-merge
   proposals, and open review findings render as approval/finding cards for the analyst to action.
-- **AIQ research → wiki**: dispatch deep/shallow web research to `aiq-server`; poll for the
-  report; run a synthesis workflow that commits a **draft wiki page + pending proposal**; a
-  curator repairs wikilinks.
+- **Research → wiki**: dispatch deep/shallow web research as an in-worker LangGraph job; run a
+  synthesis workflow that commits a **draft wiki page + pending proposal**; a curator repairs
+  wikilinks.
 - **Artifacts**: build report_pdf / docx / markdown bundle / source pack / deck from wiki pages
   + datasets; download the rendered asset.
 - **Visualizations**: chart (Vega-Lite), table, graph (SVG), and map (MapLibre) cards.
@@ -96,16 +96,16 @@ confirm real data end-to-end.
   spec `10-wiki-links-*`).
 
 ### Source → wiki pipeline + workers (traced FULLY WIRED)
-- `arq.py:107-120` registers **12 jobs**; enqueue call-sites verified for 11:
+- `arq.py` registers the worker jobs; enqueue call-sites verified:
   `normalize_job`→`{chunk_embed_job, wiki_ingest_job}`→`{mechanical_review, curate_page}`, plus
-  `aiq_submit`, `aiq_synthesis_poll`, `bootstrap_project`, `builder`, `editorial_review`,
+  `deep_research`, `bootstrap_project`, `builder`, `editorial_review`,
   `reembed`, `curate_page`. Upload (`POST /sources/upload`) and URL-ingest both kick off normalize.
 
-### AIQ research → wiki (traced FULLY WIRED; artifacts present live)
-- `POST /synthesize` → `dispatch_research` → AIQ `POST /v1/jobs/async/submit` (base URL
-  configurable, default `http://aiq-server:8000`) → `aiq_synthesis_poll_job` polls →
-  `SynthesisWorkflow` (5-node LangGraph) commits a **draft page + pending SynthesisProposal** →
-  `curate_page_job` runs `CuratorService` which calls `AliasService.repair_broken_links`.
+### Research → wiki (traced FULLY WIRED; artifacts present live)
+- `POST /synthesize` → `deep_research_job` (in-worker LangGraph loop over the typed
+  connectors) → `SynthesisWorkflow` (5-node LangGraph) commits a **draft page + pending
+  SynthesisProposal** → `curate_page_job` runs `CuratorService` which calls
+  `AliasService.repair_broken_links`.
 - Live proof: both projects have `synthesis-proposals` rows (all `approved`), and Sovereign AI's
   cost ledger shows `bootstrap.scope` + `wiki.curate.overview` phases → **bootstrap-on-create
   actually ran** and produced an approved overview page.
@@ -149,11 +149,10 @@ Ordered roughly by significance. These are the things a passing `npm test` would
    the renderers themselves work (the audit's `viz-renderers` check intercepts the *stream* and the
    real Vega `<canvas>` renders). A passing-looking suite name hides a broken test.
 
-2. **Typed connector suite is orphaned (by design, but it's dead on the live path).**
-   `packages/aleph-connectors` `ConnectorBase`/`ConnectorRegistry` `search`/`fetch` are **not**
-   on the research path — research runs against AIQ's built-in Tavily web search. Wiring the typed
-   connectors requires a custom AIQ image with NAT plugins (sequenced infra). CLAUDE.md admits this.
-   *Impact: the "connectors" abstraction is a large body of code with no runtime caller.*
+2. **Typed connector suite is now live (WP-3).** `packages/aleph-connectors`
+   `ConnectorBase`/`ConnectorRegistry` `search`/`fetch` are registered at worker startup and
+   bound per-project into the native research loop; the historical orphaning noted by the
+   original audit is resolved.
 
 2. **JS/SPA render worker is specced but NOT built.** URL ingest is raw-HTTP
    (`aleph-workers` note in CLAUDE.md): JavaScript/SPA pages capture as static HTML. A

@@ -2,7 +2,6 @@
 
 from aleph_api.routes import (
     agent_tokens,
-    aiq_internal,
     aliases,
     artifacts,
     assistant,
@@ -33,7 +32,6 @@ from aleph_api.routes import (
 
 __all__ = [
     "agent_tokens",
-    "aiq_internal",
     "aliases",
     "artifacts",
     "assistant",

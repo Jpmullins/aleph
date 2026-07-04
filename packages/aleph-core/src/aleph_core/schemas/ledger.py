@@ -8,7 +8,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
-ActorKindStr = Literal["user", "aleph_agent", "aiq_agent", "system"]
+ActorKindStr = Literal["user", "aleph_agent", "system"]
 
 
 class LedgerEventOut(BaseModel):

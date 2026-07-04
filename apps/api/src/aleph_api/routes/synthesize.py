@@ -1,9 +1,10 @@
 """Synthesize action + synthesis proposal approval/rejection routes.
 
-The /synthesize endpoint creates an AgentRun(kind="aiq_deep"), issues
-an AIQ service token bound to that run, dispatches the job to the AIQ
-server, and returns the run id so the chat surface can subscribe to
-progress events.
+The /synthesize endpoint creates an AgentRun (agent_kind
+"deep_research" | "shallow_research"), writes the synthesize.dispatch
+ledger event in the same transaction, mints an agent token bound to
+that run, and enqueues the native ``deep_research_job`` — the run id is
+returned so the chat surface can subscribe to progress events.
 
 Approve / reject endpoints flip the proposal status and the underlying
 WikiPage.status in one transaction, recording an ApprovalDecision row.
@@ -21,7 +22,6 @@ from fastapi import APIRouter, Body, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
-from aleph_aiq.dispatch import dispatch_research
 from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
 from aleph_connectors.models import ApprovalDecision, SynthesisProposal
@@ -29,6 +29,7 @@ from aleph_core.errors import NotFound, ValidationFailed
 from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
 from aleph_observability.tracing import current_trace_id
+from aleph_research.dispatch import dispatch_research
 from aleph_security.roles import ProjectRole, require_at_least
 from aleph_wiki.feedback_service import write_feedback
 from aleph_wiki.models import WikiPage
@@ -45,7 +46,6 @@ class SynthesizeIn(BaseModel):
 class SynthesizeOut(BaseModel):
     agent_run_id: str
     correlation_id: str
-    aiq_job_id: str | None
     dispatched: bool
 
 
@@ -82,7 +82,8 @@ async def synthesize(
 ) -> SynthesizeOut:
     require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
 
-    # Resolve connectors → create run → dispatch → enqueue poll, via the shared
+    # Resolve enabled connector kinds → create the pending AgentRun + ledger
+    # the dispatch → enqueue the native deep_research_job, via the shared
     # helper (the same path the bootstrap_project_job uses).
     settings = request.app.state.settings
     pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
@@ -90,12 +91,12 @@ async def synthesize(
         try:
             started = await dispatch_research(
                 session=session,
-                settings=settings,
+                ledger=ledger,
                 redis_pool=pool,
+                agent_token_secret=settings.aleph_agent_token_secret,
                 project_id=project_id,
                 principal_user_id=principal.user_id,
                 actor_kind=principal.actor_kind,
-                ledger=ledger,
                 topic=body.topic,
                 depth=body.depth,
                 allowed_connectors=body.allowed_connectors,
@@ -108,7 +109,6 @@ async def synthesize(
     return SynthesizeOut(
         agent_run_id=str(started.agent_run_id),
         correlation_id=started.correlation_id,
-        aiq_job_id=started.aiq_job_id,
         dispatched=started.dispatched,
     )
 

@@ -5,8 +5,8 @@ Runs on every wiki revision commit. Checks:
   stale_source | hash_mismatch | duplicate_source | alias_inconsistency |
   schema_invalid.
 
-Most checks are deterministic. citation_match wraps AIQ's
-`verify_citations` contract (mirrored in `aleph_wiki.citation_verification`).
+Most checks are deterministic. citation_match uses
+`aleph_wiki.citation_verification.verify_citations`.
 doi_verification wraps `aleph_scholar` DOI verification (spec WP-2 §6).
 """
 

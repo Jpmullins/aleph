@@ -1,7 +1,7 @@
 """Synthesis-compose workflow.
 
-Consumes an AIQ DeepResearcher report (or any structured research
-report shaped the same way) and lands it as wiki draft pages with
+Consumes a structured research report (produced by the native
+research loop in ``aleph-research``) and lands it as wiki draft pages with
 `status="draft"`, ready for owner approval.
 
 Workflow nodes:
@@ -46,30 +46,30 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
-class AIQReportSourceRef:
+class ResearchSourceRef:
     source_short_id: str
     title: str
     url: str | None
 
 
 @dataclass(frozen=True)
-class AIQReportClaim:
+class ResearchClaim:
     text: str
     citation_markers: list[str]  # ["c1", "c3"]
     section_anchor: str | None
 
 
 @dataclass(frozen=True)
-class AIQReport:
-    """Structured research report returned by AIQ DeepResearcher."""
+class ResearchReport:
+    """Structured research report consumed by the synthesis workflow."""
 
     topic: str
     body_md: str
     summary: str
-    sources: list[AIQReportSourceRef]
-    citations_by_marker: dict[str, AIQReportSourceRef]
+    sources: list[ResearchSourceRef]
+    citations_by_marker: dict[str, ResearchSourceRef]
     """Map of `c1` / `c2` markers (as they appear in `body_md`) to source refs."""
-    claims: list[AIQReportClaim]
+    claims: list[ResearchClaim]
 
 
 @dataclass
@@ -96,10 +96,10 @@ class SynthesisState(TypedDict, total=False):
     agent_run_id: UUID
     project_id: UUID
     topic: str
-    aiq_report: AIQReport
+    report: ResearchReport
     profile_bindings: dict[str, Any]
     normalized_topic: str
-    verified_markers: dict[str, AIQReportSourceRef]
+    verified_markers: dict[str, ResearchSourceRef]
     committed_revision_ids: list[UUID]
     committed_page_ids: list[UUID]
     proposal_ids: list[UUID]
@@ -137,7 +137,7 @@ async def _node_citation_verification(state: SynthesisState) -> dict:
             "aleph.project_id": str(state["project_id"]),
         },
     ):
-        report = state["aiq_report"]
+        report = state["report"]
         try:
             verified = verify_citations(
                 body_md=report.body_md,
@@ -164,7 +164,7 @@ async def _node_wikilink_resolve(state: SynthesisState) -> dict:
         ctx = _ctx()
         wikilinks: list[WikiLinkDraft] = []
         counts: dict[str, int] = {}
-        for m in WIKILINK_RE.finditer(state["aiq_report"].body_md):
+        for m in WIKILINK_RE.finditer(state["report"].body_md):
             t = m.group(1).split("|", 1)[0].strip()
             counts[t] = counts.get(t, 0) + 1
         if counts:
@@ -203,7 +203,7 @@ async def _node_commit_revision(state: SynthesisState) -> dict:
                 msg, verified=state.get("verified_markers") or {}, missing_markers=failures
             )
 
-        report = state["aiq_report"]
+        report = state["report"]
         wikilinks = state.get("resolved_wikilinks") or []  # type: ignore[assignment]
 
         claim_drafts: list[ClaimDraft] = []

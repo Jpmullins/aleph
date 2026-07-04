@@ -215,16 +215,16 @@
   wired: true
   notes: "POST /cards/actions {approve, target=synthesis_proposal} → proposal status approved + ledger event count increases."
 
-- id: aiq-research-to-wiki
-  intent: "AIQ web research produces a committed wiki page linked to a synthesis proposal and an agent run (research → wiki)."
+- id: research-to-wiki
+  intent: "Native research produces a committed wiki page linked to a synthesis proposal and an agent run, ingesting sources through the typed connectors (research → wiki)."
   evidence:
-    - packages/aleph-aiq/src/aleph_aiq/client.py
-    - apps/workers/src/aleph_workers/jobs/aiq_synthesis.py
+    - packages/aleph-research/src/aleph_research/research_workflow.py
+    - apps/workers/src/aleph_workers/jobs/research.py
     - packages/aleph-wiki/src/aleph_wiki/synthesis_workflow.py
   check_type: dataflow
   status: unverified
   wired: true
-  notes: "Over existing real data: each synthesis-proposal references a real page_id (a committed wiki page) + agent_run_id. Non-destructive proof the pipeline ran end-to-end."
+  notes: "Over existing real data: each synthesis-proposal references a real page_id (a committed wiki page) + agent_run_id, and the project holds research-ingested sources with connector_kind != upload. Non-destructive proof the pipeline ran end-to-end."
 
 - id: bootstrap-on-create
   intent: "Creating a project auto-bootstraps a wiki: a bootstrap agent run seeds an overview page."

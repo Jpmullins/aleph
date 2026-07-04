@@ -18,8 +18,8 @@ members = [
     "packages/aleph-wiki",
     "packages/aleph-assistant",
     "packages/aleph-connectors",
-    "packages/aleph-aiq",
     "packages/aleph-scholar",
+    "packages/aleph-research",
     "packages/aleph-a2ui",
     "packages/aleph-notes",
     "packages/aleph-reviewer",
@@ -39,8 +39,8 @@ aleph-rks = { workspace = true }
 aleph-wiki = { workspace = true }
 aleph-assistant = { workspace = true }
 aleph-connectors = { workspace = true }
-aleph-aiq = { workspace = true }
 aleph-scholar = { workspace = true }
+aleph-research = { workspace = true }
 aleph-a2ui = { workspace = true }
 aleph-notes = { workspace = true }
 aleph-reviewer = { workspace = true }
@@ -83,8 +83,8 @@ src = [
     "packages/aleph-wiki/src",
     "packages/aleph-assistant/src",
     "packages/aleph-connectors/src",
-    "packages/aleph-aiq/src",
     "packages/aleph-scholar/src",
+    "packages/aleph-research/src",
     "packages/aleph-a2ui/src",
     "packages/aleph-notes/src",
     "packages/aleph-reviewer/src",
@@ -142,8 +142,8 @@ include = [
     "packages/aleph-wiki/src",
     "packages/aleph-assistant/src",
     "packages/aleph-connectors/src",
-    "packages/aleph-aiq/src",
     "packages/aleph-scholar/src",
+    "packages/aleph-research/src",
     "packages/aleph-a2ui/src",
     "packages/aleph-notes/src",
     "packages/aleph-reviewer/src",

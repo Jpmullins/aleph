@@ -238,7 +238,7 @@ async def promote_note(
 
     Concatenates the note's sections into a draft `synthesis` wiki page and
     records a pending SynthesisProposal so it lands in Briefs for approval —
-    the analyst-authored counterpart to AIQ synthesis.
+    the analyst-authored counterpart to research synthesis.
     """
     require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
     out = await get_note(session, project_id=project_id, note_id=note_id)

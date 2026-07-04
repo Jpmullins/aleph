@@ -535,7 +535,7 @@ async def _start_research_impl(query: str, config: RunnableConfig, depth: str = 
     """Kick off background research on a topic to grow the project's wiki.
 
     Shared body of the research dispatch: self-calls the tested `/synthesize`
-    route (connector resolution, AIQ dispatch, the result→wiki poll job; rule #3
+    route (connector resolution + the native research job dispatch; rule #3
     — never touches the DB directly) and returns immediately. Reused by the
     `researcher` subagent's `start_research` tool (Wave 3 T3) so the orchestrator
     delegates research rather than self-calling it inline.
@@ -551,7 +551,7 @@ async def _start_research_impl(query: str, config: RunnableConfig, depth: str = 
         return "Research is unavailable (no project scope on this run)."
     depth = depth if depth in ("shallow", "deep") else "shallow"
     # Self-call the synthesize endpoint so we reuse the full, tested dispatch
-    # path (connector resolution, AIQ dispatch, the result→wiki poll job).
+    # path (connector resolution + the native deep_research_job dispatch).
     base = settings.aleph_self_url
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:

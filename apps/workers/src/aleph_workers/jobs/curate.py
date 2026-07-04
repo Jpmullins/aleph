@@ -1,6 +1,6 @@
 """curate_page_job: knit the wiki graph after a page commit.
 
-Enqueued best-effort by the authoring paths (AIQ synthesis + wiki ingest) after
+Enqueued best-effort by the authoring paths (research synthesis + wiki ingest) after
 a page is committed. Two stages, isolated transactions:
 
 1. Deterministic knit (always commits): repair broken wikilinks project-wide +

@@ -9,10 +9,9 @@ Two cipher schemes:
     project, ciphertext as AES-GCM. Implementation hook is provided;
     actual KMS calls are operator-configured in production deployment.
 
-A credential is **never returned by any HTTP endpoint**. Only the
-`/internal/v1/aiq/credentials/{connector_kind}` callback (in apps/api)
-decrypts, and only after verifying the AIQ service token's project +
-agent_run scope.
+A credential is **never returned by any HTTP endpoint**. Only
+`decrypt_for_callback` decrypts — called in-process by the research
+worker after resolving the project's connector binding.
 """
 
 from __future__ import annotations
@@ -237,10 +236,10 @@ class ConnectorCredentialService:
         connector_id: UUID,
         connector_kind: str,
     ) -> str:
-        """The only decryption entry point. Callable from
-        `/internal/v1/aiq/credentials/{kind}` after the service token
-        has been verified. Falls back to the deployment env default if
-        no project-specific credential exists."""
+        """The only decryption entry point. Called in-process by the
+        research worker after the project's connector binding has been
+        resolved. Falls back to the deployment env default if no
+        project-specific credential exists."""
         from sqlalchemy import select
 
         existing = (

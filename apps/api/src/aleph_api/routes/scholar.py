@@ -7,7 +7,7 @@ mutation), so — like the other project GET routes — project membership via
 
 `consensus-search` additionally enforces the project's `ConnectorBinding`
 for the `consensus` connector (disabled → 403 `connector_disabled`,
-mirroring the aiq_internal credential callback) and binds the Consensus
+mirroring the in-process credential resolution) and binds the Consensus
 OAuth credential load/save callbacks to `ConnectorCredentialService`
 per-request. A refresh-token rotation persists through the service's
 ledgered rotate/upsert path — plaintext never appears in ledger payloads.
@@ -231,7 +231,7 @@ async def consensus_search(
     `quota_exhausted` → 200 (no upstream call was made); a dead OAuth grant
     → 409 `{status: "reconnect_required"}`. A disabled project binding for
     the `consensus` connector → 403 `connector_disabled` (per-project
-    scoping by binding, mirroring the aiq_internal enforcement).
+    scoping by binding, mirroring the research-loop binding enforcement).
     """
     connector = (
         await session.execute(select(Connector).where(Connector.kind == "consensus"))

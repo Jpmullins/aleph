@@ -11,7 +11,6 @@ resolution-markers = [
 [manifest]
 members = [
     "aleph-a2ui",
-    "aleph-aiq",
     "aleph-api",
     "aleph-artifacts",
     "aleph-assistant",
@@ -24,6 +23,7 @@ members = [
     "aleph-models",
     "aleph-notes",
     "aleph-observability",
+    "aleph-research",
     "aleph-reviewer",
     "aleph-rks",
     "aleph-scholar",
@@ -113,39 +113,6 @@ requires-dist = [
 provides-extras = ["mcp"]
 
 [[package]]
-name = "aleph-aiq"
-version = "0.1.0"
-source = { editable = "packages/aleph-aiq" }
-dependencies = [
-    { name = "aleph-connectors" },
-    { name = "aleph-core" },
-    { name = "aleph-db" },
-    { name = "aleph-models" },
-    { name = "aleph-observability" },
-    { name = "aleph-security" },
-    { name = "httpx" },
-    { name = "pydantic" },
-    { name = "pyjwt", extra = ["crypto"] },
-    { name = "pyyaml" },
-    { name = "sqlalchemy", extra = ["asyncio"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aleph-connectors", editable = "packages/aleph-connectors" },
-    { name = "aleph-core", editable = "packages/aleph-core" },
-    { name = "aleph-db", editable = "packages/aleph-db" },
-    { name = "aleph-models", editable = "packages/aleph-models" },
-    { name = "aleph-observability", editable = "packages/aleph-observability" },
-    { name = "aleph-security", editable = "packages/aleph-security" },
-    { name = "httpx", specifier = "==0.28.1" },
-    { name = "pydantic", specifier = "==2.13.4" },
-    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10.1" },
-    { name = "pyyaml", specifier = "==6.0.3" },
-    { name = "sqlalchemy", extras = ["asyncio"], specifier = "==2.0.50" },
-]
-
-[[package]]
 name = "aleph-api"
 version = "0.1.0"
 source = { editable = "apps/api" }
@@ -153,7 +120,6 @@ dependencies = [
     { name = "ag-ui-langgraph" },
     { name = "alembic" },
     { name = "aleph-a2ui" },
-    { name = "aleph-aiq" },
     { name = "aleph-artifacts" },
     { name = "aleph-assistant" },
     { name = "aleph-connectors" },
@@ -165,6 +131,7 @@ dependencies = [
     { name = "aleph-models" },
     { name = "aleph-notes" },
     { name = "aleph-observability" },
+    { name = "aleph-research" },
     { name = "aleph-reviewer" },
     { name = "aleph-rks" },
     { name = "aleph-scholar" },
@@ -193,7 +160,6 @@ requires-dist = [
     { name = "ag-ui-langgraph", specifier = ">=0.0.36" },
     { name = "alembic", specifier = "==1.18.4" },
     { name = "aleph-a2ui", editable = "packages/aleph-a2ui" },
-    { name = "aleph-aiq", editable = "packages/aleph-aiq" },
     { name = "aleph-artifacts", editable = "packages/aleph-artifacts" },
     { name = "aleph-assistant", editable = "packages/aleph-assistant" },
     { name = "aleph-connectors", editable = "packages/aleph-connectors" },
@@ -205,6 +171,7 @@ requires-dist = [
     { name = "aleph-models", editable = "packages/aleph-models" },
     { name = "aleph-notes", editable = "packages/aleph-notes" },
     { name = "aleph-observability", editable = "packages/aleph-observability" },
+    { name = "aleph-research", editable = "packages/aleph-research" },
     { name = "aleph-reviewer", editable = "packages/aleph-reviewer" },
     { name = "aleph-rks", editable = "packages/aleph-rks" },
     { name = "aleph-scholar", editable = "packages/aleph-scholar" },
@@ -393,6 +360,7 @@ source = { editable = "packages/aleph-evals" }
 dependencies = [
     { name = "aleph-core" },
     { name = "aleph-db" },
+    { name = "httpx" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "sqlalchemy", extra = ["asyncio"] },
@@ -402,6 +370,7 @@ dependencies = [
 requires-dist = [
     { name = "aleph-core", editable = "packages/aleph-core" },
     { name = "aleph-db", editable = "packages/aleph-db" },
+    { name = "httpx", specifier = "==0.28.1" },
     { name = "pydantic", specifier = "==2.13.4" },
     { name = "pyyaml", specifier = "==6.0.3" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = "==2.0.50" },
@@ -500,6 +469,41 @@ requires-dist = [
     { name = "opentelemetry-instrumentation-redis", specifier = "==0.63b1" },
     { name = "opentelemetry-instrumentation-sqlalchemy", specifier = "==0.63b1" },
     { name = "opentelemetry-sdk", specifier = "==1.42.1" },
+    { name = "structlog", specifier = "==25.5.0" },
+]
+
+[[package]]
+name = "aleph-research"
+version = "0.1.0"
+source = { editable = "packages/aleph-research" }
+dependencies = [
+    { name = "aleph-connectors" },
+    { name = "aleph-core" },
+    { name = "aleph-db" },
+    { name = "aleph-models" },
+    { name = "aleph-observability" },
+    { name = "aleph-rks" },
+    { name = "aleph-scholar" },
+    { name = "aleph-security" },
+    { name = "aleph-wiki" },
+    { name = "langgraph" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "structlog" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aleph-connectors", editable = "packages/aleph-connectors" },
+    { name = "aleph-core", editable = "packages/aleph-core" },
+    { name = "aleph-db", editable = "packages/aleph-db" },
+    { name = "aleph-models", editable = "packages/aleph-models" },
+    { name = "aleph-observability", editable = "packages/aleph-observability" },
+    { name = "aleph-rks", editable = "packages/aleph-rks" },
+    { name = "aleph-scholar", editable = "packages/aleph-scholar" },
+    { name = "aleph-security", editable = "packages/aleph-security" },
+    { name = "aleph-wiki", editable = "packages/aleph-wiki" },
+    { name = "langgraph", specifier = ">=1.2,<2" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = "==2.0.50" },
     { name = "structlog", specifier = "==25.5.0" },
 ]
 
@@ -664,6 +668,7 @@ dependencies = [
     { name = "aleph-db" },
     { name = "aleph-models" },
     { name = "aleph-observability" },
+    { name = "aleph-research" },
     { name = "aleph-reviewer" },
     { name = "aleph-rks" },
     { name = "aleph-scholar" },
@@ -686,6 +691,7 @@ requires-dist = [
     { name = "aleph-db", editable = "packages/aleph-db" },
     { name = "aleph-models", editable = "packages/aleph-models" },
     { name = "aleph-observability", editable = "packages/aleph-observability" },
+    { name = "aleph-research", editable = "packages/aleph-research" },
     { name = "aleph-reviewer", editable = "packages/aleph-reviewer" },
     { name = "aleph-rks", editable = "packages/aleph-rks" },
     { name = "aleph-scholar", editable = "packages/aleph-scholar" },

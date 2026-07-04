@@ -2,10 +2,10 @@
 
 Phase 1 ``scope``    — one synthesis LLM call → {overview_md, seed_topics[]}.
 Phase 2 ``seed_overview`` — commit a draft 'overview' wiki page (instant content).
-Phase 3 ``dispatch_research`` — fan out the AIQ research→synthesis pipeline per
-                       seed topic (bounded by settings.bootstrap_max_topics);
+Phase 3 ``dispatch_research`` — fan out the native research→synthesis pipeline
+                       per seed topic (bounded by settings.bootstrap_max_topics);
                        each is a child run that lands a draft page via
-                       aiq_synthesis_poll_job.
+                       deep_research_job.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ from uuid import UUID
 
 from sqlalchemy import select
 
-from aleph_aiq.dispatch import dispatch_research
 from aleph_core.schemas.model_profile import Capability
 from aleph_core.time import utcnow
 from aleph_db.models.agent import AgentRun
@@ -32,6 +31,7 @@ from aleph_db.repos.agent_events import (
 from aleph_db.repos.ledger import LedgerWriter
 from aleph_models.client import ChatMessage
 from aleph_observability.tracing import start_span
+from aleph_research.dispatch import dispatch_research
 from aleph_security.agent_token import verify_agent_token
 from aleph_security.principal import Principal
 from aleph_wiki.wiki_service import WikiLinkDraft, WikiService
@@ -236,12 +236,12 @@ async def bootstrap_project_job(
                     try:
                         r = await dispatch_research(
                             session=session,
-                            settings=settings,
+                            ledger=ledger,
                             redis_pool=redis_pool,
+                            agent_token_secret=secret,
                             project_id=project_id,
                             principal_user_id=principal.user_id,
                             actor_kind=principal.actor_kind,
-                            ledger=ledger,
                             topic=topic,
                             depth=depth,
                         )

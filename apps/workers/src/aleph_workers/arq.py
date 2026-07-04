@@ -24,12 +24,11 @@ from aleph_observability import (
 from aleph_rks.asset_store import create_asset_store
 from aleph_scholar import ScholarService
 from aleph_workers.jobs import (
-    aiq_submit_job,
-    aiq_synthesis_poll_job,
     bootstrap_project_job,
     builder_job,
     chunk_embed_job,
     curate_page_job,
+    deep_research_job,
     editorial_review_job,
     mechanical_review_job,
     normalize_job,
@@ -115,7 +114,6 @@ def _redis_from_url(url: str) -> RedisSettings:
 
 class WorkerSettings:
     functions: ClassVar = [
-        aiq_submit_job,
         smoke_llm_job,
         normalize_job,
         chunk_embed_job,
@@ -123,7 +121,7 @@ class WorkerSettings:
         mechanical_review_job,
         editorial_review_job,
         builder_job,
-        aiq_synthesis_poll_job,
+        deep_research_job,
         bootstrap_project_job,
         curate_page_job,
         reembed_job,

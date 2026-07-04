@@ -1,4 +1,4 @@
-"""AIQ benchmark adapters."""
+"""Research benchmark adapters (native /synthesize round-trip)."""
 
 from aleph_evals.adapters.deepresearch_bench import (
     DeepResearchBenchAdapter,

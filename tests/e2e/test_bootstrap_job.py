@@ -2,7 +2,7 @@
 
 Integration: real DB + real WikiService.commit_revision. The LLM gateway is
 patched to return the scope JSON, and dispatch_research is patched to record
-the topics it would fan out to (no AIQ needed).
+the topics it would fan out to (no research worker needed).
 """
 
 from __future__ import annotations
@@ -121,15 +121,15 @@ async def test_bootstrap_job_seeds_overview_and_caps_dispatch(
         ttl_seconds=3600,
     )
 
-    # Patch dispatch_research to record topics (no AIQ).
+    # Patch dispatch_research to record topics (no research worker).
     import aleph_workers.jobs.bootstrap as b
-    from aleph_aiq.dispatch import StartedResearch
+    from aleph_research.dispatch import StartedResearch
 
     dispatched: list[str] = []
 
     async def fake_dispatch(**kw):
         dispatched.append(kw["topic"])
-        return StartedResearch(uuid7(), "c", "job", True)
+        return StartedResearch(uuid7(), "c", True)
 
     monkeypatch.setattr(b, "dispatch_research", fake_dispatch)
 

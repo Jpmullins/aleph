@@ -6,12 +6,12 @@ Behavior depends on `settings.aleph_auth_mode`:
     non-public request is associated with a fixed `dev@aleph.local`
     user, JIT-provisioned on first sight (ledgered as `user.create`).
     Agent tokens (HS256) are still accepted in this mode so
-    aleph-workers and aiq-server can present scoped credentials.
+    aleph-workers can present scoped credentials.
   * `oidc` — accepts two token forms:
       - User OIDC bearer (RS256 against JWKS) → `Principal(actor_kind="user")`.
         JIT-provisions the `User` row on first sight.
       - Agent token (HS256, signed by aleph-api) →
-        `Principal(actor_kind="aleph_agent"|"aiq_agent")`.
+        `Principal(actor_kind="aleph_agent")`.
 
 Unauthenticated routes (`/healthz`, `/readyz`, `/docs`, `/openapi.json`)
 bypass in both modes.
@@ -50,11 +50,10 @@ _PUBLIC_PATHS = frozenset(
     }
 )
 
-# Routes that authenticate themselves with a different scheme (e.g. AIQ
-# internal callbacks present `X-Aleph-Service-Token`, not a user bearer).
-# The middleware skips its bearer check for these prefixes; the route
+# Routes that authenticate themselves with a different scheme. The
+# middleware skips its bearer check for these prefixes; the route
 # handler is responsible for its own verification.
-_SELF_AUTH_PREFIXES: tuple[str, ...] = ("/internal/v1/aiq/", "/copilotkit")
+_SELF_AUTH_PREFIXES: tuple[str, ...] = ("/copilotkit",)
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -74,7 +73,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         auth = request.headers.get("authorization") or ""
 
         # Agent tokens are accepted in both modes — they carry their own
-        # HS256 signature and are how workers/aiq-server authenticate.
+        # HS256 signature and are how workers authenticate.
         if auth.lower().startswith("bearer "):
             token = auth[7:].strip()
             try:

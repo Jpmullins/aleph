@@ -1,6 +1,6 @@
 """LiteLLMClient — the single LLM transport chokepoint.
 
-Every LLM and embedding call in Aleph routes through this client. AIQ
+Every LLM and embedding call in Aleph routes through this client. Agent
 also routes through the gateway via `_type: openai` configs pointed at
 `LITELLM_BASE_URL`. No provider SDK is called directly anywhere else.
 

@@ -57,13 +57,12 @@ async function openWorkspace(page, projectId) {
 
 const commands = {
   async smoke() {
-    // Containers report Started well before the apps listen (api ~20-30s cold,
-    // aiq similar) — poll each endpoint until the shared deadline.
+    // Containers report Started well before the apps listen (api ~20-30s
+    // cold) — poll each endpoint until the shared deadline.
     const deadline = Date.now() + 90_000;
     const checks = [
       ["api /healthz", `${API}/healthz`],
       ["web", WEB],
-      ["aiq /health", "http://localhost:8001/health"],
       ["copilot-runtime", "http://localhost:4000/api/copilotkit"],
     ];
     let failed = 0;
