@@ -2,7 +2,7 @@
 name = "aleph-scholar"
 version = "0.1.0"
 description = "Verified scholarship: DOI verification, citation-graph expansion, Consensus over MCP."
-requires-python = ">=3.13"
+requires-python = ">=3.13,<3.14"
 dependencies = [
     "httpx==0.28.1",
     "tenacity==9.1.4",

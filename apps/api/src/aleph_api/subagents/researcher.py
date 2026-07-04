@@ -27,8 +27,6 @@ from langchain_core.runnables import (
 )
 from langchain_core.tools import tool
 
-_SELF_AUTH_HEADERS = {"Authorization": "Bearer local-dev"}
-
 
 def _format_work(w: dict[str, Any]) -> str:
     authors_raw: list[Any] = w.get("authors") or []
@@ -65,6 +63,7 @@ def build_researcher_subagent(*, settings: Any) -> dict[str, Any]:
     from aleph_api.copilot_agent import (
         _project_id_from_config,  # pyright: ignore[reportPrivateUsage] — shared scope resolver reused (DRY); module-private to the api
         _runtime,  # pyright: ignore[reportPrivateUsage] — shared runtime accessor (DRY); module-private to the api
+        _self_headers,  # pyright: ignore[reportPrivateUsage] — shared self-call token minter (DRY); module-private to the api
         _start_research_impl,  # pyright: ignore[reportPrivateUsage] — shared dispatch body deliberately reused (DRY); module-private to the api
         subagent_model,
     )
@@ -94,7 +93,7 @@ def build_researcher_subagent(*, settings: Any) -> dict[str, Any]:
                 resp = await client.post(
                     f"{base}/v1/projects/{project_id}/{endpoint}",
                     json=payload,
-                    headers=_SELF_AUTH_HEADERS,
+                    headers=await _self_headers(project_id, settings=_runtime.get("settings")),
                 )
         except Exception as exc:
             return None, f"Could not reach {endpoint}: {exc}"
@@ -165,7 +164,7 @@ def build_researcher_subagent(*, settings: Any) -> dict[str, Any]:
                 resp = await client.post(
                     f"{base}/v1/projects/{project_id}/scholar/consensus-search",
                     json={"query": query},
-                    headers=_SELF_AUTH_HEADERS,
+                    headers=await _self_headers(project_id, settings=_runtime.get("settings")),
                 )
         except Exception as exc:
             return f"Could not reach Consensus: {exc}"

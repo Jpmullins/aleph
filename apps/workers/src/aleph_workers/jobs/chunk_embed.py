@@ -21,10 +21,12 @@ from aleph_core.time import utcnow
 from aleph_db.models.agent import AgentRun
 from aleph_db.models.model_profile import ModelProfile
 from aleph_db.repos.ledger import LedgerWriter
+from aleph_models.profile import resolve_binding
 from aleph_observability.tracing import current_trace_id, start_span
 from aleph_rks.chunking import chunk_markdown
-from aleph_rks.embedding import embed_texts
+from aleph_rks.embedding import embed_texts, embedding_dim_mismatch, is_known_embedding_model
 from aleph_rks.models import (
+    EMBEDDING_DIM,
     DocumentChunk,
     NormalizedDocument,
     RetrievalIndexRecord,
@@ -121,6 +123,33 @@ async def chunk_embed_job(
                 msg = "project has no model profile"
                 raise RuntimeError(msg)
 
+        # Embedding-dimension guard: resolve the project's `embedding` binding and
+        # reject BEFORE any (billed) embed call if the model's known output
+        # dimension does not match the pgvector column width. Writing a wrong-dim
+        # vector would fail the flush anyway; paying to discover that is the bug.
+        embed_model = resolve_binding(profile.bindings_jsonb, "embedding").model
+
+        async def _reject_dim(model: str, got_dim: int) -> dict[str, Any]:
+            reason = (
+                f"embedding model '{model}' emits {got_dim}-dim vectors, "
+                f"but document_chunks.embedding is {EMBEDDING_DIM}-dim; "
+                "rejected before embedding the document (no batch spend)"
+            )
+            async with maker() as session:
+                src = (
+                    await session.execute(select(Source).where(Source.id == normalized.source_id))
+                ).scalar_one_or_none()
+                if src is not None:
+                    src.status = "failed"
+                await session.commit()
+            await _finalize("failed", error_text=reason)
+            return {"ok": False, "reason": reason}
+
+        # Known-model fast path: reject on metadata alone, zero spend.
+        mismatch_dim = embedding_dim_mismatch(embed_model)
+        if mismatch_dim is not None:
+            return await _reject_dim(embed_model, mismatch_dim)
+
         # Fetch + chunk markdown.
         markdown_bytes = asset_store.get(normalized.markdown_uri)
         markdown = markdown_bytes.decode("utf-8")
@@ -128,6 +157,24 @@ async def chunk_embed_job(
         if not chunks:
             await _finalize("succeeded", {"chunk_count": 0})
             return {"ok": True, "chunk_count": 0}
+
+        # Unknown-model path: a single-item probe learns the real dim before the
+        # full batch, so a wrong-dim unknown embedder wastes one token, not the
+        # whole document. (Known models skipped this — their dim is in the
+        # static registry.)
+        if not is_known_embedding_model(embed_model):
+            probe = await embed_texts(
+                client=litellm,
+                principal=principal,
+                project_id=normalized.project_id,
+                agent_run_id=claims.agent_run_id,
+                profile_bindings=profile.bindings_jsonb,
+                texts=["dimension probe"],
+                purpose="rks.embed.probe",
+            )
+            probe_dim = len(probe.embeddings[0]) if probe.embeddings else EMBEDDING_DIM
+            if probe_dim != EMBEDDING_DIM:
+                return await _reject_dim(embed_model, probe_dim)
 
         # Embed (this writes a ModelCall + CostLedgerEvent per batch).
         embed_result = await embed_texts(

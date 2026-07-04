@@ -196,7 +196,7 @@ async def test_agent_action_approve_executes_effect(
 
     project_id = await _create_project(http_client)
 
-    async def _exec_in_process(*, project_id, tool, args):
+    async def _exec_in_process(*, project_id, tool, args, **_):
         route = a2ui_handlers._AGENT_ACTION_ROUTES[tool].format(project_id=project_id)
         resp = await http_client.post(route, json=args)
         assert resp.status_code < 400, resp.text

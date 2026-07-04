@@ -26,6 +26,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
+from aleph_core.ids import uuid7
 from aleph_wiki.index_service import IndexService
 
 if TYPE_CHECKING:
@@ -182,6 +183,72 @@ def get_runtime() -> dict[str, Any]:
     same way the tools below read it (the graph is built before `bind_runtime`).
     """
     return _runtime
+
+
+# ---------------------------------------------------------------------------
+# Self-call auth (A4)
+# ---------------------------------------------------------------------------
+# The in-process assistant reaches state ONLY by self-calling its own tested
+# API routes (rule #3). Those calls historically carried a hardcoded local-dev
+# bearer sentinel, which the auth middleware honors ONLY in local auth mode — so
+# under OIDC every self-call 401s. `_self_headers` mints a real short-lived
+# HS256 agent token instead, which the middleware verifies in BOTH modes.
+
+# A self-call completes in seconds; the token never needs to outlive the
+# request that mints it.
+_SELF_CALL_TTL_SECONDS = 300
+
+
+async def _resolve_self_call_user_id(settings: Any) -> UUID:
+    """Resolve the `User` id the assistant's in-process self-calls act as.
+
+    The AG-UI endpoint threads only project scope onto an agent run (no user
+    identity), so self-calls act as the same service user the old local-dev
+    bearer sentinel resolved to in local mode — looked up by
+    subject so the minted token's `user_id` references a real `User` row. The
+    auth middleware (`verify_agent_token`) refuses a token whose user is
+    unknown, and the project-scope gate keys the role on this id, so it must be
+    a real project-member user (the dev user is, exactly as under the sentinel).
+    """
+    from sqlalchemy import select
+
+    from aleph_db.models.identity import User
+
+    session_maker = _runtime.get("session_maker")
+    subject = getattr(settings, "local_dev_subject", "local-dev")
+    if session_maker is not None:
+        async with session_maker() as session:
+            uid = (
+                await session.execute(select(User.id).where(User.subject == subject))
+            ).scalar_one_or_none()
+        if uid is not None:
+            return uid
+    return _DEV_USER_UUID
+
+
+async def _self_headers(project_id: UUID, *, settings: Any) -> dict[str, str]:
+    """Mint the Authorization header for an in-process API self-call (A4).
+
+    Replaces the hardcoded local-dev bearer sentinel with a
+    real short-lived HS256 agent token scoped to the acting project + a fresh
+    agent_run_id. The sentinel authenticated ONLY in local auth mode; a minted
+    agent token is verified by the auth middleware in BOTH local and oidc mode,
+    so these self-calls no longer 401 under OIDC.
+    """
+    from aleph_security.agent_token import mint_agent_token
+
+    user_id = await _resolve_self_call_user_id(settings)
+    agent_run_id = uuid7()
+    token = mint_agent_token(
+        secret=settings.aleph_agent_token_secret,
+        user_id=user_id,
+        project_id=project_id,
+        agent_run_id=agent_run_id,
+        actor_kind="aleph_agent",
+        correlation_id=f"assistant-selfcall-{agent_run_id.hex}",
+        ttl_seconds=_SELF_CALL_TTL_SECONDS,
+    )
+    return {"Authorization": f"Bearer {token}"}
 
 
 def _project_id_from_thread_id(thread_id: object) -> UUID | None:
@@ -566,7 +633,7 @@ async def _start_research_impl(query: str, config: RunnableConfig, depth: str = 
             resp = await client.post(
                 f"{base}/v1/projects/{project_id}/synthesize",
                 json={"topic": query, "depth": depth},
-                headers={"Authorization": "Bearer local-dev"},
+                headers=await _self_headers(project_id, settings=settings),
             )
     except Exception as exc:
         return f"Could not start research: {exc}"
@@ -606,7 +673,7 @@ async def _pin_to_briefs_impl(
             resp = await client.post(
                 f"{base}/v1/projects/{project_id}/cards/pin",
                 json={"card_kind": card_kind, "title": title, "props": props},
-                headers={"Authorization": "Bearer local-dev"},
+                headers=await _self_headers(project_id, settings=settings),
             )
     except Exception as exc:
         return f"Could not pin the {card_kind}: {exc}"
@@ -643,7 +710,7 @@ async def _dispatch_card_action_impl(
                     "action_kind": action_kind,
                     "params": params,
                 },
-                headers={"Authorization": "Bearer local-dev"},
+                headers=await _self_headers(project_id, settings=settings),
             )
     except Exception as exc:
         return {"error": f"{action_kind} dispatch failed: {exc}"}
@@ -754,7 +821,7 @@ async def _render_code_via_runner_impl(
                     "title": title,
                     "pin": pin,
                 },
-                headers={"Authorization": "Bearer local-dev"},
+                headers=await _self_headers(project_id, settings=settings),
             )
     except Exception as exc:
         return f"Could not dispatch the sandbox render: {exc}"
@@ -794,7 +861,7 @@ async def _ingest_source_impl(url: str, config: RunnableConfig, title: str = "")
             resp = await client.post(
                 f"{base}/v1/projects/{project_id}/sources/ingest-url",
                 json={"url": url, "title": title},
-                headers={"Authorization": "Bearer local-dev"},
+                headers=await _self_headers(project_id, settings=settings),
             )
     except Exception as exc:
         return f"Could not ingest {url}: {exc}"
@@ -832,7 +899,7 @@ async def _request_agent_action(
             resp = await client.post(
                 f"{base}/v1/projects/{project_id}/agent-actions/request",
                 json={"tool": tool, "args": args, "title": title, "summary": summary},
-                headers={"Authorization": "Bearer local-dev"},
+                headers=await _self_headers(project_id, settings=settings),
             )
     except Exception as exc:
         return f"Could not request approval for {tool}: {exc}"
@@ -909,11 +976,11 @@ async def list_connectors(config: RunnableConfig) -> str:
         async with httpx.AsyncClient(timeout=30.0) as client:
             connectors_resp = await client.get(
                 f"{base}/v1/connectors",
-                headers={"Authorization": "Bearer local-dev"},
+                headers=await _self_headers(project_id, settings=settings),
             )
             bindings_resp = await client.get(
                 f"{base}/v1/projects/{project_id}/connectors/bindings",
-                headers={"Authorization": "Bearer local-dev"},
+                headers=await _self_headers(project_id, settings=settings),
             )
     except Exception as exc:
         return f"Could not list connectors: {exc}"
@@ -994,7 +1061,7 @@ async def set_model_profile(profile_name: str, config: RunnableConfig) -> str:
             try:
                 resp = await client.post(
                     f"{base}/v1/projects/{project_id}/model-profile/switch",
-                    headers={"Authorization": "Bearer local-dev"},
+                    headers=await _self_headers(project_id, settings=settings),
                     json={"profile_name": name},
                 )
             except Exception as exc:
@@ -1009,11 +1076,11 @@ async def set_model_profile(profile_name: str, config: RunnableConfig) -> str:
         try:
             current_resp = await client.get(
                 f"{base}/v1/projects/{project_id}/model-profile",
-                headers={"Authorization": "Bearer local-dev"},
+                headers=await _self_headers(project_id, settings=settings),
             )
             templates_resp = await client.get(
                 f"{base}/v1/model-profile-templates",
-                headers={"Authorization": "Bearer local-dev"},
+                headers=await _self_headers(project_id, settings=settings),
             )
         except Exception as exc:
             return f"Could not read the model profile: {exc}"

@@ -3,10 +3,12 @@
 The user-feedback mutation (insert + ledger + lazy eval-case promotion) is
 reached from two entry points that must behave identically:
 
-* the REST endpoint `POST /v1/projects/{id}/feedback` (`routes/evals.py`), and
+* the wiki rejection-feedback route (`routes/feedback.py`), and
 * the `feedback` A2UI card action (`a2ui_handlers.py`) — WP-4 routed the surface
   cards' feedback button through the ledger-audited action router instead of a
   component-level `useMutation`.
+  (The former `POST /v1/projects/{id}/feedback` in `routes/evals.py` was removed
+  in WP-5 when that dead route was deleted.)
 
 Factoring it here keeps the single write path (and its eval promotion) from
 drifting between the two callers.

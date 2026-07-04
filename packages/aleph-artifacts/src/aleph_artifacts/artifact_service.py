@@ -32,14 +32,14 @@ async def create_artifact(
     description: str = "",
 ) -> Artifact:
     if artifact_kind not in (
+        # Builder outputs (implement-or-400). `report_docx` / `deck_pdf` were
+        # removed (WP-5): no exporter exists for them, so accepting them only
+        # produced a mislabeled markdown bundle. An unlisted kind 400s.
         "report_pdf",
-        "report_docx",
         "report_markdown_bundle",
         "source_pack",
-        "deck_pdf",
         # WP-4c sandbox viz pipeline: code_runner outputs. Honesty rule (F5) —
-        # these are fully implemented (render_code_artifact_job); an unlisted
-        # kind still 400s.
+        # these are fully implemented (render_code_artifact_job).
         "image",
         "chart",
         "html_frame",

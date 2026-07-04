@@ -183,16 +183,61 @@ def verify_event_chain(
 
 
 async def verify_project_chain(session: AsyncSession, project_id: UUID) -> ChainVerification:
-    """Load a project's events in chain order and verify the hash chain."""
+    """Verify a project's hash chain by walking `prev_event_id` links from the
+    chain head back to genesis, then recomputing the chain in that order.
+
+    The chain order is defined by the `prev_event_id` links, NOT by timestamps:
+    events may be inserted with out-of-order timestamps and still form a valid
+    chain. A dangling / cyclic `prev_event_id` link (or an ambiguous head) is a
+    broken chain and verifies False.
+    """
     rows = list(
         (
             await session.execute(
-                select(ActionLedgerEvent)
-                .where(ActionLedgerEvent.project_id == project_id)
-                .order_by(ActionLedgerEvent.timestamp.asc(), ActionLedgerEvent.id.asc())
+                select(ActionLedgerEvent).where(ActionLedgerEvent.project_id == project_id)
             )
         )
         .scalars()
         .all()
     )
-    return verify_event_chain(rows)
+    if not rows:
+        return verify_event_chain([])
+
+    by_id: dict[UUID, ActionLedgerEvent] = {e.id: e for e in rows}
+
+    # Locate the chain head (tip): prefer the tracked `LedgerChainHead`, else the
+    # unique event that no other event references as its predecessor.
+    head_row = (
+        await session.execute(
+            select(LedgerChainHead).where(LedgerChainHead.project_id == project_id)
+        )
+    ).scalar_one_or_none()
+    head_id = head_row.head_event_id if head_row is not None else None
+    if head_id is None or head_id not in by_id:
+        referenced = {e.prev_event_id for e in rows if e.prev_event_id is not None}
+        tips = [e for e in rows if e.id not in referenced]
+        if len(tips) != 1:
+            # No unambiguous tip — forked or malformed chain.
+            return ChainVerification(ok=False, count=len(rows), first_divergence=None)
+        head_id = tips[0].id
+
+    # Walk prev_event_id from head → genesis, collecting events in chain order.
+    ordered_rev: list[ActionLedgerEvent] = []
+    seen: set[UUID] = set()
+    cur: ActionLedgerEvent | None = by_id.get(head_id)
+    while cur is not None:
+        if cur.id in seen:
+            # Cycle in the chain — broken.
+            return ChainVerification(ok=False, count=len(rows), first_divergence=None)
+        seen.add(cur.id)
+        ordered_rev.append(cur)
+        if cur.prev_event_id is None:
+            break
+        nxt = by_id.get(cur.prev_event_id)
+        if nxt is None:
+            # Dangling prev_event_id — the linked predecessor does not exist.
+            return ChainVerification(ok=False, count=len(rows), first_divergence=None)
+        cur = nxt
+
+    ordered_rev.reverse()
+    return verify_event_chain(ordered_rev)

@@ -2,7 +2,7 @@
 name = "aleph-core"
 version = "0.1.0"
 description = "Aleph shared domain primitives and Pydantic schemas"
-requires-python = ">=3.13"
+requires-python = ">=3.13,<3.14"
 dependencies = [
     "pydantic==2.13.4",
     "orjson==3.11.9",

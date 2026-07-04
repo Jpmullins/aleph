@@ -57,6 +57,7 @@ def build_wiki_builder_subagent(*, settings: Any) -> dict[str, Any]:
 
         from aleph_api.copilot_agent import (
             _runtime,  # pyright: ignore[reportPrivateUsage] — shared runtime accessor (DRY); module-private to the api
+            _self_headers,  # pyright: ignore[reportPrivateUsage] — shared self-call token minter (DRY); module-private to the api
         )
 
         settings_rt = _runtime.get("settings")
@@ -72,7 +73,7 @@ def build_wiki_builder_subagent(*, settings: Any) -> dict[str, Any]:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(
                     f"{base}/v1/projects/{project_id}/notes/{note_uuid}/promote",
-                    headers={"Authorization": "Bearer local-dev"},
+                    headers=await _self_headers(project_id, settings=settings_rt),
                 )
         except Exception as exc:
             return f"Could not promote note {note_id}: {exc}"

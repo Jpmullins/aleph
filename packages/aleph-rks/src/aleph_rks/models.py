@@ -27,6 +27,12 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from aleph_db.base import Base, CommonColumns
 
+#: Width of the ``document_chunks.embedding`` pgvector column. This is the
+#: single source of truth for the embedding dimension the store can hold; an
+#: embedder whose output dimension differs cannot be written and must be
+#: rejected *before* any (billed) embed call. See ``aleph_rks.embedding``.
+EMBEDDING_DIM = 1024
+
 
 class Connector(CommonColumns, Base):
     __tablename__ = "connectors"
@@ -133,7 +139,7 @@ class DocumentChunk(Base):
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     text_tsv: Mapped[TSVECTOR] = mapped_column(TSVECTOR, nullable=False)
-    embedding: Mapped[list[float]] = mapped_column(Vector(1024), nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM), nullable=False)
     section_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     char_start: Mapped[int] = mapped_column(Integer, nullable=False)
     char_end: Mapped[int] = mapped_column(Integer, nullable=False)

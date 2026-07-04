@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from aleph_assistant.models import (
     AssistantMessage,
@@ -80,75 +80,6 @@ async def get_thread(
             )
         )
     ).scalar_one_or_none()
-
-
-async def list_messages(
-    session: AsyncSession, *, thread_id: UUID, limit: int = 200
-) -> list[AssistantMessage]:
-    stmt = (
-        select(AssistantMessage)
-        .where(AssistantMessage.thread_id == thread_id)
-        .order_by(AssistantMessage.ordinal.asc())
-        .limit(limit)
-    )
-    return list((await session.execute(stmt)).scalars().all())
-
-
-async def get_message(
-    session: AsyncSession, *, project_id: UUID, message_id: UUID
-) -> AssistantMessage | None:
-    return (
-        await session.execute(
-            select(AssistantMessage).where(
-                AssistantMessage.id == message_id,
-                AssistantMessage.project_id == project_id,
-            )
-        )
-    ).scalar_one_or_none()
-
-
-async def append_message(
-    session: AsyncSession,
-    *,
-    project_id: UUID,
-    thread_id: UUID,
-    role: str,
-    body_md: str,
-    created_by: UUID,
-    status: str = "complete",
-    agent_run_id: UUID | None = None,
-    retrieval_jsonb: dict | None = None,
-) -> AssistantMessage:
-    next_ord = (
-        await session.execute(
-            select(func.coalesce(func.max(AssistantMessage.ordinal), -1)).where(
-                AssistantMessage.thread_id == thread_id
-            )
-        )
-    ).scalar_one() + 1
-    msg = AssistantMessage(
-        id=uuid7(),
-        project_id=project_id,
-        thread_id=thread_id,
-        ordinal=next_ord,
-        role=role,
-        body_md=body_md,
-        status=status,
-        retrieval_jsonb=retrieval_jsonb or {},
-        attached_cards_jsonb=[],
-        agent_run_id=agent_run_id,
-        created_by=created_by,
-        access_scope="project",
-    )
-    session.add(msg)
-    await session.flush()
-    # Bump session activity.
-    thread = await get_thread(session, project_id=project_id, thread_id=thread_id)
-    if thread:
-        s = await session.get(AssistantSession, thread.session_id)
-        if s:
-            s.last_activity_at = utcnow()
-    return msg
 
 
 async def fork_thread(

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -16,9 +15,7 @@ from aleph_assistant.models import AssistantSession
 from aleph_assistant.thread_service import (
     create_session,
     fork_thread,
-    get_message,
     get_thread,
-    list_messages,
     list_sessions,
     list_threads,
 )
@@ -60,24 +57,6 @@ class ThreadOut(BaseModel):
     session_id: UUID
     parent_thread_id: UUID | None
     title: str | None
-    created_at: datetime
-
-
-class MessageOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: UUID
-    thread_id: UUID
-    ordinal: int
-    role: str
-    body_md: str
-    status: str
-    retrieval_jsonb: dict
-    attached_cards_jsonb: list
-    agent_run_id: UUID | None
-    cost_usd: Decimal
-    latency_ms: int | None
-    error_text: str | None
     created_at: datetime
 
 
@@ -224,34 +203,6 @@ async def post_fork(
         trace_id=current_trace_id(),
     )
     return ThreadOut.model_validate(new_thread)
-
-
-# ---------------------------------------------------------------------------
-# Messages
-# ---------------------------------------------------------------------------
-
-
-@router.get("/{project_id}/threads/{thread_id}/messages", response_model=list[MessageOut])
-async def get_thread_messages(
-    project_id: ProjectScopeDep, thread_id: UUID, session: SessionDep
-) -> list[MessageOut]:
-    t = await get_thread(session, project_id=project_id, thread_id=thread_id)
-    if t is None:
-        msg = f"thread {thread_id} not found"
-        raise NotFound(msg)
-    rows = await list_messages(session, thread_id=thread_id)
-    return [MessageOut.model_validate(r) for r in rows]
-
-
-@router.get("/{project_id}/messages/{message_id}", response_model=MessageOut)
-async def get_one_message(
-    project_id: ProjectScopeDep, message_id: UUID, session: SessionDep
-) -> MessageOut:
-    m = await get_message(session, project_id=project_id, message_id=message_id)
-    if m is None:
-        msg = f"message {message_id} not found"
-        raise NotFound(msg)
-    return MessageOut.model_validate(m)
 
 
 # ---------------------------------------------------------------------------

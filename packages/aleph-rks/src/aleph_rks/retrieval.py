@@ -132,7 +132,7 @@ async def reembed_for_project(
     """
     from aleph_core.time import utcnow
     from aleph_models.profile import resolve_binding
-    from aleph_rks.embedding import embed_texts
+    from aleph_rks.embedding import embed_texts, embedding_dim_mismatch
 
     current_model = resolve_binding(profile_bindings, "embedding").model
     stale = list(
@@ -149,6 +149,7 @@ async def reembed_for_project(
     )
     sources_done = 0
     chunks_done = 0
+    dim_blocked = 0
     for rec in stale:
         chunks = list(
             (
@@ -163,6 +164,29 @@ async def reembed_for_project(
         )
         if not chunks:
             continue
+        # Dimension guard — BEFORE embedding, so a mismatch costs nothing.
+        # The `document_chunks.embedding` column is a fixed pgvector size
+        # (1024 for the default titan-embed-v2). If the target embedder's known
+        # output dimension differs, writing it would fail the flush anyway —
+        # skip this source and log loudly rather than pay to discover it.
+        existing_dim = len(chunks[0].embedding)
+        mismatch_dim = embedding_dim_mismatch(current_model, column_dim=existing_dim)
+        if mismatch_dim is not None:
+            # Marked + skipped, never re-billed (F5): the model is NOT called.
+            # The record's `embedder_model` is deliberately left at its old
+            # value, so it stays in the stale set (`embedder_model != current`)
+            # — a durable, queryable "needs re-embed but dim-blocked" mark that
+            # the next sweep re-detects and re-skips (still no spend) until the
+            # binding is corrected. `dim_blocked` is counted + logged.
+            dim_blocked += 1
+            _log.warning(
+                "rks.reembed.dim_mismatch_skipped",
+                source_id=str(rec.source_id),
+                existing_dim=existing_dim,
+                new_dim=mismatch_dim,
+                model=current_model,
+            )
+            continue
         result = await embed_texts(
             client=client,
             principal=principal,
@@ -174,21 +198,6 @@ async def reembed_for_project(
         )
         if len(result.embeddings) != len(chunks):
             continue
-        # Dimension guard: the `document_chunks.embedding` column is a fixed
-        # pgvector size (1024 for the default titan-embed-v2). If the new
-        # embedder emits a different dimension, writing it would fail the whole
-        # flush — skip this source and log loudly rather than abort the job.
-        existing_dim = len(chunks[0].embedding)
-        new_dim = len(result.embeddings[0]) if result.embeddings else existing_dim
-        if new_dim != existing_dim:
-            _log.warning(
-                "rks.reembed.dim_mismatch_skipped",
-                source_id=str(rec.source_id),
-                existing_dim=existing_dim,
-                new_dim=new_dim,
-                model=result.model,
-            )
-            continue
         for chunk, emb in zip(chunks, result.embeddings, strict=True):
             chunk.embedding = emb
             chunk.embedder_model = result.model
@@ -197,4 +206,6 @@ async def reembed_for_project(
         await session.flush()
         sources_done += 1
         chunks_done += len(chunks)
+    if dim_blocked:
+        _log.warning("rks.reembed.dim_blocked_total", project_id=str(project_id), count=dim_blocked)
     return sources_done, chunks_done

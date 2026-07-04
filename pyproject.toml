@@ -2,7 +2,7 @@
 name = "aleph-workspace"
 version = "0.1.0"
 description = "Aleph monorepo workspace root"
-requires-python = ">=3.13"
+requires-python = ">=3.13,<3.14"
 
 [tool.uv.workspace]
 members = [

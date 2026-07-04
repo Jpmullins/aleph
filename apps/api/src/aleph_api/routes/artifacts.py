@@ -75,7 +75,10 @@ class RenderedAssetOut(BaseModel):
 class BuildIn(BaseModel):
     title: str = Field(min_length=1, max_length=512)
     artifact_kind: str = Field(
-        pattern=r"^(report_pdf|report_docx|report_markdown_bundle|source_pack|deck_pdf)$"
+        # Only kinds the Builder actually produces (implement-or-400): no
+        # `report_docx` / `deck_pdf` exporter exists, so they are rejected here
+        # rather than silently emitting a mislabeled markdown bundle.
+        pattern=r"^(report_pdf|report_markdown_bundle|source_pack)$"
     )
     description: str = Field(default="", max_length=4096)
     template_name: str = Field(default="report_pdf", max_length=64)

@@ -60,21 +60,43 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-async def _self_post(route: str, *, json: dict[str, Any], what: str) -> dict[str, Any]:
-    """POST to one of this API's own routes with the local-dev agent bearer.
+async def _self_post(
+    route: str,
+    *,
+    json: dict[str, Any],
+    what: str,
+    principal: Principal,
+    project_id: UUID,
+) -> dict[str, Any]:
+    """POST to one of this API's own routes with a short-lived agent token (A4).
 
     Shared by the self-calling handlers (agent-action execution, note promote).
-    local-auth-mode only — under OIDC this would need a real short-lived agent
-    token. The real route writes its own ledger + state in its own transaction.
+    Mints an HS256 agent token scoped to the acting analyst (`principal`), the
+    project, and a fresh agent_run_id — the auth middleware verifies it in BOTH
+    local and oidc mode (the old local-dev bearer sentinel authenticated only in
+    local mode). The real route writes its own ledger + state in its own
+    transaction.
     """
     import httpx
 
     from aleph_api.settings import get_settings
+    from aleph_security.agent_token import mint_agent_token
 
-    base = get_settings().aleph_self_url
+    settings = get_settings()
+    agent_run_id = uuid7()
+    token = mint_agent_token(
+        secret=settings.aleph_agent_token_secret,
+        user_id=principal.user_id,
+        project_id=project_id,
+        agent_run_id=agent_run_id,
+        actor_kind="aleph_agent",
+        correlation_id=f"cards-selfcall-{agent_run_id.hex}",
+        ttl_seconds=300,
+    )
+    base = settings.aleph_self_url
     async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.post(
-            f"{base}{route}", json=json, headers={"Authorization": "Bearer local-dev"}
+            f"{base}{route}", json=json, headers={"Authorization": f"Bearer {token}"}
         )
     if resp.status_code >= 400:
         msg = f"{what} failed ({resp.status_code}): {resp.text[:200]}"
@@ -83,7 +105,7 @@ async def _self_post(route: str, *, json: dict[str, Any], what: str) -> dict[str
 
 
 async def _execute_agent_action(
-    *, project_id: UUID, tool: str, args: dict[str, Any]
+    *, project_id: UUID, tool: str, args: dict[str, Any], principal: Principal
 ) -> dict[str, Any]:
     """Execute an approved agent action by self-calling its underlying route.
 
@@ -92,7 +114,9 @@ async def _execute_agent_action(
     was requested, so this is not agent-emitted-executable.
     """
     route = _AGENT_ACTION_ROUTES[tool].format(project_id=project_id)
-    return await _self_post(route, json=args, what=f"executing {tool}")
+    return await _self_post(
+        route, json=args, what=f"executing {tool}", principal=principal, project_id=project_id
+    )
 
 
 async def _approve(
@@ -208,7 +232,9 @@ async def _approve(
             raise ValidationFailed(msg)
         # Execute the real effect (self-call the underlying route) BEFORE marking
         # approved, so a failed execution leaves the request pending.
-        executed = await _execute_agent_action(project_id=project_id, tool=tool, args=args)
+        executed = await _execute_agent_action(
+            project_id=project_id, tool=tool, args=args, principal=principal
+        )
         decision = ApprovalDecision(
             id=uuid7(),
             project_id=project_id,
@@ -910,6 +936,7 @@ async def _rename_note(
 
 async def _promote_note(
     *,
+    principal: Principal,
     project_id: UUID,
     request: CardActionRequest,
     **_: Any,
@@ -919,11 +946,14 @@ async def _promote_note(
     Self-calls the existing `…/notes/{id}/promote` route (the established
     `_execute_agent_action` pattern) so the promotion writes its own ledger +
     creates the SynthesisProposal in its own transaction — no logic duplication.
-    Local-auth-mode only (consistent with the other self-call handlers).
+    The self-call carries a minted short-lived agent token (works in both auth
+    modes), consistent with the other self-call handlers.
     """
     note_id = UUID(request.params["note_id"])
     route = f"/v1/projects/{project_id}/notes/{note_id}/promote"
-    return await _self_post(route, json={}, what="promoting note")
+    return await _self_post(
+        route, json={}, what="promoting note", principal=principal, project_id=project_id
+    )
 
 
 async def _edit_note(

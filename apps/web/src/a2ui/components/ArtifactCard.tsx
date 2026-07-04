@@ -47,7 +47,7 @@ export function ArtifactCard({ component, onAction }: RendererProps) {
           className="text-xs font-medium text-[var(--accent,#f97316)] hover:opacity-80"
           data-testid={`artifact-open-${p.artifact_id}`}
         >
-          Open in Artifacts
+          Open in Library
         </button>
         {!terminal && (
           <span className="ml-auto text-xs text-slate-400" data-surface={surface}>

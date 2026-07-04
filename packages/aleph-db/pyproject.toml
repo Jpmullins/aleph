@@ -2,7 +2,7 @@
 name = "aleph-db"
 version = "0.1.0"
 description = "Aleph SQLAlchemy ORM, repositories, and Alembic migrations"
-requires-python = ">=3.13"
+requires-python = ">=3.13,<3.14"
 dependencies = [
     "sqlalchemy[asyncio]==2.0.50",
     "asyncpg==0.31.0",

@@ -1682,3 +1682,82 @@ migrations: wp4_wiki_infobox, wp4_card_spotlight, + the infobox one).
 (ActivityCard/CopilotChatSurface/Drawers — not the right panel); `infobox_jsonb` has a read
 path + migration but no writer yet (curator-optional, WP-6 hook); `Bearer local-dev` self-calls
 persist (F5); a raw-ctypes sandbox-escape residual reaches only the ephemeral code-job Redis.
+
+## WP-5 — Dead-code, bug, and drift purge (2026-07-04)
+
+**Spec:** `docs/specs/2026-07-04-wp5-purge.md`. **Proves GOAL.md F5.** Runs after WP-3/WP-4 so
+the AIQ deletion + WP-4 catalog roster settled the UI questions first.
+
+**Bugs fixed (each with a named regression test).**
+- **Embedding-dimension guard on initial ingest.** `chunk_embed_job` resolves the project's
+  `embedding` binding and rejects a dim mismatch **before** any billed embed: known models via
+  a static registry (`KNOWN_EMBEDDING_DIMS`, zero-cost metadata check); unknown models via a
+  single-item **probe** embed (caps wasted spend at one token, then reject) — so "reject before
+  paying" holds universally, not just for known models. Re-embed (`reembed_for_project`) checks
+  dim before embedding and skips without calling the model (never re-billed); the mismatched
+  source stays durably in the stale set (`embedder_model != current`) as a queryable
+  needs-re-embed mark, `dim_blocked` counted/logged. Test: `apps/workers/tests/
+  test_embed_dim_guard.py` (initial-ingest reject pre-embed = zero ModelCall; re-embed skip =
+  zero cost; known/unknown/probe cases).
+- **`verify_project_chain` walks `prev_event_id`** (`packages/aleph-db/.../repos/ledger.py`)
+  from the chain head to genesis (handles cycles/dangling/ambiguous tip), not timestamp order.
+  Test `test_verify_chain_walks_prev.py`: out-of-order-timestamps-but-valid-links → verifies;
+  tampered hash / broken link → fails.
+- **Honest artifact kinds.** No docx/deck exporter exists, so `report_docx`/`deck_pdf` are
+  **rejected** (route pattern `^(report_pdf|report_markdown_bundle|source_pack)$` → 422; service
+  allowlist = those three + the WP-4c `image`/`chart`/`html_frame`; `_node_package` raises on an
+  unexpected kind, no silent markdown-bundle fallthrough). Test extends `test_artifact_kinds.py`.
+- **Agent self-calls use minted short-lived agent tokens.** All ~15 hardcoded `Bearer local-dev`
+  server self-calls (copilot_agent 13 sites + `a2ui_handlers._self_post` + subagents
+  wiki_builder/reviewer/researcher) now mint via a shared `_self_headers(project_id)` →
+  `mint_agent_token` (actor_kind agent, TTL 300s), fixing a real oidc-mode 401 (the sentinel
+  only authenticated in local mode). `grep -rn "Bearer local-dev" apps/api/src apps/workers/src
+  packages` → **empty**. Test `test_self_call_tokens.py` (grep guard + minted-token verifies,
+  ≠ sentinel, project-scoped). The frontend local-mode sentinel (`apps/web/src/lib/auth.ts`)
+  stays (documented).
+- **Library rename** straggler fixed ("Open in Artifacts" → "Open in Library").
+- **Python pinned to 3.13**: root `.python-version` = `3.13`; `requires-python = ">=3.13,<3.14"`
+  across all 22 pyprojects; venv re-resolved → `python -V` = **3.13.14**.
+- **`.env.example` ↔ settings reconciled by a unit test** (`test_env_settings_reconciled.py`,
+  bidirectional: required fields ⇒ env key; every `ALEPH_*` key ⇒ a real field, curated
+  ignore-list). Real gap it caught + fixed: the worker's **required** `aleph_api_internal_url`
+  had no env key — added `ALEPH_API_INTERNAL_URL` to `.env.example`.
+
+**Dead code removed (justification per GOAL rule 2 / datasets rule = delete broken/unproduced
+PATHS, keep ORM tables).**
+- **Writer-less assistant persistence:** `append_message`/`list_messages`/`get_message` +
+  the GET-messages read-routes deleted (chat runs through CopilotKit, which persists nothing
+  here; those routes served never-written rows). Kept: the `assistant_sessions`/`_threads`/
+  `_messages` tables + the session/fork CRUD the web uses.
+- **Dead routes deleted** (files + `main.py` include + `routes/__init__.py`; ORM tables kept),
+  each confirmed by the new route-reachability sweep to have zero web/agent/script/test caller:
+  - `routes/chunks.py` — REST debug wrapper; retrieval uses `DocumentChunk` via services.
+  - `routes/merge_proposals.py` — merge approve/reject flows through the ledger-audited
+    `/cards/actions` (`page_merge_proposal`), not this route.
+  - `routes/datasets.py` — fully unwired (no producer/consumer).
+  - `routes/evals.py` — the eval **gate** is the `aleph_evals` runner package, not this route;
+    card-action feedback flows through `feedback_writer`, not its `POST /feedback`.
+  Kept (proven reached): handedits/feedback/aliases (e2e + service), hypotheses (e2e),
+  connector_credentials (`scripts/connect-consensus.py`), and the 20+ live routers.
+
+**Sweeps (committed, CI-wired).** New `scripts/check-route-reachability.sh` — enumerates
+`include_router` mounts + real route paths and asserts each router is reached by web / an
+agent-or-self-call site / a script / a test, with a commented allowlist (`health` public,
+`agent_tokens` external mint boundary). Result: **27 routers reached, 2 allowlisted**. Joins the
+WP-4 `check-catalog-roster.sh` + `check-no-self-fetch.sh` (both still green).
+
+**Pyright warnings: 1,511 → 955** (0 errors), via 18 `py.typed` markers across the first-party
+`packages/aleph-*` (PEP 561; `reportMissingTypeStubs` 655 → 144). Well below the WP-4-close 1,511
+and the 2026-07-02 baseline of 1,758. Only 5 new targeted ignores added (3 for the `_self_headers`
+private import in the token fix, 2 in a test fake) — the drop is from real markers, not
+suppressions.
+
+**Gates (final, green).** unit **336 passed**; integration **76 passed** (+1 intentional skip,
+code-runner has no host port); pyright **0 errors, 955 warnings**; ruff/format clean; all three
+sweeps pass; web typecheck/build clean; `alembic check` clean (no new migration — deletions kept
+tables).
+
+**Explicitly out of scope (recorded):** center-panel/overlay polling (ActivityCard/
+CopilotChatSurface/Drawers) is not the right panel and not F5-mandated; the embed guard's
+unknown-model path costs one probe token (not the batch); `infobox_jsonb` writer lands with
+WP-6.

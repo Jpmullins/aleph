@@ -3,8 +3,8 @@
 Delegating "review/critique this page" to this subagent keeps the review
 dispatch in an isolated context, so the orchestrator's thread just sees one
 short status line back. One tool, `review_wiki_page`, which self-calls the
-tested `POST /reviews/editorial` route (Bearer local-dev, the same self-call
-pattern as `wiki_builder`'s `promote_note` — rule #3: it never touches the
+tested `POST /reviews/editorial` route (with a minted short-lived agent token,
+the same self-call pattern as `wiki_builder`'s `promote_note` — rule #3: it never touches the
 worker/DB directly; the route mints the agent token and enqueues
 `editorial_review_job`, which owns the ReviewRun + findings). The editorial
 reviewer is project-scoped (it scans the project's pages for contradictions,
@@ -51,6 +51,7 @@ def build_reviewer_subagent(*, settings: Any) -> dict[str, Any]:
 
         from aleph_api.copilot_agent import (
             _runtime,  # pyright: ignore[reportPrivateUsage] — shared runtime accessor (DRY); module-private to the api
+            _self_headers,  # pyright: ignore[reportPrivateUsage] — shared self-call token minter (DRY); module-private to the api
         )
 
         settings_rt = _runtime.get("settings")
@@ -63,7 +64,7 @@ def build_reviewer_subagent(*, settings: Any) -> dict[str, Any]:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(
                     f"{base}/v1/projects/{project_id}/reviews/editorial",
-                    headers={"Authorization": "Bearer local-dev"},
+                    headers=await _self_headers(project_id, settings=settings_rt),
                     json={"trigger": trigger},
                 )
         except Exception as exc:

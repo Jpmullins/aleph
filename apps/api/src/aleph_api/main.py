@@ -23,19 +23,15 @@ from aleph_api.routes import (
     assistant,
     cards,
     changes,
-    chunks,
     connector_credentials,
     connectors,
     cost,
-    datasets,
-    evals,
     feedback,
     handedits,
     health,
     hypotheses,
     ledger,
     me,
-    merge_proposals,
     model_profile,
     notes,
     projects,
@@ -87,7 +83,6 @@ def create_app() -> FastAPI:
     # Inc 1
     app.include_router(sources.router)
     app.include_router(assets.router)
-    app.include_router(chunks.router)
     app.include_router(wiki.router)
     app.include_router(handedits.router)
     app.include_router(feedback.router)
@@ -97,7 +92,6 @@ def create_app() -> FastAPI:
     app.include_router(assistant.router)
     # Inc 3
     app.include_router(synthesize.router)
-    app.include_router(merge_proposals.router)
     app.include_router(connector_credentials.router)
     # Inc 4
     app.include_router(notes.router)
@@ -108,13 +102,9 @@ def create_app() -> FastAPI:
     # Inc 5
     app.include_router(reviews.router)
     app.include_router(hypotheses.router)
-    # Inc 6
-    app.include_router(datasets.router)
     # Inc 7
     app.include_router(artifacts.router)
     app.include_router(viz.router)
-    # Inc 8
-    app.include_router(evals.router)
     # WP-2 — verified scholarship (DOI verification, scholarly search,
     # citation expansion, Consensus evidence search)
     app.include_router(scholar.router)

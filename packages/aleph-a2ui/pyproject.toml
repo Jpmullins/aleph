@@ -2,7 +2,7 @@
 name = "aleph-a2ui"
 version = "0.1.0"
 description = "Aleph A2UI catalog v1.0.0 — 5 surfaces + 12 inline cards."
-requires-python = ">=3.13"
+requires-python = ">=3.13,<3.14"
 dependencies = [
     "sqlalchemy[asyncio]==2.0.50",
     "pydantic==2.13.4",

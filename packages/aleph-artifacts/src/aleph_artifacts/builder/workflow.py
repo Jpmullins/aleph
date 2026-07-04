@@ -60,12 +60,12 @@ class BuilderState(TypedDict, total=False):
     project_id: UUID
     agent_run_id: UUID
     artifact_id: UUID
-    artifact_kind: str  # report_pdf | report_markdown_bundle | source_pack | report_docx
+    artifact_kind: str  # report_pdf | report_markdown_bundle | source_pack
     template_name: str
     csl_style: str
     wiki_page_ids: list[UUID]
     dataset_version_ids: list[UUID]
-    outline: list[dict]
+    outline: list[dict[str, Any]]
     composed_markdown: str
     bibliography_markdown: str
     rendered_asset_ids: list[UUID]
@@ -137,7 +137,7 @@ async def _node_citation_resolve(state: BuilderState) -> dict[str, Any]:
     with start_span("builder.citation_resolve"):
         body = state.get("composed_markdown") or ""
         short_ids = set(re.findall(r"\[\[Source:([A-Z0-9]+)\]\]", body))
-        items: list[dict] = []
+        items: list[dict[str, Any]] = []
         async with ctx.session_maker() as session:
             for sid in short_ids:
                 src = (
@@ -207,6 +207,9 @@ async def _node_package(state: BuilderState) -> dict[str, Any]:
             + "\n\n## Bibliography\n\n"
             + (state.get("bibliography_markdown") or "(no citations)")
         )
+        # Explicit branch per accepted kind — no silent fallthrough. Kinds
+        # without a real exporter are rejected at the route/service layer
+        # (implement-or-400), so an unexpected kind here is a programming error.
         kind = state.get("artifact_kind") or "report_markdown_bundle"
         if kind == "report_pdf":
             payload = markdown_to_pdf_bytes(
@@ -225,7 +228,7 @@ async def _node_package(state: BuilderState) -> dict[str, Any]:
                 normalized_md={"report.md": full_md},
             )
             ext = "zip"
-        else:
+        elif kind == "report_markdown_bundle":
             payload = markdown_bundle_bytes(
                 report_md=full_md,
                 manifest={
@@ -235,6 +238,9 @@ async def _node_package(state: BuilderState) -> dict[str, Any]:
                 },
             )
             ext = "zip"
+        else:
+            msg = f"builder cannot package unsupported artifact_kind: {kind!r}"
+            raise ValueError(msg)
 
         sha = hashlib.sha256(payload).hexdigest()
         storage_uri = await _put_artifact_bytes(
