@@ -243,6 +243,9 @@ services:
       ALEPH_AUTH_JWKS_URL: ${ALEPH_AUTH_JWKS_URL:-}
       ALEPH_AGENT_TOKEN_SECRET: ${ALEPH_AGENT_TOKEN_SECRET}
       AIQ_BASE_URL: http://aiq-server:8000
+      # Scholar (WP-2)
+      ALEPH_SCHOLAR_MAILTO: ${ALEPH_SCHOLAR_MAILTO:-dev@aleph.local}
+      ALEPH_CONSENSUS_MONTHLY_SEARCH_CAP: ${ALEPH_CONSENSUS_MONTHLY_SEARCH_CAP:-200}
     volumes:
       - ../../data/assets:/data/assets
     depends_on:
@@ -287,6 +290,9 @@ services:
       ALEPH_API_INTERNAL_URL: http://aleph-api:8000
       ALEPH_AGENT_TOKEN_SECRET: ${ALEPH_AGENT_TOKEN_SECRET}
       AIQ_BASE_URL: http://aiq-server:8000
+      # Scholar (WP-2; workers run the reviewer's doi_verification pass in WP-3)
+      ALEPH_SCHOLAR_MAILTO: ${ALEPH_SCHOLAR_MAILTO:-dev@aleph.local}
+      ALEPH_CONSENSUS_MONTHLY_SEARCH_CAP: ${ALEPH_CONSENSUS_MONTHLY_SEARCH_CAP:-200}
     volumes:
       - ../../data/assets:/data/assets
     depends_on:

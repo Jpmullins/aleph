@@ -70,7 +70,11 @@ async def mechanical_review_job(
             agent_run_id = run.id
         await session.commit()
 
-    workflow = MechanicalReviewerWorkflow(session_maker=maker, principal=principal)
+    workflow = MechanicalReviewerWorkflow(
+        session_maker=maker,
+        principal=principal,
+        scholar=ctx.get("scholar"),
+    )
     n = await workflow.run(
         project_id=project_id,
         revision_id=revision_id,

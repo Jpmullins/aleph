@@ -1,34 +1,41 @@
 """MechanicalReviewer LangGraph workflow.
 
 Runs on every wiki revision commit. Checks:
-  citation_match | broken_wikilink | stale_source | hash_mismatch |
-  duplicate_source | alias_inconsistency | schema_invalid.
+  citation_match | fabricated_doi | retracted_source | broken_wikilink |
+  stale_source | hash_mismatch | duplicate_source | alias_inconsistency |
+  schema_invalid.
 
 Most checks are deterministic. citation_match wraps AIQ's
 `verify_citations` contract (mirrored in `aleph_wiki.citation_verification`).
+doi_verification wraps `aleph_scholar` DOI verification (spec WP-2 §6).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, Protocol, TypedDict
 from uuid import UUID
 
+import structlog
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy import func, select
 
 from aleph_core.time import utcnow
 from aleph_db.repos.agent_events import with_phase
+from aleph_db.repos.ledger import LedgerWriter
+from aleph_observability import current_trace_id
 from aleph_observability.tracing import start_span
 from aleph_reviewer.review_service import add_finding, finalize_run, start_run
 from aleph_rks.models import Source, SourceAsset, SourceVersion
+from aleph_scholar import ScholarUpstreamError, extract_dois, normalize_doi
 from aleph_wiki.citation_verification import (
     CitationVerificationFailure,
     verify_citations,
 )
 from aleph_wiki.models import (
     Citation,
+    SourcePage,
     WikiClaim,
     WikiLink,
     WikiRevision,
@@ -37,7 +44,24 @@ from aleph_wiki.models import (
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from aleph_scholar import DoiVerdict
     from aleph_security.principal import Principal
+
+_log = structlog.get_logger(__name__)
+
+#: Max DOIs verified per review run (spec WP-2 §6) — the tail is skipped
+#: with a note appended to any emitted finding descriptions.
+DOI_VERIFY_CAP = 50
+
+
+class SupportsVerifyDois(Protocol):
+    """The slice of `aleph_scholar.ScholarService` the reviewer consumes.
+
+    Injectable on `MechanicalReviewerWorkflow` so unit tests stub the
+    verification without any network access.
+    """
+
+    async def verify_dois(self, dois: list[str]) -> list[DoiVerdict]: ...
 
 
 @dataclass
@@ -45,6 +69,7 @@ class _Ctx:
     session_maker: async_sessionmaker[AsyncSession]
     principal: Principal
     freshness_threshold: timedelta = timedelta(days=180)
+    scholar: SupportsVerifyDois | None = None
 
 
 _active_ctx: _Ctx | None = None
@@ -57,12 +82,22 @@ def _ctx() -> _Ctx:
     return _active_ctx
 
 
-class MechanicalReviewState(TypedDict, total=False):
+class _MechanicalReviewInput(TypedDict):
     project_id: UUID
     revision_id: UUID
     page_id: UUID
     agent_run_id: UUID
     review_run_id: UUID
+
+
+class MechanicalReviewState(_MechanicalReviewInput, total=False):
+    # Per-node finding counts — MUST be declared here: LangGraph silently
+    # drops node updates to keys absent from the state schema.
+    n_citation: int
+    n_doi: int
+    n_links: int
+    n_stale: int
+    n_dupe: int
     finding_count: int
 
 
@@ -121,6 +156,171 @@ async def _node_citation_match(state: MechanicalReviewState) -> dict[str, int]:
                         created_by=ctx.principal.user_id,
                     )
                     n += 1
+            await session.commit()
+    return {"n": n}
+
+
+async def _registry_sources(session: AsyncSession, *, revision_id: UUID) -> list[Source]:
+    """Sources registered on a revision via claim → citation → source page."""
+    stmt = (
+        select(Source)
+        .join(SourcePage, SourcePage.source_id == Source.id)
+        .join(Citation, Citation.source_page_id == SourcePage.id)
+        .join(WikiClaim, WikiClaim.id == Citation.claim_id)
+        .where(WikiClaim.revision_id == revision_id)
+    )
+    sources: list[Source] = []
+    seen: set[UUID] = set()
+    for src in (await session.execute(stmt)).scalars():
+        if src.id not in seen:
+            seen.add(src.id)
+            sources.append(src)
+    return sources
+
+
+@with_phase("doi_verification", ctx_getter=lambda: _ctx())
+async def _node_doi_verification(state: MechanicalReviewState) -> dict[str, int]:
+    """Verify cited DOIs (spec WP-2 §6).
+
+    Gathers DOIs from the revision body markdown and from the revision's
+    source-registry rows (`source_metadata_jsonb["doi"]`), verifies them via
+    the injected scholar service (≤ DOI_VERIFY_CAP per run), and emits:
+
+    - ``fabricated_doi`` (high) when a verdict is authoritatively ``ok=False``
+    - ``retracted_source`` (critical) when ``retracted=True``
+    - nothing when ``ok=None`` — network-unverifiable is never flagged.
+
+    Verdicts for source-row DOIs are cached back into that source's
+    ``source_metadata_jsonb["doi_verdict"]`` in the same transaction as the
+    findings, with a ``source.update`` ledger event. Upstream trouble
+    (`ScholarUpstreamError`) never fails the review run — all unresolved
+    DOIs are treated as ``ok=None``.
+    """
+    ctx = _ctx()
+    if ctx.scholar is None:
+        return {"n": 0}
+    n = 0
+    with start_span("review.mechanical.doi_verification"):
+        async with ctx.session_maker() as session:
+            rev = await session.get(WikiRevision, state["revision_id"])
+            if rev is None:
+                return {"n": 0}
+            # (a) DOIs cited in the revision body.
+            body_dois = extract_dois(rev.body_md)
+            # (b) DOIs recorded on the revision's ingested source rows.
+            source_by_doi: dict[str, Source] = {}
+            for src in await _registry_sources(session, revision_id=rev.id):
+                metadata: dict[str, Any] = src.source_metadata_jsonb
+                raw = metadata.get("doi")
+                if isinstance(raw, str) and raw.strip():
+                    source_by_doi.setdefault(normalize_doi(raw), src)
+            ordered: list[str] = []
+            seen: set[str] = set()
+            for doi in [*body_dois, *source_by_doi]:
+                if doi not in seen:
+                    seen.add(doi)
+                    ordered.append(doi)
+            if not ordered:
+                return {"n": 0}
+            skipped = max(0, len(ordered) - DOI_VERIFY_CAP)
+            if skipped:
+                _log.warning(
+                    "review.mechanical.doi_verification.cap_exceeded",
+                    revision_id=str(rev.id),
+                    total=len(ordered),
+                    cap=DOI_VERIFY_CAP,
+                    skipped=skipped,
+                )
+            cap_note = (
+                f" Note: {skipped} additional DOI(s) exceeded the {DOI_VERIFY_CAP}-per-run "
+                "verification cap and were not checked."
+                if skipped
+                else ""
+            )
+            try:
+                verdicts = await ctx.scholar.verify_dois(ordered[:DOI_VERIFY_CAP])
+            except ScholarUpstreamError:
+                # Upstream trouble — everything unresolved is ok=None: no findings.
+                _log.warning(
+                    "review.mechanical.doi_verification.upstream_unavailable",
+                    revision_id=str(rev.id),
+                )
+                return {"n": 0}
+            ledger = LedgerWriter(session)
+            checked_at = utcnow().isoformat()
+            for verdict in verdicts:
+                src = source_by_doi.get(verdict.doi)
+                evidence: list[dict[str, Any]] = [
+                    {"kind": "doi", "value": verdict.doi},
+                    {"kind": "checked_via", "value": verdict.checked_via},
+                ]
+                if verdict.ok is False:
+                    await add_finding(
+                        session,
+                        review_run_id=state["review_run_id"],
+                        project_id=state["project_id"],
+                        finding_kind="fabricated_doi",
+                        severity="high",
+                        title=f"Fabricated DOI: {verdict.doi}",
+                        description=(
+                            f"DOI {verdict.doi} cited in revision {rev.id} of page "
+                            f"{state['page_id']} does not resolve on Crossref or OpenAlex "
+                            f"(checked via {verdict.checked_via}).{cap_note}"
+                        ),
+                        target_page_id=state["page_id"],
+                        target_revision_id=rev.id,
+                        target_source_id=src.id if src is not None else None,
+                        evidence_refs=evidence,
+                        auto_resolvable=False,
+                        created_by=ctx.principal.user_id,
+                    )
+                    n += 1
+                if verdict.retracted is True:
+                    await add_finding(
+                        session,
+                        review_run_id=state["review_run_id"],
+                        project_id=state["project_id"],
+                        finding_kind="retracted_source",
+                        severity="critical",
+                        title=f"Retracted source: DOI {verdict.doi}",
+                        description=(
+                            f"DOI {verdict.doi} cited in revision {rev.id} of page "
+                            f"{state['page_id']} has been retracted "
+                            f"(checked via {verdict.checked_via}).{cap_note}"
+                        ),
+                        target_page_id=state["page_id"],
+                        target_revision_id=rev.id,
+                        target_source_id=src.id if src is not None else None,
+                        evidence_refs=evidence,
+                        auto_resolvable=False,
+                        created_by=ctx.principal.user_id,
+                    )
+                    n += 1
+                # Cache authoritative verdicts back onto the ingested source row
+                # (ok=None never overwrites — unverifiable is not knowledge).
+                if src is not None and verdict.ok is not None:
+                    doi_verdict = {
+                        "ok": verdict.ok,
+                        "retracted": verdict.retracted,
+                        "checked_via": verdict.checked_via,
+                        "checked_at": checked_at,
+                    }
+                    # Reassign the full dict — JSONB doesn't track in-place mutation.
+                    existing_metadata: dict[str, Any] = src.source_metadata_jsonb
+                    src.source_metadata_jsonb = {
+                        **existing_metadata,
+                        "doi_verdict": doi_verdict,
+                    }
+                    await ledger.append(
+                        project_id=state["project_id"],
+                        actor_id=ctx.principal.user_id,
+                        actor_kind=ctx.principal.actor_kind,
+                        action_kind="source.update",
+                        target_id=src.id,
+                        target_kind="source",
+                        payload={"doi": verdict.doi, "doi_verdict": doi_verdict},
+                        trace_id=current_trace_id(),
+                    )
             await session.commit()
     return {"n": n}
 
@@ -262,10 +462,11 @@ async def _node_duplicate_sources(state: MechanicalReviewState) -> dict[str, int
 @with_phase("finalize", ctx_getter=lambda: _ctx())
 async def _node_finalize(state: MechanicalReviewState) -> dict[str, int]:
     n = (
-        (state.get("n_citation") or 0)  # type: ignore[arg-type]
-        + (state.get("n_links") or 0)  # type: ignore[arg-type]
-        + (state.get("n_stale") or 0)  # type: ignore[arg-type]
-        + (state.get("n_dupe") or 0)  # type: ignore[arg-type]
+        state.get("n_citation", 0)
+        + state.get("n_doi", 0)
+        + state.get("n_links", 0)
+        + state.get("n_stale", 0)
+        + state.get("n_dupe", 0)
     )
     ctx = _ctx()
     async with ctx.session_maker() as session:
@@ -285,25 +486,20 @@ class MechanicalReviewerWorkflow:
         *,
         session_maker: async_sessionmaker[AsyncSession],
         principal: Principal,
+        scholar: SupportsVerifyDois | None = None,
     ) -> None:
-        self._ctx = _Ctx(session_maker=session_maker, principal=principal)
+        self._ctx = _Ctx(session_maker=session_maker, principal=principal, scholar=scholar)
         graph: StateGraph = StateGraph(MechanicalReviewState)
         # Wrap each node to fan results into typed slots on state.
-        graph.add_node(
-            "citation_match",
-            lambda s: (
-                _node_citation_match(s).__await__()  # type: ignore[func-returns-value]
-                if False
-                else _wrap(_node_citation_match, "n_citation")
-            ),
-        )
         graph.add_node("citation_match", _wrap(_node_citation_match, "n_citation"))
+        graph.add_node("doi_verification", _wrap(_node_doi_verification, "n_doi"))
         graph.add_node("broken_links", _wrap(_node_broken_links, "n_links"))
         graph.add_node("stale_sources", _wrap(_node_stale_sources, "n_stale"))
         graph.add_node("duplicate_sources", _wrap(_node_duplicate_sources, "n_dupe"))
         graph.add_node("finalize", _node_finalize)
         graph.add_edge(START, "citation_match")
-        graph.add_edge("citation_match", "broken_links")
+        graph.add_edge("citation_match", "doi_verification")
+        graph.add_edge("doi_verification", "broken_links")
         graph.add_edge("broken_links", "stale_sources")
         graph.add_edge("stale_sources", "duplicate_sources")
         graph.add_edge("duplicate_sources", "finalize")

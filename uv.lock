@@ -26,6 +26,7 @@ members = [
     "aleph-observability",
     "aleph-reviewer",
     "aleph-rks",
+    "aleph-scholar",
     "aleph-security",
     "aleph-wiki",
     "aleph-workers",
@@ -166,6 +167,7 @@ dependencies = [
     { name = "aleph-observability" },
     { name = "aleph-reviewer" },
     { name = "aleph-rks" },
+    { name = "aleph-scholar" },
     { name = "aleph-security" },
     { name = "aleph-wiki" },
     { name = "asyncpg" },
@@ -205,6 +207,7 @@ requires-dist = [
     { name = "aleph-observability", editable = "packages/aleph-observability" },
     { name = "aleph-reviewer", editable = "packages/aleph-reviewer" },
     { name = "aleph-rks", editable = "packages/aleph-rks" },
+    { name = "aleph-scholar", editable = "packages/aleph-scholar" },
     { name = "aleph-security", editable = "packages/aleph-security" },
     { name = "aleph-wiki", editable = "packages/aleph-wiki" },
     { name = "asyncpg", specifier = "==0.31.0" },
@@ -511,6 +514,7 @@ dependencies = [
     { name = "aleph-models" },
     { name = "aleph-observability" },
     { name = "aleph-rks" },
+    { name = "aleph-scholar" },
     { name = "aleph-security" },
     { name = "aleph-wiki" },
     { name = "langgraph" },
@@ -526,6 +530,7 @@ requires-dist = [
     { name = "aleph-models", editable = "packages/aleph-models" },
     { name = "aleph-observability", editable = "packages/aleph-observability" },
     { name = "aleph-rks", editable = "packages/aleph-rks" },
+    { name = "aleph-scholar", editable = "packages/aleph-scholar" },
     { name = "aleph-security", editable = "packages/aleph-security" },
     { name = "aleph-wiki", editable = "packages/aleph-wiki" },
     { name = "langgraph", specifier = ">=1.2,<2" },
@@ -580,6 +585,23 @@ requires-dist = [
     { name = "readability-lxml", specifier = "==0.8.4.1" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = "==2.0.50" },
     { name = "tiktoken", specifier = ">=0.10,<1" },
+]
+
+[[package]]
+name = "aleph-scholar"
+version = "0.1.0"
+source = { editable = "packages/aleph-scholar" }
+dependencies = [
+    { name = "httpx" },
+    { name = "mcp" },
+    { name = "tenacity" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = "==0.28.1" },
+    { name = "mcp", specifier = ">=1.28,<2" },
+    { name = "tenacity", specifier = "==9.1.4" },
 ]
 
 [[package]]
@@ -644,6 +666,7 @@ dependencies = [
     { name = "aleph-observability" },
     { name = "aleph-reviewer" },
     { name = "aleph-rks" },
+    { name = "aleph-scholar" },
     { name = "aleph-security" },
     { name = "aleph-wiki" },
     { name = "arq" },
@@ -665,6 +688,7 @@ requires-dist = [
     { name = "aleph-observability", editable = "packages/aleph-observability" },
     { name = "aleph-reviewer", editable = "packages/aleph-reviewer" },
     { name = "aleph-rks", editable = "packages/aleph-rks" },
+    { name = "aleph-scholar", editable = "packages/aleph-scholar" },
     { name = "aleph-security", editable = "packages/aleph-security" },
     { name = "aleph-wiki", editable = "packages/aleph-wiki" },
     { name = "arq", specifier = "==0.28.0" },

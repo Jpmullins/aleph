@@ -42,6 +42,7 @@ from aleph_api.routes import (
     notes,
     projects,
     reviews,
+    scholar,
     smoketest,
     sources,
     surfaces,
@@ -116,6 +117,9 @@ def create_app() -> FastAPI:
     app.include_router(artifacts.router)
     # Inc 8
     app.include_router(evals.router)
+    # WP-2 — verified scholarship (DOI verification, scholarly search,
+    # citation expansion, Consensus evidence search)
+    app.include_router(scholar.router)
 
     # Wave 2 — the assistant Deep Agent is mounted as an AG-UI endpoint at
     # /copilotkit/agent/assistant during lifespan startup (NOT here): its

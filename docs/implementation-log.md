@@ -1456,3 +1456,73 @@ Pass 3 (verification): every fix confirmed genuine, mime-trick bypass hunt found
   real UI upload → Library → viewer iframe = streaming route, 200 + application/pdf + exact
   byte round-trip; full-Chromium screenshot shows the PDF rendered in the viewer; live curl:
   HTML source carries `content-security-policy: sandbox`, PDF exempt.
+
+## WP-2 — `aleph-scholar`: verified scholarship + Consensus (2026-07-03)
+
+**Spec:** `docs/specs/2026-07-03-wp2-scholar.md` (three dated amendments made during
+implementation/review: §1 no-workspace-deps + 4xx-folds-to-None; §3 any-400/401-is-dead-grant
+— the live Consensus AS is OAuth-non-conformant, `{"detail": ...}` instead of `error`).
+**Proves GOAL.md F2 (scholar half).**
+
+**Shipped.**
+- `packages/aleph-scholar` — pure-HTTP, zero LLM calls (grep-enforced), zero workspace deps
+  (credentials/persistence injected as callbacks; redis duck-typed). `verify_dois` (tri-state:
+  ok=False only on 404-from-both; unexpected 4xx/timeouts → ok=None via `ensure_ok`; retraction
+  from OpenAlex `is_retracted` + Crossref `update-to` corroboration), `crossref_lookup`,
+  `search_openalex`, `expand_citations` (backward `referenced_works` + forward `cites:`,
+  batched), `extract_dois` (linear-time trim), LLM-free `style_pass` (idempotent; consumer is
+  WP-3's compose node — written reason on record), `search_consensus` (MCP streamable-HTTP,
+  pinned URL, quota INCR-first per project-month, redis-lock-serialized refresh with re-read
+  under lock, rotation persisted via `ConnectorCredentialService.rotate` and **committed before
+  the search** so a transient MCP failure can't roll back a one-time-use token).
+- Routes `POST /v1/projects/{pid}/scholar/{verify-dois,search,expand-citations,consensus-search}`;
+  consensus-search enforces the project `ConnectorBinding` (explicit binding beats
+  `enabled_by_default`) → 403 `connector_disabled`; dead grant → 409 `reconnect_required`;
+  quota → 200 tagged. Credentials GET exposes a derived blob `status` (server-side decrypt,
+  owner-only, plaintext never returned).
+- Researcher subagent: five scholar tools; `ingest_paper` verifies first, refuses fabricated
+  DOIs, prefers OpenAlex open-access PDF URLs (paywalled landing pages serve bots empty docs).
+- Ingest passthrough: `IngestUrlIn.connector_kind` (validated against connectors, 422 before
+  fetch) + `source_metadata` merged (never clobbering upload bookkeeping).
+- MechanicalReviewer `doi_verification` node: fabricated_doi(high) / retracted_source(critical),
+  ok=None never flagged, upstream failure never fails the run, verdicts cached to
+  `source_metadata_jsonb.doi_verdict` + `source.update` ledger event, cap 50, always
+  re-verifies (a planted fake verdict cannot suppress findings). Also fixed two latent
+  pre-existing MechanicalReviewer bugs (duplicate node registration → workflow unconstructible;
+  state-schema fan-in dropping finding counts).
+- Migration `wp2_scholar_connectors` seeds `consensus`/`crossref` (idempotent, downgrade-tested).
+- `scripts/connect-consensus.py`: RFC 9728→8414→7591 discovery + PKCE loopback OAuth,
+  stores the blob via the owner-only credentials route, enables the project binding
+  (auth-required connectors seed disabled), smoke-searches. `--discover-only` verified live.
+
+**Adversarial review (3 passes, fresh subagents, all reports in-session).** Pass 1
+(spec-conformance) and pass 2 (security/rules) each: `FINAL-STATE VIOLATIONS: 0`, with
+findings fixed and re-verified by pass 3 (`FINAL-STATE VIOLATIONS: 0`, all fixes genuine):
+rotation-rollback commit, unexpected-4xx fold (regression test), O(n²) trim → incremental,
+unused deps dropped. Security pass verified: no token leakage into logs/ledger/responses/agent
+output; quota race-free at the cap boundary; binding unbypassable (only construction site is
+the gated route); reviewer never trusts agent-written verdicts; ReDoS probes clean.
+
+**Live verification (2026-07-03/04, all outputs in-session).**
+- OAuth bootstrap completed against the real Pro subscription (user at browser); credential
+  row `libsodium-sealed` + `connector_credential.create` ledger event.
+- `consensus-search` via the stored credential: `status: ok, hits: 20` (real titles/URLs).
+- Forced `access_token_expires_at` → past: next search `ok | 20 hits`; `rotated_at` set;
+  `connector_credential.update` event — refresh + rotation proven live.
+- Corrupted refresh token: HTTP 409 `{"status": "reconnect_required"}`, state queryable via
+  credentials GET; restored blob → `ok | 20 hits`.
+- Live-agent lit question ("find + verify + ingest a deep-learning paper"): Source S0035
+  "Deep learning" (Nature 2015) `connector_kind=openalex`, `doi=10.1038/nature14539`,
+  `doi_verdict.ok=true`, status **wiki_done**; `source.create`+`source_version.create` events.
+- Live `expand_citations("10.1038/nature14539")`: backward→"Learning representations by
+  back-propagating errors", forward→"Mastering the game of Go…". Live `verify_dois`:
+  Wakefield `10.1016/s0140-6736(97)11096-0` → ok=True retracted=True.
+
+**Gates (final, green).** ruff + format clean (336 files); unit `249 passed` (60 scholar);
+pyright `0 errors, 1,754 warnings` (< 1,758 baseline); web typecheck/lint/build green;
+`alembic check` clean; integration `68 passed` against the rebuilt MinIO-less stack.
+
+**Honest notes (recorded, out of WP-2 scope):** researcher tools extend the `Bearer local-dev`
+self-call pattern (WP-5/F5 fixes it); quota units are consumed by reconnect/failed searches;
+`token_endpoint` is owner-writable with no egress allowlist (owner-only threat model);
+venv runs Python 3.14 vs the 3.13 pin (WP-5).

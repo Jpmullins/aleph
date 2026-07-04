@@ -92,6 +92,12 @@ class Settings(BaseSettings):
     # asset store directly (architecture rule #3). Overridable via ALEPH_SELF_URL.
     aleph_self_url: str = "http://localhost:8000"
 
+    # Scholar (WP-2). `mailto` is the polite-pool contact sent to Crossref /
+    # OpenAlex on every request; the cap meters Consensus searches per project
+    # per month (Redis counter — the Pro plan meters 250/month upstream).
+    aleph_scholar_mailto: str = "dev@aleph.local"
+    aleph_consensus_monthly_search_cap: int = 200
+
     # Bootstrap-on-create. When a project is created, a background
     # `bootstrap_project_job` scopes the title+description into seed topics,
     # seeds an overview wiki page, and fans out research per topic. Cost is

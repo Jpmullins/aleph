@@ -37,6 +37,10 @@ class CredentialOut(BaseModel):
     connector_kind: str
     has_project_specific: bool
     rotated_at: str | None = None
+    # Derived from the (server-side decrypted) blob's `status` field for
+    # JSON-blob credentials — e.g. consensus `reconnect_required` (WP-2 §3).
+    # Plaintext itself is never returned.
+    status: str | None = None
 
 
 def _master_secret(request: Request) -> bytes:
@@ -77,6 +81,7 @@ async def _connector_by_kind(session, kind: str) -> Connector:
     response_model=list[CredentialOut],
 )
 async def list_creds(
+    request: Request,
     project_id: ProjectScopeDep,
     session: SessionDep,
     principal: PrincipalDep,
@@ -95,6 +100,7 @@ async def list_creds(
         .scalars()
         .all()
     }
+    cipher = LibsodiumSealedBoxCipher(master_secret=_master_secret(request))
     out: list[CredentialOut] = []
     for c in connectors:
         row = cred_rows.get(c.id)
@@ -103,9 +109,29 @@ async def list_creds(
                 connector_kind=c.kind,
                 has_project_specific=row is not None,
                 rotated_at=(row.rotated_at.isoformat() if row and row.rotated_at else None),
+                status=_blob_status(cipher, row) if row is not None else None,
             )
         )
     return out
+
+
+def _blob_status(cipher: LibsodiumSealedBoxCipher, row: ConnectorCredential) -> str | None:
+    """Derive the credential's `status` from its decrypted JSON blob.
+
+    Owner-only path; only the status string leaves this function — never
+    the plaintext. Non-JSON credentials (plain API keys) have no status.
+    """
+    import json
+
+    try:
+        plaintext = cipher.decrypt(project_id=row.project_id, cipher_blob=bytes(row.cipher_blob))
+        parsed = json.loads(plaintext)
+    except Exception:
+        return None
+    if isinstance(parsed, dict):
+        value = parsed.get("status")
+        return str(value) if value is not None else None
+    return None
 
 
 @router.put(

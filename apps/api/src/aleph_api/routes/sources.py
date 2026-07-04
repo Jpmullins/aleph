@@ -25,7 +25,7 @@ from aleph_core.errors import NotFound, ValidationFailed
 from aleph_core.ids import uuid7
 from aleph_db.models.agent import AgentRun
 from aleph_observability.tracing import current_trace_id
-from aleph_rks.models import NormalizedDocument, Source
+from aleph_rks.models import Connector, NormalizedDocument, Source
 from aleph_rks.source_service import register_uploaded_source
 from aleph_security.agent_token import mint_agent_token
 from aleph_security.roles import ProjectRole, require_at_least
@@ -184,6 +184,12 @@ async def _kick_off_normalize(
 class IngestUrlIn(BaseModel):
     url: HttpUrl
     title: str = Field("", max_length=512)
+    # WP-2 §5 — scholarly provenance passthrough. `connector_kind` must name a
+    # seeded connector (e.g. openalex | crossref | consensus | arxiv); unknown
+    # kinds are a 422 so provenance names stay real. `source_metadata` is merged
+    # onto the Source row's source_metadata_jsonb (doi, openalex_id, doi_verdict).
+    connector_kind: str | None = Field(None, max_length=64)
+    source_metadata: dict[str, Any] | None = None
 
 
 class IngestUrlOut(BaseModel):
@@ -217,6 +223,16 @@ async def ingest_url(
     """
     require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
 
+    # Validate the declared provenance BEFORE fetching anything: an unknown
+    # connector_kind is a caller bug (422), not a reason to hit the network.
+    if body.connector_kind is not None:
+        known = (
+            await session.execute(select(Connector).where(Connector.kind == body.connector_kind))
+        ).scalar_one_or_none()
+        if known is None:
+            msg = f"unknown connector_kind: {body.connector_kind}"
+            raise ValidationFailed(msg)
+
     url = str(body.url)
     try:
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as c:
@@ -240,6 +256,8 @@ async def ingest_url(
         data=resp.content,
         filename=filename,
         mime_type=mime_type,
+        connector_kind=body.connector_kind or "upload",
+        source_metadata=body.source_metadata,
     )
 
     await _kick_off_normalize(

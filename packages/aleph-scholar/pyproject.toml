@@ -1,0 +1,17 @@
+[project]
+name = "aleph-scholar"
+version = "0.1.0"
+description = "Verified scholarship: DOI verification, citation-graph expansion, Consensus over MCP."
+requires-python = ">=3.13"
+dependencies = [
+    "httpx==0.28.1",
+    "tenacity==9.1.4",
+    "mcp>=1.28,<2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aleph_scholar"]

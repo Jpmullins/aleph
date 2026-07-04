@@ -33,6 +33,7 @@ dependencies = [
     "aleph-models",
     "aleph-evals",
     "aleph-rks",
+    "aleph-scholar",
     "aleph-wiki",
     "aleph-assistant",
     "aleph-connectors",

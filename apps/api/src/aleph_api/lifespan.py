@@ -25,6 +25,7 @@ from aleph_observability import (
     shutdown_otel,
 )
 from aleph_rks.asset_store import AssetStore, create_asset_store
+from aleph_scholar import ScholarService
 from aleph_security.jwt import JWKSCache
 
 if TYPE_CHECKING:
@@ -97,10 +98,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         secure=settings.aleph_s3_secure,
     )
 
+    # WP-2 — verified scholarship. One shared ScholarService so the polite
+    # per-host throttle + retry transport live for the app's lifetime. It is
+    # constructed credential-free: the Consensus credential load/save
+    # callbacks are project-scoped, so the scholar routes bind them
+    # per-request to ConnectorCredentialService (the token-refresh httpx
+    # client is shared here so per-request ConsensusClients don't leak one).
+    # follow_redirects: the live Consensus AS 308-redirects its token endpoint
+    # to a trailing-slash path; 308 preserves method+body.
+    consensus_token_http = httpx.AsyncClient(timeout=15.0, follow_redirects=True)
+    scholar = ScholarService(
+        mailto=settings.aleph_scholar_mailto,
+        redis=redis_client,
+        consensus_monthly_cap=settings.aleph_consensus_monthly_search_cap,
+        consensus_token_http=consensus_token_http,
+    )
+
     app.state.settings = settings
     app.state.db_engine = engine
     app.state.session_maker = session_maker
     app.state.jwks_cache = jwks_cache
+    app.state.scholar = scholar
+    app.state.consensus_token_http = consensus_token_http
 
     # Wave 2 — give the in-process assistant Deep Agent (mounted at
     # /copilotkit/agent/assistant) access to the shared session_maker.
@@ -167,6 +186,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         await notify_listener.stop()
         await agent_store_pool.close()
+        await scholar.http.aclose()
+        await consensus_token_http.aclose()
         await gateway_http.aclose()
         await auth_http.aclose()
         await redis_client.aclose()

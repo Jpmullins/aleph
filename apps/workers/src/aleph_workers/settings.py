@@ -60,6 +60,12 @@ class WorkerSettings(BaseSettings):
     bootstrap_max_topics: int = 3
     bootstrap_depth: str = "shallow"
 
+    # Scholar (WP-2, mirrors aleph_api.settings.Settings). The reviewer's
+    # doi_verification pass (WP-3) runs in workers and needs the same polite
+    # mailto + Consensus quota cap the API uses.
+    aleph_scholar_mailto: str = "dev@aleph.local"
+    aleph_consensus_monthly_search_cap: int = 200
+
 
 @lru_cache(maxsize=1)
 def get_worker_settings() -> WorkerSettings:

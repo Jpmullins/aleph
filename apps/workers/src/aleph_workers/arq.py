@@ -22,6 +22,7 @@ from aleph_observability import (
     shutdown_otel,
 )
 from aleph_rks.asset_store import create_asset_store
+from aleph_scholar import ScholarService
 from aleph_workers.jobs import (
     aiq_submit_job,
     aiq_synthesis_poll_job,
@@ -81,7 +82,13 @@ async def _startup(ctx: dict[str, Any]) -> None:
         bucket=s.aleph_s3_bucket,
         secure=s.aleph_s3_secure,
     )
+    # Scholar (WP-2): DOI verification for the MechanicalReviewer. The
+    # settings key is being added by a parallel work package — fall back to
+    # the spec default until it lands.
+    scholar_mailto: str = getattr(s, "aleph_scholar_mailto", "dev@aleph.local")
+    scholar = ScholarService(mailto=scholar_mailto)
     ctx["settings"] = s
+    ctx["scholar"] = scholar
     ctx["db_engine"] = engine
     ctx["session_maker"] = maker
     ctx["litellm_client"] = litellm
@@ -93,6 +100,7 @@ async def _startup(ctx: dict[str, Any]) -> None:
 
 
 async def _shutdown(ctx: dict[str, Any]) -> None:
+    await ctx["scholar"].http.aclose()
     await ctx["gateway_http"].aclose()
     await ctx["redis"].aclose()
     await ctx["redis_pool"].aclose()

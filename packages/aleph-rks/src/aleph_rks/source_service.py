@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -50,9 +50,17 @@ async def register_uploaded_source(
     data: bytes,
     filename: str,
     mime_type: str,
+    connector_kind: str = "upload",
+    source_metadata: dict[str, Any] | None = None,
 ) -> SourceCreated:
     """Store the bytes, create Source + SourceVersion + SourceAsset rows,
     set Source.status="normalizing", emit ledger events.
+
+    `connector_kind` records the real origin (WP-2 §5: openalex | crossref |
+    consensus | arxiv | ... — callers validate it against the connectors
+    table); `source_metadata` is merged onto `source_metadata_jsonb`
+    (scholarly identity: doi, openalex_id, doi_verdict). Defaults preserve
+    the historical upload behavior.
     """
     source_id = uuid7()
     short_id = await _next_short_id(session)
@@ -85,7 +93,7 @@ async def register_uploaded_source(
     source = Source(
         id=source_id,
         project_id=project_id,
-        connector_kind="upload",
+        connector_kind=connector_kind,
         external_id=f"{principal.user_id}::{filename}",
         title=title or filename,
         url=None,
@@ -94,6 +102,7 @@ async def register_uploaded_source(
             "uploader_id": str(principal.user_id),
             "original_size": len(data),
             "storage_uri": stored.storage_uri,
+            **(source_metadata or {}),
         },
         short_id=short_id,
         status="normalizing",
@@ -131,7 +140,7 @@ async def register_uploaded_source(
         payload={
             "short_id": short_id,
             "title": source.title,
-            "connector_kind": "upload",
+            "connector_kind": connector_kind,
             "mime_type": mime_type,
             "sha256": sha,
             "size_bytes": len(data),

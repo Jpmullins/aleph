@@ -18,6 +18,7 @@ dependencies = [
     "aleph-observability",
     "aleph-models",
     "aleph-rks",
+    "aleph-scholar",
     "aleph-wiki",
     "aleph-assistant",
     "aleph-reviewer",

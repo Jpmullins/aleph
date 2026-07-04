@@ -12,6 +12,7 @@ dependencies = [
     "aleph-models",
     "aleph-observability",
     "aleph-rks",
+    "aleph-scholar",
     "aleph-security",
     "aleph-wiki",
     "aleph-connectors",
