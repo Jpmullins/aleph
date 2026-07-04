@@ -14,6 +14,17 @@ import {
  * (so the real renderer + SSE wiring is exercised), but the wiki *data*
  * endpoints are mocked so the link cases are deterministic regardless of what
  * the wiki agent compiled.
+ *
+ * NOTE (WP-4): the canonical wiki tab is now SERVER-BUILT and streamed over
+ * `…/surfaces/wiki/stream` (sub-spec a) — the browser no longer fetches
+ * `/wiki/pages` directly, so the route mocks below feed the *server*-built
+ * surface only if the stack seeds these pages. Reaching the reader green
+ * therefore needs DB-seeded wiki pages (WP-4a test-infra), not browser mocks.
+ * WP-4b's change here is the READER + curation path: the reader is now the
+ * `WikiPageCard` catalog card, and Approve/Reject/Repair route through the
+ * ledger-audited action router (`POST /cards/actions`), NOT the old dedicated
+ * `/wiki/pages/{id}/approve` + `/wiki/aliases/repair-links` endpoints. The
+ * action assertions below target the new router path accordingly.
  */
 
 const HUB_ID = "00000000-0000-4000-8000-000000000001";
@@ -115,9 +126,8 @@ test.describe("Stage 0 — wiki links, navigation, scaling", () => {
     await expect(page.getByTestId("wiki-linkout")).toHaveCount(1);
     await expect(page.getByTestId("wiki-linkout-broken")).toHaveCount(1);
 
-    // Curation: the reader header shows the page's lifecycle status + provenance.
+    // Curation: the reader (WikiPageCard) shows the page's lifecycle status.
     await expect(page.getByTestId("wiki-status-badge").first()).toHaveText("approved");
-    await expect(page.getByTestId("wiki-provenance")).toContainText("Revision 1");
 
     // Clicking an inline wikilink navigates the reader to the target page.
     await page.getByTestId("wikilink-chip").filter({ hasText: "Target Page" }).first().click();
@@ -125,11 +135,12 @@ test.describe("Stage 0 — wiki links, navigation, scaling", () => {
   });
 
   test("draft pages are badged in the list; repair-links action fires", async ({ page }) => {
-    // The repair endpoint is mocked; capture that the action calls it.
+    // WP-4b: repair-links now routes through the ledger-audited action router.
     let repairCalled = false;
-    await page.route(/\/wiki\/aliases\/repair-links/, (route) => {
-      repairCalled = true;
-      return route.fulfill({ json: { repaired: 1 } });
+    await page.route(/\/cards\/actions/, (route) => {
+      const body = route.request().postDataJSON() as { action_kind?: string };
+      if (body?.action_kind === "repair_links") repairCalled = true;
+      return route.fulfill({ json: { action_id: HUB_ID, ok: true, result: { repaired: 1 } } });
     });
 
     await openProjectWorkspace(page, projectId);
@@ -147,11 +158,18 @@ test.describe("Stage 0 — wiki links, navigation, scaling", () => {
   });
 
   test("a draft page exposes Approve/Reject; Approve calls the endpoint", async ({ page }) => {
+    // WP-4b: Approve routes through the action router with target_kind=wiki_page.
     let approveCalled = false;
-    await page.route(new RegExp(`/wiki/pages/${TARGET_ID}/approve`), (route) => {
-      approveCalled = true;
+    await page.route(/\/cards\/actions/, (route) => {
+      const body = route.request().postDataJSON() as {
+        action_kind?: string;
+        target_kind?: string;
+      };
+      if (body?.action_kind === "approve" && body?.target_kind === "wiki_page") {
+        approveCalled = true;
+      }
       return route.fulfill({
-        json: { id: TARGET_ID, title: "Target Page", status: "approved" },
+        json: { action_id: TARGET_ID, ok: true, result: { new_status: "approved" } },
       });
     });
 

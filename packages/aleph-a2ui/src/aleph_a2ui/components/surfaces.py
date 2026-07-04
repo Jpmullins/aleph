@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from typing import Any
-from uuid import UUID, uuid4
 
 from aleph_a2ui.messages import create_surface, full_surface, update_components
 
@@ -13,173 +12,16 @@ from aleph_a2ui.messages import create_surface, full_surface, update_components
 ALEPH_V09_CATALOG_ID = "aleph://v1"
 
 
-def _surface(
-    type_name: str,
-    *,
-    surface_id: str | None,
-    props: dict[str, Any],
-    children: list[dict[str, Any]] | None = None,
-    data_bindings: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    return {
-        "type": type_name,
-        "id": surface_id or f"{type_name}-{uuid4().hex[:8]}",
-        "props": props,
-        "data_bindings": data_bindings or {},
-        "children": children or [],
-    }
-
-
-def wiki_surface(
-    *,
-    current_page_id: UUID | None = None,
-    view_mode: str = "page",
-    filters: dict[str, Any] | None = None,
-    children: list[dict[str, Any]] | None = None,
-    surface_id: str | None = None,
-) -> dict[str, Any]:
-    return _surface(
-        "WikiSurface",
-        surface_id=surface_id,
-        props={
-            "current_page_id": str(current_page_id) if current_page_id else None,
-            "view_mode": view_mode,
-            "filters": filters or {},
-        },
-        children=children,
-    )
-
-
-def artifacts_surface(
-    *,
-    current_artifact_id: UUID | None = None,
-    surface_id: str | None = None,
-) -> dict[str, Any]:
-    return _surface(
-        "ArtifactsSurface",
-        surface_id=surface_id,
-        props={
-            "current_artifact_id": str(current_artifact_id) if current_artifact_id else None,
-        },
-    )
-
-
-def notes_surface(
-    *,
-    current_note_id: UUID | None = None,
-    current_section_id: UUID | None = None,
-    children: list[dict[str, Any]] | None = None,
-    surface_id: str | None = None,
-) -> dict[str, Any]:
-    return _surface(
-        "NotesSurface",
-        surface_id=surface_id,
-        props={
-            "current_note_id": str(current_note_id) if current_note_id else None,
-            "current_section_id": str(current_section_id) if current_section_id else None,
-        },
-        children=children,
-    )
-
-
-def hypotheses_surface(
-    *,
-    current_hypothesis_id: UUID | None = None,
-    children: list[dict[str, Any]] | None = None,
-    surface_id: str | None = None,
-) -> dict[str, Any]:
-    return _surface(
-        "HypothesesSurface",
-        surface_id=surface_id,
-        props={
-            "current_hypothesis_id": str(current_hypothesis_id) if current_hypothesis_id else None,
-        },
-        children=children,
-    )
-
-
-def hypothesis_cards_v09(
-    *,
-    hypotheses: list[dict[str, Any]],
-    surface_id: str = "hypotheses",
-    catalog_id: str = ALEPH_V09_CATALOG_ID,
-) -> list[dict[str, Any]]:
-    """Bound-card message list: one `HypothesisCard` per hypothesis in a `Column`.
-
-    Card props are data BINDINGS into `/items/<i>/...` so a per-path
-    `updateDataModel` (Wave 4 T6) can patch confidence/evidence in place
-    without re-sending the component tree. This is the data-binding/delta
-    exemplar the other tabs will adopt when their data moves into the surface
-    data model; the Hypotheses TAB itself mounts the interactive
-    `HypothesesSurface` view (see `hypotheses_surface_v09`). `hypotheses` is a
-    list of dicts with keys `hypothesis_id`, `title`, `confidence`,
-    `evidence_count`.
-    """
-    components: list[dict[str, Any]] = []
-    items: list[dict[str, Any]] = []
-    card_ids: list[str] = []
-    for i, h in enumerate(hypotheses):
-        cid = f"hyp-card-{i}"
-        card_ids.append(cid)
-        components.append(
-            {
-                "id": cid,
-                "component": "HypothesisCard",
-                "hypothesis_id": {"path": f"/items/{i}/hypothesis_id"},
-                "title": {"path": f"/items/{i}/title"},
-                "confidence": {"path": f"/items/{i}/confidence"},
-                "evidence_count": {"path": f"/items/{i}/evidence_count"},
-            }
-        )
-        items.append(
-            {
-                "hypothesis_id": str(h.get("hypothesis_id", "")),
-                "title": str(h.get("title", "")),
-                "confidence": str(h.get("confidence", "")),
-                "evidence_count": int(h.get("evidence_count", 0) or 0),
-            }
-        )
-    # Root Column wraps the cards (basic-catalog primitive, merged into the
-    # shared catalog alongside HypothesisCard).
-    components.insert(0, {"id": "root", "component": "Column", "children": card_ids})
-    return full_surface(
-        surface_id=surface_id,
-        catalog_id=catalog_id,
-        components=components,
-        data_model={"items": items},
-    )
-
-
-def briefs_surface(
-    *,
-    badge_count: int = 0,
-    filters: dict[str, Any] | None = None,
-    children: list[dict[str, Any]] | None = None,
-    surface_id: str | None = None,
-) -> dict[str, Any]:
-    return _surface(
-        "BriefsSurface",
-        surface_id=surface_id,
-        props={
-            "badge_count": badge_count,
-            "filters": filters or {},
-        },
-        children=children,
-    )
-
-
 # ---------------------------------------------------------------------------
 # v0.9 message-list builders (Wave 4 T3)
 # ---------------------------------------------------------------------------
 #
 # Each right-panel tab is rendered through the upstream `@a2ui` v0_9
 # `MessageProcessor` + `<A2uiSurface>` against the shared catalog (`aleph://v1`).
-# The rich Aleph surface views (`WikiSurface`/`ArtifactsSurface`/`NotesSurface`/
-# `HypothesesSurface`/`BriefsSurface`) are registered as single v0_9 components
-# and fetch their own data client-side, so each builder emits exactly ONE
-# top-level surface component plus an (optional) child card list. `children`
-# rides INLINE on the component object as a structural prop (the frontend
-# `adapt` helper forwards it to `component.children`).
+# The four canonical tabs (Wiki/Library/Notes/Hypotheses) are DATA-BOUND (see
+# the builders below); `BriefsSurface` (agent-composed, WP-4d) still rides the
+# single-component `_surface_messages` shell with an inline `children` card list
+# (the frontend `adapt` helper forwards it to `component.children`).
 
 
 def _surface_messages(
@@ -215,59 +57,121 @@ def _surface_messages(
     ]
 
 
+# ---------------------------------------------------------------------------
+# Data-bound canonical tab builders (WP-4 sub-spec (a)).
+#
+# Each of the four canonical tabs (Wiki / Library / Notes / Hypotheses) is now
+# SERVER-BUILT and DATA-BOUND: the builder loads its rows (in the route layer,
+# which owns the session), then emits a `full_surface` — `createSurface` +
+# `updateComponents` (structure, once) + a root `updateDataModel` (the typed
+# data model). The single surface component carries its data as `{"path": ...}`
+# BINDINGS into that model (the `hypothesis_cards_v09` exemplar pattern), so the
+# React view renders ONLY from bound props (zero client fetch) and a mutation
+# patches in place via a per-path `updateDataModel` delta (`diff_data_model`) —
+# never a full re-render. The self-fetching react-query views are gone
+# (`scripts/check-no-self-fetch.sh` enforces it).
+# ---------------------------------------------------------------------------
+
+
 def wiki_surface_v09(
     *,
-    current_page_id: UUID | None = None,
-    view_mode: str = "page",
-    children: list[dict[str, Any]] | None = None,
+    pages: list[dict[str, Any]],
+    open_page: dict[str, Any] | None = None,
     surface_id: str = "wiki",
+    catalog_id: str = ALEPH_V09_CATALOG_ID,
 ) -> list[dict[str, Any]]:
-    return _surface_messages(
+    """Data-bound Wiki tab. Data model: ``{pages: [...], open: {...} | null}``.
+
+    `pages` is the page-browser list; `open` is the currently-open page's reader
+    payload (revision body, claims, citations, wikilinks) or ``None`` when
+    browsing the index. Opening a page is an `open` A2UI action → the panel
+    re-streams with `?page_id=`, populating `open` (the rich reader card is
+    WP-4b; for now the body renders through a bound markdown primitive).
+    """
+    component = {
+        "id": "root",
+        "component": "WikiSurface",
+        "pages": {"path": "/pages"},
+        "open": {"path": "/open"},
+    }
+    return full_surface(
         surface_id=surface_id,
-        component_name="WikiSurface",
-        props={
-            "current_page_id": str(current_page_id) if current_page_id else "",
-            "view_mode": view_mode,
-        },
-        children=children or [],
+        catalog_id=catalog_id,
+        components=[component],
+        data_model={"pages": pages, "open": open_page},
     )
 
 
 def artifacts_surface_v09(
     *,
-    current_artifact_id: UUID | None = None,
-    surface_id: str = "artifacts",
+    sources: list[dict[str, Any]],
+    artifacts: list[dict[str, Any]],
+    surface_id: str = "library",
+    catalog_id: str = ALEPH_V09_CATALOG_ID,
 ) -> list[dict[str, Any]]:
-    return _surface_messages(
+    """Data-bound Library tab. Data model: ``{sources: [...], artifacts: [...]}``.
+
+    Ingested `sources` (raw PDFs/webpages/docs) alongside built `artifacts`.
+    Each source carries a bound ``normalized_preview`` (WP-4e) so `SourceCard`
+    renders its text preview from props with no self-fetch.
+    """
+    component = {
+        "id": "root",
+        "component": "ArtifactsSurface",
+        "sources": {"path": "/sources"},
+        "artifacts": {"path": "/artifacts"},
+    }
+    return full_surface(
         surface_id=surface_id,
-        component_name="ArtifactsSurface",
-        props={
-            "current_artifact_id": str(current_artifact_id) if current_artifact_id else "",
-        },
+        catalog_id=catalog_id,
+        components=[component],
+        data_model={"sources": sources, "artifacts": artifacts},
     )
 
 
 def notes_surface_v09(
     *,
-    children: list[dict[str, Any]] | None = None,
+    notes: list[dict[str, Any]],
     surface_id: str = "notes",
+    catalog_id: str = ALEPH_V09_CATALOG_ID,
 ) -> list[dict[str, Any]]:
-    return _surface_messages(
+    """Data-bound Notes tab. Data model: ``{notes: [{id, title, body_md,
+    section_id, updated_at}]}``. Editing a note body is an `edit_note` action
+    through the router; the debounced edit patches the model in place."""
+    component = {
+        "id": "root",
+        "component": "NotesSurface",
+        "notes": {"path": "/notes"},
+    }
+    return full_surface(
         surface_id=surface_id,
-        component_name="NotesSurface",
-        children=children or [],
+        catalog_id=catalog_id,
+        components=[component],
+        data_model={"notes": notes},
     )
 
 
 def hypotheses_surface_v09(
     *,
-    children: list[dict[str, Any]] | None = None,
+    items: list[dict[str, Any]],
+    ach: dict[str, Any] | None = None,
     surface_id: str = "hypotheses",
+    catalog_id: str = ALEPH_V09_CATALOG_ID,
 ) -> list[dict[str, Any]]:
-    return _surface_messages(
+    """Data-bound Hypotheses tab. Data model: ``{items: [...], ach: {...} |
+    null}``. `items` is the tracked-hypothesis list; `ach` is the ACH matrix
+    (null when there is no evidence yet)."""
+    component = {
+        "id": "root",
+        "component": "HypothesesSurface",
+        "items": {"path": "/items"},
+        "ach": {"path": "/ach"},
+    }
+    return full_surface(
         surface_id=surface_id,
-        component_name="HypothesesSurface",
-        children=children or [],
+        catalog_id=catalog_id,
+        components=[component],
+        data_model={"items": items, "ach": ach},
     )
 
 

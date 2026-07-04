@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Query
+from fastapi import APIRouter, Body, Query, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
 from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
+from aleph_artifacts.models import RenderedAsset
+from aleph_artifacts.render_service import record_render
 from aleph_connectors.models import ApprovalDecision
 from aleph_core.errors import NotFound, ValidationFailed
 from aleph_core.ids import uuid7
@@ -19,6 +23,7 @@ from aleph_core.time import utcnow
 from aleph_observability.tracing import current_trace_id
 from aleph_security.roles import ProjectRole, require_at_least
 from aleph_wiki.feedback_service import write_feedback
+from aleph_wiki.html_compiler import compile_page_html
 from aleph_wiki.index_service import IndexService
 from aleph_wiki.models import WikiClaim, WikiLink, WikiPage, WikiRevision
 
@@ -326,6 +331,131 @@ async def list_revisions(
     )
     rows = list((await session.execute(stmt)).scalars().all())
     return [WikiRevisionOut.model_validate(r) for r in rows]
+
+
+async def _compile_and_persist_html(
+    *,
+    request: Request,
+    session: SessionDep,
+    ledger: LedgerDep,
+    principal: PrincipalDep,
+    project_id: UUID,
+    page: WikiPage,
+) -> tuple[bytes, RenderedAsset]:
+    """Deterministically compile the page's HTML and persist it as a
+    RenderedAsset (`source_kind="wiki_page_html"`) via `record_render`.
+
+    Idempotent: the compiler is a pure function of (title, body_md, claims,
+    infobox), so we key the cached render on the compiled bytes' sha256. A
+    matching prior render is reused (no new row, no ledger event); a changed
+    page (new revision / edited infobox) materializes a fresh render + a ledger
+    event. This keeps repeated reads cheap and never mutates on a cache hit.
+    """
+    body_md = ""
+    claims: list[dict[str, Any]] = []
+    if page.current_revision_id is not None:
+        rev = (
+            await session.execute(
+                select(WikiRevision).where(WikiRevision.id == page.current_revision_id)
+            )
+        ).scalar_one_or_none()
+        if rev is not None:
+            body_md = rev.body_md
+            claim_rows = list(
+                (await session.execute(select(WikiClaim).where(WikiClaim.revision_id == rev.id)))
+                .scalars()
+                .all()
+            )
+            claims = [{"text": c.text, "confidence": c.confidence} for c in claim_rows]
+    html = compile_page_html(
+        title=page.title,
+        body_md=body_md,
+        claims=claims,
+        infobox=page.infobox_jsonb,
+    )
+    data = html.encode("utf-8")
+    sha = hashlib.sha256(data).hexdigest()
+    existing = (
+        await session.execute(
+            select(RenderedAsset).where(
+                RenderedAsset.project_id == project_id,
+                RenderedAsset.source_kind == "wiki_page_html",
+                RenderedAsset.source_id == page.id,
+                RenderedAsset.sha256 == sha,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return data, existing
+    asset = await record_render(
+        session,
+        asset_store=request.app.state.asset_store,
+        principal=principal,
+        project_id=project_id,
+        source_kind="wiki_page_html",
+        source_id=page.id,
+        source_version_id=page.current_revision_id,
+        dataset_version_ids=[],
+        output_format="html",
+        data=data,
+        render_spec={"kind": "wiki_page_html", "body_sha256": sha},
+    )
+    await ledger.append(
+        project_id=project_id,
+        actor_id=principal.user_id,
+        actor_kind=principal.actor_kind,
+        action_kind="wiki.page.html_compile",
+        target_id=asset.id,
+        target_kind="rendered_asset",
+        payload={"page_id": str(page.id), "sha256": sha},
+        trace_id=current_trace_id(),
+    )
+    return data, asset
+
+
+@router.get("/{project_id}/wiki/pages/{page_id}/html")
+async def get_page_html(
+    request: Request,
+    project_id: ProjectScopeDep,
+    page_id: UUID,
+    session: SessionDep,
+    ledger: LedgerDep,
+    principal: PrincipalDep,
+) -> Response:
+    """Deterministic server-compiled HTML for a wiki page (WP-4b).
+
+    Compiles + persists a RenderedAsset (idempotent by sha) and streams the
+    self-contained document with `Content-Security-Policy: sandbox` — the
+    server-side belt that pairs with `HtmlDocCard`'s `sandbox=""` iframe. No
+    scripts, no external refs, so this can never run in the API origin.
+    """
+    require_at_least(principal, project_id, at_least=ProjectRole.VIEWER)
+    page = (
+        await session.execute(
+            select(WikiPage).where(WikiPage.id == page_id, WikiPage.project_id == project_id)
+        )
+    ).scalar_one_or_none()
+    if page is None:
+        msg = f"wiki page not found: {page_id}"
+        raise NotFound(msg)
+    data, asset = await _compile_and_persist_html(
+        request=request,
+        session=session,
+        ledger=ledger,
+        principal=principal,
+        project_id=project_id,
+        page=page,
+    )
+    return Response(
+        content=data,
+        media_type="text/html; charset=utf-8",
+        headers={
+            "Content-Security-Policy": "sandbox",
+            "X-Content-Type-Options": "nosniff",
+            "ETag": f'"{asset.sha256}"',
+            "Cache-Control": "private, max-age=60",
+        },
+    )
 
 
 class WikiSearchIn(BaseModel):

@@ -79,14 +79,16 @@ import { ClaimCard as ClaimCardView } from "./components/ClaimCard";
 import { DiffCard as DiffCardView } from "./components/DiffCard";
 import { FindingCard as FindingCardView } from "./components/FindingCard";
 import { FormCard as FormCardView } from "./components/FormCard";
-import { GraphCard as GraphCardView } from "./components/GraphCard";
+import { HtmlDocCard as HtmlDocCardView } from "./components/HtmlDocCard";
+import { HtmlFrameCard as HtmlFrameCardView } from "./components/HtmlFrameCard";
+import { ImageCard as ImageCardView } from "./components/ImageCard";
 import { HypothesesSurface as HypothesesSurfaceView } from "./components/HypothesesSurface";
 import { HypothesisCard as HypothesisCardView } from "./components/HypothesisCard";
-import { MapCard as MapCardView } from "./components/MapCard";
-import { NotebookCellCard as NotebookCellCardView } from "./components/NotebookCellCard";
+import { NoteEditorCard as NoteEditorCardView } from "./components/NoteEditorCard";
 import { NotesSurface as NotesSurfaceView } from "./components/NotesSurface";
 import { SourceCard as SourceCardView } from "./components/SourceCard";
 import { TableCard as TableCardView } from "./components/TableCard";
+import { WikiPageCard as WikiPageCardView } from "./components/WikiPageCard";
 import { WikiSurface as WikiSurfaceView } from "./components/WikiSurface";
 
 import type { A2UIComponent, ComponentName } from "./catalog";
@@ -210,6 +212,7 @@ export const SourceCardApi = {
     title: CommonSchemas.DynamicString,
     url: CommonSchemas.DynamicString.optional(),
     status: CommonSchemas.DynamicString,
+    normalized_preview: CommonSchemas.DynamicString.optional(),
     open_action: CommonSchemas.Action.optional(),
     navigate_wiki_action: CommonSchemas.Action.optional(),
   }),
@@ -238,18 +241,47 @@ export const ArtifactCardImpl = createComponentImplementation(
 export const ChartCardApi = {
   name: "ChartCard",
   schema: z3.object({
-    dataset_version_id: CommonSchemas.DynamicString.optional(),
     title: CommonSchemas.DynamicString.optional(),
     chart_id: CommonSchemas.DynamicString.optional(),
+    // Streaming-route URI vega-embed can load (WP-4c) — no self-fetch here.
+    chart_url: CommonSchemas.DynamicString.optional(),
+    artifact_version_id: CommonSchemas.DynamicString.optional(),
     // Vega-Lite spec is a whole-object literal — passthrough.
     vega_lite_spec: z3.any().optional(),
-    _placeholder: CommonSchemas.DynamicBoolean.optional(),
     open_action: CommonSchemas.Action.optional(),
   }),
 };
 export const ChartCardImpl = createComponentImplementation(
   ChartCardApi,
   adapt("ChartCard", ChartCardView, "chart"),
+);
+
+// WP-4c sandbox viz pipeline — cards reference code_runner artifacts by URI.
+export const ImageCardApi = {
+  name: "ImageCard",
+  schema: z3.object({
+    src: CommonSchemas.DynamicString,
+    title: CommonSchemas.DynamicString.optional(),
+    alt: CommonSchemas.DynamicString.optional(),
+    artifact_version_id: CommonSchemas.DynamicString.optional(),
+  }),
+};
+export const ImageCardImpl = createComponentImplementation(
+  ImageCardApi,
+  adapt("ImageCard", ImageCardView, "image"),
+);
+
+export const HtmlFrameCardApi = {
+  name: "HtmlFrameCard",
+  schema: z3.object({
+    src: CommonSchemas.DynamicString,
+    title: CommonSchemas.DynamicString.optional(),
+    artifact_version_id: CommonSchemas.DynamicString.optional(),
+  }),
+};
+export const HtmlFrameCardImpl = createComponentImplementation(
+  HtmlFrameCardApi,
+  adapt("HtmlFrameCard", HtmlFrameCardView, "html-frame"),
 );
 
 export const TableCardApi = {
@@ -267,38 +299,6 @@ export const TableCardApi = {
 export const TableCardImpl = createComponentImplementation(
   TableCardApi,
   adapt("TableCard", TableCardView, "table"),
-);
-
-export const MapCardApi = {
-  name: "MapCard",
-  schema: z3.object({
-    title: CommonSchemas.DynamicString.optional(),
-    // points / center are whole-object literals — passthrough.
-    points: z3.array(z3.any()).optional(),
-    style_url: CommonSchemas.DynamicString.optional(),
-    center: z3.any().optional(),
-    zoom: CommonSchemas.DynamicNumber.optional(),
-    _placeholder: CommonSchemas.DynamicBoolean.optional(),
-  }),
-};
-export const MapCardImpl = createComponentImplementation(
-  MapCardApi,
-  adapt("MapCard", MapCardView, "map"),
-);
-
-export const GraphCardApi = {
-  name: "GraphCard",
-  schema: z3.object({
-    title: CommonSchemas.DynamicString.optional(),
-    // nodes / edges are whole-object literals — passthrough.
-    nodes: z3.array(z3.any()).optional(),
-    edges: z3.array(z3.any()).optional(),
-    _placeholder: CommonSchemas.DynamicBoolean.optional(),
-  }),
-};
-export const GraphCardImpl = createComponentImplementation(
-  GraphCardApi,
-  adapt("GraphCard", GraphCardView, "graph"),
 );
 
 export const ApprovalCardApi = {
@@ -338,20 +338,6 @@ export const FindingCardImpl = createComponentImplementation(
   adapt("FindingCard", FindingCardView, "finding"),
 );
 
-export const NotebookCellCardApi = {
-  name: "NotebookCellCard",
-  schema: z3.object({
-    section_id: CommonSchemas.DynamicString,
-    body_md: CommonSchemas.DynamicString,
-    ordinal: CommonSchemas.DynamicNumber,
-    edit_action: CommonSchemas.Action.optional(),
-  }),
-};
-export const NotebookCellCardImpl = createComponentImplementation(
-  NotebookCellCardApi,
-  adapt("NotebookCellCard", NotebookCellCardView, "section"),
-);
-
 export const FormCardApi = {
   name: "FormCard",
   schema: z3.object({
@@ -373,12 +359,74 @@ export const DiffCardApi = {
     from_revision_id: CommonSchemas.DynamicString,
     to_revision_id: CommonSchemas.DynamicString,
     page_id: CommonSchemas.DynamicString,
+    from_body_md: CommonSchemas.DynamicString.optional(),
+    to_body_md: CommonSchemas.DynamicString.optional(),
     open_action: CommonSchemas.Action.optional(),
   }),
 };
 export const DiffCardImpl = createComponentImplementation(
   DiffCardApi,
   adapt("DiffCard", DiffCardView, "diff"),
+);
+
+// ---------------------------------------------------------------------------
+// Reader / editor tier (WP-4 sub-spec b). Rich reader + note editor + compiled
+// HTML doc. All data arrives via bound props; mutations route through onAction.
+// The array/object props (claims/citations/wikilinks_out/page_meta) are
+// whole-value literals — passthrough (z3.any), not bindable scalars.
+// ---------------------------------------------------------------------------
+export const WikiPageCardApi = {
+  name: "WikiPageCard",
+  schema: z3.object({
+    page_id: CommonSchemas.DynamicString.optional(),
+    body_md: CommonSchemas.DynamicString.optional(),
+    claims: z3.array(z3.any()).optional(),
+    citations: z3.array(z3.any()).optional(),
+    wikilinks_out: z3.array(z3.any()).optional(),
+    page_meta: z3.any().optional(),
+    html_url: CommonSchemas.DynamicString.optional(),
+    derived: CommonSchemas.DynamicBoolean.optional(),
+    read_only: CommonSchemas.DynamicBoolean.optional(),
+    navigate_wiki_action: CommonSchemas.Action.optional(),
+    approve_action: CommonSchemas.Action.optional(),
+    reject_action: CommonSchemas.Action.optional(),
+    repair_links_action: CommonSchemas.Action.optional(),
+  }),
+};
+export const WikiPageCardImpl = createComponentImplementation(
+  WikiPageCardApi,
+  adapt("WikiPageCard", WikiPageCardView, "wiki-page"),
+);
+
+export const NoteEditorCardApi = {
+  name: "NoteEditorCard",
+  schema: z3.object({
+    note_id: CommonSchemas.DynamicString.optional(),
+    section_id: CommonSchemas.DynamicString.optional(),
+    title: CommonSchemas.DynamicString.optional(),
+    body_md: CommonSchemas.DynamicString.optional(),
+    edit_action: CommonSchemas.Action.optional(),
+    rename_action: CommonSchemas.Action.optional(),
+    promote_action: CommonSchemas.Action.optional(),
+  }),
+};
+export const NoteEditorCardImpl = createComponentImplementation(
+  NoteEditorCardApi,
+  adapt("NoteEditorCard", NoteEditorCardView, "note-editor"),
+);
+
+export const HtmlDocCardApi = {
+  name: "HtmlDocCard",
+  schema: z3.object({
+    src: CommonSchemas.DynamicString,
+    title: CommonSchemas.DynamicString.optional(),
+    derived: CommonSchemas.DynamicBoolean.optional(),
+    read_only: CommonSchemas.DynamicBoolean.optional(),
+  }),
+};
+export const HtmlDocCardImpl = createComponentImplementation(
+  HtmlDocCardApi,
+  adapt("HtmlDocCard", HtmlDocCardView, "html-doc"),
 );
 
 // ---------------------------------------------------------------------------
@@ -389,13 +437,16 @@ export const DiffCardImpl = createComponentImplementation(
 // literals (filters, current-selection ids, child card lists) — passthrough.
 // ---------------------------------------------------------------------------
 
+// WP-4: the four canonical tabs are data-bound. Each data prop is a
+// `DynamicValue` (a union that includes `{ path }`), so a `{ path: "/pages" }`
+// binding resolves the WHOLE array/object from the surface data model before
+// the view renders — and a per-path `updateDataModel` delta re-resolves only
+// the changed prop. The views render exclusively from these resolved props.
 export const WikiSurfaceApi = {
   name: "WikiSurface",
   schema: z3.object({
-    current_page_id: CommonSchemas.DynamicString.optional(),
-    view_mode: CommonSchemas.DynamicString.optional(),
-    filters: z3.any().optional(),
-    children: z3.array(z3.any()).optional(),
+    pages: CommonSchemas.DynamicValue.optional(),
+    open: CommonSchemas.DynamicValue.optional(),
   }),
 };
 export const WikiSurfaceImpl = createComponentImplementation(
@@ -406,7 +457,8 @@ export const WikiSurfaceImpl = createComponentImplementation(
 export const ArtifactsSurfaceApi = {
   name: "ArtifactsSurface",
   schema: z3.object({
-    current_artifact_id: CommonSchemas.DynamicString.optional(),
+    sources: CommonSchemas.DynamicValue.optional(),
+    artifacts: CommonSchemas.DynamicValue.optional(),
   }),
 };
 export const ArtifactsSurfaceImpl = createComponentImplementation(
@@ -417,9 +469,7 @@ export const ArtifactsSurfaceImpl = createComponentImplementation(
 export const NotesSurfaceApi = {
   name: "NotesSurface",
   schema: z3.object({
-    current_note_id: CommonSchemas.DynamicString.optional(),
-    current_section_id: CommonSchemas.DynamicString.optional(),
-    children: z3.array(z3.any()).optional(),
+    notes: CommonSchemas.DynamicValue.optional(),
   }),
 };
 export const NotesSurfaceImpl = createComponentImplementation(
@@ -430,8 +480,8 @@ export const NotesSurfaceImpl = createComponentImplementation(
 export const HypothesesSurfaceApi = {
   name: "HypothesesSurface",
   schema: z3.object({
-    current_hypothesis_id: CommonSchemas.DynamicString.optional(),
-    children: z3.array(z3.any()).optional(),
+    items: CommonSchemas.DynamicValue.optional(),
+    ach: CommonSchemas.DynamicValue.optional(),
   }),
 };
 export const HypothesesSurfaceImpl = createComponentImplementation(
@@ -464,14 +514,17 @@ export const ALEPH_CARD_IMPLS = [
   SourceCardImpl,
   ArtifactCardImpl,
   ChartCardImpl,
+  ImageCardImpl,
+  HtmlFrameCardImpl,
   TableCardImpl,
-  MapCardImpl,
-  GraphCardImpl,
   ApprovalCardImpl,
   FindingCardImpl,
-  NotebookCellCardImpl,
   FormCardImpl,
   DiffCardImpl,
+  // reader / editor tier (WP-4b)
+  WikiPageCardImpl,
+  NoteEditorCardImpl,
+  HtmlDocCardImpl,
   // surfaces
   WikiSurfaceImpl,
   ArtifactsSurfaceImpl,

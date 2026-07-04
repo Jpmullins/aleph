@@ -77,7 +77,12 @@ def _fake_request(asgi_app: Any) -> Any:
     async def is_disconnected() -> bool:
         return False
 
-    return SimpleNamespace(app=asgi_app, is_disconnected=is_disconnected)
+    # `query_params` / `headers` are read by the surface stream for the WP-4
+    # reconnect cursor (`?cid=`, `Last-Event-ID`); real Starlette requests
+    # always carry them, so the fake supplies empty stand-ins.
+    return SimpleNamespace(
+        app=asgi_app, is_disconnected=is_disconnected, query_params={}, headers={}
+    )
 
 
 class _StreamReader:
@@ -249,13 +254,12 @@ async def test_agent_events_stream_is_project_scoped(http_client, auth_bypass, a
 
 
 async def test_surfaces_stream_emits_initial_surface_then_idles(http_client, auth_bypass, asgi_app):
-    """The surface delta-stream emits the full v0.9 surface on connect, then idles.
+    """The surface delta-stream emits the full v0.9 surface on connect.
 
-    All five right-panel tabs are self-fetching React views (they pull their own
-    data via react-query), so the stream binds no data into the surface model and
-    emits no per-mutation deltas — its job is the initial surface + a push-driven
-    recompute that self-heals a dropped listener. (The push/wake mechanism itself
-    is covered by the agent-events and changes streams below.)
+    WP-4 made the canonical tabs data-bound, so the surface stream now also emits
+    per-mutation `updateDataModel` deltas (covered by
+    `test_surface_stream_resume.py`). This test just asserts the initial
+    full-snapshot handshake — the first frame is the v0.9 `createSurface`.
     """
     from aleph_api.routes.surfaces import stream_surface
 

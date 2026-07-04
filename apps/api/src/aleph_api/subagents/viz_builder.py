@@ -37,6 +37,7 @@ def build_viz_builder_subagent(*, settings: Any) -> dict[str, Any]:
     from aleph_api.copilot_agent import (
         _build_artifact_impl,  # pyright: ignore[reportPrivateUsage] — shared build body deliberately reused (DRY); module-private to the api
         _pin_to_briefs_impl,  # pyright: ignore[reportPrivateUsage]
+        _render_code_via_runner_impl,  # pyright: ignore[reportPrivateUsage]
         subagent_model,
     )
     from aleph_core.schemas.model_profile import Capability
@@ -90,6 +91,31 @@ def build_viz_builder_subagent(*, settings: Any) -> dict[str, Any]:
         )
 
     @tool
+    async def render_chart_via_code(
+        python_code: str,
+        config: RunnableConfig,
+        output_kind: str = "png",
+        title: str = "Sandbox chart",
+        pin: bool = True,
+    ) -> str:
+        """Render a chart by running Python in the isolated sandbox, then pin it.
+
+        Use this when a chart needs real computation (matplotlib/pandas/numpy) or
+        a data transform — anything beyond a trivial inline Vega-Lite spec. Write
+        self-contained Python that produces ONE output:
+          - output_kind='png' or 'svg': draw with matplotlib (the sandbox saves
+            the current figure, or write to the path in the `OUTPUT_PATH` global);
+          - output_kind='vega': define a top-level `spec` dict (a Vega-Lite spec)
+            or an Altair chart named `spec`;
+          - output_kind='html': define a top-level `html` string (self-contained).
+        The code runs with NO network and NO credentials (amended rule 8); its
+        output becomes a versioned artifact pinned to Briefs as an ImageCard /
+        ChartCard / HtmlFrameCard. For a trivial bar chart from inline points,
+        prefer make_chart instead.
+        """
+        return await _render_code_via_runner_impl(python_code, output_kind, config, title, pin)
+
+    @tool
     async def build_artifact(
         title: str,
         config: RunnableConfig,
@@ -112,16 +138,21 @@ def build_viz_builder_subagent(*, settings: Any) -> dict[str, Any]:
         "name": "viz_builder",
         "description": (
             "Builds visualizations and product artifacts: quick charts "
-            "(make_chart → ChartCard) and full reports/decks/source-packs "
-            "(build_artifact, which is approval-gated). Delegate when the analyst "
-            "wants a chart, report, export, or visualization."
+            "(make_chart → ChartCard), computed charts via the sandbox "
+            "(render_chart_via_code → code_runner → pinned artifact card), and "
+            "full reports/decks/source-packs (build_artifact, approval-gated). "
+            "Delegate when the analyst wants a chart, report, export, or "
+            "visualization."
         ),
         "system_prompt": (
-            "You are Aleph's viz builder. For a quick chart, call make_chart and "
-            "return the ChartCard render instruction. For a report/deck/export, "
-            "call build_artifact (it will surface an approval card). Return "
-            "concise render instructions, never raw specs as prose."
+            "You are Aleph's viz builder. For a trivial chart from inline points, "
+            "call make_chart. For a chart needing real computation "
+            "(matplotlib/pandas) or a data transform, call render_chart_via_code "
+            "(it runs your Python in the isolated sandbox and pins the artifact). "
+            "For a report/deck/export, call build_artifact (it surfaces an "
+            "approval card). Return concise render instructions, never raw specs "
+            "as prose."
         ),
-        "tools": [make_chart, build_artifact],
+        "tools": [make_chart, render_chart_via_code, build_artifact],
         "model": subagent_model(settings, "viz_builder", capability=Capability.CODE),
     }

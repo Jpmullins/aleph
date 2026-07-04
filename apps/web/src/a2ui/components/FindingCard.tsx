@@ -2,7 +2,7 @@ import { useSurface } from "../surface-context";
 import { CardShell, FeedbackButton, Pill, type RendererProps } from "./_shared";
 
 export function FindingCard({ component, onAction }: RendererProps) {
-  const { projectId, surface } = useSurface();
+  const { surface } = useSurface();
   const p = component.props as {
     finding_id: string;
     severity: "info" | "low" | "medium" | "high";
@@ -16,7 +16,7 @@ export function FindingCard({ component, onAction }: RendererProps) {
       subtitle={<Pill tone={tone}>{p.severity}</Pill>}
       actions={
         <FeedbackButton
-          projectId={projectId}
+          onAction={onAction}
           targetKind="finding"
           targetId={p.finding_id}
           surface={surface}

@@ -10,6 +10,7 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Integer,
     String,
@@ -32,6 +33,9 @@ class InteractiveCard(CommonColumns, Base):
     current_version_id: Mapped[UUID | None] = mapped_column(nullable=True)
     pinned_to: Mapped[str | None] = mapped_column(String(32), nullable=True)
     pinned_target_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    # WP-4d: an agent `spotlight` action flips this bit; the Briefs builder
+    # orders spotlighted cards first and flags them in props. Survives rebuilds.
+    spotlighted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
 
 
 class InteractiveCardVersion(Base):

@@ -1,39 +1,18 @@
-import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { useSurface } from "../surface-context";
 import { WikiBodyMarkdown } from "@/components/WikiBodyMarkdown";
-import { api } from "@/lib/api";
 import { CardShell, FeedbackButton, Pill, type RendererProps } from "./_shared";
 
-interface NormalizedOut {
-  markdown: string;
-  char_count: number;
-  parser: string;
-}
-
-function SourceReader({ projectId, sourceId }: { projectId: string; sourceId: string }) {
-  const q = useQuery<NormalizedOut>({
-    queryKey: ["source-normalized", projectId, sourceId],
-    queryFn: () =>
-      api.get<NormalizedOut>(`/v1/projects/${projectId}/sources/${sourceId}/normalized`),
-  });
-  if (q.isPending) return <p className="mt-2 text-xs text-slate-400">Loading source…</p>;
-  if (q.isError)
-    return (
-      <p className="mt-2 text-xs text-slate-400">
-        Source text isn’t available yet (still normalizing).
-      </p>
-    );
-  return (
-    <div className="mt-2 max-h-[28rem] overflow-y-auto rounded-md border border-[var(--border-muted,#e2e8f0)] bg-[var(--surface-sunken,#f8fafc)] p-3">
-      <WikiBodyMarkdown body={q.data.markdown} />
-    </div>
-  );
-}
-
+/**
+ * WP-4e: SourceCard renders ONLY from bound props — no `useQuery`, no
+ * `api.*`, no `fetch`. The normalized-text preview arrives as a bound
+ * `normalized_preview` string supplied by the Library surface builder
+ * (`_library_messages` → `artifacts_surface_v09`) / the `source_card` builder.
+ * The card never self-fetches the normalized-source route.
+ */
 export function SourceCard({ component, onAction }: RendererProps) {
-  const { projectId, surface } = useSurface();
+  const { surface } = useSurface();
   const [reading, setReading] = useState(false);
   const p = component.props as {
     source_id: string;
@@ -41,6 +20,7 @@ export function SourceCard({ component, onAction }: RendererProps) {
     title: string;
     url?: string | null;
     status: string;
+    normalized_preview?: string | null;
   };
   const tone =
     p.status === "wiki_done"
@@ -50,6 +30,7 @@ export function SourceCard({ component, onAction }: RendererProps) {
         : p.status === "indexed"
           ? "sky"
           : "slate";
+  const preview = p.normalized_preview ?? "";
   return (
     <CardShell
       title={`${p.short_id} · ${p.title}`}
@@ -70,7 +51,7 @@ export function SourceCard({ component, onAction }: RendererProps) {
       }
       actions={
         <FeedbackButton
-          projectId={projectId}
+          onAction={onAction}
           targetKind="source"
           targetId={p.source_id}
           surface={surface}
@@ -87,23 +68,27 @@ export function SourceCard({ component, onAction }: RendererProps) {
         </button>
         <button
           type="button"
-          onClick={() =>
-            onAction("navigate_wiki", { page_id: p.source_id })
-          }
+          onClick={() => onAction("navigate_wiki", { page_id: p.source_id })}
           className="text-xs text-slate-500 hover:text-slate-900"
         >
           Open source page
         </button>
-        <button
-          type="button"
-          onClick={() => setReading((r) => !r)}
-          className="ml-auto text-xs font-medium text-[var(--accent,#f97316)] hover:opacity-80"
-          data-testid={`source-read-${p.source_id}`}
-        >
-          {reading ? "Hide text ▲" : "Read ▾"}
-        </button>
+        {preview && (
+          <button
+            type="button"
+            onClick={() => setReading((r) => !r)}
+            className="ml-auto text-xs font-medium text-[var(--accent,#f97316)] hover:opacity-80"
+            data-testid={`source-read-${p.source_id}`}
+          >
+            {reading ? "Hide text ▲" : "Read ▾"}
+          </button>
+        )}
       </div>
-      {reading && <SourceReader projectId={projectId} sourceId={p.source_id} />}
+      {reading && preview && (
+        <div className="mt-2 max-h-[28rem] overflow-y-auto rounded-md border border-[var(--border-muted,#e2e8f0)] bg-[var(--surface-sunken,#f8fafc)] p-3">
+          <WikiBodyMarkdown body={preview} />
+        </div>
+      )}
     </CardShell>
   );
 }

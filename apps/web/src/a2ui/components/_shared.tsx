@@ -1,12 +1,30 @@
-import { useMutation } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 
 import type { A2UIComponent } from "../catalog";
-import { api } from "@/lib/api";
 
 export interface RendererProps {
   component: A2UIComponent;
   onAction: (action: string, params: Record<string, unknown>) => void;
+}
+
+/**
+ * Amended rule 8 (WP-4c): an interactive/document artifact iframe may load ONLY
+ * a project-scoped asset streaming route under the principal boundary — never a
+ * data: URI, an external origin, or an arbitrary agent-supplied URL. These
+ * routes serve their bytes with a server `Content-Security-Policy: sandbox`, so
+ * they can never execute in the API page context. `HtmlDocCard` /
+ * `HtmlFrameCard` call this on their bound `src` and refuse to mount otherwise.
+ *
+ * Accepted (all principal-boundary, CSP-sandboxed):
+ *   /v1/projects/{id}/assets/rendered/{id}
+ *   /v1/projects/{id}/assets/artifact-version/{id}
+ *   /v1/projects/{id}/wiki/pages/{id}/html   (deterministic compiled wiki doc)
+ */
+const _ASSET_SRC_RE =
+  /^\/v1\/projects\/[^/]+\/(assets\/(rendered|artifact-version)\/[^/]+|wiki\/pages\/[^/]+\/html)\/?$/;
+
+export function isSandboxedAssetSrc(src: unknown): src is string {
+  return typeof src === "string" && _ASSET_SRC_RE.test(src);
 }
 
 export function Pill({
@@ -108,10 +126,14 @@ export type FeedbackTargetKind =
   | "wiki_page";
 
 interface FeedbackButtonProps {
-  projectId: string;
   targetKind: FeedbackTargetKind;
   targetId: string;
   surface?: string;
+  /**
+   * Route the feedback through the ledger-audited action router (WP-4: surface
+   * cards no longer `useMutation` — every mutation is an `onAction`).
+   */
+  onAction: (action: string, params: Record<string, unknown>) => void;
 }
 
 const FEEDBACK_OPTIONS: { signal: FeedbackSignal; label: string }[] = [
@@ -121,26 +143,23 @@ const FEEDBACK_OPTIONS: { signal: FeedbackSignal; label: string }[] = [
   { signal: "thumbs_down", label: "Just thumbs down" },
 ];
 
-export function FeedbackButton({ projectId, targetKind, targetId, surface }: FeedbackButtonProps) {
+export function FeedbackButton({ targetKind, targetId, surface, onAction }: FeedbackButtonProps) {
   const [open, setOpen] = useState(false);
   const [note, setNote] = useState("");
   const [submitted, setSubmitted] = useState<FeedbackSignal | null>(null);
 
-  const submit = useMutation({
-    mutationFn: async (signal: FeedbackSignal) =>
-      api.post(`/v1/projects/${projectId}/feedback`, {
-        target_kind: targetKind,
-        target_id: targetId,
-        signal,
-        note,
-        context: surface ? { surface } : {},
-      }),
-    onSuccess: (_d, signal) => {
-      setSubmitted(signal);
-      setOpen(false);
-      setNote("");
-    },
-  });
+  const submit = (signal: FeedbackSignal) => {
+    onAction("feedback", {
+      target_kind: targetKind,
+      target_id: targetId,
+      signal,
+      note,
+      context: surface ? { surface } : {},
+    });
+    setSubmitted(signal);
+    setOpen(false);
+    setNote("");
+  };
 
   if (submitted) {
     return (
@@ -172,9 +191,8 @@ export function FeedbackButton({ projectId, targetKind, targetId, surface }: Fee
               <li key={opt.signal}>
                 <button
                   type="button"
-                  onClick={() => submit.mutate(opt.signal)}
-                  disabled={submit.isPending}
-                  className="w-full rounded px-2 py-1 text-left text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                  onClick={() => submit(opt.signal)}
+                  className="w-full rounded px-2 py-1 text-left text-slate-700 hover:bg-slate-100"
                 >
                   {opt.label}
                 </button>

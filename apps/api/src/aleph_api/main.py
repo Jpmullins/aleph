@@ -21,7 +21,6 @@ from aleph_api.routes import (
     artifacts,
     assets,
     assistant,
-    briefs,
     cards,
     changes,
     chunks,
@@ -46,6 +45,7 @@ from aleph_api.routes import (
     sources,
     surfaces,
     synthesize,
+    viz,
     wiki,
 )
 from aleph_observability.tracing import instrument_fastapi
@@ -103,7 +103,6 @@ def create_app() -> FastAPI:
     app.include_router(notes.router)
     app.include_router(cards.router)
     app.include_router(agent_actions.router)
-    app.include_router(briefs.router)
     app.include_router(surfaces.router)
     app.include_router(changes.router)
     # Inc 5
@@ -113,6 +112,7 @@ def create_app() -> FastAPI:
     app.include_router(datasets.router)
     # Inc 7
     app.include_router(artifacts.router)
+    app.include_router(viz.router)
     # Inc 8
     app.include_router(evals.router)
     # WP-2 — verified scholarship (DOI verification, scholarly search,

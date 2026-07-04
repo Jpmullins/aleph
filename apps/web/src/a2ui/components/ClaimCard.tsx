@@ -2,7 +2,7 @@ import { useSurface } from "../surface-context";
 import { CardShell, FeedbackButton, Pill, type RendererProps } from "./_shared";
 
 export function ClaimCard({ component, onAction }: RendererProps) {
-  const { projectId, surface } = useSurface();
+  const { surface } = useSurface();
   const p = component.props as {
     claim_id: string;
     text: string;
@@ -22,7 +22,7 @@ export function ClaimCard({ component, onAction }: RendererProps) {
       subtitle={<Pill tone={tone}>{p.confidence}</Pill>}
       actions={
         <FeedbackButton
-          projectId={projectId}
+          onAction={onAction}
           targetKind="claim"
           targetId={p.claim_id}
           surface={surface}

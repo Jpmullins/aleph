@@ -9,6 +9,7 @@ claims to chunks or to source pages.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
@@ -46,6 +47,10 @@ class WikiPage(CommonColumns, Base):
     last_compiled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Optional key/value metadata the curator may populate (WP-4b). Absent =
+    # no infobox. Read by the deterministic HTML compiler to render an infobox
+    # table; never a body — markdown stays the only wiki write-format.
+    infobox_jsonb: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
 
 class WikiRevision(Base):

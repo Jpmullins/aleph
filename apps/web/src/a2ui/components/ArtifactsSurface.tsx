@@ -1,8 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { apiUrl } from "@/lib/api";
 import { useSurface } from "../surface-context";
-import { api, apiUrl } from "@/lib/api";
 import { CardShell, Pill, SurfaceHeader, type RendererProps } from "./_shared";
 
 interface ArtifactOut {
@@ -34,59 +33,35 @@ const KIND_TONE: Record<string, "sky" | "emerald" | "amber" | "slate"> = {
 };
 
 /**
- * The Library tab (formerly "Artifacts"): ingested **Sources** (raw PDFs /
- * webpages / documents — viewable in their own card) and built **Artifacts**
- * (reports / decks / source-packs).
+ * WP-4: the Library tab (ingested **Sources** + built **Artifacts**) renders
+ * ONLY from the surface data model (`{sources, artifacts}`) — no `useQuery`, no
+ * polling. Raw sources open in an authenticated asset iframe (a URL, not a
+ * fetch). The normalized-text preview (SourceCard) and the "+ Build" flow are
+ * WP-4b/e; they are intentionally not re-introduced as component fetches here.
  */
-export function ArtifactsSurface(_: RendererProps) {
+export function ArtifactsSurface({ component }: RendererProps) {
   const { projectId } = useSurface();
-  const qc = useQueryClient();
-  const [showBuild, setShowBuild] = useState(false);
+  const sources = (component.props.sources as SourceOut[] | undefined) ?? [];
+  const artifacts = (component.props.artifacts as ArtifactOut[] | undefined) ?? [];
   const [viewing, setViewing] = useState<SourceOut | null>(null);
-
-  const sources = useQuery<SourceOut[]>({
-    queryKey: ["sources", projectId],
-    queryFn: () => api.get<SourceOut[]>(`/v1/projects/${projectId}/sources`),
-    refetchInterval: 5_000,
-  });
-  const artifacts = useQuery<ArtifactOut[]>({
-    queryKey: ["artifacts", projectId],
-    queryFn: () => api.get<ArtifactOut[]>(`/v1/projects/${projectId}/artifacts`),
-    refetchInterval: 5_000,
-  });
 
   return (
     <div className="flex h-full flex-col">
       <SurfaceHeader
         title="Library"
-        subtitle={
-          sources.data || artifacts.data
-            ? `${sources.data?.length ?? 0} sources · ${artifacts.data?.length ?? 0} artifacts`
-            : undefined
-        }
-        actions={
-          <button
-            type="button"
-            onClick={() => setShowBuild(true)}
-            className="rounded-md bg-slate-900 px-3 py-1 text-xs font-medium text-white hover:bg-slate-700"
-            data-testid="build-artifact"
-          >
-            + Build
-          </button>
-        }
+        subtitle={`${sources.length} sources · ${artifacts.length} artifacts`}
       />
       <div className="flex-1 space-y-4 overflow-y-auto p-3">
         <section data-testid="library-sources">
           <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
             Sources
           </h3>
-          {sources.isPending && <p className="text-sm text-slate-400">Loading…</p>}
-          {sources.isSuccess && sources.data.length === 0 && (
+          {sources.length === 0 && (
             <div className="rounded-lg border border-dashed border-slate-300 p-4 text-center text-xs text-slate-500">
               No sources yet. Upload a document or ingest a URL, or run research.
             </div>
           )}
-          {sources.data?.map((s) => (
+          {sources.map((s) => (
             <SourceRow key={s.id} s={s} onView={() => setViewing(s)} />
           ))}
         </section>
@@ -95,29 +70,18 @@ export function ArtifactsSurface(_: RendererProps) {
           <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
             Artifacts
           </h3>
-          {artifacts.isSuccess && artifacts.data.length === 0 && (
+          {artifacts.length === 0 && (
             <div className="rounded-lg border border-dashed border-slate-300 p-4 text-center text-xs text-slate-500">
-              No artifacts yet. Click <strong>+ Build</strong> to compose a report from the wiki.
+              No artifacts yet.
             </div>
           )}
-          {artifacts.data?.map((a) => (
+          {artifacts.map((a) => (
             <ArtifactRow key={a.id} a={a} projectId={projectId} />
           ))}
         </section>
       </div>
       {viewing && (
         <SourceViewer projectId={projectId} source={viewing} onClose={() => setViewing(null)} />
-      )}
-      {showBuild && (
-        <BuildArtifactModal
-          projectId={projectId}
-          onClose={() => setShowBuild(false)}
-          onBuilt={() => {
-            setShowBuild(false);
-            qc.invalidateQueries({ queryKey: ["artifacts", projectId] });
-            qc.invalidateQueries({ queryKey: ["agent-runs", projectId] });
-          }}
-        />
       )}
     </div>
   );
@@ -162,9 +126,9 @@ function SourceRow({ s, onView }: { s: SourceOut; onView: () => void }) {
   );
 }
 
-/** Renders a raw source asset in its own card: PDF / webpage / document via the
- * authenticated asset streaming route (browsers render PDF + HTML inline in an
- * iframe), with a fallback to the normalized text. */
+/** Renders a raw source asset in its own card via the authenticated asset
+ * streaming route (browsers render PDF + HTML inline in an iframe). The `src`
+ * is a URL, not a fetch. */
 function SourceViewer({
   projectId,
   source,
@@ -174,12 +138,6 @@ function SourceViewer({
   source: SourceOut;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<"raw" | "text">("raw");
-  const normalized = useQuery<{ markdown: string }>({
-    queryKey: ["source-normalized", projectId, source.id],
-    queryFn: () => api.get(`/v1/projects/${projectId}/sources/${source.id}/normalized`),
-    enabled: tab === "text",
-  });
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
       <div
@@ -188,47 +146,21 @@ function SourceViewer({
       >
         <div className="flex items-center gap-3 border-b border-slate-200 p-3">
           <h3 className="truncate text-sm font-semibold">{source.title}</h3>
-          <div className="ml-auto flex gap-1 text-xs">
-            <button
-              type="button"
-              onClick={() => setTab("raw")}
-              className={`rounded px-2 py-1 ${tab === "raw" ? "bg-slate-900 text-white" : "text-slate-500"}`}
-            >
-              Raw
-            </button>
-            <button
-              type="button"
-              onClick={() => setTab("text")}
-              className={`rounded px-2 py-1 ${tab === "text" ? "bg-slate-900 text-white" : "text-slate-500"}`}
-            >
-              Text
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded px-2 py-1 text-slate-500 hover:text-slate-900"
-            >
-              ✕
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="ml-auto rounded px-2 py-1 text-slate-500 hover:text-slate-900"
+          >
+            ✕
+          </button>
         </div>
         <div className="min-h-0 flex-1 overflow-auto bg-slate-50">
-          {tab === "raw" && (
-            <iframe
-              title={source.title}
-              src={apiUrl(`/v1/projects/${projectId}/assets/source/${source.id}`)}
-              className="h-full w-full"
-              data-testid="source-viewer-frame"
-            />
-          )}
-          {tab === "text" &&
-            (normalized.isPending ? (
-              <p className="p-4 text-sm text-slate-400">Loading text…</p>
-            ) : (
-              <pre className="whitespace-pre-wrap p-4 text-xs text-slate-700">
-                {normalized.data?.markdown ?? "No normalized text available yet."}
-              </pre>
-            ))}
+          <iframe
+            title={source.title}
+            src={apiUrl(`/v1/projects/${projectId}/assets/source/${source.id}`)}
+            className="h-full w-full"
+            data-testid="source-viewer-frame"
+          />
         </div>
       </div>
     </div>
@@ -253,7 +185,7 @@ function ArtifactRow({ a, projectId }: { a: ArtifactOut; projectId: string }) {
       {a.description && <p className="text-xs text-slate-600">{a.description}</p>}
       {ready && (
         <a
-          href={`/v1/projects/${projectId}/artifacts/${a.id}/versions/${a.current_version_id}/download`}
+          href={apiUrl(`/v1/projects/${projectId}/assets/artifact-version/${a.current_version_id}`)}
           download
           className="mt-1 inline-block text-xs font-medium text-slate-700 hover:text-slate-900"
         >
@@ -261,105 +193,5 @@ function ArtifactRow({ a, projectId }: { a: ArtifactOut; projectId: string }) {
         </a>
       )}
     </CardShell>
-  );
-}
-
-function BuildArtifactModal({
-  projectId,
-  onClose,
-  onBuilt,
-}: {
-  projectId: string;
-  onClose: () => void;
-  onBuilt: () => void;
-}) {
-  const [title, setTitle] = useState("");
-  const [kind, setKind] = useState<
-    "report_pdf" | "report_markdown_bundle" | "source_pack" | "deck_pdf"
-  >("report_markdown_bundle");
-  const [description, setDescription] = useState("");
-
-  const build = useMutation({
-    mutationFn: async () => {
-      const out = await api.post<{ dispatched: boolean }>(
-        `/v1/projects/${projectId}/artifacts/build`,
-        {
-          title,
-          artifact_kind: kind,
-          description,
-          template_name: kind,
-          csl_style: "apa-7",
-        },
-      );
-      if (!out.dispatched) {
-        throw new Error("build accepted but could not be dispatched to the worker queue");
-      }
-      return out;
-    },
-    onSuccess: onBuilt,
-  });
-
-  return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 px-4">
-      <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
-        <h3 className="mb-3 text-base font-semibold">Build artifact</h3>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (title) build.mutate();
-          }}
-          className="space-y-3"
-        >
-          <label className="block">
-            <span className="text-xs font-medium text-slate-700">Title</span>
-            <input
-              required
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
-          </label>
-          <label className="block">
-            <span className="text-xs font-medium text-slate-700">Kind</span>
-            <select
-              value={kind}
-              onChange={(e) => setKind(e.target.value as typeof kind)}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            >
-              <option value="report_markdown_bundle">Report (markdown bundle)</option>
-              <option value="report_pdf">Report (PDF)</option>
-              <option value="source_pack">Source pack</option>
-              <option value="deck_pdf">Deck (PDF)</option>
-            </select>
-          </label>
-          <label className="block">
-            <span className="text-xs font-medium text-slate-700">Description</span>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={2}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
-          </label>
-          {build.isError && <p className="text-xs text-red-600">Failed to dispatch build.</p>}
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-md border border-slate-300 px-3 py-1.5 text-xs hover:border-slate-500"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={build.isPending || !title}
-              className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-50"
-            >
-              {build.isPending ? "Dispatching…" : "Build"}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
   );
 }

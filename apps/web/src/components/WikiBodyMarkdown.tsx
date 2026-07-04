@@ -12,6 +12,12 @@ interface Props {
    * broken links distinctly without re-fetching.
    */
   resolveLink?: (title: string) => boolean | null;
+  /**
+   * Optional custom renderer for a `[cN]` citation marker. When provided (the
+   * WP-4b reader tier), it renders the interactive citation badge/popover;
+   * otherwise `[cN]` falls back to a static badge.
+   */
+  renderCitation?: (marker: string) => JSX.Element | null;
 }
 
 // Inline token matcher, alternation tried left-to-right at each position:
@@ -26,11 +32,11 @@ const TOKEN_RE =
  * (broken ones styled distinct), `[text](url)` and bare URLs become external
  * anchors, `[cN]` becomes a citation badge.
  */
-export function WikiBodyMarkdown({ body, onNavigate, resolveLink }: Props) {
+export function WikiBodyMarkdown({ body, onNavigate, resolveLink, renderCitation }: Props) {
   const blocks = useMemo(() => splitBlocks(body), [body]);
   return (
     <div className="prose prose-slate max-w-none break-words text-sm">
-      {blocks.map((block, i) => renderBlock(block, i, onNavigate, resolveLink))}
+      {blocks.map((block, i) => renderBlock(block, i, onNavigate, resolveLink, renderCitation))}
     </div>
   );
 }
@@ -73,6 +79,7 @@ function renderInline(
   text: string,
   onNavigate?: (target: string) => void,
   resolveLink?: (title: string) => boolean | null,
+  renderCitation?: (marker: string) => JSX.Element | null,
 ): Array<string | JSX.Element> {
   const out: Array<string | JSX.Element> = [];
   let cursor = 0;
@@ -96,14 +103,17 @@ function renderInline(
     } else if (m[2] !== undefined && m[3] !== undefined) {
       out.push(<ExternalLink key={`l-${k}`} k={`l-${k}`} href={m[3]} label={m[2]} />);
     } else if (m[4] !== undefined) {
+      const custom = renderCitation ? renderCitation(m[4]) : null;
       out.push(
-        <span
-          key={`c-${k}`}
-          title={m[4]}
-          className="mx-0.5 inline-flex items-baseline rounded bg-amber-100 px-1 text-[10px] font-semibold uppercase tracking-wider text-amber-900"
-        >
-          {m[4]}
-        </span>,
+        custom ?? (
+          <span
+            key={`c-${k}`}
+            title={m[4]}
+            className="mx-0.5 inline-flex items-baseline rounded bg-amber-100 px-1 text-[10px] font-semibold uppercase tracking-wider text-amber-900"
+          >
+            {m[4]}
+          </span>
+        ),
       );
     } else if (m[5] !== undefined) {
       out.push(<ExternalLink key={`u-${k}`} k={`u-${k}`} href={m[5]} label={m[5]} />);
@@ -120,6 +130,7 @@ function renderBlock(
   i: number,
   onNavigate?: (target: string) => void,
   resolveLink?: (title: string) => boolean | null,
+  renderCitation?: (marker: string) => JSX.Element | null,
 ) {
   if (block.kind === "heading") {
     const cls =
@@ -131,13 +142,13 @@ function renderBlock(
     const Tag = `h${block.level}` as keyof JSX.IntrinsicElements;
     return (
       <Tag key={i} className={cls}>
-        {renderInline(block.text, onNavigate, resolveLink)}
+        {renderInline(block.text, onNavigate, resolveLink, renderCitation)}
       </Tag>
     );
   }
   return (
     <p key={i} className="my-3 leading-relaxed text-slate-700">
-      {renderInline(block.text, onNavigate, resolveLink)}
+      {renderInline(block.text, onNavigate, resolveLink, renderCitation)}
     </p>
   );
 }

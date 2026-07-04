@@ -15,15 +15,17 @@ export const COMPONENT_NAMES = [
   "SourceCard",
   "ArtifactCard",
   "ChartCard",
+  "ImageCard",
+  "HtmlFrameCard",
   "TableCard",
-  "MapCard",
-  "GraphCard",
   "ApprovalCard",
   "FindingCard",
   "HypothesisCard",
-  "NotebookCellCard",
   "FormCard",
   "DiffCard",
+  "WikiPageCard",
+  "NoteEditorCard",
+  "HtmlDocCard",
 ] as const;
 
 export type ComponentName = (typeof COMPONENT_NAMES)[number];
@@ -35,12 +37,21 @@ export const ACTION_NAMES = [
   "navigate_wiki",
   "submit_form",
   "create_hypothesis",
+  "create_note",
+  "feedback",
   "edit_note",
   "clarify",
   "mark_handedit",
   "clear_handedit",
   "unpin",
   "dismiss",
+  "repair_links",
+  "rename_note",
+  "promote_note",
+  "focus_tab",
+  "highlight_claim",
+  "compose_dossier",
+  "spotlight",
 ] as const;
 
 export type ActionName = (typeof ACTION_NAMES)[number];

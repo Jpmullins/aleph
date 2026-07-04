@@ -1,19 +1,15 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { useSurface } from "../surface-context";
-import { api } from "@/lib/api";
-import { HypothesisMatrix } from "./HypothesisMatrix";
+import { HypothesisMatrix, type AchMatrix } from "./HypothesisMatrix";
 import { CardShell, FeedbackButton, Pill, SurfaceHeader, type RendererProps } from "./_shared";
 
-interface HypothesisOut {
+interface HypothesisItem {
   id: string;
   short_id: string;
   title: string;
   statement: string;
   confidence: string;
   status: string;
-  current_version_id: string | null;
   last_evidence_change_at: string | null;
   created_at: string;
 }
@@ -27,22 +23,23 @@ const TONE: Record<string, "emerald" | "sky" | "amber" | "red" | "slate" | "viol
   initial: "slate",
 };
 
-export function HypothesesSurface(_: RendererProps) {
-  const { projectId } = useSurface();
-  const qc = useQueryClient();
+/**
+ * WP-4: the Hypotheses tab renders ONLY from the surface data model
+ * (`{items, ach}`) streamed by the backend builder — no `useQuery`, no
+ * polling. Mutations (create, feedback) go through `onAction` → the
+ * ledger-audited action router; the resulting change comes back as an
+ * `updateDataModel` delta over the same SSE stream.
+ */
+export function HypothesesSurface({ component, onAction }: RendererProps) {
+  const items = (component.props.items as HypothesisItem[] | undefined) ?? [];
+  const ach = (component.props.ach as AchMatrix | null | undefined) ?? null;
   const [showCreate, setShowCreate] = useState(false);
-
-  const hypotheses = useQuery<HypothesisOut[]>({
-    queryKey: ["hypotheses", projectId],
-    queryFn: () => api.get<HypothesisOut[]>(`/v1/projects/${projectId}/hypotheses`),
-    refetchInterval: 15_000,
-  });
 
   return (
     <div className="flex h-full flex-col">
       <SurfaceHeader
         title="Hypotheses"
-        subtitle={hypotheses.data ? `${hypotheses.data.length} tracked` : undefined}
+        subtitle={`${items.length} tracked`}
         actions={
           <button
             type="button"
@@ -55,24 +52,22 @@ export function HypothesesSurface(_: RendererProps) {
         }
       />
       <div className="flex-1 space-y-2 overflow-y-auto p-3">
-        <HypothesisMatrix projectId={projectId} />
-        {hypotheses.isPending && <p className="text-sm text-slate-400">Loading…</p>}
-        {hypotheses.isSuccess && hypotheses.data.length === 0 && (
+        <HypothesisMatrix ach={ach} />
+        {items.length === 0 && (
           <div className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">
             No hypotheses yet. Click <strong>+ New</strong> to add your first.
           </div>
         )}
-        {hypotheses.data?.map((h) => (
-          <HypothesisRow key={h.id} h={h} projectId={projectId} />
+        {items.map((h) => (
+          <HypothesisRow key={h.id} h={h} onAction={onAction} />
         ))}
       </div>
       {showCreate && (
         <NewHypothesisModal
-          projectId={projectId}
           onClose={() => setShowCreate(false)}
-          onCreated={() => {
+          onCreate={(title, statement) => {
+            onAction("create_hypothesis", { title, statement });
             setShowCreate(false);
-            qc.invalidateQueries({ queryKey: ["hypotheses", projectId] });
           }}
         />
       )}
@@ -80,7 +75,13 @@ export function HypothesesSurface(_: RendererProps) {
   );
 }
 
-function HypothesisRow({ h, projectId }: { h: HypothesisOut; projectId: string }) {
+function HypothesisRow({
+  h,
+  onAction,
+}: {
+  h: HypothesisItem;
+  onAction: RendererProps["onAction"];
+}) {
   const updated = h.last_evidence_change_at ?? h.created_at;
   return (
     <CardShell
@@ -93,13 +94,13 @@ function HypothesisRow({ h, projectId }: { h: HypothesisOut; projectId: string }
       }
       actions={
         <FeedbackButton
-          projectId={projectId}
           targetKind="hypothesis"
           targetId={h.id}
           surface="HypothesesSurface"
+          onAction={onAction}
         />
       }
-      footer={`updated ${new Date(updated).toLocaleString()}`}
+      footer={updated ? `updated ${new Date(updated).toLocaleString()}` : undefined}
     >
       <p className="text-sm text-slate-700">{h.statement}</p>
     </CardShell>
@@ -107,25 +108,14 @@ function HypothesisRow({ h, projectId }: { h: HypothesisOut; projectId: string }
 }
 
 function NewHypothesisModal({
-  projectId,
   onClose,
-  onCreated,
+  onCreate,
 }: {
-  projectId: string;
   onClose: () => void;
-  onCreated: () => void;
+  onCreate: (title: string, statement: string) => void;
 }) {
   const [title, setTitle] = useState("");
   const [statement, setStatement] = useState("");
-  const create = useMutation({
-    mutationFn: async () =>
-      api.post(`/v1/projects/${projectId}/hypotheses`, {
-        title,
-        statement,
-        confidence: "initial",
-      }),
-    onSuccess: onCreated,
-  });
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 px-4">
       <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
@@ -133,7 +123,7 @@ function NewHypothesisModal({
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            if (title && statement) create.mutate();
+            if (title && statement) onCreate(title, statement);
           }}
           className="space-y-3"
         >
@@ -157,9 +147,6 @@ function NewHypothesisModal({
               placeholder="A precise, falsifiable claim. e.g. 'CoT prompting improves GSM8K accuracy by >5 pts on models ≥7B params.'"
             />
           </label>
-          {create.isError && (
-            <p className="text-xs text-red-600">Failed to create hypothesis.</p>
-          )}
           <div className="flex justify-end gap-2">
             <button
               type="button"
@@ -170,10 +157,10 @@ function NewHypothesisModal({
             </button>
             <button
               type="submit"
-              disabled={create.isPending || !title || !statement}
+              disabled={!title || !statement}
               className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-50"
             >
-              {create.isPending ? "Creating…" : "Create"}
+              Create
             </button>
           </div>
         </form>

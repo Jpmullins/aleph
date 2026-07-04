@@ -42,11 +42,15 @@ A2UI_MIME_TYPE = "application/a2ui+json"
 CATALOG_RESOURCE_URI = "a2ui://aleph/catalog"
 
 # surface name -> zero-arg builder returning a v0.9 message list.
+# The canonical tabs are data-bound (WP-4): their builders take loaded rows.
+# The MCP `build_surface` tool has no DB session, so it emits the empty-data
+# SKELETON surface (structure + bound `{path}` props + an empty data model) —
+# the shape an agent inspects, populated at stream time by the route layer.
 _SURFACE_BUILDERS: dict[str, Any] = {
-    "wiki": wiki_surface_v09,
-    "artifacts": artifacts_surface_v09,
-    "notes": notes_surface_v09,
-    "hypotheses": hypotheses_surface_v09,
+    "wiki": lambda: wiki_surface_v09(pages=[], open_page=None),
+    "artifacts": lambda: artifacts_surface_v09(sources=[], artifacts=[]),
+    "notes": lambda: notes_surface_v09(notes=[]),
+    "hypotheses": lambda: hypotheses_surface_v09(items=[], ach=None),
     "briefs": briefs_surface_v09,
 }
 

@@ -33,6 +33,7 @@ from aleph_workers.jobs import (
     mechanical_review_job,
     normalize_job,
     reembed_job,
+    render_code_artifact_job,
     smoke_llm_job,
     wiki_ingest_job,
 )
@@ -64,6 +65,10 @@ async def _startup(ctx: dict[str, Any]) -> None:
     # caching. Job-to-job enqueue (normalize → chunk → wiki) needs an
     # ArqRedis pool, which only `arq.create_pool` returns.
     redis_pool = await create_pool(RedisSettings.from_dsn(s.redis_url))
+    # Dedicated pool for dispatching code_runner jobs on the isolated code-job
+    # Redis (the sandbox shares that bus; it must never reach the platform
+    # Redis above, which carries tokens + privileged queues). WP-4c §6.
+    code_runner_pool = await create_pool(RedisSettings.from_dsn(s.code_runner_redis_url))
     litellm = LiteLLMClient(
         base_url=s.litellm_base_url,
         api_key=s.insights_litellm_api_key,
@@ -94,6 +99,7 @@ async def _startup(ctx: dict[str, Any]) -> None:
     ctx["gateway_http"] = gateway_http
     ctx["redis"] = redis
     ctx["redis_pool"] = redis_pool
+    ctx["code_runner_pool"] = code_runner_pool
     ctx["asset_store"] = asset_store
     ctx["agent_token_secret"] = s.aleph_agent_token_secret
 
@@ -103,6 +109,7 @@ async def _shutdown(ctx: dict[str, Any]) -> None:
     await ctx["gateway_http"].aclose()
     await ctx["redis"].aclose()
     await ctx["redis_pool"].aclose()
+    await ctx["code_runner_pool"].aclose()
     await ctx["db_engine"].dispose()
     shutdown_langfuse()
     shutdown_otel()
@@ -125,6 +132,7 @@ class WorkerSettings:
         bootstrap_project_job,
         curate_page_job,
         reembed_job,
+        render_code_artifact_job,
     ]
     on_startup = _startup
     on_shutdown = _shutdown

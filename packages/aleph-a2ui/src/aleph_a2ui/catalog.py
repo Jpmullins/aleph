@@ -107,6 +107,9 @@ _COMPONENTS = {
             "title": {"type": "string"},
             "url": {"type": ["string", "null"]},
             "status": {"type": "string"},
+            # WP-4e: normalized-text preview supplied as a BOUND prop by the
+            # Library builder; the card renders it in place (no self-fetch).
+            "normalized_preview": {"type": ["string", "null"]},
             "open_action": {"const": "open"},
             "navigate_wiki_action": {"const": "navigate_wiki"},
         },
@@ -125,15 +128,37 @@ _COMPONENTS = {
     ),
     "ChartCard": _comp(
         {
-            "dataset_version_id": {"type": ["string", "null"]},
+            # WP-4c rebuild: an inline Vega-Lite spec (bound prop) OR a
+            # streaming-route URI vega-embed loads. No dataset self-fetch.
             "vega_lite_spec": {"type": "object"},
+            "chart_url": {"type": ["string", "null"]},
+            "artifact_version_id": {"type": ["string", "null"]},
             "title": {"type": "string"},
+            "chart_id": {"type": ["string", "null"]},
             "open_action": {"const": "open"},
-            "_placeholder": {
-                "type": "boolean",
-                "description": "True while DatasetVersion (Inc 6) hasn't landed.",
-            },
         },
+    ),
+    # WP-4c sandbox viz pipeline — cards reference code_runner artifacts by URI.
+    "ImageCard": _comp(
+        {
+            # `src` is the streaming-route path for the rendered image bytes.
+            "src": {"type": "string"},
+            "title": {"type": "string"},
+            "alt": {"type": "string"},
+            "artifact_version_id": {"type": ["string", "null"]},
+        },
+        required=["src"],
+    ),
+    "HtmlFrameCard": _comp(
+        {
+            # `src` MUST be the asset streaming route; the renderer refuses to
+            # mount otherwise (amended rule 8). Interactive HTML runs only inside
+            # a sandboxed iframe (allow-scripts, no allow-same-origin).
+            "src": {"type": "string"},
+            "title": {"type": "string"},
+            "artifact_version_id": {"type": ["string", "null"]},
+        },
+        required=["src"],
     ),
     "TableCard": _comp(
         {
@@ -142,22 +167,6 @@ _COMPONENTS = {
             "rows": {"type": "array"},
             "title": {"type": "string"},
             "open_action": {"const": "open"},
-        },
-    ),
-    "MapCard": _comp(
-        {
-            "dataset_version_id": {"type": ["string", "null"]},
-            "maplibre_style_url": {"type": "string"},
-            "geo_features": {"type": "array"},
-            "title": {"type": "string"},
-        },
-    ),
-    "GraphCard": _comp(
-        {
-            "dataset_version_id": {"type": ["string", "null"]},
-            "nodes": {"type": "array"},
-            "edges": {"type": "array"},
-            "title": {"type": "string"},
         },
     ),
     "ApprovalCard": _comp(
@@ -222,15 +231,6 @@ _COMPONENTS = {
         },
         required=["hypothesis_id", "title"],
     ),
-    "NotebookCellCard": _comp(
-        {
-            "section_id": _UUID,
-            "body_md": {"type": "string"},
-            "ordinal": {"type": "integer"},
-            "edit_action": {"const": "edit_note"},
-        },
-        required=["section_id", "body_md"],
-    ),
     "FormCard": _comp(
         {
             "form_id": {"type": "string"},
@@ -258,9 +258,55 @@ _COMPONENTS = {
             "from_revision_id": _UUID,
             "to_revision_id": _UUID,
             "page_id": _UUID,
+            # WP-4e: bound revision bodies → real line diff (no self-fetch).
+            "from_body_md": {"type": ["string", "null"]},
+            "to_body_md": {"type": ["string", "null"]},
             "open_action": {"const": "open"},
         },
         required=["from_revision_id", "to_revision_id", "page_id"],
+    ),
+    # ----- Reader / editor tier (WP-4 sub-spec b) ---------------------------
+    "WikiPageCard": _comp(
+        {
+            "page_id": _UUID,
+            "body_md": {"type": "string"},
+            "claims": {"type": "array", "items": {"type": "object"}},
+            "citations": {"type": "array", "items": {"type": "object"}},
+            "wikilinks_out": {"type": "array", "items": {"type": "object"}},
+            "page_meta": {"type": "object"},
+            "html_url": {"type": ["string", "null"]},
+            # Agent-composed dossier/ACH pages are read-only card compositions.
+            "derived": {"type": "boolean"},
+            "read_only": {"type": "boolean"},
+            "navigate_wiki_action": {"const": "navigate_wiki"},
+            "approve_action": {"const": "approve"},
+            "reject_action": {"const": "reject"},
+            "repair_links_action": {"const": "repair_links"},
+        },
+        required=["body_md"],
+    ),
+    "NoteEditorCard": _comp(
+        {
+            "note_id": _UUID,
+            "section_id": {"type": ["string", "null"]},
+            "title": {"type": "string"},
+            "body_md": {"type": "string"},
+            "edit_action": {"const": "edit_note"},
+            "rename_action": {"const": "rename_note"},
+            "promote_action": {"const": "promote_note"},
+        },
+        required=["note_id", "body_md"],
+    ),
+    "HtmlDocCard": _comp(
+        {
+            # `src` is the streaming-route path the sandboxed iframe loads. The
+            # builder computes it; the CARD never fetches. `title` labels it.
+            "src": {"type": "string"},
+            "title": {"type": "string"},
+            "derived": {"type": "boolean"},
+            "read_only": {"type": "boolean"},
+        },
+        required=["src"],
     ),
 }
 
@@ -310,9 +356,15 @@ _ACTIONS = {
     },
     "navigate_wiki": {
         "params": {
+            # WP-4d: `open_page` accepts a page_id OR a slug (the agent may know
+            # only the human-readable slug). The handler resolves a slug to its
+            # page_id; at least one must be present.
             "type": "object",
-            "properties": {"page_id": _UUID},
-            "required": ["page_id"],
+            "properties": {
+                "page_id": _UUID,
+                "slug": {"type": "string"},
+            },
+            "anyOf": [{"required": ["page_id"]}, {"required": ["slug"]}],
         }
     },
     "submit_form": {
@@ -325,7 +377,36 @@ _ACTIONS = {
             "required": ["form_id", "values"],
         }
     },
-    "create_hypothesis": {"params": {"type": "object"}},
+    "create_hypothesis": {
+        "params": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "statement": {"type": "string"},
+            },
+            "required": ["title", "statement"],
+        }
+    },
+    "create_note": {
+        "params": {
+            "type": "object",
+            "properties": {"title": {"type": "string"}},
+        }
+    },
+    "feedback": {
+        "params": {
+            "type": "object",
+            "properties": {
+                "target_id": _UUID,
+                "target_kind": {"type": "string"},
+                "signal": {"type": "string"},
+                "note": {"type": "string"},
+                "severity": {"type": "string"},
+                "context": {"type": "object"},
+            },
+            "required": ["target_id", "target_kind", "signal"],
+        }
+    },
     "edit_note": {
         "params": {
             "type": "object",
@@ -364,6 +445,67 @@ _ACTIONS = {
                 "section_anchor": {"type": "string"},
             },
             "required": ["page_id", "section_anchor"],
+        }
+    },
+    # WP-4 sub-spec (b): reader/editor-tier mutations, all ledger-audited.
+    "repair_links": {
+        "params": {
+            "type": "object",
+            "properties": {},
+        }
+    },
+    "rename_note": {
+        "params": {
+            "type": "object",
+            "properties": {
+                "note_id": _UUID,
+                "title": {"type": "string"},
+            },
+            "required": ["note_id", "title"],
+        }
+    },
+    "promote_note": {
+        "params": {
+            "type": "object",
+            "properties": {"note_id": _UUID},
+            "required": ["note_id"],
+        }
+    },
+    # WP-4 sub-spec (d): agent eyes+hands. Navigation (focus_tab / highlight_claim)
+    # and composition (compose_dossier / spotlight) verbs, all ledger-audited
+    # through the one action router.
+    "focus_tab": {
+        "params": {
+            "type": "object",
+            "properties": {
+                "tab": {"enum": ["Wiki", "Library", "Notes", "Hypotheses", "Briefs"]},
+            },
+            "required": ["tab"],
+        }
+    },
+    "highlight_claim": {
+        "params": {
+            "type": "object",
+            "properties": {"claim_id": _UUID},
+            "required": ["claim_id"],
+        }
+    },
+    "compose_dossier": {
+        "params": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "card_ids": {"type": "array", "items": _UUID},
+                "page_ids": {"type": "array", "items": _UUID},
+            },
+            "required": ["title"],
+        }
+    },
+    "spotlight": {
+        "params": {
+            "type": "object",
+            "properties": {"card_id": _UUID},
+            "required": ["card_id"],
         }
     },
 }

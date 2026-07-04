@@ -29,6 +29,12 @@ jobs:
           pnpm -C apps/web typecheck
           pnpm -C apps/web lint
 
+      - name: No self-fetch in A2UI surface components (WP-4a)
+        run: ./scripts/check-no-self-fetch.sh
+
+      - name: A2UI catalog producer/renderer sweep (WP-4e)
+        run: ./scripts/check-catalog-roster.sh
+
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.5.21"

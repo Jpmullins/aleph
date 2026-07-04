@@ -1,0 +1,23 @@
+[project]
+name = "aleph-code-runner"
+version = "0.1.0"
+description = "Isolated, credential-less sandbox that executes agent-written Python for the Aleph viz pipeline (WP-4c). Imports NO aleph package and NO DB/S3 driver by design."
+requires-python = ">=3.13"
+# A FIXED, audited scientific stack and NOTHING else. No aleph packages, no
+# database drivers, no HTTP clients beyond what arq needs for its Redis queue.
+# arq (+ its redis dep) is the ONLY transport; everything below is pure
+# in-process computation the sandboxed subprocess is allowed to use.
+dependencies = [
+    "arq==0.28.0",
+    "matplotlib>=3.9,<4",
+    "numpy>=2,<3",
+    "pandas>=2.2,<3",
+    "altair>=5.4,<6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aleph_code_runner"]

@@ -8,6 +8,7 @@ requires-python = ">=3.13"
 members = [
     "apps/api",
     "apps/workers",
+    "apps/code-runner",
     "packages/aleph-core",
     "packages/aleph-db",
     "packages/aleph-security",
@@ -49,6 +50,7 @@ aleph-datasets = { workspace = true }
 aleph-artifacts = { workspace = true }
 aleph-api = { workspace = true }
 aleph-workers = { workspace = true }
+aleph-code-runner = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -73,6 +75,7 @@ target-version = "py313"
 src = [
     "apps/api/src",
     "apps/workers/src",
+    "apps/code-runner/src",
     "packages/aleph-core/src",
     "packages/aleph-db/src",
     "packages/aleph-security/src",
@@ -132,6 +135,7 @@ typeCheckingMode = "strict"
 include = [
     "apps/api/src",
     "apps/workers/src",
+    "apps/code-runner/src",
     "packages/aleph-core/src",
     "packages/aleph-db/src",
     "packages/aleph-security/src",

@@ -35,6 +35,9 @@ class SourceCardProps:
     title: str
     url: str | None = None
     status: str = "indexed"
+    # WP-4e: the normalized-text preview the Library builder supplies as a BOUND
+    # prop. The card renders it in place (no self-fetch of `/sources/*/normalized`).
+    normalized_preview: str | None = None
 
 
 @dataclass
@@ -50,22 +53,6 @@ class TableCardProps:
     title: str = ""
     columns: list[dict[str, Any]] = field(default_factory=list)
     rows: list[Any] = field(default_factory=list)
-
-
-@dataclass
-class MapCardProps:
-    dataset_version_id: UUID | None
-    title: str = ""
-    maplibre_style_url: str = "https://demotiles.maplibre.org/style.json"
-    geo_features: list[Any] = field(default_factory=list)
-
-
-@dataclass
-class GraphCardProps:
-    dataset_version_id: UUID | None
-    title: str = ""
-    nodes: list[Any] = field(default_factory=list)
-    edges: list[Any] = field(default_factory=list)
 
 
 @dataclass
@@ -97,13 +84,6 @@ class HypothesisCardProps:
 
 
 @dataclass
-class NotebookCellCardProps:
-    section_id: UUID
-    body_md: str
-    ordinal: int = 0
-
-
-@dataclass
 class FormCardProps:
     form_id: str
     title: str
@@ -115,6 +95,10 @@ class DiffCardProps:
     from_revision_id: UUID
     to_revision_id: UUID
     page_id: UUID
+    # WP-4e: bound revision bodies so DiffCard renders a real line diff (no
+    # self-fetch). Absent → the card renders the revision-id summary only.
+    from_body_md: str | None = None
+    to_body_md: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +130,7 @@ def source_card(p: SourceCardProps, *, card_id: str | None = None) -> dict[str, 
             "title": p.title,
             "url": p.url,
             "status": p.status,
+            "normalized_preview": p.normalized_preview,
             "open_action": "open",
             "navigate_wiki_action": "navigate_wiki",
         },
@@ -178,32 +163,6 @@ def table_card(p: TableCardProps, *, card_id: str | None = None) -> dict[str, An
             "columns": p.columns,
             "rows": p.rows,
             "open_action": "open",
-        },
-    )
-
-
-def map_card(p: MapCardProps, *, card_id: str | None = None) -> dict[str, Any]:
-    return _card(
-        "MapCard",
-        card_id=card_id,
-        props={
-            "dataset_version_id": str(p.dataset_version_id) if p.dataset_version_id else None,
-            "title": p.title,
-            "maplibre_style_url": p.maplibre_style_url,
-            "geo_features": p.geo_features,
-        },
-    )
-
-
-def graph_card(p: GraphCardProps, *, card_id: str | None = None) -> dict[str, Any]:
-    return _card(
-        "GraphCard",
-        card_id=card_id,
-        props={
-            "dataset_version_id": str(p.dataset_version_id) if p.dataset_version_id else None,
-            "title": p.title,
-            "nodes": p.nodes,
-            "edges": p.edges,
         },
     )
 
@@ -258,19 +217,6 @@ def hypothesis_card(p: HypothesisCardProps, *, card_id: str | None = None) -> di
     )
 
 
-def notebook_cell_card(p: NotebookCellCardProps, *, card_id: str | None = None) -> dict[str, Any]:
-    return _card(
-        "NotebookCellCard",
-        card_id=card_id,
-        props={
-            "section_id": str(p.section_id),
-            "body_md": p.body_md,
-            "ordinal": p.ordinal,
-            "edit_action": "edit_note",
-        },
-    )
-
-
 def form_card(p: FormCardProps, *, card_id: str | None = None) -> dict[str, Any]:
     return _card(
         "FormCard",
@@ -292,6 +238,8 @@ def diff_card(p: DiffCardProps, *, card_id: str | None = None) -> dict[str, Any]
             "from_revision_id": str(p.from_revision_id),
             "to_revision_id": str(p.to_revision_id),
             "page_id": str(p.page_id),
+            "from_body_md": p.from_body_md,
+            "to_body_md": p.to_body_md,
             "open_action": "open",
         },
     )

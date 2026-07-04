@@ -1610,3 +1610,75 @@ were also hardened with tests.
 fetch are hardening gaps within the spec-accepted "same posture as ingest-url" (recommend a
 follow-up scheme allowlist + streaming cap); `_start_research_impl`/bootstrap still use
 `Bearer local-dev` self-calls (WP-5/F5); venv Python is 3.14 vs the 3.13 pin (WP-5).
+
+## WP-4 — Workspace rearchitecture (A2UI-native) (2026-07-04)
+
+**Spec:** `docs/specs/2026-07-04-wp4-workspace.md` (sub-specs a–e; four dated Final-State
+amendments made before close per GOAL rule 5: §6 `network_mode: none`→redis-only-internal-net,
+then →dedicated `code-runner-redis`; item 2 refetchInterval scope→right-panel). **Proves F3.**
+The user was away for the spec-approval checkpoint; per the autonomous whole-goal mode this was
+built as-written (F3 kept intact — deferring the sandbox would have needed a Final-State
+amendment).
+
+**Shipped (a–e).**
+- **(a) Data-binding + delta substrate:** the four canonical tabs (Wiki/Library/Notes/
+  Hypotheses) are server-built, data-bound v0_9 surfaces (`*_v09` builders emit `{"path":...}`
+  bindings + a typed data model); the React surface views render only from bound props (all
+  `useQuery`/`refetchInterval`/`fetch`/`EventSource` removed; mutations route through the
+  ledger-audited action router). Deltas emit via `diff_data_model`→`updateDataModel` on
+  LISTEN/NOTIFY wake. New monotonic `seq` + `Last-Event-ID` reconnect/resume with a bounded
+  ring, keyed `(project_id, tab, cid)` (no cross-project replay). Committed
+  `scripts/check-no-self-fetch.sh` (CI) — allowlist **empty**.
+- **(b) Reader/editor tier:** `WikiPageCard` (bound reader — wikilink `navigate_wiki` actions,
+  citation-marker popovers, claim-confidence badges, freshness slot for WP-6), `NoteEditorCard`,
+  and a **deterministic non-LLM HTML compiler** (`html_compiler.py`, markdown-it `html=False`,
+  fully escaped, byte-identical output) + `HtmlDocCard` (sandboxed iframe). `infobox_jsonb`
+  migration (nullable). Markdown stays the only wiki write-format.
+- **(c) Sandbox viz pipeline:** `aleph-code-runner` — an isolated compose service running
+  agent-written Python off a **dedicated `code-runner-redis`** on an `internal: true` network
+  (no internet, no Postgres, no aleph-api, and — after the security fix — no platform Redis),
+  `cap_drop:[ALL]`, `read_only`, `pids_limit`, tmpfs scratch, non-root, zero credentials; the
+  agent-code subprocess is further socket-denied (`python -I` + guard). A privileged worker
+  step persists outputs as versioned artifacts (`producing_code`+sha256+lineage) served via the
+  F1 streaming route. `ImageCard`/rebuilt-`ChartCard` (inline-spec-only, network-blocked vega
+  loader)/`HtmlFrameCard` reference artifacts by URI; the renderer refuses non-streaming-route
+  iframe src (`isSandboxedAssetSrc`). New viz artifact kinds (image/chart/html_frame); honesty
+  rule holds.
+- **(d) Agent eyes+hands:** CopilotKit shared state `{active_tab, open_page_id, selection}`;
+  `open_page`/`focus_tab`/`pin_to_brief`/`highlight_claim` frontend actions + `compose_dossier`/
+  `spotlight` verbs, all through the ledger-audited action router (`CardAction` + ledger event);
+  `spotlighted` column migration.
+- **(e) Roster:** deleted MapCard/GraphCard/NotebookCellCard (no producer); rebuilt
+  SourceCard/TableCard/DiffCard off self-fetch; committed `scripts/check-catalog-roster.sh`
+  (CI) — 20 components, each with a named producer + renderer. Also deleted the dead
+  `WikiTab.tsx`, the legacy `_surface()` builders, and the dormant `GET /briefs` route.
+
+**Adversarial review (3 passes, fresh subagents, all reports in-session).** Spec-conformance:
+`FINAL-STATE VIOLATIONS: 0` (9/9 items) + 4 dead-plumbing findings (broken /download href,
+legacy builders, dormant /briefs, obsolete exemplar) — all fixed. Security/rules: **1 BLOCKER**
+— the sandbox reached the *shared* platform Redis (agent tokens as job args + privileged
+queues) — plus 2 concerns (cross-project SSE resume; ChartCard remote-URL fetch). All fixed:
+dedicated `code-runner-redis` split (platform Redis off the sandbox network — live-probed
+unreachable), `(project,tab,cid)` buffer keying + isolation test, inline-only ChartCard with a
+reject-all vega loader. Verification pass: every fix GENUINE, no regressions,
+`FINAL-STATE VIOLATIONS: 0`.
+
+**In-browser demos (screenshots in-session).** (1) Hypothesis created via API with the
+Hypotheses tab open → card patches in place via the SSE `updateDataModel` delta, **zero**
+component `/hypotheses` fetches. (2) `WikiPageCard` renders a real page — DRAFT/STUB badges,
+FRESHNESS slot, wikilink chips, citation popovers, Approve/Reject + "Repair 2 broken links" —
+with zero component fetches. (3) Agent `code_runner` job → real matplotlib PNG artifact
+(`producing_code`+sha+lineage) → pinned card rendered in Briefs; Activity shows `viz_code
+succeeded`.
+
+**Gates (final, green).** unit `311 passed`; integration `76 passed` (+1 intentional skip —
+`code-runner-redis` has no host port by design, so the host-run queue test can't drive it; the
+path is proven via the live viz route); pyright `0 errors, 1511 warnings` (< 1663 pre-WP-4 and
+< 1758 F5 baseline; py.typed markers added to aleph-core + aleph-a2ui); ruff/format clean; web
+typecheck/lint/build clean; both sweep scripts pass; `alembic check` clean (3 additive
+migrations: wp4_wiki_infobox, wp4_card_spotlight, + the infobox one).
+
+**Honest notes (out of WP-4 scope, for WP-5):** center-panel/overlay polling remains
+(ActivityCard/CopilotChatSurface/Drawers — not the right panel); `infobox_jsonb` has a read
+path + migration but no writer yet (curator-optional, WP-6 hook); `Bearer local-dev` self-calls
+persist (F5); a raw-ctypes sandbox-escape residual reaches only the ephemeral code-job Redis.

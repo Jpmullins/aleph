@@ -8,6 +8,7 @@ SSE channel; for Inc 4 this returns a one-shot snapshot.
 from __future__ import annotations
 
 import json
+import time
 from typing import TYPE_CHECKING, Annotated, Any
 from uuid import UUID
 
@@ -19,10 +20,8 @@ from starlette.responses import StreamingResponse
 from aleph_a2ui.card_service import list_pinned
 from aleph_a2ui.components.cards import (
     ApprovalCardProps,
-    ClaimCardProps,
     FindingCardProps,
     approval_card,
-    claim_card,
     finding_card,
 )
 from aleph_a2ui.components.surfaces import (
@@ -33,6 +32,7 @@ from aleph_a2ui.components.surfaces import (
     wiki_surface_v09,
 )
 from aleph_a2ui.surface_streamer import (
+    SurfaceStreamBuffer,
     data_model_patches_to_messages,
     diff_data_model,
     split_surface_messages,
@@ -40,7 +40,7 @@ from aleph_a2ui.surface_streamer import (
 from aleph_api.deps import PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep, assert_stream_access
 from aleph_core.errors import NotFound, ValidationFailed
-from aleph_wiki.models import WikiClaim, WikiPage
+from aleph_wiki.models import Citation, PageMergeProposal, SourcePage, WikiPage
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -54,6 +54,44 @@ router = APIRouter(prefix="/v1/projects", tags=["surfaces"])
 # self-healing safety net. Surface recompute hits Postgres harder than the
 # agent-events requery (full tab rebuild), so its fallback is more conservative.
 _STREAM_FALLBACK_SEC = 10.0
+
+# Reconnect / resume / ordering (WP-4 sub-spec (a)). Every SSE message is stamped
+# with a monotonic per-connection `seq` (SSE `id:` field + `seq` in the payload)
+# and retained in a bounded ring so a reconnect carrying `Last-Event-ID` replays
+# only what it missed (or falls back to a clean full snapshot if the gap is
+# beyond the ring). Buffers are keyed by a client-connection id (`?cid=`) the
+# frontend mints once per mount — `EventSource` auto-reconnect reuses the same
+# URL (hence the same `cid`), so the ring survives a dropped connection. TTL
+# eviction reaps abandoned connections; a soft cap bounds the registry.
+_RING_SIZE = 64
+_BUFFER_TTL_SEC = 300.0
+_BUFFER_MAX = 4096
+_STREAM_BUFFERS: dict[str, SurfaceStreamBuffer] = {}
+
+
+def _sweep_buffers() -> None:
+    """Evict abandoned per-connection buffers (TTL, then soft cap)."""
+    now = time.monotonic()
+    for key in [k for k, b in _STREAM_BUFFERS.items() if now - b.touched > _BUFFER_TTL_SEC]:
+        _STREAM_BUFFERS.pop(key, None)
+    if len(_STREAM_BUFFERS) > _BUFFER_MAX:
+        # Drop the least-recently-touched entries down to the cap.
+        for key, _ in sorted(_STREAM_BUFFERS.items(), key=lambda kv: kv[1].touched)[
+            : len(_STREAM_BUFFERS) - _BUFFER_MAX
+        ]:
+            _STREAM_BUFFERS.pop(key, None)
+
+
+def _sse(message: dict[str, Any]) -> bytes:
+    """Serialize a seq-stamped message as an SSE event (with `id:` for resume)."""
+    return f"id: {message['seq']}\ndata: {json.dumps(message)}\n\n".encode()
+
+
+def _parse_last_event_id(raw: str | None) -> int | None:
+    if raw is None:
+        return None
+    raw = raw.strip()
+    return int(raw) if raw.lstrip("-").isdigit() else None
 
 
 class SurfaceMessagesOut(BaseModel):
@@ -71,21 +109,27 @@ class SurfaceMessagesOut(BaseModel):
 
 
 async def _build_tab_messages(
-    session: Any, project_id: UUID, tab_lc: str, page_id: str | None = None
+    session: Any,
+    project_id: UUID,
+    tab_lc: str,
+    page_id: str | None = None,
+    surface_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Build the v0.9 message list for `tab_lc`. Shared by the snapshot route
-    and the delta stream so both compute identical surfaces."""
+    and the delta stream so both compute identical surfaces. `surface_id`
+    defaults to `tab_lc` so the stamped delta `surfaceId` matches
+    `createSurface`."""
+    sid = surface_id or tab_lc
     if tab_lc == "wiki":
-        return await _wiki_messages(session, project_id, page_id)
-    # "library" is the renamed Artifacts tab — the same self-fetching surface
-    # component (now showing ingested Sources + built Artifacts). "artifacts" is
-    # kept as an alias for any older client / agent navigation.
+        return await _wiki_messages(session, project_id, page_id, sid)
+    # "library" is the renamed Artifacts tab (ingested Sources + built
+    # Artifacts). "artifacts" is kept as an alias for older client/agent nav.
     if tab_lc in ("library", "artifacts"):
-        return artifacts_surface_v09()
+        return await _library_messages(session, project_id, sid)
     if tab_lc == "notes":
-        return await _notes_messages(session, project_id)
+        return await _notes_messages(session, project_id, sid)
     if tab_lc == "hypotheses":
-        return await _hypotheses_messages(session, project_id)
+        return await _hypotheses_messages(session, project_id, sid)
     if tab_lc == "briefs":
         return await _briefs_messages(session, project_id)
     msg = f"unknown tab: {tab_lc}"
@@ -112,29 +156,26 @@ async def stream_surface(
     principal: PrincipalDep,
     page_id: str | None = Query(default=None),
 ) -> StreamingResponse:
-    """Delta SurfaceStreamer (Wave 4 T6).
+    """Delta SurfaceStreamer with reconnect/resume + ordering (WP-4 sub-spec a).
 
-    On connect, emits the full v0_9 surface for `tab` (each `createSurface` /
-    `updateComponents` / root `updateDataModel` as its own SSE `data:` event).
-    Then, every `_STREAM_RECOMPUTE_SEC`, rebuilds the surface and emits:
+    On a fresh connect, emits the full v0_9 surface for `tab` (`createSurface` /
+    `updateComponents` / root `updateDataModel`), each stamped with a monotonic
+    `seq` (SSE `id:` + `seq` in the payload). Then, on every LISTEN/NOTIFY wake
+    (with a `_STREAM_FALLBACK_SEC` self-heal poll), it rebuilds and emits:
 
     * an `updateComponents` message *iff* the structural component list changed
-      (new/removed cards) — the processor updates existing components in place
-      (no DOM teardown) and only ADDS genuinely-new ones; and
-    * one `updateDataModel` message per minimal data-model patch
-      (`diff_data_model`), so a bound prop change (e.g. a hypothesis confidence)
-      re-renders only that prop, not the whole tree.
+      (the processor updates existing ids in place, adds only new ones); and
+    * one `updateDataModel` per minimal `diff_data_model` patch, so a bound prop
+      change (e.g. a hypothesis's confidence) re-renders only that prop.
 
-    If neither changed, nothing is emitted (just a heartbeat). Only the
-    Hypotheses tab binds data into the model today, so it is the only tab that
-    produces data deltas; the other four emit their structural surface once and
-    then idle — which is correct, they self-refresh via react-query.
-
-    Change signal: LISTEN/NOTIFY push (any mutation for the project) wakes a
-    recompute-and-diff instantly, with a `_STREAM_FALLBACK_SEC` poll fallback.
-    Recompute-and-diff stays the universal, tab-agnostic detector (surfaces
-    aggregate across many entities/mutation kinds); the push just replaces the
-    old fixed 2.5s poll as the wake trigger.
+    **Reconnect.** The browser `EventSource` reconnects to the same URL (same
+    `?cid=`) carrying `Last-Event-ID`. If that id is still within this
+    connection's ring, we replay only the retained tail and then forward-diff
+    from the model the client last had to current DB state — delivering exactly
+    the deltas missed while disconnected, never a resnapshot. If the id is
+    beyond the ring (or the buffer is gone), we send a clean full snapshot with
+    a fresh baseline seq. The client applies messages in `seq` order and drops
+    duplicates/out-of-order ids.
     """
     # Membership check WITHOUT pinning a pool connection for the stream's life.
     await assert_stream_access(request, project_id, principal)
@@ -142,21 +183,54 @@ async def stream_surface(
     surface_id = tab_lc
     maker = request.app.state.session_maker
     broker = request.app.state.change_broker
+    # Namespace the buffer key by (project, tab, cid): a `cid` leaked from the
+    # URL (query params reach logs/proxies/history) can then only ever resume
+    # the exact project+tab stream that created it — never another project's
+    # buffered surface bytes (wiki body_md, claims, notes, …). The membership
+    # check above (assert_stream_access) gates the project; this gates replay.
+    raw_cid = request.query_params.get("cid")
+    cid = f"{project_id}:{tab_lc}:{raw_cid}" if raw_cid else None
+    last_event_id = _parse_last_event_id(request.headers.get("last-event-id"))
 
     async def _gen() -> AsyncIterator[bytes]:
-        # Initial full surface.
+        _sweep_buffers()
+        buf = _STREAM_BUFFERS.get(cid) if cid else None
+
         async with maker() as session:
-            messages = await _build_tab_messages(session, project_id, tab_lc, page_id)
-        prev_structural, prev_model = split_surface_messages(messages)
-        for m in messages:
-            yield f"data: {json.dumps(m)}\n\n".encode()
+            fresh = await _build_tab_messages(session, project_id, tab_lc, page_id, surface_id)
+        structural, model = split_surface_messages(fresh)
+
+        if buf is not None and last_event_id is not None and buf.can_replay(last_event_id):
+            # Resume: replay the retained tail (original seqs), then forward-diff
+            # only what changed while the client was disconnected.
+            for m in buf.messages_after(last_event_id):
+                yield _sse(m)
+            if structural != buf.structural:
+                for m in structural:
+                    if "updateComponents" in m:
+                        yield _sse(buf.stamp(m))
+            patches = diff_data_model(buf.model, model)
+            for delta in data_model_patches_to_messages(
+                surface_id=surface_id, patches=patches, next_model=model
+            ):
+                yield _sse(buf.stamp(delta))
+            buf.structural, buf.model = structural, model
+        else:
+            # Fresh full snapshot (new baseline seq).
+            if buf is None:
+                buf = SurfaceStreamBuffer(_RING_SIZE)
+                if cid:
+                    _STREAM_BUFFERS[cid] = buf
+            for m in fresh:
+                yield _sse(buf.stamp(m))
+            buf.structural, buf.model = structural, model
+
+        prev_structural, prev_model = buf.structural, buf.model
 
         # Push: any mutation for this project wakes a recompute-and-diff the
         # instant it commits (the broker is fed by the LISTEN/NOTIFY listener).
         # `sub.wait` also returns after `_STREAM_FALLBACK_SEC` with no push, so a
-        # dropped listener self-heals. Recompute-and-diff stays the universal,
-        # tab-agnostic change detector; only the wake trigger changed (was a 2.5s
-        # poll).
+        # dropped listener self-heals.
         async with broker.subscribe(project_id) as sub:
             while True:
                 if await request.is_disconnected():
@@ -166,25 +240,25 @@ async def stream_surface(
                     return
 
                 async with maker() as session:
-                    fresh = await _build_tab_messages(session, project_id, tab_lc, page_id)
+                    fresh = await _build_tab_messages(
+                        session, project_id, tab_lc, page_id, surface_id
+                    )
                 structural, model = split_surface_messages(fresh)
 
-                # Structural change (cards added/removed) → re-send updateComponents.
-                # The processor updates existing component ids in place and only adds
-                # new ones, so existing DOM nodes are preserved.
                 if structural != prev_structural:
                     for m in structural:
                         if "updateComponents" in m:
-                            yield f"data: {json.dumps(m)}\n\n".encode()
+                            yield _sse(buf.stamp(m))
                     prev_structural = structural
+                    buf.structural = structural
 
-                # Data-model deltas.
                 patches = diff_data_model(prev_model, model)
                 for delta in data_model_patches_to_messages(
                     surface_id=surface_id, patches=patches, next_model=model
                 ):
-                    yield f"data: {json.dumps(delta)}\n\n".encode()
+                    yield _sse(buf.stamp(delta))
                 prev_model = model
+                buf.model = model
 
                 # Heartbeat so idle proxies don't close the connection.
                 yield b": heartbeat\n\n"
@@ -196,73 +270,220 @@ async def stream_surface(
     )
 
 
-async def _hypotheses_messages(session: Any, project_id: UUID) -> list[dict[str, Any]]:
-    """Build the v0.9 message list for the Hypotheses tab.
+async def _hypotheses_messages(
+    session: Any, project_id: UUID, surface_id: str
+) -> list[dict[str, Any]]:
+    """Data-bound Hypotheses tab: the tracked-hypothesis list + the ACH matrix,
+    loaded through the existing hypotheses routes (same queries the REST list /
+    `/hypotheses/ach` endpoints use) and bound into the surface data model."""
+    from aleph_api.routes.hypotheses import get_ach_matrix, get_hypotheses
 
-    A single interactive `HypothesesSurface` (header, + New, ACH matrix,
-    feedback, empty state) that fetches its own hypothesis list — the same
-    pattern as the other four tabs.
-    """
-    return hypotheses_surface_v09()
+    items = [h.model_dump(mode="json") for h in await get_hypotheses(project_id, session)]
+    ach_out = (await get_ach_matrix(project_id, session)).model_dump(mode="json")
+    # ACH is only meaningful once there is evidence; expose null otherwise so the
+    # view renders its empty state rather than an empty grid.
+    ach: dict[str, Any] | None = ach_out if ach_out.get("targets") else None
+    return hypotheses_surface_v09(items=items, ach=ach, surface_id=surface_id)
+
+
+async def _library_messages(
+    session: Any, project_id: UUID, surface_id: str
+) -> list[dict[str, Any]]:
+    """Data-bound Library tab: ingested Sources + built Artifacts, loaded through
+    the existing sources/artifacts routes and bound into the surface data model.
+
+    Each source carries a bound ``normalized_preview`` — the head of its
+    normalized text (WP-4e) — so `SourceCard` renders the preview in place with
+    NO self-fetch. Previews come from the first `DocumentChunk` per source (in
+    Postgres, one batched query — never an asset-store read per source and no
+    N+1)."""
+    from aleph_api.routes.artifacts import get_artifacts
+    from aleph_api.routes.sources import list_sources
+
+    sources = [s.model_dump(mode="json") for s in await list_sources(project_id, session)]
+    previews = await _source_previews(session, project_id, [UUID(s["id"]) for s in sources])
+    for s in sources:
+        s["normalized_preview"] = previews.get(UUID(s["id"]))
+    artifacts = [a.model_dump(mode="json") for a in await get_artifacts(project_id, session)]
+    return artifacts_surface_v09(sources=sources, artifacts=artifacts, surface_id=surface_id)
+
+
+# Normalized-text preview length (chars). The Library builder binds this head of
+# each source's first chunk into `SourceCard.normalized_preview`; the reader shows
+# more only by opening the raw asset (an iframe URL, not a fetch).
+_SOURCE_PREVIEW_CHARS = 2000
+
+
+async def _source_previews(
+    session: Any, project_id: UUID, source_ids: list[UUID]
+) -> dict[UUID, str]:
+    """Batched first-chunk (`ordinal == 0`) text per source, truncated to a
+    bounded preview. One query for all sources — no N+1, no asset-store read."""
+    from aleph_rks.models import DocumentChunk
+
+    if not source_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(DocumentChunk.source_id, DocumentChunk.text).where(
+                DocumentChunk.project_id == project_id,
+                DocumentChunk.source_id.in_(source_ids),
+                DocumentChunk.ordinal == 0,
+            )
+        )
+    ).all()
+    out: dict[UUID, str] = {}
+    for sid, text in rows:
+        out[sid] = text[:_SOURCE_PREVIEW_CHARS] if text else ""
+    return out
 
 
 async def _wiki_messages(
-    session: Any, project_id: UUID, page_id: str | None
+    session: Any, project_id: UUID, page_id: str | None, surface_id: str
 ) -> list[dict[str, Any]]:
-    """v0.9 message list for the Wiki tab — a single `WikiSurface`.
+    """Data-bound Wiki tab: the page-browser list, plus the open page's reader
+    payload when `?page_id=` is set. Both come from the existing wiki routes
+    (`list_pages` / `get_page`) so the surface renders exactly what the REST
+    endpoints return, minus the client fetch. `open` is null when browsing."""
+    from aleph_api.routes.wiki import get_page, list_pages
 
-    The frontend `WikiSurface` fetches `/wiki/pages` directly and renders its own
-    page browser + reader; `children` is reserved for embedded viz/claim cards
-    placed on the surface. When a `page_id` is supplied we attach that page's
-    claims as `ClaimCard`s (legacy `A2UIComponent` `{type,id,props}` shape, which
-    the surface's renderer consumes).
-    """
-    cards: list[dict[str, Any]] = []
+    pages = [p.model_dump(mode="json") for p in await list_pages(project_id, session)]
+    open_page: dict[str, Any] | None = None
     if page_id:
         try:
             pid = UUID(page_id)
         except ValueError as exc:
             msg = "invalid page_id"
             raise ValidationFailed(msg) from exc
-        page = await session.get(WikiPage, pid)
-        if page and page.project_id == project_id and page.current_revision_id is not None:
-            claim_rows = list(
-                (
-                    await session.execute(
-                        select(WikiClaim).where(WikiClaim.revision_id == page.current_revision_id)
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            for c in claim_rows[:25]:
-                cards.append(
-                    claim_card(
-                        ClaimCardProps(
-                            claim_id=c.id,
-                            text=c.text,
-                            confidence=c.confidence,
-                        ),
-                        card_id=f"claim-{c.id}",
-                    )
-                )
-    return wiki_surface_v09(
-        current_page_id=UUID(page_id) if page_id else None,
-        view_mode="page",
-        children=cards,
+        try:
+            detail = (await get_page(project_id, pid, session)).model_dump(mode="json")
+        except NotFound:
+            detail = None
+        if detail is not None:
+            claims = detail["claims"]
+            citations = await _resolve_citations(session, project_id, claims)
+            open_page = {
+                "page_id": detail["page"]["id"],
+                "title": detail["page"]["title"],
+                "status": detail["page"]["status"],
+                "is_stub": detail["page"]["is_stub"],
+                "revision": detail["revision"],
+                "claims": claims,
+                # Resolved [cN] markers → source title + url for the reader's
+                # citation popover (WP-4b). page_meta.freshness is left unset —
+                # WP-6 populates it; the card renders "—" until then.
+                "citations": citations,
+                "wikilinks_out": detail["wikilinks_out"],
+                # Deterministic server-compiled HTML doc (WP-4b). Bound into
+                # HtmlDocCard's sandboxed iframe src; the card never fetches.
+                "html_url": f"/v1/projects/{project_id}/wiki/pages/{pid}/html",
+            }
+    return wiki_surface_v09(pages=pages, open_page=open_page, surface_id=surface_id)
+
+
+async def _resolve_citations(
+    session: Any, project_id: UUID, claims: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Resolve the `Citation` rows for a page's claims to source title + url.
+
+    Two queries (citations, then source pages/sources) — no N+1. Each entry is
+    ``{marker, claim_id, source_page_id, source_title, url, chunk_ids}``; the
+    reader keys its `[cN]` popover on `marker`."""
+    from aleph_rks.models import Source
+
+    claim_ids = [UUID(c["id"]) for c in claims if c.get("id")]
+    if not claim_ids:
+        return []
+    cite_rows = list(
+        (await session.execute(select(Citation).where(Citation.claim_id.in_(claim_ids))))
+        .scalars()
+        .all()
     )
+    if not cite_rows:
+        return []
+    source_page_ids = {c.source_page_id for c in cite_rows if c.source_page_id is not None}
+    titles: dict[UUID, str] = {}
+    urls: dict[UUID, str | None] = {}
+    if source_page_ids:
+        titles = dict(
+            (
+                await session.execute(
+                    select(WikiPage.id, WikiPage.title).where(WikiPage.id.in_(source_page_ids))
+                )
+            ).all()
+        )
+        # source_page_id → SourcePage.source_id → Source.url (best-effort).
+        sp_rows = list(
+            (
+                await session.execute(
+                    select(SourcePage.page_id, Source.title, Source.url)
+                    .join(Source, Source.id == SourcePage.source_id)
+                    .where(SourcePage.page_id.in_(source_page_ids))
+                )
+            ).all()
+        )
+        for page_id_, src_title, src_url in sp_rows:
+            urls[page_id_] = src_url
+            titles.setdefault(page_id_, src_title)
+    out: list[dict[str, Any]] = []
+    for c in cite_rows:
+        spid = c.source_page_id
+        out.append(
+            {
+                "marker": c.citation_marker,
+                "claim_id": str(c.claim_id),
+                "source_page_id": str(spid) if spid is not None else None,
+                "source_title": titles.get(spid) if spid is not None else None,
+                "url": urls.get(spid) if spid is not None else None,
+                "chunk_ids": list(c.chunk_ids or []),
+            }
+        )
+    return out
 
 
-async def _notes_messages(session: Any, project_id: UUID) -> list[dict[str, Any]]:
-    """v0.9 message list for the Notes tab — a single self-fetching `NotesSurface`.
-
-    The surface view fetches its own note list + editor, so the surface stream
-    only needs to emit the structural component. (We previously forwarded each
-    note's sections as `NotebookCellCard` children, but `NotesSurface` ignores
-    surface children — that was an N+1 query per load building a discarded
-    payload, so it's been removed.)
+async def _notes_messages(session: Any, project_id: UUID, surface_id: str) -> list[dict[str, Any]]:
+    """Data-bound Notes tab: each note with its first (lowest-ordinal) section's
+    body, loaded in TWO queries (notes, then all sections) — no N+1. Editing a
+    body is an `edit_note` action through the router; the delta patches in place.
     """
-    return notes_surface_v09(children=[])
+    from aleph_notes.models import Note, NoteSection
+
+    notes = list(
+        (
+            await session.execute(
+                select(Note).where(Note.project_id == project_id).order_by(Note.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    sections = list(
+        (
+            await session.execute(
+                select(NoteSection)
+                .where(NoteSection.project_id == project_id)
+                .order_by(NoteSection.ordinal.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    first_by_note: dict[UUID, Any] = {}
+    for s in sections:
+        first_by_note.setdefault(s.note_id, s)
+    notes_out: list[dict[str, Any]] = []
+    for n in notes:
+        first = first_by_note.get(n.id)
+        notes_out.append(
+            {
+                "id": str(n.id),
+                "title": n.title,
+                "section_id": str(first.id) if first is not None else None,
+                "body_md": first.body_md if first is not None else "",
+                "updated_at": n.updated_at.isoformat() if n.updated_at else None,
+            }
+        )
+    return notes_surface_v09(notes=notes_out, surface_id=surface_id)
 
 
 async def _briefs_messages(session: Any, project_id: UUID) -> list[dict[str, Any]]:
@@ -274,7 +495,6 @@ async def _briefs_messages(session: Any, project_id: UUID) -> list[dict[str, Any
     """
     from aleph_connectors.models import SynthesisProposal
     from aleph_reviewer.models import ReviewFinding
-    from aleph_wiki.models import PageMergeProposal, WikiPage
 
     rows = list(
         (
@@ -370,6 +590,18 @@ async def _briefs_messages(session: Any, project_id: UUID) -> list[dict[str, Any
                 card_id=f"finding-{f.id}",
             )
         )
-    for _card, version in await list_pinned(session, project_id=project_id, pinned_to="briefs"):
-        cards.append(version.a2ui_payload_jsonb)
-    return briefs_surface_v09(badge_count=len(cards), children=cards)
+    # Pinned + agent-composed cards. Spotlighted cards (WP-4d) are ordered first
+    # across the whole pile and carry a `spotlight: true` flag in their props.
+    spotlighted: list[dict[str, Any]] = []
+    normal_pinned: list[dict[str, Any]] = []
+    for card, version in await list_pinned(session, project_id=project_id, pinned_to="briefs"):
+        payload: dict[str, Any] = dict(version.a2ui_payload_jsonb)
+        if card.spotlighted:
+            props: dict[str, Any] = dict(payload.get("props") or {})
+            props["spotlight"] = True
+            payload["props"] = props
+            spotlighted.append(payload)
+        else:
+            normal_pinned.append(payload)
+    ordered = spotlighted + cards + normal_pinned
+    return briefs_surface_v09(badge_count=len(ordered), children=ordered)

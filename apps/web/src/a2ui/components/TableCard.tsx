@@ -1,18 +1,14 @@
-import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
-import { useSurface } from "../surface-context";
-import { api } from "@/lib/api";
 import { CardShell, Pill, type RendererProps } from "./_shared";
 
-interface ObservationsPage {
-  rows: Array<Record<string, unknown>>;
-  columns: Array<{ name: string; label?: string; type?: string }>;
-  total: number;
-}
-
+/**
+ * WP-4e: TableCard renders ONLY from bound props (`columns` + `rows`). It never
+ * self-fetches dataset rows — the producer (a dataset/agent builder, e.g.
+ * `table_card`) supplies the rows in props. If no producer supplied rows and no
+ * dataset is bound, it renders its empty state; it does not fetch.
+ */
 export function TableCard({ component }: RendererProps) {
-  const { projectId } = useSurface();
   const p = component.props as {
     dataset_version_id?: string | null;
     title?: string;
@@ -24,17 +20,8 @@ export function TableCard({ component }: RendererProps) {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [filter, setFilter] = useState("");
 
-  const dataQuery = useQuery<ObservationsPage>({
-    queryKey: ["dataset-rows", projectId, p.dataset_version_id],
-    queryFn: () =>
-      api.get<ObservationsPage>(
-        `/v1/projects/${projectId}/datasets/versions/${p.dataset_version_id}/observations?limit=500`,
-      ),
-    enabled: !!p.dataset_version_id && !p.rows,
-  });
-
-  const columns = p.columns ?? dataQuery.data?.columns ?? [];
-  const rows = p.rows ?? dataQuery.data?.rows ?? [];
+  const columns = p.columns ?? [];
+  const rows = p.rows ?? [];
 
   const filtered = useMemo(() => {
     let xs = rows;
@@ -58,7 +45,7 @@ export function TableCard({ component }: RendererProps) {
     return xs;
   }, [rows, filter, sortBy, sortDir]);
 
-  if (p._placeholder || (rows.length === 0 && !p.dataset_version_id && !dataQuery.isPending)) {
+  if (p._placeholder || rows.length === 0) {
     return (
       <CardShell title={p.title || "Table"} subtitle={<Pill tone="slate">No data bound</Pill>}>
         <p className="text-xs text-slate-500">Bind a DatasetVersion or pass rows to render.</p>
@@ -66,9 +53,12 @@ export function TableCard({ component }: RendererProps) {
     );
   }
 
-  const headers = columns.length > 0
-    ? columns
-    : (rows[0] ? Object.keys(rows[0]).map((n) => ({ name: n, label: n })) : []);
+  const headers =
+    columns.length > 0
+      ? columns
+      : rows[0]
+        ? Object.keys(rows[0]).map((n) => ({ name: n, label: n }))
+        : [];
 
   return (
     <CardShell title={p.title || "Table"} subtitle={`${filtered.length} of ${rows.length} rows`}>
@@ -78,9 +68,6 @@ export function TableCard({ component }: RendererProps) {
         placeholder="Filter…"
         className="mb-2 w-full rounded border border-slate-200 px-2 py-1 text-xs focus:border-slate-500 focus:outline-none"
       />
-      {dataQuery.isPending && rows.length === 0 && (
-        <p className="text-xs text-slate-400">Loading rows…</p>
-      )}
       <div className="max-h-72 overflow-auto">
         <table className="w-full border-collapse text-xs">
           <thead className="sticky top-0 bg-slate-50 text-left">
@@ -98,7 +85,9 @@ export function TableCard({ component }: RendererProps) {
                   }}
                 >
                   {c.label ?? c.name}
-                  {sortBy === c.name && <span className="ml-1 text-[10px]">{sortDir === "asc" ? "▲" : "▼"}</span>}
+                  {sortBy === c.name && (
+                    <span className="ml-1 text-[10px]">{sortDir === "asc" ? "▲" : "▼"}</span>
+                  )}
                 </th>
               ))}
             </tr>

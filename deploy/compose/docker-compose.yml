@@ -87,11 +87,72 @@ services:
       - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
+    # The platform Redis carries agent tokens (as job args), privileged job
+    # queues, idempotency keys, and the LISTEN/NOTIFY-backed streams. It is
+    # NOT on code-runner-net — the sandbox must never reach this bus. Code
+    # jobs use the dedicated `code-runner-redis` below.
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 2s
       timeout: 2s
       retries: 30
+
+  # WP-4c — a DEDICATED Redis for the code_runner queue, reachable only on the
+  # isolated code-runner-net. It carries exactly one kind of payload:
+  # `run_code_job(code, output_kind, timeout_s)` — no tokens, no privileged
+  # jobs, no cross-project data. A sandbox escape reaching this bus can at
+  # worst disrupt the ephemeral code queue; the platform Redis is unreachable.
+  code-runner-redis:
+    image: redis:8.8-alpine
+    restart: unless-stopped
+    mem_limit: 128m
+    memswap_limit: 128m
+    # No persistence (ephemeral job bus) and no host port — internal only.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks:
+      - code-runner-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # WP-4c — the isolated sandbox that executes agent-written Python. Its ONLY
+  # network is `code-runner-net` (internal: true → no internet/NAT), on which
+  # the ONLY reachable service is the dedicated `code-runner-redis` — NOT the
+  # platform Redis, not Postgres, not aleph-api. It carries no secrets (no
+  # DATABASE_URL / ALEPH_S3_* / LITELLM_* / ALEPH_AGENT_TOKEN_SECRET), mounts no
+  # assets, drops ALL capabilities, runs a read-only rootfs with a small tmpfs
+  # scratch, and runs non-root. A full escape yields only CPU/mem inside these
+  # caps, the agent's own submitted code, and the ephemeral code-job bus.
+  #
+  # NB: the spec/Final-State text said `network_mode: none`; that is infeasible
+  # for an arq-queue worker (it must reach a Redis to pull jobs). The equivalent
+  # posture — no egress, no reachable service but a dedicated code-job Redis —
+  # is achieved with the internal network below. See the §6 amendment + the
+  # impl-log (WP-4c).
+  aleph-code-runner:
+    build:
+      context: ../..
+      dockerfile: apps/code-runner/Dockerfile
+    restart: unless-stopped
+    mem_limit: 1g
+    memswap_limit: 1g
+    pids_limit: 128
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /scratch:rw,size=256m,nosuid,nodev
+    environment:
+      REDIS_URL: redis://code-runner-redis:6379/0
+    networks:
+      - code-runner-net
+    depends_on:
+      code-runner-redis:
+        condition: service_healthy
 
   langfuse:
     # Pinned to v2 — v3 requires ClickHouse + S3 + Redis as separate
@@ -224,6 +285,10 @@ services:
       ALEPH_ENV: ${ALEPH_ENV}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379/0
+      # Dispatch/await code_runner jobs on the isolated code-job Redis (the
+      # trusted worker dual-homes onto code-runner-net; the sandbox cannot
+      # reach the platform Redis above).
+      CODE_RUNNER_REDIS_URL: redis://code-runner-redis:6379/0
       ALEPH_ASSET_BACKEND: ${ALEPH_ASSET_BACKEND:-fs}
       ALEPH_ASSET_ROOT: /data/assets
       # Only read when ALEPH_ASSET_BACKEND=s3 (see the s3 profile).
@@ -244,12 +309,19 @@ services:
       ALEPH_CONSENSUS_MONTHLY_SEARCH_CAP: ${ALEPH_CONSENSUS_MONTHLY_SEARCH_CAP:-200}
     volumes:
       - ../../data/assets:/data/assets
+    # The trusted worker reaches BOTH the platform network and the isolated
+    # code-runner-net (to dispatch/await code jobs on code-runner-redis).
+    networks:
+      - default
+      - code-runner-net
     depends_on:
       aleph-api:
         condition: service_started
       aleph-migrate:
         condition: service_completed_successfully
       redis:
+        condition: service_healthy
+      code-runner-redis:
         condition: service_healthy
 
   aleph-web:
@@ -297,3 +369,14 @@ volumes:
   postgres-data:
   minio-data:
   redis-data:
+
+networks:
+  # Default bridge for the app services (implicitly used by everything that
+  # does not declare `networks:`).
+  default:
+  # Isolated network for the code-runner. `internal: true` removes the external
+  # route (no NAT to the internet); only containers attached to it can talk, and
+  # the only other member is Redis. This is how the sandbox reaches its job
+  # queue while having no path to the internet, Postgres, or aleph-api.
+  code-runner-net:
+    internal: true

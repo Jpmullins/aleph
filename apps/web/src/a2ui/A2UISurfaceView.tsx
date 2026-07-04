@@ -8,7 +8,7 @@
  * wiring proven by the Task 1 spike (`_spike/SpikePanel.tsx`), extracted so both
  * the right panel and (later) Live chat consume one code path.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MessageProcessor, Catalog, SurfaceModel } from "@a2ui/web_core/v0_9";
 import { A2uiSurface, basicCatalog } from "@a2ui/react/v0_9";
 
@@ -17,6 +17,33 @@ import { SurfaceProvider } from "./surface-context";
 
 /** Catalog id the backend's `createSurface.catalogId` references. */
 export const ALEPH_V09_CATALOG_ID = "aleph://v1";
+
+/**
+ * Read the monotonic sequence stamped on every surface SSE message (WP-4). The
+ * server stamps `seq` (and mirrors it as the SSE `id:`); the client applies
+ * strictly-increasing seqs and drops duplicates / out-of-order frames so a
+ * reconnect replay or a racing delivery can never apply state out of order.
+ */
+export function surfaceSeq(msg: unknown): number | null {
+  if (msg && typeof msg === "object" && "seq" in msg) {
+    const s = (msg as { seq: unknown }).seq;
+    return typeof s === "number" ? s : null;
+  }
+  return null;
+}
+
+/** Append a stable per-connection id so the server's replay ring survives an
+ * `EventSource` auto-reconnect (same URL, same `cid`). */
+function withConnectionId(streamUrl: string, cid: string): string {
+  try {
+    const u = new URL(streamUrl);
+    u.searchParams.set("cid", cid);
+    return u.toString();
+  } catch {
+    const sep = streamUrl.includes("?") ? "&" : "?";
+    return `${streamUrl}${sep}cid=${encodeURIComponent(cid)}`;
+  }
+}
 
 /**
  * One shared catalog: ALL of Aleph's domain impls (13 cards + 5 surfaces, from
@@ -139,21 +166,40 @@ interface StreamProps {
 export function A2UIStreamSurfaceView({ streamUrl, projectId, surface }: StreamProps) {
   const catalog = useMemo(() => buildAlephCatalog(), []);
   const [surfaces, setSurfaces] = useState<AlephSurface[]>([]);
+  // One connection id per mount. `EventSource` auto-reconnect reuses the same
+  // URL (hence the same cid), so the server can replay only missed deltas.
+  const cidRef = useRef<string>("");
+  if (!cidRef.current) {
+    cidRef.current =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
 
   useEffect(() => {
     const processor = new MessageProcessor([catalog]);
     let live = true;
+    // Ordering guard: last applied seq for THIS connection (survives an
+    // EventSource auto-reconnect within this effect run).
+    let lastSeq = -1;
     const sync = () => {
       if (live) setSurfaces(Array.from(processor.model.surfacesMap.values()));
     };
     const createdSub = processor.onSurfaceCreated(sync);
     const deletedSub = processor.onSurfaceDeleted(sync);
 
-    const es = new EventSource(streamUrl, { withCredentials: false });
+    const es = new EventSource(withConnectionId(streamUrl, cidRef.current), {
+      withCredentials: false,
+    });
     es.onmessage = (ev) => {
       if (!live || !ev.data) return; // heartbeats are SSE comments → never onmessage
       try {
         const msg = JSON.parse(ev.data) as unknown;
+        const seq = surfaceSeq(msg);
+        if (seq !== null) {
+          if (seq <= lastSeq) return; // duplicate / out-of-order → drop
+          lastSeq = seq;
+        }
         processor.processMessages([msg] as never);
         sync();
       } catch {

@@ -11,9 +11,11 @@ from __future__ import annotations
 
 from aleph_a2ui.messages import full_surface
 from aleph_a2ui.surface_streamer import (
+    SurfaceStreamBuffer,
     data_model_patches_to_messages,
     diff_data_model,
     split_surface_messages,
+    stamp_seq,
 )
 
 
@@ -195,3 +197,60 @@ def test_diff_then_messages_roundtrip_for_a_delta() -> None:
         "value": {"id": "H2", "confidence": "low"},
     } in bodies
     assert len(bodies) == 2
+
+
+# ---------------------------------------------------------------------------
+# SurfaceStreamBuffer — seq stamping + reconnect/resume ring (WP-4 sub-spec a)
+# ---------------------------------------------------------------------------
+
+
+def test_stamp_seq_injects_seq_without_mutating_source() -> None:
+    src = {"version": "v0.9", "createSurface": {"surfaceId": "wiki"}}
+    stamped = stamp_seq(src, 7)
+    assert stamped["seq"] == 7
+    assert "seq" not in src  # non-mutating copy
+
+
+def test_buffer_stamps_strictly_increasing_seq() -> None:
+    buf = SurfaceStreamBuffer(ring_size=64)
+    seqs = [buf.stamp({"m": i})["seq"] for i in range(5)]
+    assert seqs == [0, 1, 2, 3, 4]
+    assert buf.newest_seq == 4
+    assert buf.oldest_seq == 0
+
+
+def test_buffer_can_replay_within_window() -> None:
+    buf = SurfaceStreamBuffer(ring_size=64)
+    for i in range(5):
+        buf.stamp({"m": i})
+    # Client last saw seq 2 → messages 3,4 are still retained → replayable.
+    assert buf.can_replay(2) is True
+    assert [m["m"] for m in buf.messages_after(2)] == [3, 4]
+    # Client already has everything (last == newest) → replayable, nothing to send.
+    assert buf.can_replay(4) is True
+    assert buf.messages_after(4) == []
+
+
+def test_buffer_rejects_future_last_event_id() -> None:
+    buf = SurfaceStreamBuffer(ring_size=64)
+    buf.stamp({"m": 0})
+    assert buf.can_replay(9) is False  # claims to have seen more than we sent
+
+
+def test_buffer_gap_beyond_ring_is_not_replayable() -> None:
+    buf = SurfaceStreamBuffer(ring_size=4)
+    for i in range(10):  # only seqs 6..9 retained
+        buf.stamp({"m": i})
+    assert buf.oldest_seq == 6
+    assert buf.can_replay(9) is True  # up to date
+    assert buf.can_replay(5) is True  # last-before-oldest boundary is fine
+    assert buf.can_replay(3) is False  # 4,5 were evicted → gap → full resync
+    # Retained tail after seq 6 is exactly seqs 7,8,9.
+    assert [m["seq"] for m in buf.messages_after(6)] == [7, 8, 9]
+
+
+def test_empty_buffer_never_replays() -> None:
+    buf = SurfaceStreamBuffer()
+    assert buf.can_replay(0) is False
+    assert buf.newest_seq == -1
+    assert buf.oldest_seq is None

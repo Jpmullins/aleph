@@ -15,7 +15,6 @@ from aleph_a2ui.components.surfaces import (
     artifacts_surface_v09,
     briefs_surface_v09,
     hypotheses_surface_v09,
-    hypothesis_cards_v09,
     notes_surface_v09,
     wiki_surface_v09,
 )
@@ -112,48 +111,65 @@ def _assert_surface_messages(msgs: list[dict], *, surface_id: str, component: st
     return comps[0]
 
 
-def test_wiki_surface_v09_shape() -> None:
-    comp = _assert_surface_messages(
-        wiki_surface_v09(children=[]), surface_id="wiki", component="WikiSurface"
-    )
-    assert comp["view_mode"] == "page"
-    assert comp["children"] == []
-
-
-def test_artifacts_surface_v09_shape() -> None:
-    _assert_surface_messages(
-        artifacts_surface_v09(), surface_id="artifacts", component="ArtifactsSurface"
-    )
-
-
-def test_notes_surface_v09_shape() -> None:
-    cards = [{"type": "NotebookCellCard", "id": "s-1", "props": {"section_id": "x"}}]
-    comp = _assert_surface_messages(
-        notes_surface_v09(children=cards), surface_id="notes", component="NotesSurface"
-    )
-    assert comp["children"] == cards
-
-
-def test_hypotheses_surface_v09_shape() -> None:
-    _assert_surface_messages(
-        hypotheses_surface_v09(), surface_id="hypotheses", component="HypothesesSurface"
-    )
-
-
-def test_hypothesis_cards_v09_shape() -> None:
-    msgs = hypothesis_cards_v09(
-        hypotheses=[
-            {"hypothesis_id": "h1", "title": "T", "confidence": "likely", "evidence_count": 2}
-        ]
-    )
-    # full_surface list: createSurface + updateComponents + root updateDataModel.
+def _assert_bound_surface(
+    msgs: list[dict], *, surface_id: str, component: str
+) -> tuple[dict, dict]:
+    """A data-bound tab = full_surface: createSurface + updateComponents (one
+    root component whose props are `{path}` bindings) + a root updateDataModel.
+    Returns (root component, data model)."""
+    assert len(msgs) == 3
     assert list(msgs[0].keys()) == ["version", "createSurface"]
-    assert msgs[0]["createSurface"]["surfaceId"] == "hypotheses"
+    assert msgs[0]["createSurface"]["surfaceId"] == surface_id
+    assert msgs[0]["createSurface"]["catalogId"] == ALEPH_V09_CATALOG_ID
     comps = msgs[1]["updateComponents"]["components"]
-    assert comps[0]["component"] == "Column"
-    assert comps[1]["component"] == "HypothesisCard"
-    assert comps[1]["confidence"] == {"path": "/items/0/confidence"}
-    assert msgs[2]["updateDataModel"]["value"]["items"][0]["evidence_count"] == 2
+    assert len(comps) == 1
+    assert comps[0]["id"] == "root"
+    assert comps[0]["component"] == component
+    assert msgs[2]["updateDataModel"]["path"] == "/"
+    return comps[0], msgs[2]["updateDataModel"]["value"]
+
+
+def test_wiki_surface_v09_binds_pages_and_open() -> None:
+    comp, model = _assert_bound_surface(
+        wiki_surface_v09(pages=[{"id": "p1", "title": "T"}], open_page=None),
+        surface_id="wiki",
+        component="WikiSurface",
+    )
+    assert comp["pages"] == {"path": "/pages"}
+    assert comp["open"] == {"path": "/open"}
+    assert model == {"pages": [{"id": "p1", "title": "T"}], "open": None}
+
+
+def test_artifacts_surface_v09_binds_sources_and_artifacts() -> None:
+    comp, model = _assert_bound_surface(
+        artifacts_surface_v09(sources=[{"id": "s1"}], artifacts=[]),
+        surface_id="library",
+        component="ArtifactsSurface",
+    )
+    assert comp["sources"] == {"path": "/sources"}
+    assert comp["artifacts"] == {"path": "/artifacts"}
+    assert model == {"sources": [{"id": "s1"}], "artifacts": []}
+
+
+def test_notes_surface_v09_binds_notes() -> None:
+    comp, model = _assert_bound_surface(
+        notes_surface_v09(notes=[{"id": "n1", "title": "N", "body_md": "b"}]),
+        surface_id="notes",
+        component="NotesSurface",
+    )
+    assert comp["notes"] == {"path": "/notes"}
+    assert model["notes"][0]["id"] == "n1"
+
+
+def test_hypotheses_surface_v09_binds_items_and_ach() -> None:
+    comp, model = _assert_bound_surface(
+        hypotheses_surface_v09(items=[{"id": "h1"}], ach=None),
+        surface_id="hypotheses",
+        component="HypothesesSurface",
+    )
+    assert comp["items"] == {"path": "/items"}
+    assert comp["ach"] == {"path": "/ach"}
+    assert model == {"items": [{"id": "h1"}], "ach": None}
 
 
 def test_briefs_surface_v09_carries_approval_children() -> None:

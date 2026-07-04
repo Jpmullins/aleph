@@ -6,8 +6,11 @@
  * A2UI surfaces live over AG-UI, and shares state with the workspace:
  *
  *   - `useAgentContext` tells the agent which right-panel tab / wiki page the
- *     analyst is viewing, so it can answer "what am I looking at?".
- *   - `useFrontendTool` (`open_surface`) lets the agent drive the right panel.
+ *     analyst is viewing (plus the current claim/text selection), so it can
+ *     answer "what am I looking at?" / "summarize this page" with nothing named.
+ *   - `useFrontendTool` (`focus_tab` / `open_page` / `highlight_claim`) lets the
+ *     agent drive the workspace; each dispatches through the ledger-audited
+ *     action router (`POST /cards/actions`) before applying the UI change.
  *   - Project scope rides on the thread id (`proj:<projectId>:<thread>`), the
  *     only channel `ag-ui-langgraph` threads into the graph config.
  *
@@ -40,17 +43,55 @@ interface Props {
   threadId: string | null;
 }
 
+interface CardActionResult {
+  action_id: string;
+  ok: boolean;
+  result: Record<string, unknown>;
+}
+
 export function CopilotChatSurface({ projectId, threadId }: Props) {
-  const { activeSurface, setActiveSurface, openPageTitle } = useWorkspaceUI();
+  const {
+    activeSurface,
+    setActiveSurface,
+    openPageTitle,
+    openPageId,
+    setOpenPageId,
+    selection,
+    setHighlightedClaimId,
+  } = useWorkspaceUI();
   const copilotThreadId = `proj:${projectId}:${threadId ?? "default"}`;
 
   // Share the analyst's current view with the agent (shared state, UI → agent).
+  // Shape: {active_tab, open_page_id, open_page_title, selection}. `open_page_id`
+  // being in shared state is what lets "summarize this page" work unnamed.
   useAgentContext({
     description:
       "The analyst's current workspace view: which right-panel surface tab is " +
-      "active and which wiki page (if any) they have open.",
-    value: { activeSurface, openPageTitle: openPageTitle ?? "(none)" },
+      "active, which wiki page (if any) they have open, and the claim/text they " +
+      "currently have selected in the reader. Use open_page_id/selection to act " +
+      'on "this page" / "this claim" without asking which one.',
+    value: {
+      active_tab: activeSurface,
+      open_page_id: openPageId ?? null,
+      open_page_title: openPageTitle ?? null,
+      selection: selection
+        ? { claim_id: selection.claim_id, text: selection.text, page_id: selection.page_id }
+        : null,
+    },
   });
+
+  // Dispatch a frontend tool through the ledger-audited action router before
+  // applying the local UI change, so every agent-driven workspace move is
+  // audited exactly like an analyst's card click.
+  const dispatchAction = (
+    action_kind: string,
+    params: Record<string, unknown>,
+  ): Promise<CardActionResult> =>
+    api.post<CardActionResult>(`/v1/projects/${projectId}/cards/actions`, {
+      surface_kind: "ChatSurface",
+      action_kind,
+      params,
+    });
 
   // Close the action loop: tell the agent what the analyst recently did on the
   // surfaces (approved/rejected proposals, resolved/dismissed findings, unpins)
@@ -75,9 +116,10 @@ export function CopilotChatSurface({ projectId, threadId }: Props) {
     })),
   });
 
-  // Let the agent steer the right panel (shared state, agent → UI).
+  // Let the agent steer the right panel (agent → UI). `focus_tab` folds the old
+  // `open_surface` tool — one canonical tab-switch tool, now ledger-audited.
   useFrontendTool({
-    name: "open_surface",
+    name: "focus_tab",
     description:
       "Switch the analyst's right-hand panel to one of the surface tabs: " +
       `${SURFACE_TABS.join(", ")}. Call this when your answer is best explored ` +
@@ -85,8 +127,51 @@ export function CopilotChatSurface({ projectId, threadId }: Props) {
       "Library to show ingested sources and built artifacts).",
     parameters: z.object({ tab: z.enum(SURFACE_TABS) }),
     handler: async ({ tab }) => {
+      await dispatchAction("focus_tab", { tab });
       setActiveSurface(tab);
       return `Opened the ${tab} panel for the analyst.`;
+    },
+  });
+
+  // Open a wiki page in the reader — by page_id or human-readable slug (the
+  // router resolves the slug). Drives the Wiki tab + open page.
+  useFrontendTool({
+    name: "open_page",
+    description:
+      "Open a wiki page in the reader on the analyst's Wiki tab. Pass the " +
+      "page's UUID as `page_id`, or its `slug` if that's all you have. Use this " +
+      "to land the analyst on the exact page you're discussing.",
+    parameters: z.object({
+      page_id: z.string().optional(),
+      slug: z.string().optional(),
+    }),
+    handler: async ({ page_id, slug }) => {
+      const params: Record<string, unknown> = {};
+      if (page_id) params.page_id = page_id;
+      if (slug) params.slug = slug;
+      const res = await dispatchAction("navigate_wiki", params);
+      const nav = res.result?.navigate as { page_id?: string } | undefined;
+      const resolvedId = nav?.page_id ?? page_id ?? null;
+      setActiveSurface("Wiki");
+      if (resolvedId) setOpenPageId(resolvedId);
+      return resolvedId
+        ? `Opened wiki page ${resolvedId} in the reader.`
+        : "Could not resolve that page.";
+    },
+  });
+
+  // Highlight a claim in the open reader (agent → UI). WikiPageCard rings it.
+  useFrontendTool({
+    name: "highlight_claim",
+    description:
+      "Highlight a specific claim in the wiki page open in the reader, so the " +
+      "analyst's eye lands on it. Pass the claim's UUID as `claim_id`.",
+    parameters: z.object({ claim_id: z.string() }),
+    handler: async ({ claim_id }) => {
+      await dispatchAction("highlight_claim", { claim_id });
+      setActiveSurface("Wiki");
+      setHighlightedClaimId(claim_id);
+      return `Highlighted claim ${claim_id} in the reader.`;
     },
   });
 

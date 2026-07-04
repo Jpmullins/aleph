@@ -4,32 +4,31 @@
  * Columns = hypotheses, rows = evidence items, cells = each hypothesis's
  * stance toward that evidence (supports / contradicts / contextualizes). The
  * column with the fewest *disconfirming* (contradicting) items is highlighted
- * as the leading hypothesis. Reads `GET /hypotheses/ach`.
+ * as the leading hypothesis.
+ *
+ * WP-4: bound-props only — the matrix is supplied by the Hypotheses surface's
+ * data model (`ach`), never self-fetched.
  */
-import { useQuery } from "@tanstack/react-query";
-
-import { api } from "@/lib/api";
-
-interface AchHypothesis {
+export interface AchHypothesis {
   id: string;
   short_id: string;
   title: string;
   confidence: string;
   disconfirming_count: number;
 }
-interface AchTarget {
+export interface AchTarget {
   target_id: string;
   evidence_kind: string;
   label: string;
 }
-interface AchCell {
+export interface AchCell {
   hypothesis_id: string;
   target_id: string;
   stance: string;
   weight: number;
   note: string;
 }
-interface AchMatrix {
+export interface AchMatrix {
   hypotheses: AchHypothesis[];
   targets: AchTarget[];
   cells: AchCell[];
@@ -42,15 +41,9 @@ const STANCE: Record<string, { glyph: string; cls: string; label: string }> = {
   contextualizes: { glyph: "○", cls: "bg-amber-500/15 text-amber-500", label: "contextualizes" },
 };
 
-export function HypothesisMatrix({ projectId }: { projectId: string }) {
-  const q = useQuery<AchMatrix>({
-    queryKey: ["ach-matrix", projectId],
-    queryFn: () => api.get<AchMatrix>(`/v1/projects/${projectId}/hypotheses/ach`),
-    refetchInterval: 15_000,
-  });
-
-  if (q.isPending || !q.data) return null;
-  const { hypotheses, targets, cells, fewest_disconfirming_id } = q.data;
+export function HypothesisMatrix({ ach }: { ach: AchMatrix | null }) {
+  if (!ach) return null;
+  const { hypotheses, targets, cells, fewest_disconfirming_id } = ach;
   if (hypotheses.length === 0 || targets.length === 0) return null;
 
   const cellFor = (hid: string, tid: string) =>

@@ -125,6 +125,7 @@ const ALEPH_A2UI_CATALOG = {
           title: { type: "string" },
           url: { type: "string" },
           status: { type: "string" },
+          normalized_preview: { type: "string" },
         },
         required: ["source_id", "short_id", "title", "status"],
       },
@@ -180,58 +181,19 @@ const ALEPH_A2UI_CATALOG = {
         required: ["form_id", "title", "fields"],
       },
     },
-    MapCard: {
-      description:
-        "A geographic map of point features. Provide `points` (array of " +
-        "{lat,lng,label?} objects), optional `center` ({lat,lng}) and `zoom`.",
-      props: {
-        type: "object",
-        properties: {
-          title: { type: "string" },
-          points: { type: "array", items: { type: "object" } },
-          center: { type: "object" },
-          zoom: { type: "number" },
-          style_url: { type: "string" },
-        },
-      },
-    },
-    GraphCard: {
-      description:
-        "A node-link graph (entities + relationships). Provide `nodes` " +
-        "([{id,label?}]) and `edges` ([{source,target,label?}]).",
-      props: {
-        type: "object",
-        properties: {
-          title: { type: "string" },
-          nodes: { type: "array", items: { type: "object" } },
-          edges: { type: "array", items: { type: "object" } },
-        },
-      },
-    },
-    NotebookCellCard: {
-      description:
-        "An editable analyst-note cell (markdown). Render when surfacing or " +
-        "drafting a note section the analyst can edit in place.",
-      props: {
-        type: "object",
-        properties: {
-          section_id: { type: "string" },
-          body_md: { type: "string" },
-          ordinal: { type: "number" },
-        },
-        required: ["section_id", "body_md", "ordinal"],
-      },
-    },
     DiffCard: {
       description:
         "A revision diff for a wiki page (from_revision_id → to_revision_id). " +
-        "Render when showing what changed between two wiki revisions.",
+        "Render when showing what changed between two wiki revisions. Supply " +
+        "`from_body_md`/`to_body_md` to render a real line diff.",
       props: {
         type: "object",
         properties: {
           from_revision_id: { type: "string" },
           to_revision_id: { type: "string" },
           page_id: { type: "string" },
+          from_body_md: { type: "string" },
+          to_body_md: { type: "string" },
         },
         required: ["from_revision_id", "to_revision_id", "page_id"],
       },

@@ -11,15 +11,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
 from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
+from aleph_api.feedback_writer import record_feedback
 from aleph_api.middleware.project_scope import ProjectScopeDep
-from aleph_core.feedback import UserFeedback
-from aleph_core.ids import uuid7
 from aleph_evals.models import (
-    EvalCase,
     EvalDataset,
     EvalRun,
 )
-from aleph_observability.tracing import current_trace_id
 from aleph_security.roles import ProjectRole, require_at_least
 
 router = APIRouter(prefix="/v1", tags=["evals"])
@@ -112,82 +109,17 @@ async def post_feedback(
     principal: PrincipalDep,
 ) -> FeedbackOut:
     require_at_least(principal, project_id, at_least=ProjectRole.VIEWER)
-    fb = UserFeedback(
-        id=uuid7(),
+    fb = await record_feedback(
+        session,
+        ledger,
         project_id=project_id,
+        actor_id=principal.user_id,
+        actor_kind=principal.actor_kind,
         target_kind=body.target_kind,
         target_id=body.target_id,
         signal=body.signal,
         note=body.note,
         severity=body.severity,
-        context_jsonb=body.context,
-        promoted_to_eval_case_id=None,
-        created_by=principal.user_id,
-        access_scope="project",
+        context=body.context,
     )
-    session.add(fb)
-    await session.flush()
-    await ledger.append(
-        project_id=project_id,
-        actor_id=principal.user_id,
-        actor_kind=principal.actor_kind,
-        action_kind=f"feedback.{body.signal}",
-        target_id=body.target_id,
-        target_kind=body.target_kind,
-        payload={
-            "severity": body.severity,
-            "note_length": len(body.note),
-        },
-        trace_id=current_trace_id(),
-    )
-
-    # Promote high-signal feedback to an EvalCase under a per-project
-    # "user_feedback" EvalDataset (lazily created).
-    if body.signal in ("marked_wrong", "misleading", "false_positive"):
-        await _promote_to_eval_case(session, fb)
-
     return FeedbackOut.model_validate(fb)
-
-
-async def _promote_to_eval_case(session, fb: UserFeedback) -> None:
-    dataset_name = f"user_feedback:{fb.project_id}"
-    existing = (
-        await session.execute(select(EvalDataset).where(EvalDataset.name == dataset_name))
-    ).scalar_one_or_none()
-    if existing is None:
-        existing = EvalDataset(
-            id=uuid7(),
-            name=dataset_name,
-            description=f"User feedback promoted to regression cases for {fb.project_id}",
-            kind="metric_only",
-            case_count=0,
-            fixture_path=f"<runtime:user_feedback:{fb.project_id}>",
-            gate_kind="warning",
-            gate_thresholds_jsonb={},
-            introduced_in_increment=8,
-            created_by=fb.created_by,
-            access_scope="project",
-        )
-        session.add(existing)
-        await session.flush()
-    case = EvalCase(
-        id=uuid7(),
-        eval_dataset_id=existing.id,
-        case_key=f"feedback-{fb.id}",
-        payload_jsonb={
-            "target_kind": fb.target_kind,
-            "target_id": str(fb.target_id),
-            "context": fb.context_jsonb,
-        },
-        expected_jsonb={
-            "signal_not_in": ["marked_wrong", "misleading", "false_positive"],
-            "note": fb.note,
-        },
-        tags_jsonb=["user_feedback", fb.signal],
-        origin="user_feedback",
-        origin_ref_id=fb.id,
-    )
-    session.add(case)
-    existing.case_count += 1
-    fb.promoted_to_eval_case_id = case.id
-    await session.flush()

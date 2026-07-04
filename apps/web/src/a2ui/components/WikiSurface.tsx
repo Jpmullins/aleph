@@ -1,46 +1,41 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
-import { renderChildCard, useSurface } from "../surface-context";
-import { WikiBodyMarkdown } from "@/components/WikiBodyMarkdown";
-import { useLiveSignals } from "@/hooks/live-signals";
-import type { WikiLiveSignals } from "@/hooks/useWikiLiveSignals";
-import { api } from "@/lib/api";
 import { useWorkspaceUI } from "@/lib/workspace-ui";
-import { CardShell, FeedbackButton, Pill, SurfaceHeader, type RendererProps } from "./_shared";
+import { WikiPageCard } from "./WikiPageCard";
+import { Pill, SurfaceHeader, type RendererProps } from "./_shared";
 
-/** Is this page currently being compiled by an agent (by id or title)? */
-function isCompiling(live: WikiLiveSignals, p: { id: string; title: string }): boolean {
-  return live.compilingPages.has(p.id) || live.compilingPages.has(`title:${p.title}`);
-}
-
+/**
+ * WP-4: the Wiki tab renders ONLY from the surface data model
+ * (`{pages, open}`) streamed by the backend builder — no `useQuery`, no
+ * polling, no fetch. Opening a page is an `open` A2UI action (routed through
+ * the ledger-audited action router); the right panel re-streams with
+ * `?page_id=`, which populates `open`. The rich reader card + inline
+ * approve/reject/repair are the WP-4b reader tier; for now the body renders
+ * through the bound markdown primitive and the reader is read-only.
+ */
 interface WikiPageSummary {
   id: string;
   title: string;
   slug: string;
-  page_kind: string; // "topic" | "source" | ...
-  summary: string;
+  page_kind: string;
   is_stub: boolean;
   status: string;
   current_revision_id: string | null;
   last_compiled_at: string | null;
 }
 
-interface WikiPageDetail {
-  page: WikiPageSummary;
+interface OpenPage {
+  page_id: string;
+  title: string;
+  status: string;
+  is_stub?: boolean;
   revision: { body_md: string; revision_no: number; created_at: string } | null;
   claims: Array<{ id: string; text: string; confidence: string; section_anchor: string | null }>;
+  citations: Array<Record<string, unknown>>;
   wikilinks_out: Array<{ dst_title: string; dst_page_id: string | null; occurrences: number }>;
+  html_url?: string | null;
 }
 
-const CONFIDENCE_TONE: Record<string, "emerald" | "amber" | "red" | "slate"> = {
-  "well-supported": "emerald",
-  well_supported: "emerald",
-  contested: "amber",
-  uncited: "red",
-};
-
-/** Lifecycle badge for a page's curation status. */
 const STATUS_TONE: Record<string, "emerald" | "amber" | "slate"> = {
   approved: "emerald",
   draft: "amber",
@@ -56,87 +51,69 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export function WikiSurface({ component, onAction }: RendererProps) {
-  const { projectId } = useSurface();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const pages = (component.props.pages as WikiPageSummary[] | undefined) ?? [];
+  const open = (component.props.open as OpenPage | null | undefined) ?? null;
+  const { setOpenPageId } = useWorkspaceUI();
   const [filter, setFilter] = useState("");
   const [draftsOnly, setDraftsOnly] = useState(false);
-  const { openPageId, setOpenPageId } = useWorkspaceUI();
 
-  // Honor external open requests (card "open" actions, agent navigation):
-  // consume openPageId into the local selection, then clear it.
-  useEffect(() => {
-    if (openPageId) {
-      setSelectedId(openPageId);
-      setOpenPageId(null);
-    }
-  }, [openPageId, setOpenPageId]);
+  const openPage = (id: string) => onAction("open", { target_id: id, target_kind: "wiki_page" });
 
-  // Live signals: instant index/page refresh + "✦ editing…" / "updated" presence
-  // as agents write. One workspace-level subscription (LiveSignalsProvider);
-  // freshness comes from the push stream, so the query below only keeps a slow
-  // safety-net interval.
-  const live = useLiveSignals();
-
-  // Embedded A2UI cards (charts / tables / graphs / maps the agent placed
-  // on this surface) render above the page browser, per spec §7.4 —
-  // "inline charts/tables/maps render here where they belong."
-  const embeds = component.children ?? [];
-
-  const pages = useQuery<WikiPageSummary[]>({
-    queryKey: ["wiki-pages", projectId],
-    queryFn: () => api.get<WikiPageSummary[]>(`/v1/projects/${projectId}/wiki/pages`),
-    // Event-driven now (the changes stream invalidates this on every write); the
-    // interval is just a self-healing backstop if the stream drops.
-    refetchInterval: 30_000,
-  });
-
-  const draftCount = useMemo(
-    () => (pages.data ?? []).filter((p) => p.status === "draft").length,
-    [pages.data],
-  );
+  const draftCount = useMemo(() => pages.filter((p) => p.status === "draft").length, [pages]);
 
   const filtered = useMemo(() => {
-    let list = pages.data ?? [];
+    let list = pages;
     if (draftsOnly) list = list.filter((p) => p.status === "draft");
     if (!filter) return list;
     const needle = filter.toLowerCase();
-    return list.filter(
-      (p) =>
-        p.title.toLowerCase().includes(needle) ||
-        p.summary.toLowerCase().includes(needle),
-    );
-  }, [pages.data, filter, draftsOnly]);
+    return list.filter((p) => p.title.toLowerCase().includes(needle));
+  }, [pages, filter, draftsOnly]);
 
   const topicPages = filtered.filter((p) => p.page_kind !== "source");
   const sourcePages = filtered.filter((p) => p.page_kind === "source");
 
-  // Reading a page.
-  if (selectedId) {
-    const selectedPage = (pages.data ?? []).find((p) => p.id === selectedId);
-    const compiling = selectedPage ? isCompiling(live, selectedPage) : false;
+  if (open) {
     return (
-      <WikiPageReader
-        projectId={projectId}
-        pageId={selectedId}
-        compiling={compiling}
-        onBack={() => setSelectedId(null)}
-        onOpenPage={setSelectedId}
-      />
+      <div className="flex h-full flex-col">
+        <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-[var(--border-muted,#e2e8f0)] bg-[var(--surface-raised,#fff)] px-3 py-2">
+          <button
+            type="button"
+            onClick={() => setOpenPageId(null)}
+            className="text-xs font-medium text-slate-500 hover:text-slate-900"
+            data-testid="wiki-back"
+          >
+            ← Wiki
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <WikiPageCard
+            component={{
+              type: "WikiPageCard",
+              id: "wiki-reader",
+              props: {
+                body_md: open.revision?.body_md ?? "",
+                claims: open.claims,
+                citations: open.citations,
+                wikilinks_out: open.wikilinks_out,
+                html_url: open.html_url ?? null,
+                page_meta: {
+                  page_id: open.page_id,
+                  title: open.title,
+                  status: open.status,
+                  is_stub: open.is_stub,
+                },
+              },
+            }}
+            onAction={onAction}
+          />
+        </div>
+      </div>
     );
   }
 
   return (
     <div className="flex h-full flex-col">
-      <SurfaceHeader
-        title="Wiki"
-        subtitle={
-          live.isAgentBuilding
-            ? "✦ agent is building the wiki…"
-            : pages.data
-              ? `${pages.data.length} page${pages.data.length === 1 ? "" : "s"}`
-              : undefined
-        }
-      />
+      <SurfaceHeader title="Wiki" subtitle={`${pages.length} page${pages.length === 1 ? "" : "s"}`} />
       <div className="border-b border-slate-200 px-3 py-2">
         <input
           value={filter}
@@ -162,23 +139,12 @@ export function WikiSurface({ component, onAction }: RendererProps) {
         </button>
       )}
       <div className="flex-1 space-y-3 overflow-y-auto p-3">
-        {embeds.length > 0 && (
-          <section className="space-y-2" data-testid="wiki-embeds">
-            {embeds.map((c) => (
-              <div key={c.id}>{renderChildCard(c, onAction)}</div>
-            ))}
-          </section>
-        )}
-
-        {pages.isPending && <p className="text-sm text-slate-400">Loading wiki…</p>}
-
-        {pages.isSuccess && pages.data.length === 0 && embeds.length === 0 && <WikiEmptyState />}
-
+        {pages.length === 0 && <WikiEmptyState />}
         {topicPages.length > 0 && (
-          <PageGroup label="Topic pages" pages={topicPages} live={live} onSelect={setSelectedId} />
+          <PageGroup label="Topic pages" pages={topicPages} onSelect={openPage} />
         )}
         {sourcePages.length > 0 && (
-          <PageGroup label="Source pages" pages={sourcePages} live={live} onSelect={setSelectedId} />
+          <PageGroup label="Source pages" pages={sourcePages} onSelect={openPage} />
         )}
       </div>
     </div>
@@ -190,15 +156,8 @@ function WikiEmptyState() {
     <div className="rounded-lg border border-dashed border-slate-300 p-6 text-center">
       <p className="text-sm font-medium text-slate-700">No wiki pages yet</p>
       <p className="mt-2 text-xs text-slate-500">
-        The wiki compiles from ingested sources. Click{" "}
-        <strong>+ Upload source</strong> in the left panel to add a document —
-        you'll see the build progress in the <strong>Activity</strong> card at
-        the top of the chat, and pages will appear here as the wiki agent
-        compiles them.
-      </p>
-      <p className="mt-2 text-xs text-slate-400">
-        Or use <code className="rounded bg-slate-100 px-1">/synthesize</code> in
-        chat to research a topic and grow the wiki.
+        The wiki compiles from ingested sources. Click <strong>+ Upload source</strong> in the left
+        panel to add a document — pages will appear here as the wiki agent compiles them.
       </p>
     </div>
   );
@@ -207,12 +166,10 @@ function WikiEmptyState() {
 function PageGroup({
   label,
   pages,
-  live,
   onSelect,
 }: {
   label: string;
   pages: WikiPageSummary[];
-  live: WikiLiveSignals;
   onSelect: (id: string) => void;
 }) {
   return (
@@ -221,263 +178,25 @@ function PageGroup({
         {label} ({pages.length})
       </h4>
       <ul className="space-y-1.5">
-        {pages.map((p) => {
-          const compiling = isCompiling(live, p);
-          const pulsing = live.recentlyCommitted.has(p.id);
-          return (
-            <li key={p.id}>
-              <button
-                type="button"
-                onClick={() => onSelect(p.id)}
-                className={`block w-full rounded-md border bg-white px-3 py-2 text-left transition-colors hover:border-slate-400 ${
-                  pulsing
-                    ? "border-emerald-400 bg-emerald-50"
-                    : compiling
-                      ? "border-sky-300"
-                      : "border-slate-200"
-                }`}
-                data-testid={`wiki-page-${p.id}`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="truncate text-sm font-medium text-slate-900">{p.title}</span>
-                  {compiling ? (
-                    <Pill tone="sky">✦ editing…</Pill>
-                  ) : pulsing ? (
-                    <Pill tone="emerald">updated</Pill>
-                  ) : (
-                    <span className="flex items-center gap-1">
-                      {p.is_stub && <Pill tone="amber">stub</Pill>}
-                      {p.status !== "approved" && <StatusBadge status={p.status} />}
-                    </span>
-                  )}
-                </div>
-                {p.summary && (
-                  <p className="mt-0.5 line-clamp-2 text-xs text-slate-500">{p.summary}</p>
-                )}
-              </button>
-            </li>
-          );
-        })}
+        {pages.map((p) => (
+          <li key={p.id}>
+            <button
+              type="button"
+              onClick={() => onSelect(p.id)}
+              className="block w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-left transition-colors hover:border-slate-400"
+              data-testid={`wiki-page-${p.id}`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate text-sm font-medium text-slate-900">{p.title}</span>
+                <span className="flex items-center gap-1">
+                  {p.is_stub && <Pill tone="amber">stub</Pill>}
+                  {p.status !== "approved" && <StatusBadge status={p.status} />}
+                </span>
+              </div>
+            </button>
+          </li>
+        ))}
       </ul>
     </section>
-  );
-}
-
-function WikiPageReader({
-  projectId,
-  pageId,
-  compiling,
-  onBack,
-  onOpenPage,
-}: {
-  projectId: string;
-  pageId: string;
-  compiling: boolean;
-  onBack: () => void;
-  onOpenPage: (id: string) => void;
-}) {
-  const { surface } = useSurface();
-  const queryClient = useQueryClient();
-  const detail = useQuery<WikiPageDetail>({
-    queryKey: ["wiki-page", projectId, pageId],
-    queryFn: () => api.get<WikiPageDetail>(`/v1/projects/${projectId}/wiki/pages/${pageId}`),
-  });
-
-  const invalidatePage = () => {
-    void queryClient.invalidateQueries({ queryKey: ["wiki-page", projectId, pageId] });
-    void queryClient.invalidateQueries({ queryKey: ["wiki-pages", projectId] });
-  };
-
-  const repair = useMutation({
-    mutationFn: () =>
-      api.post<{ repaired: number }>(`/v1/projects/${projectId}/wiki/aliases/repair-links`, {}),
-    onSuccess: invalidatePage,
-  });
-
-  const approve = useMutation({
-    mutationFn: () =>
-      api.post(`/v1/projects/${projectId}/wiki/pages/${pageId}/approve`, {}),
-    onSuccess: invalidatePage,
-  });
-
-  const reject = useMutation({
-    mutationFn: () =>
-      api.post(`/v1/projects/${projectId}/wiki/pages/${pageId}/reject`, { reason: "" }),
-    onSuccess: invalidatePage,
-  });
-
-  const brokenCount = (detail.data?.wikilinks_out ?? []).filter((l) => !l.dst_page_id).length;
-
-  // Resolve inline [[wikilinks]] + "Links out" entries by title → target page.
-  // wikilinks_out is derived from this page's body, so every inline link is
-  // present here with its resolution (dst_page_id null = broken).
-  const linkMap = useMemo(() => {
-    const map = new Map<string, string | null>();
-    for (const l of detail.data?.wikilinks_out ?? []) map.set(l.dst_title, l.dst_page_id);
-    return map;
-  }, [detail.data]);
-
-  const navigateByTitle = (title: string) => {
-    const dst = linkMap.get(title);
-    if (dst) onOpenPage(dst);
-  };
-  const resolveLink = (title: string): boolean | null =>
-    linkMap.has(title) ? linkMap.get(title) !== null : null;
-
-  return (
-    <div className="flex flex-col">
-      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-[var(--border-muted,#e2e8f0)] bg-[var(--surface-raised,#fff)] px-3 py-2">
-        <button
-          type="button"
-          onClick={onBack}
-          className="text-xs font-medium text-slate-500 hover:text-slate-900"
-        >
-          ← Wiki
-        </button>
-        {detail.data && (
-          <span className="truncate text-sm font-semibold text-slate-900">
-            {detail.data.page.title}
-          </span>
-        )}
-        {detail.data && <StatusBadge status={detail.data.page.status} />}
-        {detail.data?.page.status === "draft" && (
-          <span className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => approve.mutate()}
-              disabled={approve.isPending}
-              className="rounded border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-800 hover:bg-emerald-100 disabled:opacity-50"
-              data-testid="wiki-approve"
-            >
-              {approve.isPending ? "Approving…" : "Approve"}
-            </button>
-            <button
-              type="button"
-              onClick={() => reject.mutate()}
-              disabled={reject.isPending}
-              className="rounded border border-red-300 bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
-              data-testid="wiki-reject"
-            >
-              {reject.isPending ? "Rejecting…" : "Reject"}
-            </button>
-          </span>
-        )}
-        {detail.data && (
-          <span className="ml-auto">
-            <FeedbackButton
-              projectId={projectId}
-              targetKind="wiki_page"
-              targetId={pageId}
-              surface={surface}
-            />
-          </span>
-        )}
-      </div>
-      <div className="p-4">
-        {compiling && (
-          <div
-            className="mb-3 flex items-center gap-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs text-sky-700"
-            data-testid="wiki-editing-banner"
-          >
-            <span className="animate-pulse">✦</span> An agent is editing this page — it will
-            refresh as soon as the changes land.
-          </div>
-        )}
-        {detail.isPending && <p className="text-sm text-slate-400">Loading page…</p>}
-        {detail.isError && <p className="text-sm text-red-700">Failed to load page.</p>}
-        {detail.data && (
-          <>
-            <p className="mb-3 text-[11px] text-slate-400" data-testid="wiki-provenance">
-              {detail.data.revision
-                ? `Revision ${detail.data.revision.revision_no}`
-                : "No compiled revision"}
-              {detail.data.page.last_compiled_at &&
-                ` · compiled ${new Date(detail.data.page.last_compiled_at).toLocaleString()}`}
-            </p>
-            {detail.data.revision ? (
-              <WikiBodyMarkdown
-                body={detail.data.revision.body_md}
-                onNavigate={navigateByTitle}
-                resolveLink={resolveLink}
-              />
-            ) : (
-              <p className="text-sm italic text-slate-500">
-                This page is a stub — no compiled revision yet.
-              </p>
-            )}
-
-            {detail.data.claims.length > 0 && (
-              <section className="mt-5">
-                <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Claims ({detail.data.claims.length})
-                </h4>
-                <ul className="space-y-2">
-                  {detail.data.claims.map((c) => (
-                    <li key={c.id}>
-                      <CardShell subtitle={<Pill tone={CONFIDENCE_TONE[c.confidence] ?? "slate"}>{c.confidence}</Pill>}>
-                        <p className="text-sm text-slate-700">{c.text}</p>
-                      </CardShell>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-
-            {detail.data.wikilinks_out.length > 0 && (
-              <section className="mt-5">
-                <div className="mb-2 flex items-center gap-2">
-                  <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Links out ({detail.data.wikilinks_out.length})
-                  </h4>
-                  {brokenCount > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => repair.mutate()}
-                      disabled={repair.isPending}
-                      className="rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
-                      data-testid="wiki-repair-links"
-                    >
-                      {repair.isPending
-                        ? "Repairing…"
-                        : `Repair ${brokenCount} broken link${brokenCount === 1 ? "" : "s"}`}
-                    </button>
-                  )}
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {detail.data.wikilinks_out.map((l, i) =>
-                    l.dst_page_id ? (
-                      <button
-                        key={`${l.dst_title}-${i}`}
-                        type="button"
-                        onClick={() => onOpenPage(l.dst_page_id as string)}
-                        className="inline-flex items-center rounded border border-slate-300 bg-slate-100 px-2 py-0.5 text-xs text-slate-700 hover:bg-slate-200"
-                        data-testid="wiki-linkout"
-                      >
-                        [[{l.dst_title}]]
-                        {l.occurrences > 1 && (
-                          <span className="ml-1 text-slate-400">×{l.occurrences}</span>
-                        )}
-                      </button>
-                    ) : (
-                      <span
-                        key={`${l.dst_title}-${i}`}
-                        title="Unresolved link — no page with this title yet"
-                        className="inline-flex items-center rounded border border-dashed border-amber-400 bg-amber-50 px-2 py-0.5 text-xs text-amber-700"
-                        data-testid="wiki-linkout-broken"
-                      >
-                        [[{l.dst_title}]]
-                        {l.occurrences > 1 && (
-                          <span className="ml-1 text-amber-500">×{l.occurrences}</span>
-                        )}
-                      </span>
-                    ),
-                  )}
-                </div>
-              </section>
-            )}
-          </>
-        )}
-      </div>
-    </div>
   );
 }

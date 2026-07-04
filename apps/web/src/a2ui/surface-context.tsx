@@ -15,14 +15,16 @@ import { ClaimCard } from "./components/ClaimCard";
 import { DiffCard } from "./components/DiffCard";
 import { FindingCard } from "./components/FindingCard";
 import { FormCard } from "./components/FormCard";
-import { GraphCard } from "./components/GraphCard";
+import { HtmlDocCard } from "./components/HtmlDocCard";
+import { HtmlFrameCard } from "./components/HtmlFrameCard";
 import { HypothesesSurface } from "./components/HypothesesSurface";
+import { ImageCard } from "./components/ImageCard";
 import { HypothesisCard } from "./components/HypothesisCard";
-import { MapCard } from "./components/MapCard";
-import { NotebookCellCard } from "./components/NotebookCellCard";
+import { NoteEditorCard } from "./components/NoteEditorCard";
 import { NotesSurface } from "./components/NotesSurface";
 import { SourceCard } from "./components/SourceCard";
 import { TableCard } from "./components/TableCard";
+import { WikiPageCard } from "./components/WikiPageCard";
 import { WikiSurface } from "./components/WikiSurface";
 
 import type { A2UIComponent, ComponentName } from "./catalog";
@@ -86,15 +88,17 @@ const CARD_VIEWS: Record<ComponentName, ComponentType<ChildRenderProps>> = {
   SourceCard,
   ArtifactCard,
   ChartCard,
+  ImageCard,
+  HtmlFrameCard,
   TableCard,
-  MapCard,
-  GraphCard,
   ApprovalCard,
   FindingCard,
   HypothesisCard,
-  NotebookCellCard,
   FormCard,
   DiffCard,
+  WikiPageCard,
+  NoteEditorCard,
+  HtmlDocCard,
 };
 
 export function renderChildCard(

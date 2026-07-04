@@ -37,6 +37,12 @@ async def create_artifact(
         "report_markdown_bundle",
         "source_pack",
         "deck_pdf",
+        # WP-4c sandbox viz pipeline: code_runner outputs. Honesty rule (F5) —
+        # these are fully implemented (render_code_artifact_job); an unlisted
+        # kind still 400s.
+        "image",
+        "chart",
+        "html_frame",
     ):
         msg = f"invalid artifact_kind: {artifact_kind}"
         raise ValidationFailed(msg)

@@ -23,6 +23,9 @@ class WorkerSettings(BaseSettings):
 
     database_url: str
     redis_url: str
+    # Dedicated Redis for the isolated code_runner job bus (WP-4c). Defaults to
+    # the platform Redis for non-compose/test contexts where no sandbox runs.
+    code_runner_redis_url: str = "redis://redis:6379/0"
 
     # Asset storage (WP-1) — same selection as the API; workers read/write
     # the identical root (shared bind mount in compose).

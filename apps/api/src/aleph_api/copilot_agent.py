@@ -93,10 +93,6 @@ hand-composed A2UI primitives when one fits:
 - a **TableCard** for a taxonomy, comparison, or any row/column data (e.g. \
 "the kinds of distillation" → a table of Kind / Category / Description);
 - a **ChartCard** for quantitative data (or delegate to viz_builder's make_chart);
-- a **GraphCard** for a network, delegation chain, topology, or any \
-relationship/hierarchy — pass `nodes` (`[{id,label,group?}]`) and `edges` \
-(`[{source,target,label?}]`). NEVER draw a graph/topology as an ASCII diagram \
-in a text/code block; emit a GraphCard so it renders;
 - a **HypothesisCard**/matrix for competing hypotheses, a **ClaimCard** for a \
 single cited assertion.
 Emit the card via your render_a2ui tool using the exact component name above. \
@@ -104,6 +100,18 @@ Prefer the analyst's current context — the page or \
 hypothesis they are viewing, provided to you — when it is relevant. When work \
 lands in a specific tab (Briefs, Library, Hypotheses), point the analyst \
 there.
+
+## Driving the workspace (eyes + hands)
+
+You can see and steer the analyst's workspace. Shared state tells you the active \
+tab, the open wiki page, and the analyst's current selection — so "summarize \
+this page" needs nothing named. You can drive the UI: `focus_tab` switches the \
+right-panel tab, `open_page` opens a wiki page (by id or slug) in the reader, \
+and `highlight_claim` highlights a claim in the open page. You can also compose: \
+`pin_to_brief` keeps a card in Briefs, `compose_dossier` groups pages/cards into \
+one read-only dossier card, and `spotlight` sorts a Briefs card to the top. Use \
+these to land the analyst on exactly what you're talking about rather than only \
+describing it.
 
 When the analyst asks how the wiki is doing, what needs review, or which links \
 are broken, call `wiki_curation_status` for a quick read of draft pages awaiting \
@@ -607,6 +615,164 @@ async def _pin_to_briefs_impl(
     return f"Pinned '{title}' to the Briefs tab (card {resp.json()['card_id']})."
 
 
+async def _dispatch_card_action_impl(
+    action_kind: str,
+    params: dict[str, Any],
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Self-call the tested `/cards/actions` route (rule #3 — never raw DB).
+
+    The route runs the action through the ONE ledger-audited ActionRouter, so
+    the agent's composition verbs (compose_dossier / spotlight) are audited
+    identically to an analyst's card click (CardAction row + ledger event).
+    Returns the route's `{action_id, ok, result}` body, or `{"error": ...}`.
+    """
+    import httpx
+
+    settings = _runtime.get("settings")
+    project_id = _project_id_from_config(config)
+    if settings is None or project_id is None:
+        return {"error": "no project scope on this run"}
+    base = settings.aleph_self_url
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{base}/v1/projects/{project_id}/cards/actions",
+                json={
+                    "surface_kind": "ChatSurface",
+                    "action_kind": action_kind,
+                    "params": params,
+                },
+                headers={"Authorization": "Bearer local-dev"},
+            )
+    except Exception as exc:
+        return {"error": f"{action_kind} dispatch failed: {exc}"}
+    if resp.status_code >= 400:
+        return {"error": f"{action_kind} rejected ({resp.status_code}): {resp.text[:200]}"}
+    return resp.json()
+
+
+@tool
+async def pin_to_brief(
+    card_kind: str,
+    title: str,
+    props: dict[str, Any],
+    config: RunnableConfig,
+) -> str:
+    """Pin a catalog card to the Briefs tab so it survives the chat transcript.
+
+    `card_kind` is a catalog component name (e.g. "ClaimCard", "TableCard",
+    "WikiPageCard"); `title` labels the pinned card; `props` are the card's
+    props matching that component's schema. Use this to keep a card the analyst
+    should be able to return to (a key claim, a comparison table, a composed
+    view). It renders in the Briefs tab until the analyst unpins it.
+    """
+    return await _pin_to_briefs_impl(card_kind, title, props, config)
+
+
+@tool
+async def compose_dossier(
+    title: str,
+    config: RunnableConfig,
+    card_ids: list[str] | None = None,
+    page_ids: list[str] | None = None,
+) -> str:
+    """Compose a derived, read-only dossier card grouping wiki pages and/or cards.
+
+    Creates a single read-only Briefs card titled `title` that groups the
+    referenced wiki pages (`page_ids`, linked as [[wikilinks]]) and pinned cards
+    (`card_ids`). Use it to assemble a themed collection the analyst can open
+    from Briefs. The dossier is persisted and audited through the action router.
+    """
+    result = await _dispatch_card_action_impl(
+        "compose_dossier",
+        {
+            "title": title,
+            "card_ids": list(card_ids or []),
+            "page_ids": list(page_ids or []),
+        },
+        config,
+    )
+    if "error" in result:
+        return f"Could not compose the dossier: {result['error']}"
+    data = result.get("result", {})
+    return (
+        f"Composed dossier '{title}' (card {data.get('card_id')}) grouping "
+        f"{data.get('page_count', 0)} page(s) and {data.get('card_count', 0)} "
+        "card(s). It's pinned to the Briefs tab — open Briefs to see it."
+    )
+
+
+@tool
+async def spotlight(card_id: str, config: RunnableConfig) -> str:
+    """Spotlight a Briefs card so it sorts to the top of the pile.
+
+    `card_id` is the UUID of a pinned/composed Briefs card. Spotlighting marks it
+    so the Briefs surface orders it first and flags it visually. Use it to draw
+    the analyst's attention to the card that matters most right now. Audited
+    through the action router.
+    """
+    try:
+        UUID(card_id)
+    except ValueError:
+        return f"card_id must be a valid UUID (got '{card_id}')."
+    result = await _dispatch_card_action_impl("spotlight", {"card_id": card_id}, config)
+    if "error" in result:
+        return f"Could not spotlight the card: {result['error']}"
+    return f"Spotlighted card {card_id} — it now sorts to the top of the Briefs tab."
+
+
+async def _render_code_via_runner_impl(
+    code: str,
+    output_kind: str,
+    config: RunnableConfig,
+    title: str = "Sandbox chart",
+    pin: bool = True,
+) -> str:
+    """Run agent-written Python in the isolated sandbox → versioned artifact → pin.
+
+    Self-calls the tested `/viz/render-code` route (rule #3 — never touches the
+    DB or executes code here). The API dispatches to `aleph-workers`, which fans
+    the code out to the network-less `aleph-code-runner`, awaits the bytes,
+    persists a versioned artifact (checksum + producing_code + lineage), and pins
+    the resulting card to Briefs. The agent's process never runs the code
+    (amended rule 8)."""
+    import httpx
+
+    settings = _runtime.get("settings")
+    project_id = _project_id_from_config(config)
+    if settings is None or project_id is None:
+        return "Cannot render code (no project scope)."
+    base = settings.aleph_self_url
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{base}/v1/projects/{project_id}/viz/render-code",
+                json={
+                    "code": code,
+                    "output_kind": output_kind,
+                    "title": title,
+                    "pin": pin,
+                },
+                headers={"Authorization": "Bearer local-dev"},
+            )
+    except Exception as exc:
+        return f"Could not dispatch the sandbox render: {exc}"
+    if resp.status_code >= 400:
+        return f"Sandbox render could not start ({resp.status_code}): {resp.text[:200]}"
+    body = resp.json()
+    if not body.get("dispatched"):
+        return (
+            f"Queued the {output_kind} render of '{title}', but the sandbox "
+            "did not accept the dispatch — the code_runner may be unavailable."
+        )
+    return (
+        f"Rendering '{title}' ({output_kind}) in the sandbox. It runs isolated "
+        "(no network, no credentials); when it finishes the chart is a versioned "
+        "artifact pinned to the Briefs tab. Open Briefs to see it."
+    )
+
+
 async def _ingest_source_impl(url: str, config: RunnableConfig, title: str = "") -> str:
     """Ingest a web page or document URL into the project's knowledge store.
 
@@ -1085,6 +1251,11 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
             list_connectors,
             set_connector_enabled,
             set_model_profile,
+            # WP-4d hands: persist/compose verbs (the UI-driving open_page /
+            # focus_tab / highlight_claim are CopilotKit frontend tools).
+            pin_to_brief,
+            compose_dossier,
+            spotlight,
         ],
         system_prompt=SYSTEM_PROMPT,
         subagents=[

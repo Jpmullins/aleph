@@ -55,6 +55,11 @@ _ARTIFACT_MIME = {
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "md": "text/markdown; charset=utf-8",
     "zip": "application/zip",
+    # WP-4c code_runner artifact versions (image / chart / html_frame).
+    "png": "image/png",
+    "svg": "image/svg+xml",
+    "json": "application/json",
+    "html": "text/html; charset=utf-8",
 }
 
 
@@ -164,14 +169,22 @@ async def stream_asset(
         # browser second-guess them into something executable.
         "X-Content-Type-Options": "nosniff",
     }
-    if mime.split(";")[0].strip() != "application/pdf":
+    base_mime = mime.split(";")[0].strip()
+    if base_mime != "application/pdf":
         # Uploaded HTML/SVG must never run script on the API origin — in
         # local auth mode every same-origin request carries ambient auth.
         # CSP `sandbox` applies iframe-sandbox semantics server-side (and,
         # unlike the iframe attribute, also covers direct URL opens). PDFs
         # are exempt: Chromium's PDF viewer refuses to render in a sandboxed
         # document (verified empirically), and it isn't page-context script.
-        headers["Content-Security-Policy"] = "sandbox"
+        if asset_kind == "artifact-version" and base_mime == "text/html":
+            # WP-4c interactive HtmlFrameCard artifact: scripts run ONLY inside
+            # the sandbox's opaque origin (no `allow-same-origin` → no access to
+            # the API origin's ambient auth/cookies). This is the amended-rule-8
+            # escape hatch; the FE iframe carries the matching `allow-scripts`.
+            headers["Content-Security-Policy"] = "sandbox allow-scripts"
+        else:
+            headers["Content-Security-Policy"] = "sandbox"
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers=headers)
 

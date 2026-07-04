@@ -48,6 +48,8 @@ exactly four messages: `createSurface`, `updateComponents`, `updateDataModel`,
 
 from __future__ import annotations
 
+import time
+from collections import deque
 from typing import Any, cast
 
 from aleph_a2ui.messages import update_data_model
@@ -201,3 +203,87 @@ def data_model_patches_to_messages(
                 update_data_model(surface_id=surface_id, path=op["path"], value=op["value"])
             )
     return messages
+
+
+# ---------------------------------------------------------------------------
+# Reconnect / resume / ordering — the monotonic sequence + bounded ring buffer
+# (WP-4 sub-spec (a)). This is the load-bearing gap the delta substrate had:
+# without a resume cursor a dropped SSE connection could silently miss deltas
+# (EventSource auto-reconnect just re-opens; the server used to re-snapshot,
+# tearing every card down). We stamp every SSE message with a per-connection
+# `seq` (also emitted as the SSE `id:` field) and keep the last `ring_size`
+# messages so a reconnect carrying `Last-Event-ID` can replay only what it
+# missed, or fall back to a clean full snapshot if the gap is beyond the ring.
+#
+# The class is a *pure* state machine (no I/O): the route (`routes/surfaces.py`)
+# owns the registry keyed by client-connection id and the SSE serialization, so
+# the stamping/replay logic is unit-testable in isolation.
+# ---------------------------------------------------------------------------
+
+
+def stamp_seq(message: dict[str, Any], seq: int) -> dict[str, Any]:
+    """Return a copy of `message` with the monotonic `seq` stamped in.
+
+    The same integer is emitted as the SSE `id:` line so the browser
+    `EventSource` echoes it back as `Last-Event-ID` on reconnect.
+    """
+    return {**message, "seq": seq}
+
+
+class SurfaceStreamBuffer:
+    """Per-connection sequence stamper + bounded replay ring.
+
+    * `stamp(message)` assigns the next monotonic `seq`, records the stamped
+      message in the ring, and returns it.
+    * `can_replay(last_event_id)` is True when every message after
+      `last_event_id` is still retained (no eviction gap and the id is not from
+      the future) — i.e. a reconnect can be served incrementally.
+    * `messages_after(last_event_id)` returns the retained tail to replay.
+
+    `model` / `structural` hold the surface state *as last emitted* so a
+    resuming generator can diff forward from exactly what the client last had
+    (delivering only the deltas missed while disconnected — never a
+    resnapshot). `touched` supports TTL eviction of abandoned connections in the
+    route's registry.
+    """
+
+    def __init__(self, ring_size: int = 64) -> None:
+        self._ring: deque[tuple[int, dict[str, Any]]] = deque(maxlen=ring_size)
+        self.next_seq: int = 0
+        self.model: dict[str, Any] = {}
+        self.structural: list[dict[str, Any]] = []
+        self.touched: float = time.monotonic()
+
+    def stamp(self, message: dict[str, Any]) -> dict[str, Any]:
+        seq = self.next_seq
+        self.next_seq += 1
+        stamped = stamp_seq(message, seq)
+        self._ring.append((seq, stamped))
+        self.touched = time.monotonic()
+        return stamped
+
+    @property
+    def newest_seq(self) -> int:
+        """Highest seq assigned so far (-1 before anything is stamped)."""
+        return self.next_seq - 1
+
+    @property
+    def oldest_seq(self) -> int | None:
+        """Lowest seq still retained in the ring (None when empty)."""
+        return self._ring[0][0] if self._ring else None
+
+    def can_replay(self, last_event_id: int) -> bool:
+        """Can we serve a reconnect at `last_event_id` incrementally?"""
+        if not self._ring:
+            return False
+        if last_event_id > self.newest_seq:
+            # Client claims to have seen more than we ever sent → distrust, resync.
+            return False
+        oldest = self.oldest_seq
+        # Every message with seq in (last_event_id, newest_seq] must be retained.
+        # Retained ids start at `oldest`, so we need last_event_id >= oldest - 1.
+        return oldest is not None and last_event_id >= oldest - 1
+
+    def messages_after(self, last_event_id: int) -> list[dict[str, Any]]:
+        """Retained stamped messages with seq > `last_event_id`, in order."""
+        return [m for s, m in self._ring if s > last_event_id]

@@ -13,11 +13,15 @@ from uuid import uuid4
 from aleph_a2ui.components.cards import (
     ApprovalCardProps,
     ClaimCardProps,
+    DiffCardProps,
     HypothesisCardProps,
     SourceCardProps,
+    TableCardProps,
     approval_card,
     claim_card,
+    diff_card,
     source_card,
+    table_card,
 )
 
 
@@ -75,3 +79,62 @@ def test_hypothesis_props_dataclass_defaults() -> None:
     p = HypothesisCardProps(hypothesis_id=uuid4(), title="H")
     assert p.confidence == "initial"
     assert p.evidence_count == 0
+
+
+def test_source_card_carries_bound_normalized_preview() -> None:
+    # WP-4e: the Library builder supplies the preview as a BOUND prop; the card
+    # renders it in place (no self-fetch of /sources/*/normalized).
+    card = source_card(
+        SourceCardProps(
+            source_id=uuid4(),
+            short_id="S9",
+            title="Doc",
+            normalized_preview="# Heading\n\nBody text.",
+        )
+    )
+    assert card["type"] == "SourceCard"
+    assert card["props"]["normalized_preview"] == "# Heading\n\nBody text."
+
+
+def test_source_card_preview_defaults_none() -> None:
+    card = source_card(SourceCardProps(source_id=uuid4(), short_id="S1", title="Doc"))
+    assert card["props"]["normalized_preview"] is None
+
+
+def test_table_card_carries_bound_rows_and_columns() -> None:
+    # WP-4e: rows/columns are bound props supplied by the producer; the card
+    # never self-fetches dataset rows.
+    card = table_card(
+        TableCardProps(
+            dataset_version_id=None,
+            title="Benchmarks",
+            columns=[{"name": "model", "label": "Model"}],
+            rows=[{"model": "PaLM"}],
+        )
+    )
+    assert card["type"] == "TableCard"
+    assert card["props"]["rows"] == [{"model": "PaLM"}]
+    assert card["props"]["columns"] == [{"name": "model", "label": "Model"}]
+
+
+def test_diff_card_carries_bound_revision_bodies() -> None:
+    # WP-4e: DiffCard renders a real diff from bound bodies (no self-fetch).
+    p = DiffCardProps(
+        from_revision_id=uuid4(),
+        to_revision_id=uuid4(),
+        page_id=uuid4(),
+        from_body_md="line a\nline b",
+        to_body_md="line a\nline c",
+    )
+    card = diff_card(p)
+    assert card["type"] == "DiffCard"
+    assert card["props"]["from_body_md"] == "line a\nline b"
+    assert card["props"]["to_body_md"] == "line a\nline c"
+
+
+def test_diff_card_bodies_default_none() -> None:
+    card = diff_card(
+        DiffCardProps(from_revision_id=uuid4(), to_revision_id=uuid4(), page_id=uuid4())
+    )
+    assert card["props"]["from_body_md"] is None
+    assert card["props"]["to_body_md"] is None

@@ -13,21 +13,25 @@ export function A2UIRightPanel({ projectId }: Props) {
 
 function RealPanel({ projectId }: Props) {
   // Tab state is shared so the assistant agent can drive it (useFrontendTool).
-  const { activeSurface: tab, setActiveSurface: setTab } = useWorkspaceUI();
+  const { activeSurface: tab, setActiveSurface: setTab, openPageId } = useWorkspaceUI();
 
-  // Wave 4 T6: every tab is rendered through the delta SurfaceStreamer. The
-  // `…/surfaces/{tab}/stream` SSE endpoint emits the full v0.9 surface on
-  // connect (createSurface + updateComponents + root updateDataModel), then
-  // incremental `updateDataModel` deltas as the underlying data changes. A
-  // persistent MessageProcessor (one per connection, keyed by `tab`) applies
-  // those deltas in place — so e.g. a new hypothesis appears via an
-  // `add`/`updateComponents` delta without re-mounting existing card DOM. The
-  // four self-fetching tabs (Wiki/Artifacts/Notes/Briefs) carry no bound data
-  // model, so their stream emits the structural surface once and then idles;
-  // they self-refresh via react-query inside their own surface views.
+  // WP-4: every canonical tab is server-built + data-bound and rendered through
+  // the delta SurfaceStreamer. The `…/surfaces/{tab}/stream` SSE endpoint emits
+  // the full v0.9 surface on connect (createSurface + updateComponents + root
+  // updateDataModel), then incremental `updateDataModel` deltas woken by
+  // LISTEN/NOTIFY. A persistent MessageProcessor applies those deltas in place,
+  // so a hypothesis edit / new note patches the bound prop without re-mounting.
+  //
+  // Opening a wiki page is an `open` action that sets `openPageId`; we thread it
+  // into the Wiki stream as `?page_id=`, so the surface builder populates the
+  // bound `open` reader payload. The `key` includes it so switching pages
+  // re-streams cleanly (a fresh connection = fresh full snapshot).
   const baseUrl =
     (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8000";
-  const streamUrl = `${baseUrl}/v1/projects/${projectId}/surfaces/${tab.toLowerCase()}/stream`;
+  const tabLc = tab.toLowerCase();
+  const pageQuery = tabLc === "wiki" && openPageId ? `?page_id=${encodeURIComponent(openPageId)}` : "";
+  const streamUrl = `${baseUrl}/v1/projects/${projectId}/surfaces/${tabLc}/stream${pageQuery}`;
+  const streamKey = tabLc === "wiki" ? `${tab}:${openPageId ?? ""}` : tab;
 
   return (
     <aside className="flex h-full min-h-0 w-full min-w-0 flex-col border-l border-slate-200 bg-white">
@@ -50,7 +54,7 @@ function RealPanel({ projectId }: Props) {
       </nav>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <A2UIStreamSurfaceView
-          key={tab}
+          key={streamKey}
           streamUrl={streamUrl}
           projectId={projectId}
           surface={`${tab}Surface`}

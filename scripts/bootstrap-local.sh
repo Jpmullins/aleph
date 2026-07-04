@@ -29,6 +29,9 @@ export ALEPH_UID="$(id -u)" ALEPH_GID="$(id -g)"
 # aleph-api / aleph-workers gate on the one-shots via service_completed_successfully.
 # Asset bytes live on the local fs (data/assets bind mount) — no MinIO in the
 # default stack; `--profile s3` opts back in for s3-backend testing.
+# The sandbox viz worker (aleph-code-runner, WP-4c) boots here too — it joins
+# only the internal Redis-only network (no egress, no DB/S3/LLM creds) and
+# consumes the dedicated `code_runner` queue.
 
 echo "→ Building + starting the Aleph stack (docker compose up -d --build)"
 "${DC[@]}" up -d --build

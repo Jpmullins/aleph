@@ -6,6 +6,7 @@ from aleph_workers.jobs.chunk_embed import chunk_embed_job
 from aleph_workers.jobs.curate import curate_page_job
 from aleph_workers.jobs.normalize import normalize_job
 from aleph_workers.jobs.reembed import reembed_job
+from aleph_workers.jobs.render_code import render_code_artifact_job
 from aleph_workers.jobs.research import deep_research_job
 from aleph_workers.jobs.reviewers import (
     editorial_review_job,
@@ -24,6 +25,7 @@ __all__ = [
     "mechanical_review_job",
     "normalize_job",
     "reembed_job",
+    "render_code_artifact_job",
     "smoke_llm_job",
     "wiki_ingest_job",
 ]
