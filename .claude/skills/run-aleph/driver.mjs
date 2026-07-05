@@ -12,11 +12,25 @@
 // Screenshots default to /tmp/aleph-<cmd>.png. Exit code 0 = flow worked.
 
 import { createRequire } from "node:module";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 const require = createRequire(
   new URL("../../../tests/playwright/package.json", import.meta.url),
 );
 const { chromium } = require("@playwright/test");
+
+// On hosts without root (e.g. this WSL2 box), Chromium's shared-lib deps
+// (libnspr4/libnss3/…) can't be apt-installed system-wide. We stage them in
+// ~/.cache/ms-playwright/aleph-syslibs and point the browser at them via
+// LD_LIBRARY_PATH. No-op when the dir is absent (deps installed normally).
+function launchEnv() {
+  const syslibs = join(homedir(), ".cache", "ms-playwright", "aleph-syslibs");
+  if (!existsSync(syslibs)) return process.env;
+  const prev = process.env.LD_LIBRARY_PATH;
+  return { ...process.env, LD_LIBRARY_PATH: prev ? `${syslibs}:${prev}` : syslibs };
+}
 
 const WEB = process.env.ALEPH_WEB_BASE_URL ?? "http://localhost:5173";
 const API = process.env.ALEPH_API_BASE_URL ?? "http://localhost:8000";
@@ -37,7 +51,7 @@ async function firstProjectId() {
 }
 
 async function withPage(fn) {
-  const browser = await chromium.launch();
+  const browser = await chromium.launch({ env: launchEnv() });
   const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
   const errors = [];
   page.on("console", (m) => m.type() === "error" && errors.push(m.text().slice(0, 200)));

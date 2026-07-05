@@ -120,6 +120,13 @@ docker compose -f deploy/compose/docker-compose.yml --env-file deploy/compose/.e
   with ESM/await). Write throwaway scripts to a real file, or extend the driver.
 - **Chat replies are slow.** A trivial no-tool turn takes ~15–30s through the
   Deep-Agents orchestrator; tool-using turns 60s+. Poll, don't fixed-wait.
+- **Chromium missing shared libs (`libnspr4.so` etc.).** On this WSL2 box
+  there's no passwordless sudo, so Playwright's `install-deps` can't run.
+  The libs are staged in `~/.cache/ms-playwright/aleph-syslibs/` and
+  `driver.mjs` prepends that to `LD_LIBRARY_PATH` at launch (no-op if the
+  dir is absent). If the dir gets wiped, re-stage the NSS/NSPR/alsa `.so`s
+  there (e.g. `apt-get download libnspr4 libnss3 libasound2t64` then
+  `dpkg -x` each into a temp dir and copy the `.so*` files across).
 
 ## Troubleshooting
 
