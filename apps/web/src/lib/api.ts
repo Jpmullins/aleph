@@ -60,6 +60,9 @@ export const api = {
   post<T>(path: string, body: Json): Promise<T> {
     return request("POST", path, body);
   },
+  put<T>(path: string, body: Json): Promise<T> {
+    return request("PUT", path, body);
+  },
   patch<T>(path: string, body: Json): Promise<T> {
     return request("PATCH", path, body);
   },
@@ -102,4 +105,36 @@ export interface CostRollupOut {
     cost_usd: string;
     timestamp: string;
   }>;
+}
+
+export interface ConnectorOut {
+  id: string;
+  kind: string;
+  name: string;
+  output_kind: string;
+  requires_auth: boolean;
+  enabled_by_default: boolean;
+}
+
+export interface ConnectorBindingOut {
+  id: string;
+  project_id: string;
+  connector_id: string;
+  enabled: boolean;
+  config_jsonb: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface CredentialOut {
+  connector_kind: string;
+  has_project_specific: boolean;
+  rotated_at: string | null;
+  status: string | null;
+}
+
+export interface ModelProfileOut {
+  id: string;
+  name: string;
+  is_template?: boolean;
+  bindings: Record<string, unknown>;
 }
