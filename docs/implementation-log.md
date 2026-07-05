@@ -1884,3 +1884,45 @@ F6 acceptance grep) + `scripts/check-claude-commands.sh` (fresh-clone command ex
 baseline); ruff/format clean; **all five committed sweeps pass** (no-self-fetch, catalog-roster,
 route-reachability, docs-drift, claude-commands); web typecheck/lint/build clean; `alembic check`
 clean; integration `80 passed` (WP-6 close).
+
+## Observability — Langfuse v2→v3 upgrade + self-diagnosis (2026-07-05)
+
+Post-goal fix. The platform was emitting OTEL spans into a void: it ran
+`langfuse/langfuse:2`, which has **no OTLP ingestion endpoint** (`POST
+/api/public/otel/v1/traces` → 404), and the otel-collector's Langfuse exporter
+was deliberately left out of the traces pipeline for exactly that reason. Net:
+**0 traces**, no self-diagnosis possible — defeating the point of running
+Langfuse at all.
+
+**Fix (compose): Langfuse v3, which ingests OTEL natively.**
+- Added `clickhouse` (OLAP trace store), a dedicated `langfuse-redis` (BullMQ
+  ingestion queue, isolated from the platform's privileged token bus), and a
+  dedicated `langfuse-minio` blob store (v3 has no fs fallback for event
+  uploads; kept separate from the opt-in asset MinIO so WP-1's fs-default asset
+  backend is untouched).
+- Split `langfuse` into web (`langfuse:3`) + `langfuse-worker` (`langfuse-worker:3`),
+  sharing one env anchor. Bumped the web mem_limit 1g→2g (Next.js OOM-crash-looped
+  at 1g: Node auto-tunes its heap from the cgroup limit, FATAL at ~505MB).
+- Re-enabled the collector's `otlphttp/langfuse` exporter in the traces pipeline.
+- New `.env` keys: `CLICKHOUSE_PASSWORD`, `LANGFUSE_REDIS_AUTH`,
+  `LANGFUSE_MINIO_ROOT_PASSWORD` (documented in `.env.example`).
+
+**Access — Claude Code (MCP).** `deploy/mcp/langfuse_mcp.py` — a self-contained,
+strictly read-only FastMCP server over the Langfuse public REST API
+(list_traces / get_trace / list_observations / recent_errors / daily_metrics),
+reading creds from `deploy/compose/.env`. Registered project-scoped in
+`.mcp.json` (`uv run --with fastmcp`). Plus the `langfuse` agent skill
+(`.claude/skills/langfuse`) for CLI/doc access.
+
+**Access — the platform (agent tool).** `aleph_observability.LangfuseReader` —
+async, read-only wrapper over the same API with a `diagnostic_snapshot()`
+aggregator; unit-tested via an httpx MockTransport. Wired as the
+`diagnose_platform` orchestrator tool (registered + prompted) so the Live agent
+answers "how is the system doing / why did that fail" from real telemetry.
+
+**Verified live.** Langfuse 0 → 1200+ traces the moment API traffic flowed;
+worker ran all Prisma + ClickHouse migrations clean; MCP passed a real stdio
+`initialize`+`tools/list` handshake; the reader run **inside the api container**
+against `langfuse:3000` returned 1247 traces / 61,916 observations / 56 errors.
+(An in-browser chat demo was blocked by a host chromium missing `libnspr4.so` —
+unrelated to the change; the in-container run exercises the identical code path.)
