@@ -32,7 +32,11 @@ from tenacity import (
 
 from aleph_scholar.errors import ScholarUpstreamError
 
-_RETRY_AFTER_CAP_S = 30.0
+# Cap on an honored `Retry-After`. Kept small: a rate-limited (429) scholarly
+# search is best-effort discovery -- waiting tens of seconds per request, times
+# attempts times queries times connectors, drags the research `search` phase to
+# minutes and still yields nothing. Failing fast lets the loop use what it got.
+_RETRY_AFTER_CAP_S = 8.0
 
 
 def _is_retryable(exc: BaseException) -> bool:

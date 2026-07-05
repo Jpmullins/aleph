@@ -269,10 +269,37 @@ async def test_dispatch_research_creates_run_ledgers_commits_and_enqueues(
     # committed BEFORE enqueue (row durable when the worker runs)
     assert session.committed == 1
     assert len(pool.jobs) == 1
-    (job_args, _job_kwargs) = pool.jobs[0]
+    (job_args, job_kwargs) = pool.jobs[0]
     assert job_args[0] == "deep_research_job"
+    # no defer by default (immediate)
+    assert "_defer_by" not in job_kwargs
     # correlation id is the FULL hex (no truncation → no collision)
     assert started.correlation_id == f"research-{started.agent_run_id.hex}"
+
+
+async def test_dispatch_research_defer_seconds_staggers_enqueue(monkeypatch: pytest.MonkeyPatch):
+    """`defer_seconds` maps to arq `_defer_by` so the bootstrap fan-out can
+    stagger runs (avoids concurrent 429-storms of the keyless scholarly APIs)."""
+    import aleph_research.dispatch as disp
+
+    async def _enabled(*_a: Any, **_k: Any) -> list[str]:
+        return ["openalex"]
+
+    monkeypatch.setattr(disp, "resolve_enabled_kinds", _enabled)
+    pool = _RecordingPool()
+    await disp.dispatch_research(
+        session=_RecordingSession(),
+        ledger=_RecordingLedger(),
+        redis_pool=pool,
+        agent_token_secret="x" * 32,
+        project_id=uuid4(),
+        principal_user_id=uuid4(),
+        actor_kind="user",
+        topic="t",
+        defer_seconds=180,
+    )
+    (_args, kwargs) = pool.jobs[0]
+    assert kwargs["_defer_by"] == 180
 
 
 async def test_dispatch_research_enqueue_failure_marks_run_failed(

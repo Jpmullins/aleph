@@ -1,31 +1,33 @@
 import { useEffect, useState } from "react";
 
-type Mode = "light" | "dark" | "system";
+// Two explicit modes. The OS preference only seeds the FIRST-visit default
+// (below); the toggle itself is a binary light/dark switch — no third "system"
+// button.
+type Mode = "light" | "dark";
 
 const STORAGE_KEY = "aleph.theme";
 
 function applyMode(mode: Mode) {
   const root = document.documentElement;
-  // "system" is resolved to an explicit light/dark attribute: the dark-mode
-  // class-remap shim in tokens.css keys off [data-theme="dark"], so leaving
-  // the attribute unset in system-dark would dark-flip the CSS tokens (via
-  // the prefers-color-scheme block) while every hardcoded bg-white/slate-*
-  // component stayed light.
+  root.setAttribute("data-theme", mode);
+  // CopilotKit v2 (the Live chat) keys its dark styles off a `.dark` class,
+  // so mirror Aleph's effective dark state onto it.
+  root.classList.toggle("dark", mode === "dark");
+}
+
+function systemDefault(): Mode {
   const prefersDark =
     typeof window !== "undefined" &&
     window.matchMedia?.("(prefers-color-scheme: dark)").matches;
-  const resolved = mode === "system" ? (prefersDark ? "dark" : "light") : mode;
-  root.setAttribute("data-theme", resolved);
-  // CopilotKit v2 (the Live chat) keys its dark styles off a `.dark` class,
-  // so mirror Aleph's effective dark state onto it.
-  root.classList.toggle("dark", resolved === "dark");
+  return prefersDark ? "dark" : "light";
 }
 
 function loadMode(): Mode {
-  if (typeof window === "undefined") return "system";
+  if (typeof window === "undefined") return "light";
   const v = window.localStorage.getItem(STORAGE_KEY);
-  if (v === "light" || v === "dark" || v === "system") return v;
-  return "system";
+  if (v === "light" || v === "dark") return v;
+  // No explicit choice yet → seed from the OS preference.
+  return systemDefault();
 }
 
 interface Props {
@@ -33,17 +35,21 @@ interface Props {
 }
 
 export function ThemeToggle({ className }: Props) {
-  const [mode, setMode] = useState<Mode>("system");
+  const [mode, setMode] = useState<Mode>("light");
 
   useEffect(() => {
     const initial = loadMode();
     setMode(initial);
     applyMode(initial);
-    // In system mode, follow OS theme changes live.
+    // Until the user makes an explicit choice, follow OS theme changes live.
     const mq = window.matchMedia?.("(prefers-color-scheme: dark)");
     if (!mq) return;
     const onChange = () => {
-      if (loadMode() === "system") applyMode("system");
+      if (window.localStorage.getItem(STORAGE_KEY) === null) {
+        const d = systemDefault();
+        setMode(d);
+        applyMode(d);
+      }
     };
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);
@@ -62,7 +68,6 @@ export function ThemeToggle({ className }: Props) {
   const OPTIONS: { mode: Mode; icon: string; label: string }[] = [
     { mode: "light", icon: "☀", label: "Light" },
     { mode: "dark", icon: "☾", label: "Dark" },
-    { mode: "system", icon: "⊙", label: "System" },
   ];
 
   return (

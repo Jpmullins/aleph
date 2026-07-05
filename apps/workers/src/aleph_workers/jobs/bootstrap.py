@@ -56,6 +56,12 @@ _SCOPE_SYS = (
 
 _JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
 
+# Seconds between successive seed-topic research dispatches (arq _defer_by), so
+# a multi-topic bootstrap doesn't run its shallow runs concurrently and
+# 429-storm the keyless scholarly APIs. A shallow run is ~60-120s; ~90s spacing
+# keeps at most ~1 hitting the scholarly endpoints at a time.
+_RESEARCH_STAGGER_S = 90
+
 
 def _loads_lenient(text: str) -> dict[str, Any]:
     """Recover a JSON object from an LLM response.
@@ -232,7 +238,11 @@ async def bootstrap_project_job(
                     session, agent_run_id=agent_run_id, phase_name="dispatch_research"
                 )
                 ledger = LedgerWriter(session)
-                for topic in seed_topics:
+                # Stagger the fan-out: running every seed topic's research at
+                # once makes them 429-storm the shared keyless scholarly APIs
+                # (OpenAlex/Semantic Scholar). Spacing starts by _RESEARCH_STAGGER_S
+                # keeps concurrent scholarly load low so each run finds sources.
+                for i, topic in enumerate(seed_topics):
                     try:
                         r = await dispatch_research(
                             session=session,
@@ -244,6 +254,7 @@ async def bootstrap_project_job(
                             actor_kind=principal.actor_kind,
                             topic=topic,
                             depth=depth,
+                            defer_seconds=i * _RESEARCH_STAGGER_S,
                         )
                         if r.dispatched:
                             dispatched += 1

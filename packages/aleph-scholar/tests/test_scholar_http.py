@@ -95,7 +95,7 @@ async def test_retry_after_is_honored_and_capped() -> None:
     response = await _http(handler, sleeps=sleeps).get("https://api.openalex.org/works")
     assert response.status_code == 200
     assert 7.0 in sleeps
-    assert 30.0 in sleeps  # 9999 capped at 30s
+    assert 8.0 in sleeps  # 9999 capped at _RETRY_AFTER_CAP_S (8s)
     assert 9999.0 not in sleeps
 
 

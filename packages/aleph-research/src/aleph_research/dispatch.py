@@ -54,10 +54,15 @@ async def dispatch_research(
     topic: str,
     depth: str = "deep",
     allowed_connectors: list[str] | None = None,
+    defer_seconds: int = 0,
 ) -> StartedResearch:
     """Create the run, ledger the dispatch, and enqueue ``deep_research_job``.
 
     Raises ``ValueError`` if no connectors are enabled for the project.
+
+    ``defer_seconds`` staggers the worker start (arq ``_defer_by``) — used by the
+    bootstrap fan-out so N seed-topic runs don't hit the keyless scholarly APIs
+    (OpenAlex/Semantic Scholar) simultaneously and 429-storm each other.
     """
     enabled = await resolve_enabled_kinds(
         session, project_id=project_id, allowed=allowed_connectors
@@ -113,7 +118,8 @@ async def dispatch_research(
     # Committing first makes the row unconditionally visible when the job runs.
     await session.commit()
     try:
-        await redis_pool.enqueue_job("deep_research_job", str(agent_run_id), token)
+        kwargs = {"_defer_by": defer_seconds} if defer_seconds > 0 else {}
+        await redis_pool.enqueue_job("deep_research_job", str(agent_run_id), token, **kwargs)
     except Exception:
         # Redis unreachable after the run committed: no job will ever run to
         # converge it. Mark the committed run failed here so it never strands
