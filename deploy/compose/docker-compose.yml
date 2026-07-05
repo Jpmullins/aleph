@@ -274,8 +274,10 @@ services:
   langfuse:
     image: langfuse/langfuse:3
     restart: unless-stopped
-    mem_limit: 1g
-    memswap_limit: 1g
+    # v3 web is Next.js — Node auto-tunes its heap cap from the cgroup limit,
+    # so 1g OOM-crash-loops (~505MB heap FATAL). 2g gives it headroom.
+    mem_limit: 2g
+    memswap_limit: 2g
     environment:
       <<: *langfuse-env
       NEXTAUTH_URL: http://localhost:3000

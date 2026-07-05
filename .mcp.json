@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "langfuse": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "fastmcp",
+        "--with",
+        "httpx",
+        "python",
+        "deploy/mcp/langfuse_mcp.py"
+      ]
+    }
+  }
+}
