@@ -12,6 +12,7 @@ interface ArtifactOut {
   description: string;
   current_version_id: string | null;
   created_at: string;
+  drifted?: boolean;
 }
 
 interface SourceOut {
@@ -178,6 +179,11 @@ function ArtifactRow({ a, projectId }: { a: ArtifactOut; projectId: string }) {
             {a.artifact_kind.replace(/_/g, " ")}
           </Pill>
           <Pill tone={ready ? "emerald" : "amber"}>{ready ? "ready" : "building"}</Pill>
+          {a.drifted && (
+            <Pill tone="amber">
+              <span data-testid={`artifact-drifted-${a.id}`}>drifted</span>
+            </Pill>
+          )}
         </span>
       }
       footer={`created ${new Date(a.created_at).toLocaleString()}`}

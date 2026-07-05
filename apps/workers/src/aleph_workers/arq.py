@@ -33,9 +33,11 @@ from aleph_workers.jobs import (
     mechanical_review_job,
     normalize_job,
     reembed_job,
+    refresh_stale_pages_job,
     render_code_artifact_job,
     smoke_llm_job,
     wiki_ingest_job,
+    wiki_refresh_job,
 )
 from aleph_workers.settings import get_worker_settings
 
@@ -133,6 +135,8 @@ class WorkerSettings:
         curate_page_job,
         reembed_job,
         render_code_artifact_job,
+        wiki_refresh_job,
+        refresh_stale_pages_job,
     ]
     on_startup = _startup
     on_shutdown = _shutdown

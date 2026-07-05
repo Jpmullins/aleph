@@ -14,6 +14,7 @@ from aleph_workers.jobs.reviewers import (
 )
 from aleph_workers.jobs.smoketest import smoke_llm_job
 from aleph_workers.jobs.wiki_ingest import wiki_ingest_job
+from aleph_workers.jobs.wiki_refresh import refresh_stale_pages_job, wiki_refresh_job
 
 __all__ = [
     "bootstrap_project_job",
@@ -25,7 +26,9 @@ __all__ = [
     "mechanical_review_job",
     "normalize_job",
     "reembed_job",
+    "refresh_stale_pages_job",
     "render_code_artifact_job",
     "smoke_llm_job",
     "wiki_ingest_job",
+    "wiki_refresh_job",
 ]

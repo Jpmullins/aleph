@@ -21,6 +21,7 @@ export function SourceCard({ component, onAction }: RendererProps) {
     url?: string | null;
     status: string;
     normalized_preview?: string | null;
+    retracted?: boolean;
   };
   const tone =
     p.status === "wiki_done"
@@ -37,6 +38,11 @@ export function SourceCard({ component, onAction }: RendererProps) {
       subtitle={
         <span className="flex items-center gap-2">
           <Pill tone={tone}>{p.status}</Pill>
+          {(p.retracted || p.status === "retracted") && (
+            <Pill tone="red">
+              <span data-testid={`source-retracted-${p.source_id}`}>⚠ retracted</span>
+            </Pill>
+          )}
           {p.url && (
             <a
               href={p.url}

@@ -17,6 +17,7 @@ export function ArtifactCard({ component, onAction }: RendererProps) {
     title: string;
     artifact_kind: string;
     status: string;
+    drifted?: boolean;
   };
   const terminal = p.status === "ready" || p.status === "done" || !!p.short_id;
   const statusTone =
@@ -35,6 +36,11 @@ export function ArtifactCard({ component, onAction }: RendererProps) {
             {p.artifact_kind.replace(/_/g, " ")}
           </Pill>
           <Pill tone={statusTone}>{p.status}</Pill>
+          {p.drifted && (
+            <Pill tone="amber">
+              <span data-testid={`artifact-drifted-${p.artifact_id}`}>drifted</span>
+            </Pill>
+          )}
         </span>
       }
     >

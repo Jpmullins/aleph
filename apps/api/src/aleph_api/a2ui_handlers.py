@@ -20,6 +20,7 @@ from aleph_a2ui.action_router import ActionRouter, CardActionRequest
 from aleph_a2ui.card_service import pin_card, unpin_card
 from aleph_a2ui.catalog import CatalogValidationError, validate_component
 from aleph_a2ui.models import InteractiveCard
+from aleph_api.settings import get_settings
 from aleph_connectors.models import (
     ApprovalDecision,
     SynthesisProposal,
@@ -38,7 +39,7 @@ from aleph_reviewer.models import ApprovalRequest, ReviewFinding
 from aleph_wiki.curator_service import CuratorService
 from aleph_wiki.feedback_service import write_feedback
 from aleph_wiki.handedit_service import clear_section, mark_section
-from aleph_wiki.models import PageMergeProposal, WikiPage
+from aleph_wiki.models import PageMergeProposal, WikiClaim, WikiPage
 
 # Agent actions an approval may execute on approve. The approve handler
 # dispatches via this fixed map (route + how to shape the request body), never
@@ -79,7 +80,6 @@ async def _self_post(
     """
     import httpx
 
-    from aleph_api.settings import get_settings
     from aleph_security.agent_token import mint_agent_token
 
     settings = get_settings()
@@ -102,6 +102,24 @@ async def _self_post(
         msg = f"{what} failed ({resp.status_code}): {resp.text[:200]}"
         raise ValidationFailed(msg)
     return resp.json()
+
+
+async def _enqueue_curate(project_id: UUID, page_id: UUID) -> None:
+    """Best-effort curator freshness recompute after a trust decision (WP-6 §3).
+
+    A queue hiccup must never fail the approve/reject; the decision + ledger are
+    already committed by the router."""
+    try:
+        from arq import create_pool
+        from arq.connections import RedisSettings
+
+        pool = await create_pool(RedisSettings.from_dsn(get_settings().redis_url))
+        try:
+            await pool.enqueue_job("curate_page_job", str(project_id), str(page_id))
+        finally:
+            await pool.aclose()
+    except Exception:
+        pass
 
 
 async def _execute_agent_action(
@@ -340,6 +358,46 @@ async def _approve(
             trace_id=current_trace_id(),
         )
         return {"target": str(target_id), "new_status": "approved"}
+    if target_kind == "refresh_result":
+        # WP-6 §3: approve/skip a staleness-refresh verdict → re-affirm the page
+        # (bump `verified_at`, which lifts freshness on the next recompute).
+        # NEVER recompiles — no new revision, claims untouched.
+        page = (
+            await session.execute(
+                select(WikiPage).where(WikiPage.id == target_id, WikiPage.project_id == project_id)
+            )
+        ).scalar_one_or_none()
+        if page is None:
+            msg = f"wiki page not found: {target_id}"
+            raise NotFound(msg)
+        decision = ApprovalDecision(
+            id=uuid7(),
+            project_id=project_id,
+            target_kind="refresh_result",
+            target_id=target_id,
+            decision="approved",
+            reason=None,
+            decided_by=principal.user_id,
+            decided_at=utcnow(),
+            created_by=principal.user_id,
+            access_scope="project",
+        )
+        session.add(decision)
+        now = utcnow()
+        page.verified_at = now
+        await session.flush()
+        await ledger.append(
+            project_id=project_id,
+            actor_id=principal.user_id,
+            actor_kind=principal.actor_kind,
+            action_kind="wiki.refresh.approve",
+            target_id=target_id,
+            target_kind="wiki_page",
+            payload={"verified_at": now.isoformat()},
+            trace_id=current_trace_id(),
+        )
+        await _enqueue_curate(project_id, target_id)
+        return {"target": str(target_id), "new_status": "verified"}
     msg = f"approve handler not wired for target_kind={target_kind}"
     raise ValidationFailed(msg)
 
@@ -578,6 +636,65 @@ async def _reject(
             trace_id=current_trace_id(),
         )
         return {"target": str(target_id), "new_status": "archived"}
+    if target_kind == "refresh_result":
+        # WP-6 §3: flag a staleness-refresh verdict → downgrade the page's cited
+        # claims to `contested` (a contributing source changed/contradicts) and
+        # record the decision. NEVER recompiles; a human/agent decides via a
+        # separate synthesis run. The contested claims are the derived banner.
+        page = (
+            await session.execute(
+                select(WikiPage).where(WikiPage.id == target_id, WikiPage.project_id == project_id)
+            )
+        ).scalar_one_or_none()
+        if page is None:
+            msg = f"wiki page not found: {target_id}"
+            raise NotFound(msg)
+        decision = ApprovalDecision(
+            id=uuid7(),
+            project_id=project_id,
+            target_kind="refresh_result",
+            target_id=target_id,
+            decision="rejected",
+            reason=reason,
+            decided_by=principal.user_id,
+            decided_at=utcnow(),
+            created_by=principal.user_id,
+            access_scope="project",
+        )
+        session.add(decision)
+        downgraded = 0
+        if page.current_revision_id is not None:
+            claims = list(
+                (
+                    await session.execute(
+                        select(WikiClaim).where(
+                            WikiClaim.revision_id == page.current_revision_id,
+                            # A retracted claim is already the strongest marker;
+                            # do not overwrite it with the weaker `contested`.
+                            WikiClaim.confidence != "retracted",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for claim in claims:
+                claim.confidence = "contested"
+                claim.status = "contested"
+                downgraded += 1
+        await session.flush()
+        await ledger.append(
+            project_id=project_id,
+            actor_id=principal.user_id,
+            actor_kind=principal.actor_kind,
+            action_kind="wiki.refresh.flag",
+            target_id=target_id,
+            target_kind="wiki_page",
+            payload={"reason": reason, "claims_contested": downgraded},
+            trace_id=current_trace_id(),
+        )
+        await _enqueue_curate(project_id, target_id)
+        return {"target": str(target_id), "new_status": "flagged", "claims_contested": downgraded}
     msg = f"reject handler not wired for target_kind={target_kind}"
     raise ValidationFailed(msg)
 

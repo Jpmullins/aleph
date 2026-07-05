@@ -59,6 +59,7 @@ const CONFIDENCE_TONE: Record<string, "emerald" | "amber" | "red" | "sky" | "sla
   weakly_supported: "amber",
   contested: "amber",
   uncited: "red",
+  retracted: "red",
 };
 
 const STATUS_TONE: Record<string, "emerald" | "amber" | "slate"> = {
@@ -118,6 +119,7 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
     wikilinks_out?: Wikilink[];
     page_meta?: PageMeta;
     html_url?: string | null;
+    retracted?: boolean;
     derived?: boolean;
     read_only?: boolean;
   };
@@ -178,6 +180,11 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
           </Pill>
         )}
         {meta.is_stub && <Pill tone="amber">stub</Pill>}
+        {p.retracted && (
+          <Pill tone="red">
+            <span data-testid="wiki-retracted-badge">⚠ retracted source</span>
+          </Pill>
+        )}
         <Pill tone="slate">
           <span data-testid="wiki-freshness">freshness: {meta.freshness ?? "—"}</span>
         </Pill>
@@ -229,6 +236,16 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
           >
             Reject
           </button>
+        </div>
+      )}
+
+      {p.retracted && (
+        <div
+          className="mb-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-xs font-medium text-red-800"
+          data-testid="wiki-retracted-banner"
+        >
+          ⚠ A source cited by this page has been retracted — its dependent claims are
+          flagged and should be re-reviewed.
         </div>
       )}
 

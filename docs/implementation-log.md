@@ -1761,3 +1761,55 @@ tables).
 CopilotChatSurface/Drawers) is not the right panel and not F5-mandated; the embed guard's
 unknown-model path costs one probe token (not the batch); `infobox_jsonb` writer lands with
 WP-6.
+
+## WP-6 — Wiki trust layer (2026-07-04)
+
+**Spec:** `docs/specs/2026-07-04-wp6-trust.md` (§7 amended 2026-07-04: freshness-recompute is a
+derived score written within the ledgered curate txn, not its own ledger event). **Proves F4.**
+Migration `wp6_trust_layer` (down_revision `wp4_card_spotlight`) — additive: `wiki_pages`
+`volatility`/`verified_at`/`freshness`, `sources` `retracted_at`/`retraction_reason`.
+
+**Shipped.**
+- **Freshness** (`aleph_wiki.freshness.compute_freshness`): pure 0–100 = four 0–25 dims
+  (recency, citation health, source freshness, verification) with half-life decay 30/90/365d by
+  volatility; a retracted contributing source forces 0. Computed as a deterministic 4th curator
+  step; surfaced on the open page + page-list rows (sorted freshest-first). 12 unit tests.
+- **Refresh** (`wiki_refresh_job` + `refresh_stale_pages_job`): re-fetch → fact-diff vs stored
+  `NormalizedDocument` markdown → classify unchanged/updated/contradicted/unreachable
+  (`LiteLLMClient` CLASSIFICATION, `purpose="wiki.refresh.factdiff"`; unreachable = fetch
+  failure, no LLM) → one `refresh_result` ApprovalCard in Briefs. Approve/skip bumps
+  `verified_at`; flag downgrades cited claims to `contested`; **never recompiles** (asserted).
+  Both write `ApprovalDecision` + ledger + enqueue a curator recompute.
+- **Retraction + blast-radius** (`aleph_reviewer.retraction.retract_source` / `dependent_claims`):
+  sets `status="retracted"` + `retracted_at` + `source.retract` ledger; walks
+  `Source→SourcePage→Citation→WikiClaim`, flags each dependent claim `confidence="retracted"`/
+  `status="contested"` with a per-claim `wiki_claim.retract_flag` ledger; emits a critical
+  `retracted_source` ReviewFinding. The WP-2 reviewer `doi_verification` retracted branch funnels
+  through this same service (network-unverifiable `ok=None` never triggers it). EDITOR-gated
+  route `POST /sources/{sid}/retract`. **Fixed a strict-DAG violation:** the service was
+  initially placed in the `aleph-rks` leaf (importing `aleph-wiki`/`aleph-reviewer`, a lower→
+  higher import); relocated to `aleph-reviewer` (the top of the three packages it touches).
+- **Drift** (`aleph_artifacts.drift.is_drifted`): live-computed (never stored) — an artifact is
+  drifted iff any recorded `lineage_jsonb.source_pages[].revision_id` differs from the page's
+  current `current_revision_id`. Builder records the source-page/revision snapshot at build;
+  `_annotate_drift` computes it for the Library surface → amber `drifted` pill.
+- **Rendering:** `ClaimCard.confidence` gains `retracted`; `WikiPageCard`/`SourceCard` gain a
+  `retracted` prop (banner/badge); `ArtifactCard` gains `drifted`; `ApprovalCard.target_kind`
+  gains `refresh_result` — each schema + renderer together (roster sweep still green). Trust
+  mutations ride the existing `action_ledger_events` NOTIFY → surface re-derive (no new trigger).
+
+**Adversarial review (2 passes).** Full pass: 5/5 F4 items PASS, `FINAL-STATE VIOLATIONS: 0`,
+two LOW doc-drift findings (relocated-module docstring + spec §4/§7 wording) — both fixed. The
+DAG-violation fix was caught and applied mid-build; the verification confirmed `aleph-rks` has
+zero aleph-package deps and nothing in it imports wiki/reviewer.
+
+**In-browser (screenshots in-session).** A seeded page renders **FRESHNESS: 100**; after
+retracting its cited source, the dependent claim renders a **RETRACTED** marker (and the API
+confirms freshness recomputes to 0 — a retracted source forces the page unfresh).
+
+**Gates (final, green).** unit `354 passed`; integration `80 passed` (+1 code-runner skip);
+pyright `0 errors, 949 warnings` (< 955 WP-5-close); ruff/format clean; all three sweeps pass;
+web typecheck/lint/build clean; `alembic check` clean.
+
+**Honest note:** `infobox_jsonb` (added WP-4b) still has no writer — the curator freshness work
+didn't populate it; it remains a read-path-only hook for a future curator infobox pass.

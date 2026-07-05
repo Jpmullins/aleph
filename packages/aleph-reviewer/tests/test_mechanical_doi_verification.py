@@ -225,19 +225,33 @@ async def test_fabricated_and_retracted_dois_yield_exact_findings(session_maker)
             {"kind": "checked_via", "value": "crossref+openalex"},
         ]
 
+        # Scholar-detected retraction now funnels through the shared
+        # `retract_source` service (WP-6 §4): the finding names the retracted
+        # source (not the DOI), the source is retracted, and its dependent claim
+        # is flagged. It targets the source, not the page/revision.
         retracted = by_kind["retracted_source"]
-        assert RETRACTED_DOI in retracted.title
-        assert retracted.target_page_id == page_id
-        assert retracted.target_revision_id == revision_id
-        assert retracted.target_source_id == source_id  # DOI came from the source row
-        assert retracted.evidence_refs_jsonb == [
-            {"kind": "doi", "value": RETRACTED_DOI},
-            {"kind": "checked_via", "value": "crossref+openalex"},
-        ]
-
-        # Verdict cached back onto the source row, in the findings transaction.
         source = await session.get(Source, source_id)
         assert source is not None
+        assert source.short_id in retracted.title
+        assert retracted.target_source_id == source_id  # DOI came from the source row
+        assert retracted.target_page_id is None
+        assert retracted.target_revision_id is None
+        assert retracted.evidence_refs_jsonb == [
+            {"kind": "source", "source_id": str(source_id), "short_id": source.short_id}
+        ]
+        assert source.status == "retracted"
+        assert source.retracted_at is not None
+
+        # The claim backed by the retracted source is flagged retracted/contested.
+        flagged = list(
+            (await session.execute(select(WikiClaim).where(WikiClaim.revision_id == revision_id)))
+            .scalars()
+            .all()
+        )
+        assert flagged
+        assert all(c.confidence == "retracted" and c.status == "contested" for c in flagged)
+
+        # Verdict cached back onto the source row, in the findings transaction.
         cached = source.source_metadata_jsonb["doi_verdict"]
         assert cached["ok"] is True
         assert cached["retracted"] is True

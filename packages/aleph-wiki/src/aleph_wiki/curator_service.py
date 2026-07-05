@@ -38,16 +38,20 @@ from sqlalchemy import delete, func, select, text, update
 
 from aleph_core.ids import uuid7
 from aleph_core.schemas.model_profile import Capability
+from aleph_core.time import utcnow
 from aleph_db.models.project import Project
 from aleph_db.repos.ledger import LedgerWriter
 from aleph_models.client import ChatMessage
 from aleph_observability.tracing import current_trace_id, start_span
+from aleph_rks.models import Source, SourceVersion
 from aleph_security.principal import Principal
 from aleph_wiki.alias_service import AliasService
+from aleph_wiki.freshness import ClaimCitation, compute_freshness
 from aleph_wiki.models import (
     Alias,
     Citation,
     PageMergeProposal,
+    SourcePage,
     WikiClaim,
     WikiIndex,
     WikiLink,
@@ -186,6 +190,7 @@ class CurationResult:
     links_repaired: int
     aliases_registered: int
     cross_links_added: int = 0
+    freshness: int | None = None
 
 
 class CuratorService:
@@ -218,10 +223,12 @@ class CuratorService:
             )
             links_repaired = await self._repair_links(project_id=project_id)
             cross_links_added = await self._cross_link(project_id=project_id, page_id=page_id)
+            freshness = await self._recompute_freshness(project_id=project_id, page_id=page_id)
             return CurationResult(
                 links_repaired=links_repaired,
                 aliases_registered=aliases_registered,
                 cross_links_added=cross_links_added,
+                freshness=freshness,
             )
 
     async def _register_aliases(self, *, project_id: UUID, page_id: UUID) -> int:
@@ -323,6 +330,103 @@ class CuratorService:
                 origin="curator",
             )
             return len(linked)
+
+    async def _recompute_freshness(self, *, project_id: UUID, page_id: UUID) -> int | None:
+        """Deterministic 4th curator step (WP-6 §2): write ``WikiPage.freshness``.
+
+        Gathers the page's current-revision claims, resolves each claim's
+        contributing sources via the blast-radius join
+        (``Citation → SourcePage → Source``), their ``SourceVersion.fetched_at``,
+        and which are retracted, then calls the pure ``compute_freshness``. Math,
+        not generation — never recompiles the page. On first compute, seeds
+        ``verified_at = last_compiled_at`` (if null) so recency has a basis.
+        """
+        with start_span("wiki.curate.recompute_freshness", **{"aleph.page_id": str(page_id)}):
+            page = await self._get_page(project_id=project_id, page_id=page_id)
+            if page is None:
+                return None
+            rev = await self._current_revision(page)
+
+            claims: list[WikiClaim] = []
+            if page.current_revision_id is not None:
+                claims = list(
+                    (
+                        await self._session.execute(
+                            select(WikiClaim).where(
+                                WikiClaim.revision_id == page.current_revision_id
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+
+            claim_citations: list[ClaimCitation] = []
+            contributing: set[UUID] = set()
+            for claim in claims:
+                cites = list(
+                    (
+                        await self._session.execute(
+                            select(Citation).where(Citation.claim_id == claim.id)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                source_ids: list[UUID] = []
+                for cite in cites:
+                    if cite.source_page_id is None:
+                        continue
+                    sp = await self._session.get(SourcePage, cite.source_page_id)
+                    if sp is None:
+                        continue
+                    source_ids.append(sp.source_id)
+                    contributing.add(sp.source_id)
+                claim_citations.append(
+                    ClaimCitation(
+                        claim_id=claim.id,
+                        confidence=claim.confidence,
+                        source_ids=tuple(source_ids),
+                    )
+                )
+
+            retracted: set[UUID] = set()
+            fetched_ats: list[Any] = []
+            if contributing:
+                for src in (
+                    (await self._session.execute(select(Source).where(Source.id.in_(contributing))))
+                    .scalars()
+                    .all()
+                ):
+                    if src.status == "retracted" or src.retracted_at is not None:
+                        retracted.add(src.id)
+                fetched_ats = [
+                    f
+                    for (f,) in (
+                        await self._session.execute(
+                            select(SourceVersion.fetched_at).where(
+                                SourceVersion.source_id.in_(contributing)
+                            )
+                        )
+                    ).all()
+                    if f is not None
+                ]
+
+            # Seed verified_at on first compute so recency has a basis.
+            if page.verified_at is None and page.last_compiled_at is not None:
+                page.verified_at = page.last_compiled_at
+
+            score = compute_freshness(
+                page=page,
+                revision=rev,
+                citations=claim_citations,
+                source_versions=fetched_ats,
+                retracted_source_ids=retracted,
+                now=utcnow(),
+            )
+            page.freshness = score
+            await self._session.flush()
+            return score
 
     async def recurate_overview(
         self,

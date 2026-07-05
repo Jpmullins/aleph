@@ -14,7 +14,7 @@ export function ClaimCard({ component, onAction }: RendererProps) {
       ? "emerald"
       : p.confidence === "contested"
         ? "amber"
-        : p.confidence === "uncited"
+        : p.confidence === "uncited" || p.confidence === "retracted"
           ? "red"
           : "slate";
   return (

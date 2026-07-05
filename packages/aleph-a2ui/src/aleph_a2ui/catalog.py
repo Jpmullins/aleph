@@ -27,7 +27,7 @@ CATALOG_ID: Final[str] = "aleph-v1"
 # ---------------------------------------------------------------------------
 
 
-def _comp(props: dict, *, required: list[str] | None = None) -> dict:
+def _comp(props: dict[str, Any], *, required: list[str] | None = None) -> dict[str, Any]:
     """Standard component schema wrapper."""
     return {
         "type": "object",
@@ -84,7 +84,16 @@ _COMPONENTS = {
         {
             "claim_id": _UUID,
             "text": {"type": "string", "maxLength": 2048},
-            "confidence": {"enum": ["well-supported", "weakly-supported", "contested", "uncited"]},
+            "confidence": {
+                "enum": [
+                    "well-supported",
+                    "weakly-supported",
+                    "contested",
+                    "uncited",
+                    # WP-6: a source cited by this claim was retracted.
+                    "retracted",
+                ]
+            },
             "citations": {
                 "type": "array",
                 "items": {
@@ -110,6 +119,8 @@ _COMPONENTS = {
             # WP-4e: normalized-text preview supplied as a BOUND prop by the
             # Library builder; the card renders it in place (no self-fetch).
             "normalized_preview": {"type": ["string", "null"]},
+            # WP-6: true when the source has been retracted (status=="retracted").
+            "retracted": {"type": "boolean"},
             "open_action": {"const": "open"},
             "navigate_wiki_action": {"const": "navigate_wiki"},
         },
@@ -122,6 +133,9 @@ _COMPONENTS = {
             "title": {"type": "string"},
             "artifact_kind": {"type": "string"},
             "status": {"type": "string"},
+            # WP-6: live-computed — true when any upstream wiki page the artifact
+            # drew from has a newer current revision than the one it recorded.
+            "drifted": {"type": "boolean"},
             "open_action": {"const": "open"},
         },
         required=["artifact_id", "title", "artifact_kind", "status"],
@@ -178,6 +192,8 @@ _COMPONENTS = {
                     "review_finding",
                     "wiki_revision",
                     "agent_action",
+                    # WP-6: a staleness-refresh verdict summary for a wiki page.
+                    "refresh_result",
                 ]
             },
             "title": {"type": "string", "maxLength": 200},
@@ -275,6 +291,9 @@ _COMPONENTS = {
             "wikilinks_out": {"type": "array", "items": {"type": "object"}},
             "page_meta": {"type": "object"},
             "html_url": {"type": ["string", "null"]},
+            # WP-6: true when the page has ≥1 retracted-confidence claim (a
+            # contributing source was retracted). Drives a reader banner.
+            "retracted": {"type": "boolean"},
             # Agent-composed dossier/ACH pages are read-only card compositions.
             "derived": {"type": "boolean"},
             "read_only": {"type": "boolean"},

@@ -349,8 +349,44 @@ class BuilderWorkflow:
             }
             out: BuilderState = await self._compiled.ainvoke(state)  # type: ignore[assignment]
 
+            # WP-6: snapshot the exact revision of every contributing wiki page
+            # at build time so drift can be live-computed later (a newer current
+            # revision than the recorded one ⇒ the artifact drifted).
+            source_pages: list[dict[str, Any]] = []
+            if wiki_page_ids:
+                async with self._ctx.session_maker() as session:
+                    page_rows = (
+                        await session.execute(
+                            select(WikiPage.id, WikiPage.current_revision_id).where(
+                                WikiPage.id.in_(wiki_page_ids),
+                                WikiPage.project_id == project_id,
+                            )
+                        )
+                    ).all()
+                    rev_ids = [rev for _, rev in page_rows if rev is not None]
+                    rev_created: dict[UUID, Any] = {}
+                    if rev_ids:
+                        for rid, created_at in (
+                            await session.execute(
+                                select(WikiRevision.id, WikiRevision.created_at).where(
+                                    WikiRevision.id.in_(rev_ids)
+                                )
+                            )
+                        ).all():
+                            rev_created[rid] = created_at
+                    for page_id, rev_id in page_rows:
+                        created = rev_created.get(rev_id) if rev_id is not None else None
+                        source_pages.append(
+                            {
+                                "page_id": str(page_id),
+                                "revision_id": str(rev_id) if rev_id is not None else None,
+                                "revision_created_at": created.isoformat() if created else None,
+                            }
+                        )
+
             lineage = {
                 "wiki_page_ids": [str(w) for w in wiki_page_ids],
+                "source_pages": source_pages,
                 "dataset_version_ids": [str(d) for d in dataset_version_ids],
                 "rendered_asset_ids": [str(r) for r in (out.get("rendered_asset_ids") or [])],
                 "outline": out.get("outline"),

@@ -26,6 +26,7 @@ from aleph_db.repos.agent_events import with_phase
 from aleph_db.repos.ledger import LedgerWriter
 from aleph_observability import current_trace_id
 from aleph_observability.tracing import start_span
+from aleph_reviewer.retraction import retract_source
 from aleph_reviewer.review_service import add_finding, finalize_run, start_run
 from aleph_rks.models import Source, SourceAsset, SourceVersion
 from aleph_scholar import ScholarUpstreamError, extract_dois, normalize_doi
@@ -276,25 +277,44 @@ async def _node_doi_verification(state: MechanicalReviewState) -> dict[str, int]
                     )
                     n += 1
                 if verdict.retracted is True:
-                    await add_finding(
-                        session,
-                        review_run_id=state["review_run_id"],
-                        project_id=state["project_id"],
-                        finding_kind="retracted_source",
-                        severity="critical",
-                        title=f"Retracted source: DOI {verdict.doi}",
-                        description=(
-                            f"DOI {verdict.doi} cited in revision {rev.id} of page "
-                            f"{state['page_id']} has been retracted "
-                            f"(checked via {verdict.checked_via}).{cap_note}"
-                        ),
-                        target_page_id=state["page_id"],
-                        target_revision_id=rev.id,
-                        target_source_id=src.id if src is not None else None,
-                        evidence_refs=evidence,
-                        auto_resolvable=False,
-                        created_by=ctx.principal.user_id,
-                    )
+                    if src is not None:
+                        # Scholar-detected retraction funnels through the shared
+                        # `retract_source` service (WP-6 §4): it retracts the
+                        # source, flags dependent claims, and emits the critical
+                        # `retracted_source` finding — the same path as a manual
+                        # retract. Same session/transaction (rule 4).
+                        await retract_source(
+                            session,
+                            ledger,
+                            ctx.principal,
+                            source_id=src.id,
+                            reason=(
+                                f"Scholar-detected retraction of DOI {verdict.doi} "
+                                f"(checked via {verdict.checked_via})"
+                            ),
+                        )
+                    else:
+                        # A retracted DOI cited in the body with no ingested
+                        # Source row — nothing to retract, but still surface it.
+                        await add_finding(
+                            session,
+                            review_run_id=state["review_run_id"],
+                            project_id=state["project_id"],
+                            finding_kind="retracted_source",
+                            severity="critical",
+                            title=f"Retracted source: DOI {verdict.doi}",
+                            description=(
+                                f"DOI {verdict.doi} cited in revision {rev.id} of page "
+                                f"{state['page_id']} has been retracted "
+                                f"(checked via {verdict.checked_via}).{cap_note}"
+                            ),
+                            target_page_id=state["page_id"],
+                            target_revision_id=rev.id,
+                            target_source_id=None,
+                            evidence_refs=evidence,
+                            auto_resolvable=False,
+                            created_by=ctx.principal.user_id,
+                        )
                     n += 1
                 # Cache authoritative verdicts back onto the ingested source row
                 # (ok=None never overwrites — unverifiable is not knowledge).

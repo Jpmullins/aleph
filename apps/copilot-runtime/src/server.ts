@@ -141,6 +141,7 @@ const ALEPH_A2UI_CATALOG = {
           title: { type: "string" },
           artifact_kind: { type: "string" },
           status: { type: "string" },
+          drifted: { type: "boolean" },
         },
         required: ["artifact_id", "title", "artifact_kind", "status"],
       },

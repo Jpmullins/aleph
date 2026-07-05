@@ -21,7 +21,7 @@ Stages: `—` (not started) → `spec` → `spec-approved` → `implementing` �
 | WP-3 | closed (impl-log §WP-3 2026-07-04) | spec: `docs/specs/2026-07-03-wp3-research.md`; 3-pass adversarial review, 0 violations; live round-trips (10+13 provenanced sources → proposal → approve → curator); cost 7/7 & 3/3 paired; empty aiq grep; mem −4g |
 | WP-4 | closed (impl-log §WP-4 2026-07-04) | spec: `docs/specs/2026-07-04-wp4-workspace.md`; 3-pass adversarial review (blocker + concerns fixed), 0 violations; in-browser: hypothesis patch-in-place, WikiPageCard reader, agent sandbox-chart pinned to Briefs; self-fetch allowlist empty; sweeps pass |
 | WP-5 | closed (impl-log §WP-5 2026-07-04) | spec: `docs/specs/2026-07-04-wp5-purge.md`; 2-pass adversarial review, 0 violations; bugs regression-tested; dead routes + writer-less assistant deleted; route-reachability sweep committed; pyright 1511→955; Python 3.13 pinned |
-| WP-6 | — | |
+| WP-6 | closed (impl-log §WP-6 2026-07-04) | spec: `docs/specs/2026-07-04-wp6-trust.md`; 2-pass adversarial review, 0 violations; freshness/refresh/retraction/drift integration-tested; in-browser FRESHNESS badge + RETRACTED marker |
 | WP-7 | — | |
 
 ---

@@ -38,6 +38,8 @@ class SourceCardProps:
     # WP-4e: the normalized-text preview the Library builder supplies as a BOUND
     # prop. The card renders it in place (no self-fetch of `/sources/*/normalized`).
     normalized_preview: str | None = None
+    # WP-6: true when the source has been retracted (status=="retracted").
+    retracted: bool = False
 
 
 @dataclass
@@ -131,6 +133,7 @@ def source_card(p: SourceCardProps, *, card_id: str | None = None) -> dict[str, 
             "url": p.url,
             "status": p.status,
             "normalized_preview": p.normalized_preview,
+            "retracted": p.retracted,
             "open_action": "open",
             "navigate_wiki_action": "navigate_wiki",
         },

@@ -305,7 +305,57 @@ async def _library_messages(
     for s in sources:
         s["normalized_preview"] = previews.get(UUID(s["id"]))
     artifacts = [a.model_dump(mode="json") for a in await get_artifacts(project_id, session)]
+    await _annotate_drift(session, artifacts)
     return artifacts_surface_v09(sources=sources, artifacts=artifacts, surface_id=surface_id)
+
+
+async def _annotate_drift(session: Any, artifacts: list[dict[str, Any]]) -> None:
+    """Stamp a live-computed ``drifted`` flag onto each artifact dict (WP-6 §5).
+
+    An artifact is drifted iff any upstream wiki page recorded in its current
+    version's ``lineage_jsonb["source_pages"]`` now has a newer current revision
+    than the one the build recorded. No stored flag — always live-computed off
+    the current wiki graph. Two batched queries (versions, then pages)."""
+    from typing import cast
+
+    from aleph_artifacts.drift import is_drifted
+    from aleph_artifacts.models import ArtifactVersion
+
+    version_ids = [UUID(a["current_version_id"]) for a in artifacts if a.get("current_version_id")]
+    source_pages_by_version: dict[UUID, list[dict[str, Any]]] = {}
+    all_page_ids: set[UUID] = set()
+    if version_ids:
+        versions = list(
+            (
+                await session.execute(
+                    select(ArtifactVersion).where(ArtifactVersion.id.in_(version_ids))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for av in versions:
+            lineage = cast("dict[str, Any]", av.lineage_jsonb or {})
+            sps = cast("list[dict[str, Any]]", lineage.get("source_pages") or [])
+            source_pages_by_version[av.id] = sps
+            for sp in sps:
+                pid_val = sp.get("page_id")
+                if pid_val:
+                    all_page_ids.add(UUID(str(pid_val)))
+    current_revs: dict[UUID, UUID | None] = {}
+    if all_page_ids:
+        for pid_row, rev_row in (
+            await session.execute(
+                select(WikiPage.id, WikiPage.current_revision_id).where(
+                    WikiPage.id.in_(all_page_ids)
+                )
+            )
+        ).all():
+            current_revs[pid_row] = rev_row
+    for a in artifacts:
+        cvid = a.get("current_version_id")
+        sps = source_pages_by_version.get(UUID(cvid)) if cvid else None
+        a["drifted"] = is_drifted(sps, current_revs)
 
 
 # Normalized-text preview length (chars). The Library builder binds this head of
@@ -348,6 +398,14 @@ async def _wiki_messages(
     from aleph_api.routes.wiki import get_page, list_pages
 
     pages = [p.model_dump(mode="json") for p in await list_pages(project_id, session)]
+    # WP-6 F4: derive the `retracted` marker (page has ≥1 retracted-confidence
+    # claim on its current revision) for every listed page in one query, stamp it
+    # onto each row, then sort the list by freshness (freshest first; unscored
+    # pages last) so the badge + ordering read as a trust surface.
+    retracted_pages = await _retracted_page_ids(session, project_id, [UUID(p["id"]) for p in pages])
+    for p in pages:
+        p["retracted"] = UUID(p["id"]) in retracted_pages
+    pages.sort(key=lambda p: (p.get("freshness") is None, -(p.get("freshness") or 0), p["title"]))
     open_page: dict[str, Any] | None = None
     if page_id:
         try:
@@ -367,11 +425,18 @@ async def _wiki_messages(
                 "title": detail["page"]["title"],
                 "status": detail["page"]["status"],
                 "is_stub": detail["page"]["is_stub"],
+                # WP-6 trust layer: the reader's freshness badge + retracted
+                # banner read these off page_meta (freshness/volatility/
+                # verified_at come from the page row; `retracted` is derived from
+                # having ≥1 retracted-confidence claim).
+                "freshness": detail["page"]["freshness"],
+                "volatility": detail["page"]["volatility"],
+                "verified_at": detail["page"]["verified_at"],
+                "retracted": bool(await _retracted_page_ids(session, project_id, [pid])),
                 "revision": detail["revision"],
                 "claims": claims,
                 # Resolved [cN] markers → source title + url for the reader's
-                # citation popover (WP-4b). page_meta.freshness is left unset —
-                # WP-6 populates it; the card renders "—" until then.
+                # citation popover (WP-4b).
                 "citations": citations,
                 "wikilinks_out": detail["wikilinks_out"],
                 # Deterministic server-compiled HTML doc (WP-4b). Bound into
@@ -379,6 +444,33 @@ async def _wiki_messages(
                 "html_url": f"/v1/projects/{project_id}/wiki/pages/{pid}/html",
             }
     return wiki_surface_v09(pages=pages, open_page=open_page, surface_id=surface_id)
+
+
+async def _retracted_page_ids(session: Any, project_id: UUID, page_ids: list[UUID]) -> set[UUID]:
+    """Pages (of ``page_ids``) carrying ≥1 retracted-confidence claim on their
+    current revision. One query; drives the WP-6 `retracted` reader marker.
+
+    A retraction (``aleph_reviewer.retraction.retract_source``) sets the
+    dependent claims' ``confidence="retracted"``; a page is marked retracted iff
+    such a claim exists on the page's *current* revision."""
+    from aleph_wiki.models import WikiClaim
+
+    if not page_ids:
+        return set()
+    rows = (
+        await session.execute(
+            select(WikiClaim.page_id)
+            .join(WikiPage, WikiPage.id == WikiClaim.page_id)
+            .where(
+                WikiClaim.project_id == project_id,
+                WikiClaim.page_id.in_(page_ids),
+                WikiClaim.confidence == "retracted",
+                WikiClaim.revision_id == WikiPage.current_revision_id,
+            )
+            .distinct()
+        )
+    ).all()
+    return {pid for (pid,) in rows}
 
 
 async def _resolve_citations(

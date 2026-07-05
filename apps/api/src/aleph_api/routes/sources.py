@@ -25,6 +25,7 @@ from aleph_core.errors import NotFound, ValidationFailed
 from aleph_core.ids import uuid7
 from aleph_db.models.agent import AgentRun
 from aleph_observability.tracing import current_trace_id
+from aleph_reviewer.retraction import retract_source
 from aleph_rks.models import Connector, NormalizedDocument, Source
 from aleph_rks.source_service import register_uploaded_source
 from aleph_security.agent_token import mint_agent_token
@@ -299,6 +300,77 @@ async def get_source(
         msg = f"source not found: {source_id}"
         raise NotFound(msg)
     return SourceOut.model_validate(s)
+
+
+class RetractIn(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=2048)
+
+
+class RetractOut(BaseModel):
+    source_id: UUID
+    status: str
+    already_retracted: bool
+    page_ids: list[UUID]
+    claim_ids: list[UUID]
+    finding_id: UUID | None
+
+
+@router.post("/{project_id}/sources/{source_id}/retract", response_model=RetractOut)
+async def retract_source_route(
+    request: Request,
+    project_id: ProjectScopeDep,
+    source_id: UUID,
+    body: Annotated[RetractIn, Body()],
+    principal: PrincipalDep,
+    session: SessionDep,
+    ledger: LedgerDep,
+) -> RetractOut:
+    """Retract a source and flag every dependent wiki claim (WP-6 §4, EDITOR).
+
+    Funnels through the shared ``retract_source`` service: sets the source
+    ``retracted`` + ledger event, walks the blast-radius join flagging dependent
+    claims, and emits a critical ``retracted_source`` finding into Briefs. Then
+    enqueues a best-effort curator freshness recompute for each affected page.
+    """
+    require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
+
+    src = (
+        await session.execute(
+            select(Source).where(Source.id == source_id, Source.project_id == project_id)
+        )
+    ).scalar_one_or_none()
+    if src is None:
+        msg = f"source not found: {source_id}"
+        raise NotFound(msg)
+
+    result = await retract_source(
+        session, ledger, principal, source_id=source_id, reason=body.reason
+    )
+
+    # Best-effort: enqueue a curator freshness recompute for each affected page.
+    if result.page_ids:
+        try:
+            from arq import create_pool
+            from arq.connections import RedisSettings
+
+            pool = await create_pool(RedisSettings.from_dsn(request.app.state.settings.redis_url))
+            try:
+                for page_id in result.page_ids:
+                    await pool.enqueue_job("curate_page_job", str(project_id), str(page_id))
+            finally:
+                await pool.aclose()
+        except Exception:
+            # Recompute is best-effort; a queue hiccup never fails the retract.
+            pass
+
+    return RetractOut(
+        source_id=result.source_id,
+        status="retracted",
+        already_retracted=result.already_retracted,
+        page_ids=sorted(result.page_ids),
+        claim_ids=sorted(result.claim_ids),
+        finding_id=result.finding_id,
+    )
 
 
 class NormalizedOut(BaseModel):

@@ -18,6 +18,7 @@ from sqlalchemy import (
     Float,
     Index,
     Integer,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -51,6 +52,14 @@ class WikiPage(CommonColumns, Base):
     # no infobox. Read by the deterministic HTML compiler to render an infobox
     # table; never a body — markdown stays the only wiki write-format.
     infobox_jsonb: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # WP-6 trust layer. `volatility` picks the freshness half-life (hot 30d /
+    # warm 90d / cold 365d). `verified_at` is the last time a human/agent
+    # affirmed the page since its last edit (bumped by the refresh-approve
+    # path). `freshness` is the 0-100 curator-computed score
+    # (`aleph_wiki.freshness.compute_freshness`).
+    volatility: Mapped[str] = mapped_column(String(8), nullable=False, server_default="warm")
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    freshness: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
 
 
 class WikiRevision(Base):

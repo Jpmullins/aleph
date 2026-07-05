@@ -76,6 +76,11 @@ class Source(CommonColumns, Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="ingested")
     failure_reason: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     current_version_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    # WP-6 trust layer. A retracted source forces every page that cites it
+    # unfresh; the retraction service (aleph_reviewer) sets these + status "retracted"
+    # and flags dependent claims. Nullable (unset = not retracted).
+    retracted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retraction_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class SourceVersion(CommonColumns, Base):

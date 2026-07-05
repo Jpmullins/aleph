@@ -41,6 +41,10 @@ class WikiPageSummaryOut(BaseModel):
     is_stub: bool
     current_revision_id: UUID | None
     last_compiled_at: datetime | None
+    # WP-6 trust layer.
+    volatility: str
+    verified_at: datetime | None
+    freshness: int | None
 
 
 class WikiRevisionOut(BaseModel):

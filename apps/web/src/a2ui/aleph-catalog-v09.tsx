@@ -213,6 +213,8 @@ export const SourceCardApi = {
     url: CommonSchemas.DynamicString.optional(),
     status: CommonSchemas.DynamicString,
     normalized_preview: CommonSchemas.DynamicString.optional(),
+    // WP-6: true when the source has been retracted.
+    retracted: CommonSchemas.DynamicBoolean.optional(),
     open_action: CommonSchemas.Action.optional(),
     navigate_wiki_action: CommonSchemas.Action.optional(),
   }),
@@ -230,6 +232,8 @@ export const ArtifactCardApi = {
     title: CommonSchemas.DynamicString,
     artifact_kind: CommonSchemas.DynamicString,
     status: CommonSchemas.DynamicString,
+    // WP-6: live-computed drift flag (an upstream page has a newer revision).
+    drifted: CommonSchemas.DynamicBoolean.optional(),
     open_action: CommonSchemas.Action.optional(),
   }),
 };
@@ -385,6 +389,8 @@ export const WikiPageCardApi = {
     wikilinks_out: z3.array(z3.any()).optional(),
     page_meta: z3.any().optional(),
     html_url: CommonSchemas.DynamicString.optional(),
+    // WP-6: true when the page has ≥1 retracted-confidence claim.
+    retracted: CommonSchemas.DynamicBoolean.optional(),
     derived: CommonSchemas.DynamicBoolean.optional(),
     read_only: CommonSchemas.DynamicBoolean.optional(),
     navigate_wiki_action: CommonSchemas.Action.optional(),

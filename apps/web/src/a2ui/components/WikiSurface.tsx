@@ -22,6 +22,8 @@ interface WikiPageSummary {
   status: string;
   current_revision_id: string | null;
   last_compiled_at: string | null;
+  freshness?: number | null;
+  retracted?: boolean;
 }
 
 interface OpenPage {
@@ -29,6 +31,10 @@ interface OpenPage {
   title: string;
   status: string;
   is_stub?: boolean;
+  freshness?: number | null;
+  volatility?: string;
+  verified_at?: string | null;
+  retracted?: boolean;
   revision: { body_md: string; revision_no: number; created_at: string } | null;
   claims: Array<{ id: string; text: string; confidence: string; section_anchor: string | null }>;
   citations: Array<Record<string, unknown>>;
@@ -96,11 +102,13 @@ export function WikiSurface({ component, onAction }: RendererProps) {
                 citations: open.citations,
                 wikilinks_out: open.wikilinks_out,
                 html_url: open.html_url ?? null,
+                retracted: open.retracted,
                 page_meta: {
                   page_id: open.page_id,
                   title: open.title,
                   status: open.status,
                   is_stub: open.is_stub,
+                  freshness: open.freshness == null ? null : String(open.freshness),
                 },
               },
             }}
@@ -189,8 +197,18 @@ function PageGroup({
               <div className="flex items-center justify-between gap-2">
                 <span className="truncate text-sm font-medium text-slate-900">{p.title}</span>
                 <span className="flex items-center gap-1">
+                  {p.retracted && (
+                    <Pill tone="red">
+                      <span data-testid={`wiki-row-retracted-${p.id}`}>⚠</span>
+                    </Pill>
+                  )}
                   {p.is_stub && <Pill tone="amber">stub</Pill>}
                   {p.status !== "approved" && <StatusBadge status={p.status} />}
+                  {p.freshness != null && (
+                    <Pill tone={p.freshness >= 60 ? "emerald" : p.freshness >= 30 ? "amber" : "red"}>
+                      <span data-testid={`wiki-row-freshness-${p.id}`}>{p.freshness}</span>
+                    </Pill>
+                  )}
                 </span>
               </div>
             </button>
