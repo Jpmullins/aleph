@@ -154,21 +154,132 @@ services:
       code-runner-redis:
         condition: service_healthy
 
+  # ── Langfuse v3 stack ──────────────────────────────────────────────────
+  # v3 splits into web + async worker and adds hard deps on ClickHouse (OLAP
+  # trace store), Redis (ingestion queue), and an S3-compatible blob store.
+  # This is what makes traces actually land: v3 ingests OTEL natively, so the
+  # otel-collector below forwards spans to `/api/public/otel`. (v2 had no OTLP
+  # endpoint — every span was dropped.) The transactional Postgres data still
+  # lives in the aux `langfuse` DB created by postgres-initdb.sh; ClickHouse
+  # holds the traces/observations/scores. All Langfuse infra is isolated from
+  # the platform's own Redis/MinIO so observability never shares the privileged
+  # agent-token bus or the (opt-in) asset bucket.
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.12
+    restart: unless-stopped
+    mem_limit: 2g
+    memswap_limit: 2g
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - clickhouse-logs:/var/log/clickhouse-server
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Dedicated Redis for Langfuse's BullMQ ingestion queue — NOT the platform
+  # `redis` (which carries agent tokens + privileged job queues).
+  langfuse-redis:
+    image: redis:8.8-alpine
+    restart: unless-stopped
+    mem_limit: 256m
+    memswap_limit: 256m
+    command: ["redis-server", "--requirepass", "${LANGFUSE_REDIS_AUTH}", "--maxmemory-policy", "noeviction"]
+    environment:
+      LANGFUSE_REDIS_AUTH: ${LANGFUSE_REDIS_AUTH}
+    volumes:
+      - langfuse-redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $${LANGFUSE_REDIS_AUTH} ping | grep -q PONG"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Dedicated blob store for Langfuse event/media uploads. Separate from the
+  # opt-in asset MinIO (WP-1 keeps the asset backend fs-by-default); this one
+  # is always-on because v3 has no fs fallback for event uploads.
+  langfuse-minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: unless-stopped
+    mem_limit: 512m
+    memswap_limit: 512m
+    command: server /data --console-address ":9091"
+    environment:
+      MINIO_ROOT_USER: langfuse
+      MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_ROOT_PASSWORD}
+    volumes:
+      - langfuse-minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  langfuse-minio-init:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        mc alias set lf http://langfuse-minio:9000 langfuse "$${LANGFUSE_MINIO_ROOT_PASSWORD}" &&
+        mc mb --ignore-existing lf/langfuse
+    environment:
+      LANGFUSE_MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_ROOT_PASSWORD}
+    depends_on:
+      langfuse-minio:
+        condition: service_healthy
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    restart: unless-stopped
+    mem_limit: 1g
+    memswap_limit: 1g
+    environment: &langfuse-env
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/langfuse
+      SALT: ${LANGFUSE_SALT}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY}
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_CONNECTION_STRING: redis://default:${LANGFUSE_REDIS_AUTH}@langfuse-redis:6379/0
+      LANGFUSE_S3_EVENT_UPLOAD_ENABLED: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_ROOT_PASSWORD}
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-minio-init:
+        condition: service_completed_successfully
+
   langfuse:
-    # Pinned to v2 — v3 requires ClickHouse + S3 + Redis as separate
-    # services, which we don't run in the local stack. Upgrade path
-    # later when we decide to host ClickHouse.
-    image: langfuse/langfuse:2
+    image: langfuse/langfuse:3
     restart: unless-stopped
     mem_limit: 1g
     memswap_limit: 1g
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/langfuse
+      <<: *langfuse-env
       NEXTAUTH_URL: http://localhost:3000
       NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET}
-      SALT: ${LANGFUSE_SALT}
-      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY}
-      TELEMETRY_ENABLED: "false"
       LANGFUSE_INIT_ORG_ID: aleph
       LANGFUSE_INIT_PROJECT_ID: aleph-local
       LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
@@ -176,6 +287,17 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/public/health || exit 1"]
+      interval: 5s
+      timeout: 4s
+      retries: 30
     ports:
       - "127.0.0.1:3000:3000"
 
@@ -369,6 +491,10 @@ volumes:
   postgres-data:
   minio-data:
   redis-data:
+  clickhouse-data:
+  clickhouse-logs:
+  langfuse-redis-data:
+  langfuse-minio-data:
 
 networks:
   # Default bridge for the app services (implicitly used by everything that

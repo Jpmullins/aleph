@@ -17,12 +17,11 @@ processors:
         action: insert
 
 exporters:
-  # NOTE: Langfuse v2 (the pinned image) has no OTLP ingestion endpoint — that
-  # arrived in Langfuse v3 — so POSTs to /api/public/otel/v1/traces 404 and the
-  # collector drops every batch with a noisy error. The app already sends its
-  # Langfuse traces via the Langfuse SDK directly (LANGFUSE_HOST), so this
-  # exporter is redundant here and is left OUT of the traces pipeline below.
-  # Re-add it to the pipeline once Langfuse is upgraded to v3+.
+  # Langfuse v3 ingests OTEL spans natively at /api/public/otel. This is the
+  # live trace path: app spans → this collector → Langfuse. LANGFUSE_AUTH is
+  # base64(public_key:secret_key), precomputed in .env.
+  # (otelcol warns this alias is deprecated in favor of `otlp_http`, but that
+  # type name isn't wired in the pinned contrib build — `otlphttp` is correct.)
   otlphttp/langfuse:
     endpoint: ${env:LANGFUSE_HOST}/api/public/otel
     headers:
@@ -38,7 +37,7 @@ service:
     traces:
       receivers: [otlp]
       processors: [batch, resource]
-      exporters: [debug]
+      exporters: [otlphttp/langfuse, debug]
     metrics:
       receivers: [otlp]
       processors: [batch, resource]
