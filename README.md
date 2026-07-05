@@ -1,8 +1,8 @@
 # Aleph
 
-Living multi-agent research environment. See [`docs/superpowers/specs/2026-05-26-aleph-design.md`](docs/superpowers/specs/2026-05-26-aleph-design.md) for the design and [`docs/implementation-log.md`](docs/implementation-log.md) for what's actually built (through Increment 8 + post-Inc-8 Waves: a conversational Live agent, an end-to-end research→wiki pipeline, ACH matrix, notes promote-to-wiki, readable sources).
+Living multi-agent research environment. See [`CLAUDE.md`](CLAUDE.md) and the [`docs/`](docs) doc set (architecture, research-loop, workspace, wiki, storage, operations, security) for how the system works, and [`docs/implementation-log.md`](docs/implementation-log.md) for the append-only record of what shipped.
 
-Core loop: create a project → ask the assistant to research a topic (or upload a source) → AIQ web-search research + the wiki agent compile a cited draft wiki page → approve it in Briefs → query it conversationally, run ACH on competing hypotheses, take notes and promote them to the wiki.
+Core loop: create a project → ask the assistant to research a topic (or upload a source) → a native deep-research loop (`aleph-research`: plan → search → ingest → reflect → compose) fans out across the project's allowed connectors + verified scholarship (`aleph-scholar`), and the wiki agent compiles a cited draft page → approve it in Briefs → query it conversationally, run ACH on competing hypotheses, take notes and promote them to the wiki. Wiki pages carry a freshness score and retraction awareness; agent-generated charts render as sandboxed artifacts.
 
 ## Quick start
 
@@ -19,9 +19,9 @@ Then:
 - Web UI: http://localhost:5173
 - API: http://localhost:8000
 - CopilotKit runtime (Live chat bridge): http://localhost:4000
-- AIQ research subsystem: http://localhost:8001
 - Langfuse: http://localhost:3000
-- MinIO console: http://localhost:9001
+
+The default asset backend is the local filesystem (`data/assets`). An S3-compatible object store is opt-in: `docker compose --profile s3 up -d` adds it, with its console at http://localhost:9001.
 
 ## Repo layout
 
@@ -29,7 +29,8 @@ Then:
 apps/
   api/             FastAPI app (+ in-process AG-UI Deep Agent)
   web/             React + Vite app
-  workers/         Arq workers
+  workers/         Arq workers (incl. the native research loop, curator, wiki refresh)
+  code-runner/     Sandboxed, credential-less worker that executes agent-written Python
   copilot-runtime/ Node @copilotkit/runtime v2 bridge (Live chat → AG-UI)
 packages/
   aleph-core/         shared domain primitives + Pydantic schemas
@@ -37,14 +38,26 @@ packages/
   aleph-security/     auth, Principal, role gates, agent tokens
   aleph-observability/  OTEL + Langfuse + structlog
   aleph-models/       LiteLLM transport + ModelProfile resolver + pricing
-  aleph-evals/        eval runner skeleton
-deploy/compose/   docker-compose stack
-docs/             specs, engineering, runbooks
-scripts/          bootstrap-local.sh, verify-gateway.sh
+  aleph-scholar/      verified scholarship (Crossref/OpenAlex/Consensus, DOI verification)
+  aleph-rks/          Raw Knowledge Store
+  aleph-wiki/         wiki compile / curator / freshness / HTML compiler
+  aleph-assistant/    chat orchestration + wiki retrieval router
+  aleph-connectors/   typed connector plugins (driven by the research loop)
+  aleph-research/     native deep-research LangGraph loop
+  aleph-a2ui/         A2UI catalog + SDK glue
+  aleph-reviewer/     reviewers + source retraction/blast-radius
+  aleph-hypotheses/   analyst hypotheses
+  aleph-datasets/     datasets + observations
+  aleph-artifacts/    Builder agent + rendered assets + exporters
+  aleph-notes/        analyst notebook
+  aleph-evals/        eval runner + CI gates
+deploy/compose/   docker-compose stack (fs default; --profile s3 for the object store)
+docs/             architecture, research-loop, workspace, wiki, storage, operations, security
+scripts/          bootstrap-local.sh, verify-gateway.sh, the committed CI sweeps
 tests/e2e/        cross-package integration tests
 ```
 
-See [`docs/engineering/repo-structure.md`](docs/engineering/repo-structure.md) for details.
+See [`docs/architecture.md`](docs/architecture.md) for the full package list + strict DAG.
 
 ## Development
 

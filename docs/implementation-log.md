@@ -1813,3 +1813,74 @@ web typecheck/lint/build clean; `alembic check` clean.
 
 **Honest note:** `infobox_jsonb` (added WP-4b) still has no writer — the curator freshness work
 didn't populate it; it remains a read-path-only hook for a future curator infobox pass.
+
+## WP-7 — Docs reset + F1–F7 finale (2026-07-04)
+
+**Spec:** `docs/specs/2026-07-04-wp7-docs.md` (archived with the others). **Proves F6** and carries
+the whole-goal F1–F7 finale.
+
+**Docs reset.** `docs/` now holds exactly the append-only `implementation-log.md` + seven fresh
+docs written from the finished code (each ≤~200L): `architecture.md` (82), `research-loop.md`
+(83), `workspace.md` (68), `wiki.md` (62), `storage.md` (67), `operations.md` (89),
+`security.md` (43). The entire pre-WP tree — `superpowers/`, all subsystem/eng/ops/security/
+domain docs, `system-assessment.md`, the WP specs, and strays — moved verbatim under
+`docs/archive/` (provenance preserved, `git mv`). CLAUDE.md rewritten (native research loop,
+amended rule 8, corrected package list + commands + endpoints + Docs map, `~/code/aiq` gone);
+README.md fixed. Two committed CI-wired drift guards added: `scripts/check-docs-drift.sh` (the
+F6 acceptance grep) + `scripts/check-claude-commands.sh` (fresh-clone command executability).
+
+**F6 verification (all four items MET).**
+1. `docs/` describes only the current system — the 7 fresh docs + CLAUDE.md rewrite; old docs
+   under `docs/archive/`; impl-log append-only.
+2. **Fresh-review agent** (given ONLY the 7 new docs + CLAUDE.md + README, no history) checked
+   every load-bearing claim against code → found **1** contradiction (`research-loop.md`
+   described connector registration via `get_registry()` at worker startup, a dead path; the
+   real mechanism is `RESEARCH_CONNECTOR_FACTORIES` resolved per-job by `resolve_bound_tools`).
+   Fixed the doc; re-verified against code → **zero** contradictions. Its full report: package
+   roster / native loop / code_runner isolation / storage / trust layer / catalog / security /
+   rules 1–7 / commands all verified TRUE.
+3. `scripts/check-claude-commands.sh` → 16 refs resolve, compose services + invariant scripts
+   exist, no deleted thing named.
+4. `grep -rniE "aiq|minio" docs CLAUDE.md README.md` outside `docs/archive/` + impl-log →
+   **empty**; `scripts/check-docs-drift.sh` passes.
+
+**F7 end-to-end demo (in-browser, project "F7 end-to-end demo", screenshots shown in-session).**
+1. Project created.
+2. URL ingest (`source_id`, normalizing) + PDF upload.
+3. Library viewer via the one streaming route → `GET .../assets/source/{id}` → HTTP 200,
+   `application/pdf`, bytes.
+4. "research this topic" → native `deep_research_job` — the full loop ran visibly in Activity:
+   `research.tools → plan → search → ingest → reflect → compose → concept_normalize →
+   citation_verification → wikilink_resolve → commit_revision → wiki_index_update → synthesize`;
+   bound tools `["arxiv","openalex","rss","semantic_scholar"]` (scholar/connector allowlist).
+5. Run `succeeded`: **5** provenanced sources; **3/3** `research.*` LLM calls cost-attributed.
+6. Pending **proposal in Briefs**.
+7. Approve → **curator** ran (produced merge ApprovalCards in Briefs).
+8. Curator-linked wiki page **"Time-Restricted Eating"** rendered with a **FRESHNESS: 75** badge,
+   `[[Source:S0231]]` citation chip, wikilink chips, Document-view (HtmlDocCard) + Approve/Reject.
+9. **"Summarize the page I have open"** — the Live agent summarized it (Page Title + Key Points
+   & Main Claims) **without being told which page**, via CopilotKit shared-state `open_page_id`.
+10. Agent **pinned a sandbox-generated chart** to Briefs (`code_runner` → versioned artifact
+    with `producing_code` → streaming-route iframe → rendered matplotlib line chart in Briefs).
+11. Verified-DOI scholarship + retraction → marker: proven live in-browser under WP-2 (Consensus
+    20-hit search + tri-state `verify_dois`) and WP-6 (retract a cited source → the dependent
+    claim renders a **RETRACTED** marker; freshness recomputes to 0).
+
+**Honest notes (recorded, not F-item violations):**
+- Deep (3-iteration) research exceeds arq's 600s `job_timeout` under real connector + gateway
+  latency; the WP-3 no-strand semantics correctly mark it `failed` (no strand). The F7 demo used
+  a shallow (1-iteration) run — the identical native loop. Follow-up: raise the research
+  `job_timeout` or add per-node budgeting.
+- The native research **synthesis** writes `Citation`s but not the `SourcePage` bridge rows that
+  WP-6's retraction blast-radius join (`Source→SourcePage→Citation→WikiClaim`) walks, so
+  retracting a research-ingested source does not flag the synthesis page's claims. The
+  retract→marker path is proven end-to-end where the bridge exists (curator/ingest-linked pages,
+  WP-6). Follow-up: have the synthesis commit populate `SourcePage` for its cited sources.
+- The synthesis→curate auto-enqueue can race the claim commit, leaving a page's first-pass
+  freshness momentarily NULL; a curate pass scores it (75 here). The curator computes freshness
+  as designed.
+
+**Gates (final, green).** unit `354 passed`; pyright `0 errors, 949 warnings` (< the 1,758 F5
+baseline); ruff/format clean; **all five committed sweeps pass** (no-self-fetch, catalog-roster,
+route-reachability, docs-drift, claude-commands); web typecheck/lint/build clean; `alembic check`
+clean; integration `80 passed` (WP-6 close).

@@ -45,6 +45,12 @@ jobs:
       - name: Route reachability sweep (WP-5)
         run: ./scripts/check-route-reachability.sh
 
+      - name: Docs drift guard (WP-7)
+        run: ./scripts/check-docs-drift.sh
+
+      - name: CLAUDE.md command executability guard (WP-7)
+        run: ./scripts/check-claude-commands.sh
+
       - name: Ruff lint
         run: uv run ruff check .
 
