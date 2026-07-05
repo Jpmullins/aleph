@@ -124,6 +124,12 @@ directly. Enabling/disabling a \
 connector is consequential and approval-gated: render the ApprovalCard it \
 returns and let the analyst approve before the change applies.
 
+When the analyst asks how the system is doing, why something failed or stalled, \
+or whether errors are happening, call `diagnose_platform` — it reads the \
+platform's own Langfuse traces and reports trace volume plus the most recent \
+errors. Use it to ground answers about platform health in real telemetry \
+rather than guessing.
+
 ## Memory
 
 You have long-term memory at `/memories/`. At the start of substantive work, \
@@ -1098,6 +1104,55 @@ async def set_model_profile(profile_name: str, config: RunnableConfig) -> str:
     )
 
 
+@tool
+async def diagnose_platform(config: RunnableConfig, window_hours: int = 24) -> str:
+    """Inspect the platform's own Langfuse traces to report what is happening
+    and what is broken.
+
+    Reads back the OTEL traces the platform emits (LLM calls, tool calls,
+    research/wiki jobs, HTTP) over the last `window_hours` and summarizes trace
+    volume plus the most recent ERROR-level observations (failed LLM calls,
+    tool errors, exceptions) with their status messages. Call this when the
+    analyst asks how the system is doing, why something failed or stalled, or
+    whether recent errors are occurring. Read-only — it never changes anything.
+    """
+    from aleph_observability import LangfuseReader
+
+    settings = _runtime.get("settings")
+    if settings is None:
+        return "Platform diagnostics are unavailable (no runtime settings on this run)."
+    host = getattr(settings, "langfuse_host", "")
+    public_key = getattr(settings, "langfuse_public_key", "")
+    secret_key = getattr(settings, "langfuse_secret_key", "")
+    if not (host and public_key and secret_key):
+        return "Platform diagnostics are unavailable (Langfuse is not configured)."
+    # From inside compose the app talks to `langfuse:3000`; keep that as-is.
+    reader = LangfuseReader(host=host, public_key=public_key, secret_key=secret_key)
+    try:
+        snap = await reader.diagnostic_snapshot(window_hours=window_hours)
+    except Exception as exc:
+        return f"Could not read platform traces from Langfuse: {exc}"
+    finally:
+        await reader.aclose()
+
+    header = (
+        f"Platform health over the last {snap.window_hours}h: "
+        f"{snap.total_traces} traces, {snap.total_observations} observations, "
+        f"{snap.error_count} error{'s' if snap.error_count != 1 else ''}."
+    )
+    if not snap.recent_errors:
+        return (
+            header
+            + " No ERROR-level observations in this window — nothing broken is being recorded."
+        )
+    lines = [header, "Most recent errors:"]
+    for err in snap.recent_errors:
+        msg = err.status_message or "(no status message)"
+        when = err.start_time[:19] if err.start_time else "?"
+        lines.append(f"- {when} · {err.name}: {msg} (trace {err.trace_id})")
+    return "\n".join(lines)
+
+
 def _psycopg_conn_string(database_url: str) -> str:
     """Convert the app's SQLAlchemy asyncpg URL to a psycopg conn string.
 
@@ -1318,6 +1373,7 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
             list_connectors,
             set_connector_enabled,
             set_model_profile,
+            diagnose_platform,
             # WP-4d hands: persist/compose verbs (the UI-driving open_page /
             # focus_tab / highlight_claim are CopilotKit frontend tools).
             pin_to_brief,

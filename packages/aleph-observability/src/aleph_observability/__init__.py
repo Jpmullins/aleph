@@ -5,6 +5,11 @@ from aleph_observability.langfuse_client import (
     init_langfuse,
     shutdown_langfuse,
 )
+from aleph_observability.langfuse_reader import (
+    DiagnosticSnapshot,
+    ErrorObservation,
+    LangfuseReader,
+)
 from aleph_observability.logging import bind_request_context, configure_logging
 from aleph_observability.tracing import (
     current_trace_id,
@@ -17,7 +22,10 @@ from aleph_observability.tracing import (
 )
 
 __all__ = [
+    "DiagnosticSnapshot",
+    "ErrorObservation",
     "LangfuseClient",
+    "LangfuseReader",
     "bind_request_context",
     "configure_logging",
     "current_trace_id",
