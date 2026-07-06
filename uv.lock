@@ -464,6 +464,7 @@ name = "aleph-observability"
 version = "0.1.0"
 source = { editable = "packages/aleph-observability" }
 dependencies = [
+    { name = "httpx" },
     { name = "langfuse" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp" },
@@ -477,6 +478,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx", specifier = "==0.28.1" },
     { name = "langfuse", specifier = "==4.6.1" },
     { name = "opentelemetry-api", specifier = "==1.42.1" },
     { name = "opentelemetry-exporter-otlp", specifier = "==1.42.1" },
