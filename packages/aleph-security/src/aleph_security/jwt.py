@@ -68,6 +68,12 @@ class JWKSCache:
         )
 
 
+# Pinned signing-algorithm allowlist. Verifying with the algorithm named in the
+# token's own `alg` header is the classic algorithm-confusion foot-gun; only
+# asymmetric OIDC signatures are ever accepted here.
+_ALLOWED_JWT_ALGS = ("RS256", "RS384", "RS512", "ES256", "ES384", "ES512")
+
+
 async def verify_user_jwt(
     token: str,
     *,
@@ -96,10 +102,11 @@ async def verify_user_jwt(
         claims = jwt.decode(
             token,
             signing_key,
-            algorithms=[header.get("alg", "RS256")],
+            algorithms=list(_ALLOWED_JWT_ALGS),
             audience=audience,
             issuer=issuer,
             leeway=leeway_seconds,
+            options={"require": ["exp"]},
         )
     except PyJWTError as exc:
         msg = f"invalid jwt: {exc}"

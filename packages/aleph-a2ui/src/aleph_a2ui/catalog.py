@@ -376,14 +376,20 @@ _ACTIONS = {
     "navigate_wiki": {
         "params": {
             # WP-4d: `open_page` accepts a page_id OR a slug (the agent may know
-            # only the human-readable slug). The handler resolves a slug to its
-            # page_id; at least one must be present.
+            # only the human-readable slug). SourceCard passes a `source_id` (it
+            # knows only the source, not its wiki page). The handler resolves a
+            # slug or source_id to its page_id; at least one must be present.
             "type": "object",
             "properties": {
                 "page_id": _UUID,
                 "slug": {"type": "string"},
+                "source_id": _UUID,
             },
-            "anyOf": [{"required": ["page_id"]}, {"required": ["slug"]}],
+            "anyOf": [
+                {"required": ["page_id"]},
+                {"required": ["slug"]},
+                {"required": ["source_id"]},
+            ],
         }
     },
     "submit_form": {
@@ -428,12 +434,17 @@ _ACTIONS = {
     },
     "edit_note": {
         "params": {
+            # A `section_id` updates that section; a `note_id` (when the note has
+            # no section yet — deleted sections, agent-authored notes) creates the
+            # note's first section so the edit persists instead of vanishing.
             "type": "object",
             "properties": {
                 "section_id": _UUID,
+                "note_id": _UUID,
                 "body_md": {"type": "string"},
             },
-            "required": ["section_id", "body_md"],
+            "required": ["body_md"],
+            "anyOf": [{"required": ["section_id"]}, {"required": ["note_id"]}],
         }
     },
     "clarify": {

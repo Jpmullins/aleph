@@ -8,8 +8,8 @@ container-env fallback), and instantiates ONLY the enabled kinds — a
 disallowed connector is never constructed, never bound into the graph.
 
 The connector set lives in ``RESEARCH_CONNECTOR_FACTORIES`` and is
-instantiated per-run straight from that map (the loop does not use the
-global ``ConnectorRegistry`` — binding is by direct factory lookup).
+instantiated per-run straight from that map — binding is by direct
+factory lookup; there is no global connector registry.
 """
 
 # pyright: reportMissingTypeStubs=false
@@ -32,9 +32,9 @@ from aleph_connectors.credentials import (
     LibsodiumSealedBoxCipher,
 )
 from aleph_connectors.exa import ExaConnector
+from aleph_connectors.huggingface_hub import HuggingFaceHubConnector
 from aleph_connectors.lens import LensConnector
 from aleph_connectors.openalex import OpenAlexConnector
-from aleph_connectors.rss import RSSConnector
 from aleph_connectors.semantic_scholar import SemanticScholarConnector
 from aleph_connectors.serper import SerperConnector
 from aleph_connectors.tavily import TavilyConnector
@@ -54,6 +54,10 @@ ConnectorFactory = Callable[[], "ConnectorBase"]
 #: The document-output research connector set (spec WP-3 §2). Factories, not
 #: instances: a connector is constructed only once its binding is resolved
 #: enabled — never for disabled kinds.
+# Note: `rss` is intentionally NOT bound here — its search requires a per-feed
+# `SearchQuery.extra["feed_url"]` that the fan-out loop never supplies, so it can
+# only raise NotSupported in a research run. The RSSConnector plugin remains for
+# future direct/config-driven use.
 RESEARCH_CONNECTOR_FACTORIES: dict[str, ConnectorFactory] = {
     "tavily": TavilyConnector,
     "openalex": OpenAlexConnector,
@@ -61,7 +65,7 @@ RESEARCH_CONNECTOR_FACTORIES: dict[str, ConnectorFactory] = {
     "semantic_scholar": SemanticScholarConnector,
     "exa": ExaConnector,
     "serper": SerperConnector,
-    "rss": RSSConnector,
+    "huggingface_hub": HuggingFaceHubConnector,
     "lens": LensConnector,
 }
 

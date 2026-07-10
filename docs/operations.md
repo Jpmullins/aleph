@@ -28,7 +28,7 @@ Sources `.env`, requires `INSIGHTS_LITELLM_API_KEY`, and `GET`s `${LITELLM_BASE_
 
 `deploy/compose/docker-compose.yml`. All services bind to `127.0.0.1`; each carries `mem_limit` = `memswap_limit` (no swap; OOM-kill inside the cgroup rather than paging the host). Long-running caps total ~9.5g.
 
-Default services: `postgres` (pgvector 0.8.2 / pg18), `redis` (platform bus), `code-runner-redis` (dedicated code-job bus, internal only), `aleph-code-runner` (isolated sandbox), `langfuse` (v2), `otel-collector`, `aleph-migrate` (one-shot Alembic upgrade), `aleph-api`, `aleph-workers`, `aleph-web`, `aleph-copilot-runtime`.
+Default services: `postgres` (pgvector 0.8.2 / pg18), `redis` (platform bus), `code-runner-redis` (dedicated code-job bus, internal only), `aleph-code-runner` (isolated sandbox), the Langfuse v3 constellation (`langfuse`, `langfuse-worker`, `clickhouse`, `langfuse-redis`, plus Langfuse's own bundled S3-compatible object store + its init one-shot — internal to Langfuse, entirely separate from the platform asset backend), `otel-collector`, `aleph-migrate` (one-shot Alembic upgrade), `aleph-api`, `aleph-workers`, `aleph-web`, `aleph-copilot-runtime`.
 
 - **fs is the default asset backend.** The object-store services are under `profiles: ["s3"]` — start them only with `docker compose --profile s3 up -d` when testing the s3 backend.
 - **There is no separate research-subsystem service** and no external GPU-registry image.
@@ -45,7 +45,7 @@ Default services: `postgres` (pgvector 0.8.2 / pg18), `redis` (platform bus), `c
 ```bash
 # Install deps
 uv sync --all-packages --all-extras   # Python — MUST be --all-packages
-pnpm -C apps/web install               # JS (only apps/web is in the pnpm workspace)
+pnpm -C apps/web install               # JS (the pnpm workspace is apps/web + tests/playwright)
 
 # Lint / format / typecheck
 uv run ruff check .

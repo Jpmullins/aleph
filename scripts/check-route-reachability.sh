@@ -52,6 +52,12 @@ ALLOWLIST = {
     # to obtain a scoped agent token. In-process code calls mint_agent_token()
     # directly, so nothing in-repo hits the ROUTE — it exists for outside callers.
     "agent_tokens",
+    # Sound, unit-tested push endpoint (ChangeBroker SSE + `changes` serializers,
+    # tests/.../test_changes_serializers.py) retained as the data source for the
+    # planned wiki-build/refresh progress signals. Its previous frontend consumer
+    # (the useWikiLiveSignals hook) was wired to stale query keys and was removed;
+    # the replacement consumer is roadmapped in docs/future-work.md.
+    "changes",
 }
 
 # Router modules, in mount order, from main.py's include_router(...) calls.

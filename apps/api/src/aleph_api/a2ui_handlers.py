@@ -29,6 +29,9 @@ from aleph_core.errors import NotFound, ValidationFailed
 from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
 from aleph_notes.note_service import (
+    create_section as create_note_section,
+)
+from aleph_notes.note_service import (
     update_note,
 )
 from aleph_notes.note_service import (
@@ -39,7 +42,7 @@ from aleph_reviewer.models import ApprovalRequest, ReviewFinding
 from aleph_wiki.curator_service import CuratorService
 from aleph_wiki.feedback_service import write_feedback
 from aleph_wiki.handedit_service import clear_section, mark_section
-from aleph_wiki.models import PageMergeProposal, WikiClaim, WikiPage
+from aleph_wiki.models import PageMergeProposal, SourcePage, WikiClaim, WikiPage
 
 # Agent actions an approval may execute on approve. The approve handler
 # dispatches via this fixed map (route + how to shape the request body), never
@@ -791,6 +794,7 @@ async def _navigate_wiki(
     # pass a `slug` instead of a `page_id` (WP-4d); resolve it here.
     page_id = request.params.get("page_id")
     slug = request.params.get("slug")
+    source_id = request.params.get("source_id")
     if not page_id and slug:
         resolved = (
             await session.execute(
@@ -804,8 +808,23 @@ async def _navigate_wiki(
             msg = f"no wiki page with slug {slug!r} in this project"
             raise NotFound(msg)
         page_id = resolved
+    if not page_id and source_id:
+        # SourceCard's "Open source page" passes the source id; resolve it to the
+        # source-kind wiki page built from it (SourcePage maps source → page).
+        resolved = (
+            await session.execute(
+                select(SourcePage.page_id).where(
+                    SourcePage.project_id == project_id,
+                    SourcePage.source_id == UUID(str(source_id)),
+                )
+            )
+        ).scalar_one_or_none()
+        if resolved is None:
+            msg = f"source {source_id!r} has no wiki page yet"
+            raise NotFound(msg)
+        page_id = resolved
     if not page_id:
-        msg = "navigate_wiki requires a page_id or a resolvable slug"
+        msg = "navigate_wiki requires a page_id, source_id, or a resolvable slug"
         raise ValidationFailed(msg)
     page_id = str(page_id)
     return {"page_id": page_id, "navigate": {"tab": "Wiki", "page_id": page_id}}
@@ -1076,17 +1095,34 @@ async def _promote_note(
 async def _edit_note(
     *,
     session: AsyncSession,
+    principal: Principal,
     project_id: UUID,
     request: CardActionRequest,
     **_: Any,
 ) -> dict[str, Any]:
-    section_id = UUID(request.params["section_id"])
     body_md = request.params["body_md"]
-    s = await update_note_section(
+    section_id_raw = request.params.get("section_id")
+    if section_id_raw:
+        s = await update_note_section(
+            session,
+            project_id=project_id,
+            section_id=UUID(str(section_id_raw)),
+            body_md=body_md,
+        )
+        return {"section_id": str(s.id), "ordinal": s.ordinal}
+    # No section yet (deleted sections / agent-authored note) — create the note's
+    # first section so the edit persists rather than being silently dropped.
+    note_id_raw = request.params.get("note_id")
+    if not note_id_raw:
+        msg = "edit_note requires a section_id or a note_id"
+        raise ValidationFailed(msg)
+    s = await create_note_section(
         session,
         project_id=project_id,
-        section_id=section_id,
+        note_id=UUID(str(note_id_raw)),
         body_md=body_md,
+        anchor=None,
+        created_by=principal.user_id,
     )
     return {"section_id": str(s.id), "ordinal": s.ordinal}
 

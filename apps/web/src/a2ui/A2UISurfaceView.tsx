@@ -177,29 +177,54 @@ export function A2UIStreamSurfaceView({ streamUrl, projectId, surface }: StreamP
   }
 
   useEffect(() => {
-    const processor = new MessageProcessor([catalog]);
     let live = true;
-    // Ordering guard: last applied seq for THIS connection (survives an
-    // EventSource auto-reconnect within this effect run).
+    // Ordering guard: last applied seq for THIS connection. Reset whenever the
+    // server sends a fresh baseline (see the `createSurface` handling below).
     let lastSeq = -1;
+    let processor = new MessageProcessor([catalog]);
     const sync = () => {
       if (live) setSurfaces(Array.from(processor.model.surfacesMap.values()));
     };
-    const createdSub = processor.onSurfaceCreated(sync);
-    const deletedSub = processor.onSurfaceDeleted(sync);
+    let subs = [processor.onSurfaceCreated(sync), processor.onSurfaceDeleted(sync)];
+    const rebuild = () => {
+      for (const s of subs) s.unsubscribe();
+      processor = new MessageProcessor([catalog]);
+      subs = [processor.onSurfaceCreated(sync), processor.onSurfaceDeleted(sync)];
+    };
+    const isCreateSurface = (m: unknown): boolean =>
+      !!m && typeof m === "object" && "createSurface" in (m as object);
 
     const es = new EventSource(withConnectionId(streamUrl, cidRef.current), {
       withCredentials: false,
     });
     es.onmessage = (ev) => {
       if (!live || !ev.data) return; // heartbeats are SSE comments → never onmessage
+      let msg: unknown;
       try {
-        const msg = JSON.parse(ev.data) as unknown;
-        const seq = surfaceSeq(msg);
-        if (seq !== null) {
-          if (seq <= lastSeq) return; // duplicate / out-of-order → drop
-          lastSeq = seq;
-        }
+        msg = JSON.parse(ev.data);
+      } catch {
+        return; // ignore malformed frame
+      }
+      // A `createSurface` frame while a surface already exists marks a FRESH
+      // full-snapshot baseline: the server's replay buffer expired (ring TTL) or
+      // was lost on API restart, so it resnapshots with a seq counter restarted
+      // at 0. Without this, the monotonic guard would drop the entire new
+      // baseline (its seqs are ≤ the old lastSeq) and the panel would freeze on
+      // stale content. Rebuild a pristine processor and reset the seq cursor so
+      // the new baseline — and every delta after it — applies. (A normal resume
+      // replays tail deltas with ascending seqs and no createSurface, so this
+      // path is skipped; the first connect has no existing surface, so it too is
+      // skipped and flows through normally.)
+      if (isCreateSurface(msg) && processor.model.surfacesMap.size > 0) {
+        rebuild();
+        lastSeq = -1;
+      }
+      const seq = surfaceSeq(msg);
+      if (seq !== null) {
+        if (seq <= lastSeq) return; // duplicate / out-of-order → drop
+        lastSeq = seq;
+      }
+      try {
         processor.processMessages([msg] as never);
         sync();
       } catch {
@@ -207,18 +232,16 @@ export function A2UIStreamSurfaceView({ streamUrl, projectId, surface }: StreamP
       }
     };
     es.onerror = () => {
-      // EventSource auto-reconnects with backoff. On reconnect the server
-      // resends the full surface; the duplicate `createSurface` throws inside
-      // `processMessages` and is swallowed by the per-message try/catch, while
-      // the resent `updateComponents`/`updateDataModel` re-apply harmlessly to
-      // the already-registered surface. So a transient blip self-heals.
+      // EventSource auto-reconnects with backoff. If the buffer survived, the
+      // server replays only the missed tail (ascending seqs). If it didn't, the
+      // server resnapshots with a leading `createSurface`, which the onmessage
+      // handler detects and rebuilds from. Either way a transient blip self-heals.
     };
 
     return () => {
       live = false;
       es.close();
-      createdSub.unsubscribe();
-      deletedSub.unsubscribe();
+      for (const s of subs) s.unsubscribe();
     };
   }, [catalog, streamUrl]);
 

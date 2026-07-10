@@ -7,7 +7,6 @@ import { A2UIRightPanel } from "@/components/A2UIRightPanel";
 import { CopilotChatSurface } from "@/components/CopilotChatSurface";
 import { Drawer } from "@/components/Drawers";
 import { LeftPanel, type DrawerKind } from "@/components/LeftPanel";
-import { LiveSignalsProvider } from "@/hooks/live-signals";
 import { api, type ProjectOut } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 import { WorkspaceUIProvider } from "@/lib/workspace-ui";
@@ -50,7 +49,6 @@ export function ProjectWorkspace({ projectId, onBack }: Props) {
 
   return (
     <WorkspaceUIProvider>
-      <LiveSignalsProvider projectId={projectId}>
       <div className="flex h-full flex-col">
         <div className="flex min-h-0 flex-1">
           <PanelGroup direction="horizontal" autoSaveId="aleph-workspace-layout" className="flex-1">
@@ -83,7 +81,6 @@ export function ProjectWorkspace({ projectId, onBack }: Props) {
           <Drawer kind={drawer} projectId={projectId} onClose={() => setDrawer(null)} />
         )}
       </div>
-      </LiveSignalsProvider>
     </WorkspaceUIProvider>
   );
 }

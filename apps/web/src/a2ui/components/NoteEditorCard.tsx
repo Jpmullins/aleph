@@ -10,7 +10,9 @@ import type { RendererProps } from "./_shared";
  * inline `NotesSurface` editor were removed). Data arrives as bound props
  * (`note_id`, `section_id`,
  * `title`, `body_md`); every mutation is a ledger-audited `onAction`:
- *   - body edits → debounced `edit_note {section_id, body_md}`;
+ *   - body edits → debounced `edit_note {section_id | note_id, body_md}`
+ *     (falls back to `note_id` when the note has no section yet, so the first
+ *     edit creates the section instead of vanishing);
  *   - title rename → `rename_note {note_id, title}` (on blur / Enter);
  *   - "Promote to wiki" → `promote_note {note_id}`.
  * Markdown only. No fetch.
@@ -44,13 +46,19 @@ export function NoteEditorCard({ component, onAction }: RendererProps) {
 
   const onChangeBody = (text: string) => {
     setBody(text);
-    setSaved("saving");
+    // We can persist either an existing section OR (for a section-less note) the
+    // note itself — the handler creates the first section on note_id. Only show
+    // "Saving…" when a save can actually happen, so we never lie about progress.
+    const canSave = Boolean(sectionId || noteId);
+    setSaved(canSave ? "saving" : "idle");
     if (timer.current) clearTimeout(timer.current);
+    if (!canSave) return;
     timer.current = setTimeout(() => {
-      if (sectionId) {
-        onAction("edit_note", { section_id: sectionId, body_md: text });
-        setSaved("saved");
-      }
+      onAction(
+        "edit_note",
+        sectionId ? { section_id: sectionId, body_md: text } : { note_id: noteId, body_md: text },
+      );
+      setSaved("saved");
     }, 700);
   };
 

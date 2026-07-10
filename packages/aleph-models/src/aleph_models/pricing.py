@@ -17,6 +17,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
+import structlog
+
+_log = structlog.get_logger(__name__)
+
 
 @dataclass(frozen=True)
 class ModelPricing:
@@ -109,6 +113,10 @@ class PricingTable:
         """Return `(cost_usd, cache_savings_usd)` for this call."""
         p = self._table.get(model)
         if p is None:
+            # A model on the gateway but missing from this table bills as $0,
+            # silently corrupting cost telemetry (rule 5). Surface it loudly so it
+            # is caught in logs/evals and the table gets updated.
+            _log.warning("pricing.unknown_model", model=model)
             return Decimal("0"), Decimal("0")
         full_input_tokens = max(input_tokens - cached_tokens, 0)
         cache_savings = (

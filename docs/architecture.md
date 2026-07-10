@@ -8,7 +8,7 @@ Aleph is a multi-agent research environment built around three layers:
 
 ## Monorepo layout
 
-A `uv` workspace (Python 3.13, pyright strict) alongside a `pnpm` workspace (only `apps/web`). The package set below is the authoritative list from `pyproject.toml` `[tool.uv.workspace] members`.
+A `uv` workspace (Python 3.13, pyright strict) alongside a `pnpm` workspace (`apps/web` + `tests/playwright`). The package set below is the authoritative list from `pyproject.toml` `[tool.uv.workspace] members`.
 
 ```
 apps/

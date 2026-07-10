@@ -38,6 +38,50 @@ The one asset streaming route (`GET /v1/projects/{pid}/assets/{kind}/{id}`, see 
 
 Every mutation writes an `ActionLedgerEvent` in the same transaction (rule 4): hash-chained, append-only, no updates or deletes (Postgres immutability triggers). `verify_project_chain` walks the chain via `prev_event_id` from the chain head (not timestamp order), so a tampered `chain_hash` or broken link fails verification even if rows are timestamp-reordered.
 
+## Accepted local-mode gaps (must close before any multi-tenant / `oidc` deploy)
+
+Aleph currently ships **only** in `local` single-user mode, whose trust model is
+"one analyst, one machine, everything in-process is trusted." The following seams
+are harmless there but are **real** and MUST be closed before the stack is ever
+hosted or run `oidc`. They are recorded here so the flip to `oidc` is not mistaken
+for a security-complete deploy.
+
+- **The AG-UI agent endpoint (`/copilotkit/*`) is unauthenticated.** `AuthMiddleware`
+  skips its bearer check (`_SELF_AUTH_PREFIXES`), and the agent's direct-DB *read*
+  tools (`search_wiki`, `wiki_curation_status`, the retriever's `deep_read`,
+  `list_hypotheses`) derive `project_id` from the client-supplied thread id
+  (`proj:<uuid>:<thread>`) with **no membership check** — unlike every REST route,
+  which enforces `ProjectScopeDep`. Under `oidc` this lets any caller that reaches
+  the endpoint read any project's wiki/hypotheses. Close by authenticating the
+  endpoint and routing the read tools through the membership-gated service layer.
+- **Agent-token `project_id` claim is not enforced at the API boundary.**
+  `_principal_from_agent_token` builds the principal but discards the token's
+  project claim; `ProjectScopeDep` then authorizes by membership, so a token minted
+  for project A can be replayed against any other project the same user belongs to.
+  The worker jobs already self-check (`claims.project_id != project_id`); the API
+  middleware should do the same.
+- **`verify_user_jwt` trusts the token's own `alg` header.** It should verify against
+  a pinned allowlist (`["RS256","ES256"]`) rather than `header["alg"]` — classic
+  algorithm-confusion hardening. (Currently saved only by the agent-token path being
+  tried first and PyJWT refusing asymmetric keys as HMAC secrets.)
+- **SSRF from the workers/API.** `ingest_url` and every connector `fetch()` GET
+  caller-or-search-result URLs server-side with no scheme allowlist or private-IP
+  block, from a process dual-homed on the platform network. A hosted deploy needs an
+  egress guard (http/https only, block RFC-1918 + link-local + cloud metadata) and a
+  streaming size cutoff (the `MAX_FETCH_BYTES` cap is currently checked only after the
+  whole body is in memory).
+
+## Recommended before real data accrues: extend the ledger chain hash
+
+`_compute_chain_hash` currently covers `prev_hash | action_kind | target_id | payload
+| timestamp` but **omits `actor_id`, `actor_kind`, `project_id`, and `target_kind`**,
+so an attacker who bypasses the immutability triggers could re-attribute an event to
+a different actor or move it between projects without breaking `verify_project_chain`.
+Extending the hashed tuple (and adding head-hash-vs-tip verification + a NULL-project
+chain verifier) requires a chain re-anchor migration, so it is cheapest to do before
+significant ledger history accumulates. Tracked in `docs/future-work.md` scope for the
+hardening pass.
+
 ## Deferred: SSE × OIDC token transport (documented gap)
 
 The browser `EventSource` API cannot attach an `Authorization` header, so in **`oidc`** mode the SSE streams (agent-events, surfaces, assistant, `changes`) and the asset streaming route consumed by an `<iframe>` cannot carry a bearer token as written. This is a **known, accepted out-of-scope gap** (GOAL §out-of-scope: "Full OIDC deployment hardening beyond the agent-token fix — SSE token transport for EventSource remains a documented gap"). **`local` mode — the only currently-deployed mode — is unaffected** (no bearer is required). Closing it (a short-lived query-param/cookie token exchange for stream endpoints) is future work.

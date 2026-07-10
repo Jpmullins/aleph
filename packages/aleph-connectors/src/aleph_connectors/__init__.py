@@ -1,8 +1,9 @@
 """Aleph connectors: framework + the Inc 3 plugin roster.
 
-Connectors are typed source-kind plugins. The document-output research
-set is registered into the shared registry at worker startup and feeds
-the native research loop, bound per-project by the analyst's allowlist.
+Connectors are typed source-kind plugins. The native research loop binds
+each project's enabled connectors by direct factory lookup
+(``aleph_research.tools.RESEARCH_CONNECTOR_FACTORIES``), per-project by the
+analyst's allowlist — there is no global in-process registry.
 """
 
 from aleph_connectors.base import (
@@ -20,14 +21,12 @@ from aleph_connectors.credentials import (
     LibsodiumSealedBoxCipher,
 )
 from aleph_connectors.models import SynthesisProposal
-from aleph_connectors.registry import ConnectorRegistry, get_registry
 
 __all__ = [
     "ConnectorBase",
     "ConnectorContext",
     "ConnectorCredential",
     "ConnectorCredentialService",
-    "ConnectorRegistry",
     "ConnectorResult",
     "CredentialCipher",
     "LibsodiumSealedBoxCipher",
@@ -35,5 +34,4 @@ __all__ = [
     "RawPayload",
     "SearchQuery",
     "SynthesisProposal",
-    "get_registry",
 ]

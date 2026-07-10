@@ -11,7 +11,7 @@ Aleph is a multi-agent research environment built around three layers:
 
 Research runs as a **native, in-process worker loop** (`aleph-research` → `deep_research_job`: plan → search → ingest → reflect → compose → the existing `SynthesisWorkflow` → a pending proposal in Briefs). Scholarship is verified through `aleph-scholar` (Crossref/OpenAlex/Consensus, tri-state DOI verification, retraction detection). Right-panel surfaces are server-built and pushed as `updateDataModel` deltas over an SSE stream woken by Postgres LISTEN/NOTIFY. Agent-written code executes only in a sandboxed, credential-less, network-partitioned `code_runner`, producing versioned artifacts rendered in `sandbox` iframes.
 
-The canonical record of what shipped is `docs/implementation-log.md` (append-only; entries §WP-1..§WP-6 + earlier increments). The living, verified system is described by the seven top-level docs — see the Docs map below.
+The canonical record of what shipped is `docs/implementation-log.md` (append-only; entries §WP-1..§WP-7 + the post-WP Langfuse-v3 upgrade + earlier increments). The living, verified system is described by the seven top-level docs — see the Docs map below.
 
 ## Common commands
 
@@ -22,7 +22,7 @@ cp deploy/compose/.env.example deploy/compose/.env   # then edit secrets
 
 # Install deps
 uv sync --all-packages --all-extras                   # Python (MUST be --all-packages: installs every workspace member)
-pnpm -C apps/web install                              # JS (only apps/web is in pnpm workspace)
+pnpm -C apps/web install                              # JS (pnpm workspace is apps/web + tests/playwright)
 
 # Lint / format / typecheck
 uv run ruff check .
@@ -61,7 +61,7 @@ Endpoints after bootstrap: web `:5173`, api `:8000`, copilot-runtime `:4000`, La
 
 ## Architecture
 
-Monorepo: `uv` workspace (Python 3.13, pyright strict) + `pnpm` workspace (only contains `apps/web`).
+Monorepo: `uv` workspace (Python 3.13, pyright strict) + `pnpm` workspace (`apps/web` + `tests/playwright`).
 
 ```
 apps/
@@ -151,7 +151,7 @@ Hard, enforced by CI:
 - **New LLM call site** → through `LiteLLMClient.chat()`/`.embed()` with a `Capability` and a `purpose`; produces a `ModelCall` + `CostLedgerEvent`.
 - **New row type** → must have `project_id` + `access_scope`; no globally-scoped tables.
 - **New A2UI component** → schema bump in the catalog + renderer + a producer, all in the same PR (the roster sweep enforces producer+renderer together). Right-panel components render only from bound props — no self-fetch.
-- **New connector** → implement complete (`search`/`fetch`/`normalize`), register in `get_registry()`, declare `output_kind ∈ {document, dataset_rows}`. Credentials come from `ConnectorCredential` via `ConnectorCredentialService` — never from container env vars.
+- **New connector** → implement the `ConnectorBase` protocol (`search`/`fetch`; normalization lives in `aleph_rks.normalization`, not on the connector), declare `output_kind ∈ {document, dataset_rows}`, and bind it into the research loop by adding its factory to `RESEARCH_CONNECTOR_FACTORIES` (`aleph_research.tools`) — there is no global registry. Credentials come from `ConnectorCredential` via `ConnectorCredentialService` — never from container env vars.
 - **New Python package** → add to `[tool.uv.workspace] members`, `[tool.uv.sources]`, ruff/pyright `src`/`include` lists in root `pyproject.toml`; `uv sync`.
 - **Migrations** → never edit an existing revision; add a new one.
 

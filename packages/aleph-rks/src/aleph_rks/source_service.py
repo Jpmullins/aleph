@@ -33,8 +33,21 @@ class SourceCreated:
     asset: SourceAsset
 
 
+# Stable, arbitrary key for the source short-id allocation advisory lock.
+_SHORT_ID_LOCK_KEY = 918_273_401
+
+
 async def _next_short_id(session: AsyncSession) -> str:
-    """Allocate the next `S0001`-style id by counting existing sources."""
+    """Allocate the next `S0001`-style id by counting existing sources.
+
+    `Source.short_id` is globally unique, so allocation must be serialized:
+    concurrent research runs (the bootstrap fan-out launches several against one
+    project) would otherwise both read the same count and collide on insert —
+    the `IntegrityError` lands outside the per-candidate guard and fails the whole
+    run. A transaction-scoped advisory lock serializes allocation without a schema
+    change and releases automatically on commit/rollback.
+    """
+    await session.execute(select(func.pg_advisory_xact_lock(_SHORT_ID_LOCK_KEY)))
     n = (await session.execute(select(func.count()).select_from(Source))).scalar_one()
     return f"S{int(n) + 1:04d}"
 

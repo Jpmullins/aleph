@@ -13,8 +13,6 @@ adds a thin convenience wrapper to:
 
 from __future__ import annotations
 
-from typing import Any
-
 from langfuse import Langfuse
 
 _client: Langfuse | None = None
@@ -25,23 +23,6 @@ class LangfuseClient:
 
     def __init__(self, client: Langfuse) -> None:
         self._client = client
-
-    def update_trace(
-        self,
-        *,
-        trace_id: str,
-        name: str | None = None,
-        user_id: str | None = None,
-        session_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
-        self._client.update_current_trace(
-            id=trace_id,
-            name=name,
-            user_id=user_id,
-            session_id=session_id,
-            metadata=metadata,
-        )
 
     def flush(self) -> None:
         self._client.flush()

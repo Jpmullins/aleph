@@ -10,19 +10,17 @@ The client:
      capability, model, purpose.
   3. Applies the tenacity retry policy.
   4. Writes ModelCall + CostLedgerEvent inside one transaction.
-  5. Honors an optional idempotency_key by checking Redis.
 """
 
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID, uuid4
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 
 from aleph_core.errors import GatewayUnavailable, ValidationFailed
 from aleph_core.schemas.model_profile import Capability
@@ -33,7 +31,6 @@ from aleph_models.retry import gateway_retry
 from aleph_observability.tracing import current_trace_id, start_span
 
 if TYPE_CHECKING:
-    from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from aleph_security.principal import Principal
@@ -51,13 +48,6 @@ class ChatMessage(BaseModel):
     content: str
     name: str | None = None
     tool_call_id: str | None = None
-
-
-class ToolSchema(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    type: Literal["function"] = "function"
-    function: dict[str, Any]
 
 
 class ChatChoice(BaseModel):
@@ -96,29 +86,6 @@ class EmbedResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Idempotency cache
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class _IdemCache:
-    redis: Redis | None
-
-    async def get(self, key: str) -> str | None:
-        if self.redis is None:
-            return None
-        raw = await self.redis.get(f"aleph:idem:{key}")
-        if raw is None:
-            return None
-        return raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
-
-    async def put(self, key: str, model_call_id: str, ttl_seconds: int) -> None:
-        if self.redis is None:
-            return
-        await self.redis.set(f"aleph:idem:{key}", model_call_id, ex=ttl_seconds)
-
-
-# ---------------------------------------------------------------------------
 # Client
 # ---------------------------------------------------------------------------
 
@@ -134,8 +101,6 @@ class LiteLLMClient:
         http_client: httpx.AsyncClient,
         pricing: PricingTable,
         session_maker: async_sessionmaker[AsyncSession],
-        redis_client: Redis | None = None,
-        idempotency_ttl_seconds: int = 86_400,
     ) -> None:
         if not base_url:
             msg = "LITELLM_BASE_URL is required"
@@ -149,8 +114,6 @@ class LiteLLMClient:
         self._http = http_client
         self._pricing = pricing
         self._session_maker = session_maker
-        self._idem = _IdemCache(redis=redis_client)
-        self._idem_ttl = idempotency_ttl_seconds
 
     # ---- public API --------------------------------------------------------
 
@@ -187,38 +150,12 @@ class LiteLLMClient:
         profile_bindings: dict[str, Any],
         messages: list[ChatMessage],
         response_format: dict[str, Any] | None = None,
-        tools: list[ToolSchema] | None = None,
         max_tokens: int | None = None,
         temperature: float = 0.7,
         purpose: str,
-        idempotency_key: str | None = None,
     ) -> ChatResponse:
         del principal  # used by callers; not needed here once project_id is bound
         binding = resolve_binding(profile_bindings, capability)
-
-        if idempotency_key:
-            cached = await self._idem.get(idempotency_key)
-            if cached is not None:
-                # Replay path returns a stub-shaped response; callers usually
-                # fetch the original ModelCall row out-of-band. We surface
-                # the original model_call_id for them to inspect.
-                return ChatResponse(
-                    id=f"idem:{idempotency_key}",
-                    model=binding.model,
-                    choices=[
-                        ChatChoice(
-                            index=0,
-                            message=ChatMessage(role="assistant", content=""),
-                            finish_reason="idempotent_replay",
-                        )
-                    ],
-                    usage=ChatUsage(),
-                    cost_usd="0",
-                    cache_savings_usd="0",
-                    latency_ms=0,
-                    model_call_id=cached,
-                    trace_id=current_trace_id(),
-                )
 
         payload: dict[str, Any] = {
             "model": binding.model,
@@ -229,8 +166,6 @@ class LiteLLMClient:
             payload["max_tokens"] = max_tokens
         if response_format is not None:
             payload["response_format"] = response_format
-        if tools is not None:
-            payload["tools"] = [t.model_dump() for t in tools]
 
         attrs = {
             "aleph.project_id": str(project_id),
@@ -283,9 +218,6 @@ class LiteLLMClient:
                 trace_id=trace_id,
                 timestamp=utcnow(),
             )
-
-        if idempotency_key:
-            await self._idem.put(idempotency_key, str(model_call_id), self._idem_ttl)
 
         choices = [
             ChatChoice(

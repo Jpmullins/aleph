@@ -74,7 +74,7 @@ export function SourceCard({ component, onAction }: RendererProps) {
         </button>
         <button
           type="button"
-          onClick={() => onAction("navigate_wiki", { page_id: p.source_id })}
+          onClick={() => onAction("navigate_wiki", { source_id: p.source_id })}
           className="text-xs text-slate-500 hover:text-slate-900"
         >
           Open source page

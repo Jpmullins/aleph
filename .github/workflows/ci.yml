@@ -51,6 +51,16 @@ jobs:
       - name: CLAUDE.md command executability guard (WP-7)
         run: ./scripts/check-claude-commands.sh
 
+      - name: No placeholder code in production paths
+        run: |
+          if grep -rnE 'TODO|FIXME|NotImplementedError' \
+              --include='*.py' \
+              apps packages scripts \
+              | grep -v '/tests/' | grep -vE '/test_[^/]+\.py:'; then
+            echo "::error::placeholder markers (TODO/FIXME/NotImplementedError) found outside tests/"
+            exit 1
+          fi
+
       - name: Ruff lint
         run: uv run ruff check .
 

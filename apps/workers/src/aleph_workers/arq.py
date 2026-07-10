@@ -63,9 +63,9 @@ async def _startup(ctx: dict[str, Any]) -> None:
     instrument_httpx()
     gateway_http = httpx.AsyncClient()
     redis = aioredis.from_url(s.redis_url, decode_responses=False)
-    # The plain Redis client above is used by LiteLLMClient for idempotency
-    # caching. Job-to-job enqueue (normalize → chunk → wiki) needs an
-    # ArqRedis pool, which only `arq.create_pool` returns.
+    # The plain Redis client above is stashed on the job ctx (`ctx["redis"]`) for
+    # jobs that need direct key access. Job-to-job enqueue (normalize → chunk →
+    # wiki) needs an ArqRedis pool, which only `arq.create_pool` returns.
     redis_pool = await create_pool(RedisSettings.from_dsn(s.redis_url))
     # Dedicated pool for dispatching code_runner jobs on the isolated code-job
     # Redis (the sandbox shares that bus; it must never reach the platform
@@ -77,7 +77,6 @@ async def _startup(ctx: dict[str, Any]) -> None:
         http_client=gateway_http,
         pricing=get_default_pricing(),
         session_maker=maker,
-        redis_client=redis,
     )
     asset_store = create_asset_store(
         backend=s.aleph_asset_backend,

@@ -32,7 +32,16 @@ _INLINE_ROW_LIMIT = 1000
 _INLINE_BYTE_LIMIT = 100 * 1024
 
 
+# Stable, arbitrary key for the dataset short-id allocation advisory lock
+# (distinct from the source-allocation key so the two never contend).
+_SHORT_ID_LOCK_KEY = 918_273_402
+
+
 async def _next_short_id(session: AsyncSession) -> str:
+    # `Dataset.short_id` is globally unique — serialize allocation with a
+    # transaction-scoped advisory lock so concurrent creators can't read the same
+    # count and collide on insert. See aleph_rks.source_service._next_short_id.
+    await session.execute(select(func.pg_advisory_xact_lock(_SHORT_ID_LOCK_KEY)))
     n = (await session.execute(select(func.count()).select_from(Dataset))).scalar_one()
     return f"D{int(n) + 1:04d}"
 

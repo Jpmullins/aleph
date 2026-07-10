@@ -82,7 +82,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         http_client=gateway_http,
         pricing=pricing,
         session_maker=session_maker,
-        redis_client=redis_client,
     )
 
     # Fail fast on a misconfigured asset backend — no silent None fallback;

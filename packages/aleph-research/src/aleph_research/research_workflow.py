@@ -20,8 +20,12 @@ no polling, no slots:
   or done. Bounds: ``max_iterations``; plateau cutoff: an iteration that
   ingests 0 new sources stops the loop regardless.
 * **compose** (LLM, ``research.compose``): write ``body_md`` citing
-  sources as ``[cN]`` markers, normalize with the LLM-free
-  ``style_pass``, and build a :class:`ResearchReport`.
+  sources as ``[cN]`` markers, tidy whitespace with the LLM-free
+  ``style_pass`` (its ``[N]``/``## References`` renumbering is a no-op
+  here on purpose — research markers are stable source-order keys aligned
+  to ``ResearchReport.citations_by_marker``, so renumbering them would
+  desync the map; only the blank-line collapse applies), and build a
+  :class:`ResearchReport`.
 * **synthesize**: hand the report to the unchanged ``SynthesisWorkflow``
   and enqueue ``curate_page_job`` per committed page.
 
@@ -750,31 +754,44 @@ async def _node_ingest(state: ResearchState) -> dict[str, Any]:
                     "checked_at": utcnow().isoformat(),
                 }
 
-            async with ctx.session_maker() as session:
-                ledger = LedgerWriter(session)
-                created = await register_uploaded_source(
-                    session,
-                    ledger=ledger,
-                    principal=ctx.principal,
-                    asset_store=ctx.asset_store,
-                    project_id=state["project_id"],
-                    title=cand.title[:512],
-                    data=payload.data,
-                    filename=_safe_filename(cand, payload.extension),
-                    mime_type=payload.mime_type,
-                    connector_kind=cand.kind,
-                    source_metadata=meta,
+            # Registering + committing a single candidate must never fail the
+            # whole run: a DB or asset-store hiccup on one source costs that one
+            # source, consistent with the loop's per-candidate isolation above
+            # (fetch/size are already guarded).
+            try:
+                async with ctx.session_maker() as session:
+                    ledger = LedgerWriter(session)
+                    created = await register_uploaded_source(
+                        session,
+                        ledger=ledger,
+                        principal=ctx.principal,
+                        asset_store=ctx.asset_store,
+                        project_id=state["project_id"],
+                        title=cand.title[:512],
+                        data=payload.data,
+                        filename=_safe_filename(cand, payload.extension),
+                        mime_type=payload.mime_type,
+                        connector_kind=cand.kind,
+                        source_metadata=meta,
+                    )
+                    version_id, norm_token = await _kick_normalize(
+                        session,
+                        ledger=ledger,
+                        project_id=state["project_id"],
+                        created=created,
+                    )
+                    short_id = created.source.short_id
+                    title = created.source.title
+                    source_id = created.source.id
+                    await session.commit()
+            except Exception as exc:
+                _log.warning(
+                    "research.ingest_candidate_failed",
+                    kind=cand.kind,
+                    url=cand.url,
+                    error=str(exc)[:200],
                 )
-                version_id, norm_token = await _kick_normalize(
-                    session,
-                    ledger=ledger,
-                    project_id=state["project_id"],
-                    created=created,
-                )
-                short_id = created.source.short_id
-                title = created.source.title
-                source_id = created.source.id
-                await session.commit()
+                continue
             try:
                 await ctx.enqueue("normalize_job", version_id, norm_token)
             except Exception as exc:
