@@ -185,6 +185,11 @@ async def post_build(
         correlation_id=correlation_id,
         ttl_seconds=3600,
     )
+    # Durable before dispatched: the worker resolves these ids the moment it
+    # dequeues, and an arq worker beats an uncommitted transaction. A job that
+    # loses that race fails on a row that does not exist yet.
+    await session.commit()
+
     dispatched = False
     try:
         from arq import create_pool

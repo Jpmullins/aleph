@@ -198,6 +198,12 @@ async def create_project(
         try:
             from arq.connections import RedisSettings
 
+            # Durable before dispatched: bootstrap_project_job authenticates with
+            # the AgentRun flushed above and resolves the project by id. An arq
+            # worker beats an uncommitted transaction, and the job would fail on
+            # rows that do not exist yet.
+            await session.commit()
+
             pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
             try:
                 await pool.enqueue_job(
