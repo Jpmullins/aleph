@@ -11,6 +11,7 @@ export const COMPONENT_NAMES = [
   "NotesSurface",
   "HypothesesSurface",
   "BriefsSurface",
+  "GroundingSurface",
   "ClaimCard",
   "SourceCard",
   "ArtifactCard",

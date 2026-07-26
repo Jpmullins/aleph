@@ -103,6 +103,17 @@ _COMPONENTS = {
             "badge_count": {"type": "integer", "minimum": 0},
         },
     ),
+    "GroundingSurface": _comp(
+        {
+            # Both are whole objects rather than ids: the surface is a *view of
+            # a resolved walk* (claim -> citation -> chunk -> span), and the
+            # resolution is the server's job. Passing ids would force the
+            # renderer to fetch, which the no-self-fetch sweep forbids and which
+            # would let the panel drift from what the server actually resolved.
+            "claim": {"type": ["object", "null"]},
+            "groundings": {"type": "array"},
+        },
+    ),
     # ----- Inline cards -----------------------------------------------------
     "ClaimCard": _comp(
         {

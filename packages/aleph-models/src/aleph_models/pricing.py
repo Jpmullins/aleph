@@ -1,22 +1,31 @@
-"""Per-call cost, from rates the gateway reports about itself.
+"""Per-call cost, from rates learned at runtime rather than committed.
 
-This module used to carry a hand-maintained table of model names and rates,
-with a docstring asserting it had been "verified against the Insights LiteLLM
-Gateway". Measured against that very gateway, every entry was wrong: the names
-were unprefixed (`claude-sonnet-4-6` vs `bedrock-claude-sonnet-4-6`, so every
-call 400'd) and the rates were off by roughly 3x (Opus input priced at $15/MTok
-against an actual $5.50). The table is gone rather than corrected — a
-maintained-by-hand price list is wrong by default, and wrong prices that *look*
-authoritative are worse than none.
+This module used to carry a hand-maintained table of model names and rates.
+Against the primary gateway its **names were right** — `claude-opus-4-7`,
+`claude-sonnet-4-6`, `claude-haiku-4-5` and the embedders all exist there. The
+problems were the ones a committed table always has:
 
-Rates now come from :mod:`aleph_models.discovery`, which reads them from the
-gateway's own `/model/info`.
+* **It is gateway-specific and nothing said so.** Pointed at a second, Bedrock-
+  backed gateway, not one name matched (`claude-sonnet-4-6` vs
+  `bedrock-claude-sonnet-4-6`), so every call 400'd — and the reported rates
+  were roughly 3x that gateway's actual billing.
+* **Its rates were unverifiable.** They were publisher list prices presented as
+  "verified against the gateway". A gateway may mark up, discount, or host a
+  model whose cost depends entirely on someone's hardware.
+* **And an unknown model cost `$0`, silently.** This is the defect that made
+  the others invisible: on the mismatched gateway the ledger would have read
+  $0.00 across a live research run, which looks like a quiet day rather than a
+  broken pipeline. A test pinned that behaviour *as the requirement*.
 
-**Unpriced is not free.** The previous implementation returned `$0` for any
-model it did not recognise, which is how a completely broken pricing table
-produced a plausible-looking $0.00 dashboard instead of an alarm. Callers now
-receive :class:`CostBreakdown`, whose ``priced`` flag they must record, so an
-uncosted call stays distinguishable from a genuinely free one.
+Rates now come from :mod:`aleph_models.discovery`, which prefers the gateway's
+own `/model/info`. Where a virtual key may not call that admin route, the
+operator hints file supplies what it can, and the difference is recorded:
+``pricing_source`` is ``gateway`` for reported rates and ``static`` for asserted
+ones.
+
+**Unpriced is not free.** Callers receive :class:`CostBreakdown`, whose
+``priced`` flag they must record, so an uncosted call stays distinguishable from
+a genuinely free one.
 """
 
 from __future__ import annotations
@@ -98,7 +107,14 @@ class PricingTable:
 
     @classmethod
     def from_discovery(cls, models: list[DiscoveredModel]) -> PricingTable:
-        """Build from `/model/info`, skipping models the gateway won't price."""
+        """Build from discovery, skipping models nothing could price.
+
+        `source` reflects where the numbers came from: `gateway` when the
+        gateway reported its own rates, `static` when they were filled in from
+        the operator hints file. The distinction is persisted on every
+        `ModelCall`, because an asserted rate and a reported one carry very
+        different weight in an audit.
+        """
         table: dict[str, ModelPricing] = {}
         for m in models:
             if m.input_per_token is None:
@@ -117,7 +133,11 @@ class PricingTable:
                     Decimal("1.25") if m.cache_write_per_token is not None else Decimal("1")
                 ),
             )
-        return cls(table, source="gateway")
+        # The weaker claim wins the label: if any priced model's rate was
+        # asserted rather than reported, the table as a whole is `static`.
+        priced = [m for m in models if m.input_per_token is not None]
+        reported = bool(priced) and all(m.rates_source == "gateway" for m in priced)
+        return cls(table, source="gateway" if reported else "static")
 
     def has(self, model: str) -> bool:
         return model in self._table

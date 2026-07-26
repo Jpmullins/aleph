@@ -32,7 +32,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 FIXTURE = (
     pathlib.Path(__file__).resolve().parents[2]
-    / "packages/aleph-models/tests/fixtures/insights_model_info.json"
+    / "packages/aleph-models/tests/fixtures/bedrock_gateway_model_info.json"
 )
 
 #: Verified against the live gateway: advertised, priced, and both fail on call.

@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Verify the configured LiteLLM gateway can actually run Aleph.
 #
-# This used to assert a hardcoded list of five model ids. Not one of them
-# existed on the real gateway (`claude-sonnet-4-6` vs `bedrock-claude-sonnet-4-6`),
-# so the check only proved that two copies of the same guess agreed.
+# This used to assert a hardcoded list of five model ids. That passed against the
+# gateway it was written for and failed against the next one, where nothing
+# matched (`claude-sonnet-4-6` vs `bedrock-claude-sonnet-4-6`) — it only ever
+# proved that two copies of the same assumption agreed.
 #
 # It now asks the gateway what it serves, applies the same capability policy the
 # app uses to pick defaults, and — because an advertised model is not necessarily
-# a reachable one — calls each model once. The reference gateway advertises two
-# Sonnets that fail on invocation; only probing finds that.
+# a reachable one — calls each model once. Both reference deployments advertise
+# models that fail on invocation ("Model access is denied", a Sonnet needing an
+# inference profile); only probing finds them.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -29,7 +31,7 @@ if [ -z "${INSIGHTS_LITELLM_API_KEY:-}" ]; then
   exit 1
 fi
 
-export ALEPH_VERIFY_BASE_URL="${LITELLM_BASE_URL:-https://gateway.ai-ops.umd-arlis.org}"
+export ALEPH_VERIFY_BASE_URL="${LITELLM_BASE_URL:-https://gateway.insights.arlis.umd.edu}"
 export ALEPH_VERIFY_KEY="$INSIGHTS_LITELLM_API_KEY"
 export ALEPH_VERIFY_PROBE="${ALEPH_VERIFY_PROBE:-1}"
 

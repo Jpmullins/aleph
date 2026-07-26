@@ -40,9 +40,10 @@ from aleph_models.discovery import (
     probe_model,
     select_default_bindings,
     unbound_capabilities,
+    unpriced_bindings,
 )
 
-FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "insights_model_info.json"
+FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "bedrock_gateway_model_info.json"
 
 #: Verified by probing the live gateway: both advertise fine and both fail on
 #: invocation (one "Access denied", one missing an inference profile).
@@ -189,8 +190,50 @@ class TestTransport:
 
 
 class TestSelectionRefuses:
-    def test_never_selects_an_unpriced_model(self) -> None:
-        """Binding one would reintroduce silent $0 accounting via the defaults."""
+    def test_unpriced_models_are_ranked_last_and_flagged(self) -> None:
+        """Unpriced is a last resort that announces itself, not a disqualifier.
+
+        Excluding unpriced models outright was the first design, and it was too
+        strict in a way that mattered: on the reference gateway the only
+        *reachable* embedder carries no published rate, so exclusion left
+        `embedding` unbindable and the platform unusable. Binding it records
+        `pricing_source="unknown"` — honest but useless for cost control — so
+        the rule is: never prefer an unpriced model over a priced one, and
+        always report the ones chosen anyway.
+        """
+        priced_and_unpriced = parse_model_info(
+            {
+                "data": [
+                    {
+                        "model_name": "priced",
+                        "model_info": {
+                            "mode": "chat",
+                            "max_input_tokens": 1_000_000,
+                            "supports_function_calling": True,
+                            "input_cost_per_token": 1e-06,
+                            "output_cost_per_token": 2e-06,
+                        },
+                    },
+                    {
+                        "model_name": "unpriced-but-mighty",
+                        "model_info": {
+                            "mode": "chat",
+                            "max_input_tokens": 1_000_000,
+                            "supports_function_calling": True,
+                            "supports_reasoning": True,
+                        },
+                    },
+                ]
+            }
+        )
+        bindings = select_default_bindings(priced_and_unpriced)
+        assert bindings[Capability.SYNTHESIS.value]["model"] == "priced", (
+            "an unpriced model outranked a priced one — every call on it would "
+            "record pricing_source=unknown"
+        )
+        assert unpriced_bindings(bindings, priced_and_unpriced) == []
+
+    def test_unpriced_is_still_reported_when_it_is_the_only_option(self) -> None:
         free_lunch = parse_model_info(
             {
                 "data": [
@@ -206,7 +249,13 @@ class TestSelectionRefuses:
                 ]
             }
         )
-        assert select_default_bindings(free_lunch) == {}
+        bindings = select_default_bindings(free_lunch)
+        assert bindings, "refusing every option leaves the platform unusable"
+        flagged = unpriced_bindings(bindings, free_lunch)
+        assert Capability.SYNTHESIS.value in flagged, (
+            "an unpriced binding was made silently — the whole point is that a "
+            "$0 cost is never mistaken for a free call"
+        )
 
     def test_page_selection_refuses_a_small_context_model(self) -> None:
         """The trap: cheapest-wins would pick an 8k model for a whole-index prompt."""
@@ -294,3 +343,123 @@ class TestDeterminism:
 def test_every_capability_has_a_policy() -> None:
     """A capability with no policy can never be bound, silently."""
     assert set(CAPABILITY_POLICIES) == set(Capability)
+
+
+class TestRestrictedKeyFallback:
+    """A virtual key cannot call `/model/info`; discovery must not need it.
+
+    LiteLLM gates that route behind admin scope, so the *normal* case for an
+    application is a 403. Treating it as fatal would have made discovery work
+    only for whoever holds the admin key — and the reference deployment answers
+    exactly that way.
+    """
+
+    @staticmethod
+    def _routing_client(model_info_status: int) -> httpx.AsyncClient:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/model/info":
+                return httpx.Response(
+                    model_info_status,
+                    json={
+                        "detail": "Virtual key is not allowed to call this route. "
+                        "Only allowed to call routes: ['llm_api_routes']"
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"id": "claude-haiku-4-5", "object": "model", "owned_by": "openai"},
+                        {"id": "titan-embed-v2", "object": "model", "owned_by": "openai"},
+                        {"id": "some-local-model", "object": "model", "owned_by": "openai"},
+                    ]
+                },
+            )
+
+        return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [401, 403])
+    async def test_falls_back_to_v1_models(self, status: int) -> None:
+        async with self._routing_client(status) as c:
+            models = await discover_models(base_url="https://gw.example", api_key="k", client=c)
+        assert [m.id for m in models] == [
+            "claude-haiku-4-5",
+            "some-local-model",
+            "titan-embed-v2",
+        ], "a restricted key produced no models at all; Settings would be empty"
+
+    @pytest.mark.asyncio
+    async def test_hints_make_fallback_models_bindable(self) -> None:
+        """Ids alone cannot be filtered by mode or window; hints supply that."""
+        async with self._routing_client(403) as c:
+            models = await discover_models(base_url="https://gw.example", api_key="k", client=c)
+        by_id = _by_id(models)
+        assert by_id["claude-haiku-4-5"].mode == "chat"
+        assert by_id["titan-embed-v2"].mode == "embedding"
+
+        bindings = select_default_bindings(models)
+        assert bindings[Capability.EMBEDDING.value]["model"] == "titan-embed-v2"
+        assert bindings[Capability.CLASSIFICATION.value]["model"] == "claude-haiku-4-5"
+
+    @pytest.mark.asyncio
+    async def test_a_model_no_hint_covers_stays_unbindable(self) -> None:
+        """Silence is the correct answer for a model nothing describes."""
+        async with self._routing_client(403) as c:
+            models = await discover_models(base_url="https://gw.example", api_key="k", client=c)
+        unknown = _by_id(models)["some-local-model"]
+        assert unknown.mode is None
+        assert unknown.metadata_available is False
+        assert unknown.is_priced is False
+        assert unknown.id not in {b["model"] for b in select_default_bindings(models).values()}
+
+
+class TestRateProvenance:
+    """An asserted rate must never be recorded as a reported one."""
+
+    def test_gateway_reported_rates_are_labelled_gateway(self) -> None:
+        from aleph_models.pricing import PricingTable
+
+        table = PricingTable.from_discovery(_models())
+        assert table.source == "gateway"
+
+    @pytest.mark.asyncio
+    async def test_hint_supplied_rates_are_labelled_static(self) -> None:
+        """The bug this caught: a hint that set `mode` also flipped the label.
+
+        `metadata_available` and rate provenance are different questions.
+        Conflating them reported publisher list prices as if the gateway had
+        quoted them — false confidence in the one number that must not carry it.
+        """
+        from aleph_models.pricing import PricingTable
+
+        async with TestRestrictedKeyFallback._routing_client(403) as c:
+            models = await discover_models(base_url="https://gw.example", api_key="k", client=c)
+        haiku = _by_id(models)["claude-haiku-4-5"]
+        assert haiku.is_priced, "hints did not price a model they cover"
+        assert haiku.rates_source == "hints"
+        assert PricingTable.from_discovery(models).source == "static"
+
+    def test_hints_never_override_the_gateway(self) -> None:
+        """A deployment with an admin key must not be downgraded by this file."""
+        from aleph_models.hints import apply_hints
+
+        reported = parse_model_info(
+            {
+                "data": [
+                    {
+                        "model_name": "claude-haiku-4-5",
+                        "model_info": {
+                            "mode": "chat",
+                            "max_input_tokens": 999,
+                            "input_cost_per_token": 1.23e-09,
+                            "output_cost_per_token": 4.56e-09,
+                        },
+                    }
+                ]
+            }
+        )
+        after = apply_hints(reported)[0]
+        assert after.input_per_token == Decimal("1.23E-9")
+        assert after.max_input_tokens == 999
+        assert after.rates_source == "gateway"

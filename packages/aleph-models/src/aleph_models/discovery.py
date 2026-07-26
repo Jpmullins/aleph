@@ -1,30 +1,36 @@
 """Ask the gateway what it serves, instead of guessing.
 
-Aleph ships no list of models. It asks the gateway, and derives everything
-downstream from the answer: the options offered in Settings, the default
-capability bindings for a new project, and — critically — the prices used to
-cost every call.
+Aleph ships no model list. It asks the gateway, and derives what it can from
+the answer: the options offered in Settings, the default capability bindings for
+a new project, and — where the gateway will say — the prices used to cost every
+call.
 
 The alternative was a table of model names and rates committed to the repo.
-That is what shipped, and it failed in both directions at once against the
-first real gateway it met:
+Against the gateway it was written for, the names were correct. The trouble is
+what a committed table cannot know:
 
-* **Every name was wrong.** The table bound ``claude-sonnet-4-6``; the gateway
-  serves ``bedrock-claude-sonnet-4-6``. Every call returns 400.
-* **Every rate was wrong.** The table priced Opus input at $15/MTok. This
-  gateway bills $5.50. Even where a name *did* match, cost was over-reported
-  by roughly 3x.
-* **And an unknown name cost $0**, so the second failure was invisible. A
-  dashboard reading $0.00 looks like a quiet day, not a broken pipeline.
+* **Which gateway you are actually pointed at.** On a second, Bedrock-backed
+  deployment not one name matched (`claude-sonnet-4-6` vs
+  `bedrock-claude-sonnet-4-6`), every call 400'd, and the rates were ~3x that
+  gateway's real billing.
+* **What a model can do.** Context windows, tool support and modes decide
+  whether a binding works at all, and they change per deployment.
+* **And because an unknown model cost `$0` silently**, none of this surfaced —
+  a mismatched table produced a plausible $0.00 spend dashboard.
 
-A gateway knows its own prices and its own capabilities. Asking it is less
-work and more correct, and it means adding a model to the gateway is a config
-change rather than a pull request.
+Two endpoints, in preference order. `/model/info` is the good one: modes,
+context windows, capability flags and exact per-token rates. It is also an
+**admin** route, and an application's *virtual* key is normally restricted to
+``llm_api_routes`` — the primary deployment answers it with 403. So discovery
+falls back to `/v1/models`, which every key may call and which returns ids and
+nothing else; :mod:`aleph_models.hints` then fills the gap from operator
+configuration, labelled as such.
 
-Discovery covers what the gateway *advertises*. It cannot know what the
-gateway can actually *reach* — this deployment lists a Sonnet whose Bedrock
-invocation fails for want of an inference profile. That is what
-:func:`probe_model` is for, and why bootstrap probes rather than trusts.
+Discovery covers what a gateway *advertises*. It cannot know what the gateway
+can actually *reach* — the primary deployment lists three models that fail with
+"Model access is denied", and another lists a Sonnet that needs an inference
+profile. That is what :func:`probe_model` is for, and why configuration probes
+rather than trusts.
 """
 
 from __future__ import annotations
@@ -38,6 +44,7 @@ import httpx
 import structlog
 
 from aleph_core.schemas.model_profile import Capability
+from aleph_models.hints import apply_hints
 from aleph_models.pricing import PricingTable
 
 _log = structlog.get_logger(__name__)
@@ -46,6 +53,9 @@ _log = structlog.get_logger(__name__)
 #: returns bare ids, and `/model_group/info` omits the cache-token rates that
 #: prompt caching makes load-bearing, so neither is sufficient on its own.
 _MODEL_INFO_PATH = "/model/info"
+#: Every key may call this one, but it returns bare ids — no mode, no context
+#: window, no rates. The fallback when `/model/info` is admin-gated.
+_V1_MODELS_PATH = "/v1/models"
 
 
 def _decimal(v: Any) -> Decimal | None:
@@ -85,6 +95,20 @@ class DiscoveredModel:
     supports_reasoning: bool
     supports_prompt_caching: bool
     providers: tuple[str, ...] = ()
+    #: True when the gateway described this model (mode, window, flags, rates).
+    #: False when all we got was an id from `/v1/models` — the model is real and
+    #: listable, but nothing about it has been established, so it must not be
+    #: auto-bound on the strength of assumptions.
+    metadata_available: bool = True
+    #: Where `input_per_token` came from: `gateway` (reported), `hints`
+    #: (asserted by an operator), or `none`.
+    #:
+    #: Tracked separately from `metadata_available` because a hint that supplies
+    #: a *mode* legitimately makes a model bindable while saying nothing about
+    #: whether its *price* was reported — conflating the two labelled
+    #: hint-derived rates as `gateway`, which is precisely the false confidence
+    #: this module exists to remove.
+    rates_source: str = "gateway"
 
     #: False when the gateway advertises no input rate. Such a model is
     #: listable but must never be bound by default — billing it would record
@@ -161,9 +185,55 @@ def parse_model_info(payload: Any) -> list[DiscoveredModel]:
                 supports_reasoning=_flag("supports_reasoning"),
                 supports_prompt_caching=_flag("supports_prompt_caching"),
                 providers=providers,
+                metadata_available=True,
+                rates_source=(
+                    "gateway" if info.get("input_cost_per_token") is not None else "none"
+                ),
             )
         )
     # Stable order so Settings lists and generated defaults are reproducible.
+    out.sort(key=lambda m: m.id)
+    return out
+
+
+def parse_v1_models(payload: Any) -> list[DiscoveredModel]:
+    """Parse the *ids-only* ``/v1/models`` body.
+
+    This endpoint carries no mode, no context window, no capability flags and
+    no prices — ``{"id": ..., "object": "model", "owned_by": "openai"}`` and
+    nothing else. Everything it cannot say is left ``None``/``False`` rather
+    than assumed, which is what makes `metadata_available` meaningful
+    downstream: a model discovered this way is listable but not automatically
+    bindable, because nothing here proves it can do any particular job.
+    """
+    raw: object = payload.get("data", payload) if isinstance(payload, dict) else payload
+    if not isinstance(raw, list):
+        return []
+    out: list[DiscoveredModel] = []
+    for row in cast("list[object]", raw):
+        if not isinstance(row, dict):
+            continue
+        mid = cast("dict[str, object]", row).get("id")
+        if not isinstance(mid, str) or not mid:
+            continue
+        out.append(
+            DiscoveredModel(
+                id=mid,
+                mode=None,
+                max_input_tokens=None,
+                max_output_tokens=None,
+                input_per_token=None,
+                output_per_token=None,
+                cache_read_per_token=None,
+                cache_write_per_token=None,
+                supports_vision=False,
+                supports_function_calling=False,
+                supports_reasoning=False,
+                supports_prompt_caching=False,
+                metadata_available=False,
+                rates_source="none",
+            )
+        )
     out.sort(key=lambda m: m.id)
     return out
 
@@ -175,20 +245,51 @@ async def discover_models(
     client: httpx.AsyncClient | None = None,
     timeout_s: float = 20.0,
 ) -> list[DiscoveredModel]:
-    """GET ``/model/info`` and parse it.
+    """What the gateway serves, using the richest endpoint the key may call.
+
+    `/model/info` is the good one: mode, context window, capability flags and
+    exact per-token rates. But it is an **admin** route, and a LiteLLM virtual
+    key is typically restricted to ``llm_api_routes`` — the reference
+    deployment answers it with
+
+        403 "Virtual key is not allowed to call this route.
+             Only allowed to call routes: ['llm_api_routes']"
+
+    Treating that as fatal would have made discovery work only for operators
+    holding an admin key, which is the wrong audience entirely. So we fall back
+    to `/v1/models`, which every key may call, and accept that it yields ids
+    and nothing else. The gap is then filled — explicitly, and marked as
+    operator configuration rather than gateway truth — by
+    :mod:`aleph_models.hints`.
 
     `client` is injectable so tests can fake the HTTP boundary without faking
     any of the parsing, selection, or pricing that follows it.
     """
     owned = client is None
     http = client or httpx.AsyncClient(timeout=timeout_s)
+    base = base_url.rstrip("/")
+    headers = {"Authorization": f"Bearer {api_key}"}
     try:
-        resp = await http.get(
-            f"{base_url.rstrip('/')}{_MODEL_INFO_PATH}",
-            headers={"Authorization": f"Bearer {api_key}"},
-        )
-        resp.raise_for_status()
-        return parse_model_info(resp.json())
+        resp = await http.get(f"{base}{_MODEL_INFO_PATH}", headers=headers)
+        if resp.status_code in (401, 403):
+            _log.info(
+                "gateway.model_info_forbidden",
+                status=resp.status_code,
+                fallback=_V1_MODELS_PATH,
+                impact="ids only; capability metadata and rates must come from hints",
+            )
+        elif resp.status_code < 400:
+            parsed = parse_model_info(resp.json())
+            if parsed:
+                # Gateway-reported data needs no hints, but a gateway that omits
+                # a field for one model still benefits from them.
+                return apply_hints(parsed)
+        else:
+            resp.raise_for_status()
+
+        listing = await http.get(f"{base}{_V1_MODELS_PATH}", headers=headers)
+        listing.raise_for_status()
+        return apply_hints(parse_v1_models(listing.json()))
     finally:
         if owned:
             await http.aclose()
@@ -305,13 +406,18 @@ def candidates_for(
         m
         for m in models
         if m.mode == policy.mode
-        # An unpriced model is never selected automatically: binding one would
-        # reintroduce silent $0 accounting through the back door.
-        and m.is_priced
         and (not policy.needs_vision or m.supports_vision)
         and (not policy.needs_function_calling or m.supports_function_calling)
         and (m.max_input_tokens or 0) >= policy.min_input_tokens
     ]
+    # Priced models outrank unpriced ones, always. Binding an unpriced model
+    # records `pricing_source="unknown"`, which is honest but useless for cost
+    # control — so it is a last resort, not a disqualification. Excluding them
+    # outright was worse: on a gateway whose only reachable embedder carries no
+    # published rate, it left `embedding` unbindable and the platform unusable.
+    # `unpriced_bindings()` reports whichever ones were chosen anyway.
+    ok.sort(key=lambda m: not m.is_priced)
+
     # Model id breaks every remaining tie, so the same gateway always yields
     # the same defaults. Heavy prefers the LAST id, which on every version
     # scheme in practice ("...opus-4.6" vs "...opus-4.7") means the newer
@@ -328,8 +434,10 @@ def candidates_for(
                 -m.blended_cost,
             )
         )
+        ok.sort(key=lambda m: not m.is_priced)
     else:
         ok.sort(key=lambda m: (m.blended_cost, -(m.max_input_tokens or 0)))
+    ok.sort(key=lambda m: not m.is_priced)
     return ok
 
 
@@ -369,6 +477,19 @@ def select_default_bindings(
             continue
         bindings[capability.value] = binding_for(ranked[0], ranked[1] if len(ranked) > 1 else None)
     return bindings
+
+
+def unpriced_bindings(
+    bindings: dict[str, dict[str, Any]], models: list[DiscoveredModel]
+) -> list[str]:
+    """Capabilities bound to a model nothing could price.
+
+    Every call on one of these records `pricing_source="unknown"`. That is the
+    honest outcome, but it is not a *good* one, so it is surfaced wherever
+    configuration is shown rather than left for someone to notice in the ledger.
+    """
+    priced = {m.id for m in models if m.is_priced}
+    return sorted(c for c, b in bindings.items() if b.get("model") not in priced)
 
 
 def unbound_capabilities(bindings: dict[str, Any]) -> list[Capability]:

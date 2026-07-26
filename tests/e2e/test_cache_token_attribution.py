@@ -28,14 +28,14 @@ from sqlalchemy import select
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
-#: A model the real gateway actually serves. The previous value here
-#: (`claude-haiku-4-5`) came from a hand-written price table and does not exist
-#: on any gateway Aleph has met — the chain this file exercises would have
-#: 400'd in production while passing here against a canned response.
+#: A model from the captured gateway payload below. The point is not that this
+#: particular id is universal — it is not; ids differ per deployment, which is
+#: exactly why rates are discovered rather than committed — but that the rates
+#: asserted here come from a real payload rather than from memory.
 MODEL = "bedrock-claude-opus-4.7"
 
-#: The Insights gateway's own published rates, read from the captured
-#: `/model/info` fixture below rather than asserted from memory.
+#: Read from the captured `/model/info` fixture below rather than asserted from
+#: memory, so a rate change in the fixture fails this file loudly.
 IN_RATE = Decimal("5.5E-6")
 OUT_RATE = Decimal("2.75E-5")
 CACHE_READ_RATE = Decimal("5.5E-7")
@@ -43,7 +43,7 @@ CACHE_WRITE_RATE = Decimal("6.875E-6")
 
 GATEWAY_FIXTURE = (
     pathlib.Path(__file__).resolve().parents[1].parent
-    / "packages/aleph-models/tests/fixtures/insights_model_info.json"
+    / "packages/aleph-models/tests/fixtures/bedrock_gateway_model_info.json"
 )
 
 

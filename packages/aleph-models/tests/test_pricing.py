@@ -4,18 +4,19 @@ This file used to assert the two behaviours that made Aleph's cost ledger
 fiction against the first real gateway it met:
 
 * `test_default_table_has_required_models` pinned a hand-written list of model
-  names. Not one of them exists on the gateway.
+  names. Those names were right for the gateway they were written against and
+  wrong for the next one — which is the property a committed table cannot fix.
 * `test_unknown_model_returns_zero` pinned `$0` for unrecognised models *as the
-  requirement*. Combined with the above, every call would have recorded zero —
-  and the suite would have stayed green while the spend dashboard read $0.00
-  through a live research run.
+  requirement*. That is the load-bearing defect: on a gateway whose names did
+  not match, every call recorded zero, and the suite would have stayed green
+  while the spend dashboard read $0.00 through a live research run.
 
-Both are now inverted. Rates come from the gateway; an unpriced model is a
+Both are now inverted. Rates are learned at runtime; an unpriced model is a
 flagged, visible condition rather than a free one.
 
-The fixture is a verbatim capture of the Insights gateway's `/model/info`
-(with `litellm_params` stripped), so the parsing under test faces the real wire
-shape rather than one invented to suit it.
+The fixture is a verbatim `/model/info` capture from a Bedrock-backed LiteLLM
+gateway (with `litellm_params` stripped), so the parsing under test faces a real
+wire shape rather than one invented to suit it.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ import pytest
 from aleph_models.discovery import parse_model_info
 from aleph_models.pricing import ModelPricing, PricingTable, get_default_pricing
 
-FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "insights_model_info.json"
+FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "bedrock_gateway_model_info.json"
 
 
 def _live_table() -> PricingTable:
@@ -40,10 +41,11 @@ class TestNoGuessedPrices:
     def test_default_pricing_is_empty(self) -> None:
         """Aleph ships no price list.
 
-        The previous default table asserted rates for models it had never
-        contacted, and every one was wrong — Opus input at $15/MTok against an
-        actual $5.50. An empty table cannot be wrong; it can only be
-        unpopulated, which is a state the code reports.
+        The previous default table asserted rates as fact for gateways it had
+        never contacted. On one of them Opus input was priced at $15/MTok
+        against an actual $5.50. An empty table cannot be wrong about a
+        deployment; it can only be unpopulated, which is a state the code
+        reports rather than papers over.
         """
         assert get_default_pricing().models() == []
 
@@ -61,7 +63,7 @@ class TestNoGuessedPrices:
         assert b.cost_usd == Decimal("0")
 
 
-class TestPricesComeFromTheGateway:
+class TestPricesComeFromTheGatewayThatReportsThem:
     def test_every_advertised_model_is_priced(self) -> None:
         table = _live_table()
         models = parse_model_info(json.loads(FIXTURE.read_text()))

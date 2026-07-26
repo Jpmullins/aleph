@@ -40,6 +40,7 @@ ArtifactsSurface=surfaces::def artifacts_surface_v09
 NotesSurface=surfaces::def notes_surface_v09
 HypothesesSurface=surfaces::def hypotheses_surface_v09
 BriefsSurface=surfaces::def briefs_surface_v09
+GroundingSurface=surfaces::def grounding_surface_v09
 ClaimCard=cards::def claim_card
 SourceCard=cards::def source_card
 ArtifactCard=server.ts::ArtifactCard:
