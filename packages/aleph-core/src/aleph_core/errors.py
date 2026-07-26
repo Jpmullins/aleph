@@ -33,6 +33,21 @@ class PermissionDenied(AlephError):
     http_status = 403
 
 
+class Conflict(AlephError):
+    """The request is well-formed and permitted, but the target's state forbids it.
+
+    Distinct from `NotFound` (which hides existence) and `PermissionDenied`
+    (which is about the caller): here the caller may legitimately reach the
+    resource and the resource simply is not in a state that accepts the
+    operation — writing to an archived or deleted project, say. Saying so is the
+    point, because the remedy is to change that state, and a 404 would hide the
+    very thing the user needs to find in order to fix it.
+    """
+
+    code = "conflict"
+    http_status = 409
+
+
 class ValidationFailed(AlephError):
     code = "validation_failed"
     http_status = 422

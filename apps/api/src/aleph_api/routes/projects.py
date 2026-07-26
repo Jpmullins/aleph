@@ -220,8 +220,20 @@ async def create_project(
 
 
 @router.get("", response_model=list[ProjectOut])
-async def list_projects(session: SessionDep, principal: PrincipalDep) -> list[ProjectOut]:
-    rows = await project_repo.list_member_projects(session, user_id=principal.user_id)
+async def list_projects(
+    session: SessionDep, principal: PrincipalDep, include_deleted: bool = False
+) -> list[ProjectOut]:
+    """The caller's projects. Deleted ones are hidden unless asked for.
+
+    `include_deleted` is what makes the restore path reachable. Refusing writes
+    to a deleted project is only half a fix — the other half is being able to
+    *find* the project the 409 tells you to restore. Without this, a deleted
+    project is discoverable only by someone who kept its UUID, which is how a
+    real research corpus (20 sources, 223 wiki pages) became unreachable.
+    """
+    rows = await project_repo.list_member_projects(
+        session, user_id=principal.user_id, include_deleted=include_deleted
+    )
     return [ProjectOut.model_validate(p) for p in rows]
 
 

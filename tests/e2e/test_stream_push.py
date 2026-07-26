@@ -79,7 +79,14 @@ def _fake_request(asgi_app: Any) -> Any:
     # reconnect cursor (`?cid=`, `Last-Event-ID`); real Starlette requests
     # always carry them, so the fake supplies empty stand-ins.
     return SimpleNamespace(
-        app=asgi_app, is_disconnected=is_disconnected, query_params={}, headers={}
+        # `assert_stream_access` consults project status, which needs
+        # method + path. Streams are always GET.
+        method="GET",
+        url=SimpleNamespace(path="/v1/projects/stream"),
+        app=asgi_app,
+        is_disconnected=is_disconnected,
+        query_params={},
+        headers={},
     )
 
 

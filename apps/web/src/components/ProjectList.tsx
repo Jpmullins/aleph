@@ -11,9 +11,15 @@ interface Props {
 
 export function ProjectList({ onOpen }: Props) {
   const [showCreate, setShowCreate] = useState(false);
+  // Deleted projects are hidden by default but must be *findable*. A deleted
+  // project still holds its sources and wiki; without a way to see it, the only
+  // route back is knowing its UUID — which is how a real research corpus became
+  // unreachable after a stray delete.
+  const [showDeleted, setShowDeleted] = useState(false);
   const projectsQuery = useQuery<ProjectOut[]>({
-    queryKey: ["projects"],
-    queryFn: () => api.get<ProjectOut[]>("/v1/projects"),
+    queryKey: ["projects", showDeleted],
+    queryFn: () =>
+      api.get<ProjectOut[]>(`/v1/projects${showDeleted ? "?include_deleted=true" : ""}`),
   });
 
   return (
@@ -32,6 +38,15 @@ export function ProjectList({ onOpen }: Props) {
             compiled wiki, and an assistant that can research and grow it.
           </p>
         </div>
+        <label className="mr-3 flex cursor-pointer items-center gap-1.5 text-xs text-ink-muted">
+          <input
+            type="checkbox"
+            checked={showDeleted}
+            onChange={(e) => setShowDeleted(e.target.checked)}
+            data-testid="show-deleted-projects"
+          />
+          Show deleted
+        </label>
         <button
           type="button"
           onClick={() => setShowCreate(true)}
@@ -85,6 +100,14 @@ function ProjectRow({
     onSuccess: () => qc.invalidateQueries({ queryKey: ["projects"] }),
   });
 
+  // The counterpart to delete, and the reason writes to a deleted project can
+  // safely 409: there is a visible way back.
+  const restore = useMutation({
+    mutationFn: async () =>
+      api.patch<ProjectOut>(`/v1/projects/${project.id}`, { status: "active" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["projects"] }),
+  });
+
   return (
     <li className="overflow-hidden rounded-md border border-line bg-surface shadow-sm hover:border-line-strong">
       <div className="flex items-stretch">
@@ -109,20 +132,38 @@ function ProjectRow({
         >
           {expanded ? "▴ Info" : "▾ Info"}
         </button>
-        <button
-          type="button"
-          onClick={() => {
-            if (window.confirm(`Delete project "${project.title}"? This is reversible by an admin.`)) {
-              archive.mutate();
-            }
-          }}
-          disabled={archive.isPending}
-          className="border-l border-line px-4 text-xs font-medium text-ink-muted hover:bg-red-50 hover:text-red-700 disabled:opacity-50"
-          data-testid={`project-delete-${project.id}`}
-          title="Delete project"
-        >
-          {archive.isPending ? "…" : "Delete"}
-        </button>
+        {project.status === "deleted" ? (
+          <button
+            type="button"
+            onClick={() => restore.mutate()}
+            disabled={restore.isPending}
+            className="border-l border-line px-4 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+            data-testid={`project-restore-${project.id}`}
+            title="Restore this project"
+          >
+            {restore.isPending ? "…" : "Restore"}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              if (
+                window.confirm(
+                  `Delete project "${project.title}"? Its sources and wiki are kept, ` +
+                    `and you can restore it from "Show deleted".`,
+                )
+              ) {
+                archive.mutate();
+              }
+            }}
+            disabled={archive.isPending}
+            className="border-l border-line px-4 text-xs font-medium text-ink-muted hover:bg-red-50 hover:text-red-700 disabled:opacity-50"
+            data-testid={`project-delete-${project.id}`}
+            title="Delete project"
+          >
+            {archive.isPending ? "…" : "Delete"}
+          </button>
+        )}
       </div>
       {expanded && (
         <div className="space-y-1.5 border-t border-line bg-sunken px-4 py-3 text-xs text-ink-soft">

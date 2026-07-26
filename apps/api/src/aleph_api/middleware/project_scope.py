@@ -12,9 +12,81 @@ from uuid import UUID
 from fastapi import Depends, Path, Request
 
 from aleph_api.deps import PrincipalDep, SessionDep
-from aleph_core.errors import NotFound
-from aleph_db.repos.project import get_member
+from aleph_core.errors import Conflict, NotFound
+from aleph_db.repos.project import get_member_role_and_status
 from aleph_security.principal import Principal
+
+#: HTTP methods that only read. Everything else mutates.
+_READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+#: Statuses that accept writes. `archived` is deliberately read-only — that is
+#: what archiving is for — and `deleted` accepts nothing but its own restore.
+_WRITABLE_STATUSES = frozenset({"active"})
+
+
+#: The one route that can bring a project back.
+#:
+#: Matched as a *route template*, never by formatting the id into the URL and
+#: comparing strings. The first version of this did exactly that, and it was a
+#: permanent lockout: `request.url.path` carries whatever UUID spelling the
+#: client sent, while an f-string of a `UUID` is always canonical lowercase. A
+#: caller using uppercase hex — which `uuid.UUID()` accepts and FastAPI parses
+#: happily — failed the comparison and got a 409 telling them to perform the
+#: request that had just been refused. Verified against the running server:
+#: lowercase restore 200, uppercase restore 409.
+_RESTORE_ROUTE = "/v1/projects/{project_id}"
+
+
+def _is_project_status_change(request: Request) -> bool:
+    """True for the one request that can bring a project back: its own PATCH.
+
+    Without this exemption the rule below is a trap door. `PATCH
+    /v1/projects/{id}` with `{"status": "active"}` is the *only* writer of
+    `Project.status` in the codebase — delete and restore are the same request
+    with a different body — so exempting that one route template exempts restore
+    by construction. There is no second door to keep open, and none to forget.
+
+    The body is deliberately not inspected. `ProjectUpdate` is `extra="forbid"`
+    with only `title`, `description` and `status`, so the blast radius of the
+    exemption is three scalar columns; reading the body inside a dependency that
+    runs on 116 handlers would buy nothing and add a body-consumption failure
+    mode to all of them.
+    """
+    route = request.scope.get("route")
+    return request.method == "PATCH" and getattr(route, "path", None) == _RESTORE_ROUTE
+
+
+def _assert_project_writable(request: Request, project_id: UUID, status: str) -> None:
+    """Refuse writes to a project that is archived or deleted.
+
+    A soft-deleted project used to accept every write. The project *list*
+    filters on status; the write paths ignored it entirely. The result, observed
+    in production: a project was deleted at 15:09, and at 17:22 a research run
+    ingested 20 papers into it, computed embeddings, and built 223 wiki pages.
+    Every step reported success. The work was simply unreachable afterwards,
+    because nothing surfaces a deleted project.
+
+    That is the house failure mode — the operation succeeds, the state it writes
+    is orphaned, and nothing errors.
+
+    Reads stay open on purpose: a member must be able to inspect a project
+    before deciding to restore it, and the list already hides it. `Conflict`
+    (409) rather than 404 or 403 for the same reason — the project exists and
+    you may access it; it is the project's *state* that forbids the write, and
+    saying so is what tells a user to restore it. A 404 would hide the thing
+    they need to find.
+    """
+    if request.method in _READ_METHODS:
+        return
+    if status in _WRITABLE_STATUSES:
+        return
+    if _is_project_status_change(request):
+        return
+    msg = (
+        f"project is {status} and accepts no writes; restore it first "
+        f"(PATCH /v1/projects/{project_id} with status=active)"
+    )
+    raise Conflict(msg)
 
 
 def _assert_credential_scope(principal: Principal, project_id: UUID) -> None:
@@ -38,18 +110,25 @@ async def project_scope_dep(
     project_id: Annotated[UUID, Path(...)],
     principal: PrincipalDep,
     session: SessionDep,
+    request: Request,
 ) -> UUID:
-    """Resolve membership; cache role on principal.
+    """Resolve membership, refuse writes to a non-active project, cache the role.
 
     Returns 404 (NotFound) if the principal is not a member of the
-    project — never leak existence across project scopes.
+    project — never leak existence across project scopes. Returns 409 (Conflict)
+    if they are a member but the project is archived or deleted and the request
+    would write.
     """
     _assert_credential_scope(principal, project_id)
-    member = await get_member(session, project_id=project_id, user_id=principal.user_id)
-    if member is None:
+    found = await get_member_role_and_status(
+        session, project_id=project_id, user_id=principal.user_id
+    )
+    if found is None:
         msg = f"project not found: {project_id}"
         raise NotFound(msg)
-    principal.cache_role(project_id, member.role)
+    role, status = found
+    _assert_project_writable(request, project_id, status)
+    principal.cache_role(project_id, role)
     return project_id
 
 
@@ -73,8 +152,15 @@ async def assert_stream_access(request: Request, project_id: UUID, principal: Pr
     _assert_credential_scope(principal, project_id)
     maker = request.app.state.session_maker
     async with maker() as session:
-        member = await get_member(session, project_id=project_id, user_id=principal.user_id)
-    if member is None:
+        found = await get_member_role_and_status(
+            session, project_id=project_id, user_id=principal.user_id
+        )
+    if found is None:
         msg = f"project not found: {project_id}"
         raise NotFound(msg)
-    principal.cache_role(project_id, member.role)
+    role, status = found
+    # Streams are reads, so the write rule never fires here in practice — but it
+    # is applied rather than skipped, because "streams bypass ProjectScopeDep
+    # entirely" is exactly how the credential-scope hole got in.
+    _assert_project_writable(request, project_id, status)
+    principal.cache_role(project_id, role)

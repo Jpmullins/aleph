@@ -49,6 +49,18 @@ def test_principal_carries_a_project_scope() -> None:
     assert unscoped.project_id is None, "user principals must stay unscoped"
 
 
+def _fake_request(method: str = "POST", path: str = "/v1/projects/x/sources"):
+    """Minimal request for `project_scope_dep`.
+
+    A write by default: these tests assert the credential-scope refusal fires
+    before anything else, and a write is the case where the newer project-status
+    check could otherwise mask it.
+    """
+    from types import SimpleNamespace
+
+    return SimpleNamespace(method=method, url=SimpleNamespace(path=path))
+
+
 async def test_agent_token_refused_on_another_project() -> None:
     from aleph_api.middleware.project_scope import project_scope_dep
 
@@ -56,7 +68,7 @@ async def test_agent_token_refused_on_another_project() -> None:
     principal = _agent_principal(project_a)
 
     with pytest.raises(NotFound):
-        await project_scope_dep(project_b, principal, _ExplodingSession())
+        await project_scope_dep(project_b, principal, _ExplodingSession(), _fake_request())
 
 
 async def test_agent_token_scope_checked_for_streams_too() -> None:
@@ -93,6 +105,13 @@ async def test_unscoped_principal_still_reaches_membership() -> None:
             reached.append(True)
 
             class _R:
+                # `project_scope_dep` resolves membership and project status in
+                # ONE joined query now (it used to issue two), so the stub has to
+                # answer `one_or_none` rather than `scalar_one_or_none`.
+                @staticmethod
+                def one_or_none():
+                    return None
+
                 @staticmethod
                 def scalar_one_or_none():
                     return None
@@ -101,5 +120,5 @@ async def test_unscoped_principal_still_reaches_membership() -> None:
 
     principal = Principal(user_id=uuid4(), subject="u", email="u@x", actor_kind="user")
     with pytest.raises(NotFound):
-        await project_scope_dep(uuid4(), principal, _Session())
+        await project_scope_dep(uuid4(), principal, _Session(), _fake_request())
     assert reached, "an unscoped principal must fall through to the membership check"
