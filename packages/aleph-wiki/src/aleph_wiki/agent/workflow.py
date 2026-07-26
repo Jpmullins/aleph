@@ -27,6 +27,7 @@ state is the typed dict below; transitions are pure functions.
 from __future__ import annotations
 
 import json
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
@@ -134,14 +135,25 @@ class WorkflowContext:
 # Mutable singletons holding the per-invocation context. LangGraph nodes are
 # closures; we use a module-level reference to avoid plumbing the context
 # through every state field.
-_active_ctx: WorkflowContext | None = None
+# Held in a ContextVar, NOT a module global.
+#
+# arq runs jobs concurrently in a single event loop. With a global, job B
+# overwrites job A's context, A's `finally` then clears it, and B's next node
+# reads `None` — surfacing as "context not initialized" and failing the job.
+# That is not hypothetical: it failed 11 of 14 papers in one research run,
+# because a research run is exactly the concurrent case. A ContextVar is
+# per-task, so each job sees only its own context.
+_active_ctx_var: ContextVar[WorkflowContext | None] = ContextVar(
+    "aleph_wiki_ingest_active_ctx", default=None
+)
 
 
 def _ctx() -> WorkflowContext:
-    if _active_ctx is None:
+    ctx = _active_ctx_var.get()
+    if ctx is None:
         msg = "WikiIngestWorkflow context not initialized"
         raise RuntimeError(msg)
-    return _active_ctx
+    return ctx
 
 
 async def _emit_compile_page(
@@ -853,10 +865,9 @@ class WikiIngestWorkflow:
         self._compiled = graph.compile()
 
     async def run(self, initial_state: WikiIngestState) -> WikiIngestState:
-        global _active_ctx
-        _active_ctx = self._ctx
+        token = _active_ctx_var.set(self._ctx)
         try:
             out = await self._compiled.ainvoke(initial_state)
             return out  # type: ignore[return-value]
         finally:
-            _active_ctx = None
+            _active_ctx_var.reset(token)

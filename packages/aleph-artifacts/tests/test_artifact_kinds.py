@@ -123,7 +123,9 @@ async def test_node_package_produces_real_format_per_kind(
         asset_store=store,  # type: ignore[arg-type]
         principal=_principal(),
     )
-    monkeypatch.setattr(workflow, "_active_ctx", ctx)
+    # The builder context lives in a ContextVar now: concurrent arq jobs used to
+    # clobber the module global and clear each other's context mid-run.
+    workflow._active_ctx_var.set(ctx)
 
     state = {
         "project_id": uuid7(),
@@ -148,7 +150,9 @@ async def test_node_package_rejects_unexpected_kind(monkeypatch: pytest.MonkeyPa
         asset_store=_FakeAssetStore(),  # type: ignore[arg-type]
         principal=_principal(),
     )
-    monkeypatch.setattr(workflow, "_active_ctx", ctx)
+    # The builder context lives in a ContextVar now: concurrent arq jobs used to
+    # clobber the module global and clear each other's context mid-run.
+    workflow._active_ctx_var.set(ctx)
 
     state = {
         "project_id": uuid7(),

@@ -12,6 +12,7 @@ rendered asset, and source version (lineage_jsonb).
 from __future__ import annotations
 
 import hashlib
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypedDict
 from uuid import UUID
@@ -46,14 +47,23 @@ class _Ctx:
     principal: Principal
 
 
-_active_ctx: _Ctx | None = None
+# Held in a ContextVar, NOT a module global.
+#
+# arq runs jobs concurrently in a single event loop. With a global, job B
+# overwrites job A's context, A's `finally` then clears it, and B's next node
+# reads `None` — surfacing as "context not initialized" and failing the job.
+# That is not hypothetical: it failed 11 of 14 papers in one research run,
+# because a research run is exactly the concurrent case. A ContextVar is
+# per-task, so each job sees only its own context.
+_active_ctx_var: ContextVar[_Ctx | None] = ContextVar("aleph_builder_active_ctx", default=None)
 
 
 def _ctx() -> _Ctx:
-    if _active_ctx is None:
+    ctx = _active_ctx_var.get()
+    if ctx is None:
         msg = "BuilderWorkflow context not initialized"
         raise RuntimeError(msg)
-    return _active_ctx
+    return ctx
 
 
 class BuilderState(TypedDict, total=False):
@@ -331,8 +341,7 @@ class BuilderWorkflow:
         template_name: str,
         csl_style: str,
     ) -> ArtifactVersion:
-        global _active_ctx
-        _active_ctx = self._ctx
+        token = _active_ctx_var.set(self._ctx)
         try:
             async with self._ctx.session_maker() as session:
                 max_no = (
@@ -446,4 +455,4 @@ class BuilderWorkflow:
                 await session.commit()
                 return version
         finally:
-            _active_ctx = None
+            _active_ctx_var.reset(token)

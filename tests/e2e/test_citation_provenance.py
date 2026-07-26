@@ -111,8 +111,10 @@ async def _run_commit_node(asgi_app, principal, project_id, source):
         litellm=asgi_app.state.litellm,
         principal=principal,
     )
-    token = wf._active_ctx
-    wf._active_ctx = ctx
+    # The workflow context moved into a ContextVar: arq runs jobs concurrently
+    # in one event loop, and the module global let one job clear another's
+    # context mid-run ("WikiIngestWorkflow context not initialized").
+    token = wf._active_ctx_var.set(ctx)
     try:
         return await wf._node_commit_revision(
             {
@@ -125,7 +127,7 @@ async def _run_commit_node(asgi_app, principal, project_id, source):
             }
         )
     finally:
-        wf._active_ctx = token
+        wf._active_ctx_var.reset(token)
 
 
 async def test_commit_writes_a_resolvable_citation(asgi_app):
