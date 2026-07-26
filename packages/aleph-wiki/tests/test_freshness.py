@@ -72,8 +72,11 @@ def test_citation_health_fraction_cited() -> None:
     ]
     assert _citation_health(both, set()) == 25.0
     assert _citation_health(half, set()) == 12.5
-    # No claims → vacuously healthy.
-    assert _citation_health([], set()) == 25.0
+    # No claims → no health to award. This line used to assert 25.0 ("vacuously
+    # healthy"), which combined with the verification short-circuit to score a
+    # claimless page 100 — identical to a fully-cited one. See
+    # TestGroundednessDiscriminates.
+    assert _citation_health([], set()) == 0.0
 
 
 def test_citation_health_retracted_source_is_unhealthy() -> None:
@@ -96,9 +99,23 @@ def test_source_freshness_decays_on_oldest_and_zero_when_empty() -> None:
 
 
 def test_verification_full_when_verified_after_revision() -> None:
+    """A human tick counts — but only over claims that exist to be verified."""
     page = _page(verified_at=NOW)
     rev = _rev(NOW - timedelta(days=1))
-    assert _verification(page, rev, []) == 25.0
+    claims = [ClaimCitation(uuid4(), "cited", (uuid4(),))]
+    assert _verification(page, rev, claims) == 25.0
+
+
+def test_verification_of_a_claimless_page_verifies_nothing() -> None:
+    """This case previously returned full marks.
+
+    A reviewer ticking "verified" on a page that asserts nothing has verified
+    nothing, and letting that award 25 was half of why a claimless page and a
+    fully-grounded one both scored 100.
+    """
+    page = _page(verified_at=NOW)
+    rev = _rev(NOW - timedelta(days=1))
+    assert _verification(page, rev, []) == 0.0
 
 
 def test_verification_partial_by_cited_fraction() -> None:
@@ -163,3 +180,85 @@ def test_compute_freshness_decayed_middle_score() -> None:
         now=NOW,
     )
     assert score == 75
+
+
+class TestGroundednessDiscriminates:
+    """E2.3 — a grounded page must score strictly above a claimless one.
+
+    This was measured, not assumed, and the measurement is why the criterion
+    exists: on the pre-fix tree both scored **50**. Two vacuous branches
+    cancelled out. `_citation_health` returns full marks when there are no
+    citations to be unhealthy, and `_verification` returns `0.0` on the same
+    empty input — so a page asserting nothing and a page whose every claim is
+    cited landed on the same number.
+
+    A freshness score that cannot tell those apart is worse than no score: it
+    is displayed next to the page as though it means something, and it ranks a
+    page with zero evidence level with one that is fully sourced.
+    """
+
+    @staticmethod
+    def _page_kwargs(citations: list[ClaimCitation]) -> dict[str, Any]:
+        """Identical in every respect except what the page is grounded in."""
+        return {
+            "page": _page(volatility="warm", verified_at=NOW),
+            "revision": _rev(NOW - timedelta(days=1)),
+            "citations": citations,
+            "source_versions": [NOW],
+            "now": NOW,
+        }
+
+    def test_grounded_page_outscores_claimless_page(self) -> None:
+        s1 = uuid4()
+        grounded = compute_freshness(
+            **self._page_kwargs([ClaimCitation(claim_id=uuid4(), confidence="cited", source_ids={s1})])
+        )
+        claimless = compute_freshness(**self._page_kwargs([]))
+        assert grounded > claimless, (
+            f"a fully-cited page scored {grounded} and a page with no claims at "
+            f"all scored {claimless}. The score does not measure groundedness, "
+            f"so ranking or filtering on it is meaningless."
+        )
+
+    def test_uncited_claims_score_below_cited_ones(self) -> None:
+        """Asserting things without evidence must cost, not merely not-help."""
+        s1 = uuid4()
+        cited = compute_freshness(
+            **self._page_kwargs([ClaimCitation(claim_id=uuid4(), confidence="cited", source_ids={s1})])
+        )
+        uncited = compute_freshness(
+            **self._page_kwargs([ClaimCitation(claim_id=uuid4(), confidence="inferred", source_ids=set())])
+        )
+        assert cited > uncited, (
+            f"cited={cited}, inferred-only={uncited} — an unevidenced page is "
+            f"not penalised relative to an evidenced one"
+        )
+
+    def test_more_grounding_never_lowers_the_score(self) -> None:
+        """Monotonicity: adding a cited claim cannot make a page look staler."""
+        s1, s2 = uuid4(), uuid4()
+        one = compute_freshness(
+            **self._page_kwargs([ClaimCitation(claim_id=uuid4(), confidence="cited", source_ids={s1})])
+        )
+        two = compute_freshness(
+            **self._page_kwargs(
+                [
+                    ClaimCitation(claim_id=uuid4(), confidence="cited", source_ids={s1}),
+                    ClaimCitation(claim_id=uuid4(), confidence="cited", source_ids={s2}),
+                ]
+            )
+        )
+        assert two >= one, f"adding a second cited claim lowered the score: {one} -> {two}"
+
+    def test_claimless_page_is_not_awarded_full_citation_health(self) -> None:
+        """The vacuous branch, asserted directly.
+
+        `all([]) == True` is the shape of this bug wherever it appears: an
+        empty collection satisfying a universal quantifier and being scored as
+        a success.
+        """
+        assert _citation_health([], set()) == 0.0, (
+            "a page with no citations was given citation health — vacuous "
+            "truth scored as evidence, which is why a claimless page and a "
+            "fully-cited one both scored 100"
+        )

@@ -73,8 +73,15 @@ def _recency(page: WikiPage, now: datetime, halflife_days: float) -> float:
 
 def _citation_health(citations: list[ClaimCitation], retracted_source_ids: set[UUID]) -> float:
     if not citations:
-        # No claims → nothing unbacked; vacuously healthy.
-        return _DIM_MAX
+        # A page that asserts nothing has no citation health to measure, and
+        # awarding it full marks made it indistinguishable from a fully-cited
+        # one: both scored 100. `all([]) is True` is the shape of this bug
+        # wherever it appears — an empty collection satisfying a universal
+        # quantifier and being *scored* as a success.
+        #
+        # Zero is the honest reading. Freshness drives refresh prioritisation,
+        # so an unevidenced page ranking as stale is also the useful direction.
+        return 0.0
     healthy = sum(
         1 for c in citations if any(sid not in retracted_source_ids for sid in c.source_ids)
     )
@@ -94,14 +101,19 @@ def _verification(
     revision: WikiRevision | None,
     citations: list[ClaimCitation],
 ) -> float:
+    if not citations:
+        # Nothing to verify. Checked BEFORE the human-verification
+        # short-circuit below, because a reviewer ticking "verified" on a page
+        # that makes no claims has verified nothing — and letting that award
+        # full marks was the second half of why a claimless page scored the
+        # same as a fully-grounded one.
+        return 0.0
     if (
         page.verified_at is not None
         and revision is not None
         and page.verified_at > revision.created_at
     ):
         return _DIM_MAX
-    if not citations:
-        return 0.0
     cited = sum(1 for c in citations if c.confidence == "cited")
     return _DIM_MAX * cited / len(citations)
 
