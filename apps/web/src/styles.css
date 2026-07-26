@@ -172,14 +172,13 @@
   font-family: "Source Serif 4", Georgia, Cambria, "Times New Roman", serif;
 }
 
-/* Some CopilotKit v2 elements (e.g. tool-call cards) hardcode light
-   backgrounds via inline styles that neither the CSS vars nor the `.dark`
-   class reach. In Aleph's dark theme, repaint those onto dark surfaces. */
-[data-theme="dark"] .aleph-live-chat [style*="rgb(250, 250, 250)"],
-[data-theme="dark"] .aleph-live-chat [style*="rgb(255, 255, 255)"],
-.dark .aleph-live-chat [style*="rgb(250, 250, 250)"],
-.dark .aleph-live-chat [style*="rgb(255, 255, 255)"] {
-  background-color: var(--surface-sunken) !important;
-  border-color: var(--border-muted) !important;
-  color: var(--text-primary) !important;
-}
+/* The inline-RGB override that used to live here is gone.
+ *
+ * It matched elements by the literal text of their inline `style` attribute
+ * (`[style*="rgb(250, 250, 250)"]`) and repainted them with `!important` —
+ * a rule that silently stops working the moment upstream changes a colour by
+ * one digit, and whose failure mode is an unreadable dark theme rather than an
+ * error. It existed because `@copilotkit/react-ui` shipped hardcoded light
+ * surfaces; that package was removed, and the literals appear nowhere in the
+ * installed tree. The `--cpk-color-*` remapping above is the supported
+ * mechanism and is sufficient on its own. */

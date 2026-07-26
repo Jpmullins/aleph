@@ -60,6 +60,9 @@ jobs:
       - name: CLAUDE.md command executability guard (WP-7)
         run: ./scripts/check-claude-commands.sh
 
+      - name: LangGraph state-key sweep (undeclared writes are dropped silently)
+        run: ./scripts/check-graph-state-keys.sh
+
       - name: Ruff lint
         run: uv run ruff check .
 

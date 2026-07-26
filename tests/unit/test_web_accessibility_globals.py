@@ -104,3 +104,76 @@ def test_both_themes_define_the_accent_token() -> None:
     assert "--accent:" in _declaration_block(tokens, '[data-theme="dark"]'), (
         "dark theme does not define --accent"
     )
+
+
+class TestSemanticTokensOnly:
+    """E5.1 — one token set, no `!important` overrides fighting a framework.
+
+    Two hacks used to live in the stylesheets, both with the same shape: a rule
+    that wins by force rather than by cascade, and whose failure mode is silent.
+
+    * A 26-rule `!important` shim in `tokens.css` remapping `.bg-white` /
+      `.text-slate-*`, which existed only because no Tailwind theme defined
+      `bg-surface` to migrate *to*.
+    * A CopilotKit override in `styles.css` matching elements by the literal
+      text of their inline `style` attribute — `[style*="rgb(250, 250, 250)"]`.
+      That stops working the moment upstream changes a colour by one digit, and
+      the result is an unreadable dark theme rather than a build error.
+
+    Both are gone. `@theme inline` supplies the semantic names, and the
+    `--cpk-color-*` variables theme the chat through its supported mechanism.
+    """
+
+    def test_no_inline_style_attribute_selectors(self) -> None:
+        """Styling by matching a colour literal is a rule waiting to break."""
+        for path in (STYLES, TOKENS):
+            if not path.is_file():
+                continue
+            body = path.read_text(encoding="utf-8")
+            for line in body.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("*") or stripped.startswith("/*"):
+                    continue  # the comment explaining why it was removed
+                assert "[style*=" not in line, (
+                    f"{path.name} styles elements by their inline style text: "
+                    f"{line.strip()!r} — a one-digit upstream colour change "
+                    f"silently disables it"
+                )
+
+    def test_important_is_confined_to_reduced_motion(self) -> None:
+        """`prefers-reduced-motion` is the one place `!important` is correct.
+
+        Overriding animation for users who asked for less motion must beat
+        component styles; everything else should win on specificity.
+        """
+        body = STYLES.read_text(encoding="utf-8")
+        offenders = [
+            line.strip()
+            for line in body.splitlines()
+            if "!important" in line
+            and not line.strip().startswith(("*", "/*"))
+            and not any(
+                prop in line
+                for prop in (
+                    "animation-duration",
+                    "animation-iteration-count",
+                    "transition-duration",
+                    "scroll-behavior",
+                )
+            )
+        ]
+        assert offenders == [], (
+            f"`!important` outside the reduced-motion block: {offenders}. Each "
+            f"one is a rule that wins by force, and the shim this replaced grew "
+            f"to 26 of them."
+        )
+
+    def test_theme_defines_the_semantic_names(self) -> None:
+        """The shim's removal is only safe if `bg-surface` etc. actually exist."""
+        body = STYLES.read_text(encoding="utf-8")
+        assert "@theme inline" in body, (
+            "no Tailwind theme block — without it there is no `bg-surface` to "
+            "migrate to, which is precisely why the !important shim existed"
+        )
+        for token in ("--color-surface", "--color-ink", "--color-canvas"):
+            assert token in body, f"{token} missing from the theme block"

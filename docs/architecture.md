@@ -75,6 +75,7 @@ Four scripts run in CI (`.github/workflows/ci.yml`) and fail the build on drift:
 - `scripts/check-no-self-fetch.sh` — greps `apps/web/src/a2ui/components` for `useQuery`/`refetchInterval`/`EventSource`/`fetch(`/`api.get|post|…`; the allowlist is empty. Right-panel components render only from bound props.
 - `scripts/check-catalog-roster.sh` — every catalog component has both a renderer and a producer; the `catalog.py` ⟷ `catalog.ts` rosters agree; deleted cards (`MapCard`/`GraphCard`/`NotebookCellCard`) appear nowhere.
 - `scripts/check-route-reachability.sh` — every mounted `include_router` is reached by a real web/agent/script/test caller (small documented allowlist for public/external routers).
+- `scripts/check-graph-state-keys.sh` — every key a LangGraph node writes is declared on its state `TypedDict`. Undeclared writes are **discarded silently**: the write vanishes, the reader's `state.get(k, [])` returns empty, and the feature is inert while every step reports success. Four shipped defects had this shape.
 - `scripts/check-docs-drift.sh` + `scripts/check-claude-commands.sh` — WP-7 doc guards: stale deleted-subsystem / object-store references appear only under `docs/archive/` + the impl-log, and every command/script/file/compose-service named in CLAUDE.md exists in the repo.
 
 ## Auth modes

@@ -143,14 +143,6 @@ export interface ModelProfileOut {
   bindings: Record<string, ModelBindingOut | undefined>;
 }
 
-/**
- * A model the configured gateway actually serves.
- *
- * There is no committed model list in the client either — the options come
- * from `/v1/gateway/models`, which reads the gateway's own `/model/info`.
- * `capabilities` is computed server-side by the same policy that picks
- * defaults, so the picker cannot offer a model that would fail at runtime.
- */
 export interface AutoconfigureOut {
   profile: ModelProfileOut;
   /** capability → chosen model id. */
@@ -161,6 +153,14 @@ export interface AutoconfigureOut {
   unreachable: Record<string, string>;
 }
 
+/**
+ * A model the configured gateway actually serves.
+ *
+ * There is no committed model list in the client either — the options come
+ * from `/v1/gateway/models`, which reads the gateway's own `/model/info`.
+ * `capabilities` is computed server-side by the same policy that picks
+ * defaults, so the picker cannot offer a model that would fail at runtime.
+ */
 export interface GatewayModelOut {
   id: string;
   mode: string | null;
@@ -173,4 +173,18 @@ export interface GatewayModelOut {
   supports_prompt_caching: boolean;
   is_priced: boolean;
   capabilities: string[];
+}
+
+export interface PipelineStageOut {
+  key: string;
+  label: string;
+  /** Cumulative: includes every source that has advanced past this stage. */
+  count: number;
+}
+
+export interface PipelineOut {
+  stages: PipelineStageOut[];
+  /** Terminal failures, never folded into a stage. */
+  failed: number;
+  total: number;
 }

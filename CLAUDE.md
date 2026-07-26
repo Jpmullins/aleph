@@ -114,6 +114,7 @@ CI (`.github/workflows/ci.yml`) fails the build on drift in any of:
 - `scripts/check-route-reachability.sh` — every mounted router is reached by a real web/agent/script/test caller.
 - `scripts/check-docs-drift.sh` — stale deleted-subsystem / object-store references appear only under `docs/archive/` + `docs/implementation-log.md`.
 - `scripts/check-claude-commands.sh` — every command/script/file/compose-service named in this file exists.
+- `scripts/check-graph-state-keys.sh` — every key a LangGraph node writes is declared on its state `TypedDict`. Undeclared writes are **discarded silently**, so the reader's `state.get(k, [])` returns empty and the feature is inert while reporting success; four shipped defects had this shape.
 
 ### Process boundaries
 

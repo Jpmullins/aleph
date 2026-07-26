@@ -17,7 +17,7 @@ from uuid import UUID
 import httpx
 from fastapi import APIRouter, Body, File, Form, Request, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
@@ -421,4 +421,67 @@ async def get_normalized(
         token_count=nd.token_count,
         quality_flags=nd.quality_flags_jsonb,
         markdown=md,
+    )
+
+
+#: The corpus pipeline, in the order a source actually moves through it. Each
+#: stage is *cumulative*: a source that reached `indexed` has necessarily been
+#: normalized, so a stage's count includes everything downstream of it. Showing
+#: non-cumulative counts made the strip read as though work had been lost —
+#: sources "disappeared" from `normalized` as they advanced.
+_PIPELINE_STAGES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("ingested", "Ingested", ("ingested", "normalized", "indexed", "wiki_done")),
+    ("normalized", "Normalized", ("normalized", "indexed", "wiki_done")),
+    ("indexed", "Chunked + embedded", ("indexed", "wiki_done")),
+    ("wiki_done", "On the wiki", ("wiki_done",)),
+)
+
+#: Terminal failures. Counted separately and never folded into a stage: a
+#: failed source that silently vanished from the strip is the corpus-level
+#: version of the empty-path failure this codebase keeps finding.
+_PIPELINE_FAILED: tuple[str, ...] = ("failed", "wiki_failed")
+
+
+class PipelineStageOut(BaseModel):
+    key: str
+    label: str
+    count: int
+
+
+class PipelineOut(BaseModel):
+    """Corpus-level progress: how far the whole source set has actually got."""
+
+    stages: list[PipelineStageOut]
+    failed: int
+    total: int
+
+
+@router.get("/{project_id}/pipeline", response_model=PipelineOut)
+async def get_pipeline(project_id: ProjectScopeDep, session: SessionDep) -> PipelineOut:
+    """Counts per ingest stage for the project's whole corpus.
+
+    The gap this closes: a source's journey (fetch → normalize → chunk+embed →
+    wiki) ran entirely in workers with no corpus-level view, so "is my library
+    ready to ask questions of?" was unanswerable without reading logs. A run
+    that stalled after normalization looked exactly like one that had finished.
+    """
+    rows = (
+        await session.execute(
+            select(Source.status, func.count())
+            .where(Source.project_id == project_id)
+            .group_by(Source.status)
+        )
+    ).all()
+    counts = {str(status): int(n) for status, n in rows}
+    return PipelineOut(
+        stages=[
+            PipelineStageOut(
+                key=key,
+                label=label,
+                count=sum(counts.get(s, 0) for s in members),
+            )
+            for key, label, members in _PIPELINE_STAGES
+        ],
+        failed=sum(counts.get(s, 0) for s in _PIPELINE_FAILED),
+        total=sum(counts.values()),
     )

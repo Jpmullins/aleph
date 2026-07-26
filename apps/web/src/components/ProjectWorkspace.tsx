@@ -4,6 +4,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 
 import { AssistantDock } from "@/components/AssistantDock";
 import { ContextBar } from "@/components/ContextBar";
+import { PipelineStrip } from "@/components/PipelineStrip";
 import { Drawer } from "@/components/Drawers";
 import type { DrawerKind } from "@/components/LeftPanel";
 import { Rail } from "@/components/Rail";
@@ -71,6 +72,10 @@ export function ProjectWorkspace({ projectId, onBack }: Props) {
         <Rail onBack={onBack} onOpenDrawer={setDrawer} />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <ContextBar projectTitle={project.data?.title} onUpload={() => setShowUpload(true)} />
+          {/* Corpus-level progress. Sits under the context bar because it
+              answers a question about the whole project ("is my library ready
+              to ask questions of?"), not about the focused pane. */}
+          <PipelineStrip projectId={projectId} />
           <div className="flex min-h-0 flex-1">
             <PanelGroup
               direction="horizontal"
