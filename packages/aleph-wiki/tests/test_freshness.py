@@ -211,7 +211,9 @@ class TestGroundednessDiscriminates:
     def test_grounded_page_outscores_claimless_page(self) -> None:
         s1 = uuid4()
         grounded = compute_freshness(
-            **self._page_kwargs([ClaimCitation(claim_id=uuid4(), confidence="cited", source_ids={s1})])
+            **self._page_kwargs(
+                [ClaimCitation(claim_id=uuid4(), confidence="cited", source_ids={s1})]
+            )
         )
         claimless = compute_freshness(**self._page_kwargs([]))
         assert grounded > claimless, (
@@ -224,10 +226,14 @@ class TestGroundednessDiscriminates:
         """Asserting things without evidence must cost, not merely not-help."""
         s1 = uuid4()
         cited = compute_freshness(
-            **self._page_kwargs([ClaimCitation(claim_id=uuid4(), confidence="cited", source_ids={s1})])
+            **self._page_kwargs(
+                [ClaimCitation(claim_id=uuid4(), confidence="cited", source_ids={s1})]
+            )
         )
         uncited = compute_freshness(
-            **self._page_kwargs([ClaimCitation(claim_id=uuid4(), confidence="inferred", source_ids=set())])
+            **self._page_kwargs(
+                [ClaimCitation(claim_id=uuid4(), confidence="inferred", source_ids=set())]
+            )
         )
         assert cited > uncited, (
             f"cited={cited}, inferred-only={uncited} — an unevidenced page is "
@@ -238,7 +244,9 @@ class TestGroundednessDiscriminates:
         """Monotonicity: adding a cited claim cannot make a page look staler."""
         s1, s2 = uuid4(), uuid4()
         one = compute_freshness(
-            **self._page_kwargs([ClaimCitation(claim_id=uuid4(), confidence="cited", source_ids={s1})])
+            **self._page_kwargs(
+                [ClaimCitation(claim_id=uuid4(), confidence="cited", source_ids={s1})]
+            )
         )
         two = compute_freshness(
             **self._page_kwargs(
