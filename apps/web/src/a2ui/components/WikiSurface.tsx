@@ -120,7 +120,7 @@ export function WikiSurface({ component, onAction }: RendererProps) {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col" data-testid="wiki-surface">
       <SurfaceHeader title="Wiki" subtitle={`${pages.length} page${pages.length === 1 ? "" : "s"}`} />
       <div className="border-b border-line px-3 py-2">
         <input

@@ -1,0 +1,24 @@
+import { chromium } from '@playwright/test';
+const browser = await chromium.launch();
+const page = await browser.newPage();
+const streams = [];
+const errs = [];
+page.on('pageerror', e => errs.push(String(e).slice(0,160)));
+page.on('request', r => { if (r.url().includes('/surfaces/stream')) streams.push(decodeURIComponent(r.url().split('?')[1]||'').split('&')[0]); });
+await page.goto('http://localhost:5173/', { waitUntil: 'networkidle' });
+await page.getByText('AI Reasoning').first().click();
+await page.waitForTimeout(2500);
+await page.getByText('AI Reasoning', { exact: false }).nth(1).click();
+await page.waitForTimeout(3000);
+const opened = (await page.textContent('body')||'').replace(/\s+/g,' ');
+console.log('1. page opened:', opened.includes('← Wiki'));
+console.log('   body rendered:', opened.includes('This wiki investigates'));
+// go back
+await page.getByTestId('wiki-back').click();
+await page.waitForTimeout(2500);
+const back = (await page.textContent('body')||'').replace(/\s+/g,' ');
+console.log('2. back to index:', !back.includes('← Wiki'), '| index visible:', back.includes('Topic pages'));
+console.log('3. stream subs:', JSON.stringify(streams, null, 0));
+console.log('4. concurrent EventSources:', await page.evaluate(() => performance.getEntriesByType('resource').filter(r => r.name.includes('/surfaces/stream')).length));
+console.log('ERRORS:', errs.length ? errs.join(' | ') : '(none)');
+await browser.close();

@@ -116,6 +116,17 @@ export function WorkspaceUIProvider({ children }: { children: ReactNode }) {
     const id = paneKey(kind, opts.params);
     setPanes((prev) => {
       if (prev.some((p) => p.id === id)) return prev;
+      // A pane of this kind that is merely showing something (`wiki:page_id=…`)
+      // is still that pane. Matching on the exact id alone opened a SECOND Wiki
+      // pane every time a card's `open` action fired, because the action
+      // handler re-keys the pane and then asks for the surface by name.
+      if (!opts.params) {
+        const existing = prev.find((p) => p.kind === kind);
+        if (existing) {
+          setFocusedPaneId(existing.id);
+          return prev;
+        }
+      }
       const next = [...prev, { id, kind, title: opts.title ?? kind, params: opts.params }];
       // Oldest unfocused pane makes way rather than refusing the open — the
       // user asked for this view and should get it.
@@ -133,9 +144,42 @@ export function WorkspaceUIProvider({ children }: { children: ReactNode }) {
     setFocusedPaneId((cur) => (cur === id ? "wiki" : cur));
   };
 
-  const [activeSurface, setActiveSurface] = useState<SurfaceTab>("Wiki");
+  // DERIVED, not stored. Its own docstring calls it "the focused pane's kind",
+  // and holding it separately let the two drift: the rail opened a pane and
+  // focused it while `activeSurface` stayed on Wiki, so the context bar — and
+  // therefore the `active_tab` the agent is told about — reported a surface the
+  // analyst was no longer looking at.
+  const activeSurface: SurfaceTab =
+    panes.find((p) => p.id === focusedPaneId)?.kind ?? panes[0]?.kind ?? "Wiki";
   const [openPageTitle, setOpenPageTitle] = useState<string | null>(null);
-  const [openPageId, setOpenPageId] = useState<string | null>(null);
+  const [openPageId, setOpenPageIdState] = useState<string | null>(null);
+
+  /**
+   * Open a wiki page — which means re-keying the Wiki pane, not just storing an id.
+   *
+   * A pane's id IS its wire `surfaceId`, and the stream subscribes with
+   * `?panes=<id>,<id>`. The server reads the page from that spec
+   * (`wiki:page_id=…`) and binds it to `/open`. So an `openPageId` held only in
+   * React state never reaches the server: `/open` stays null, `WikiSurface`
+   * keeps rendering the index, and clicking a page does visibly nothing while
+   * every layer reports success — the action POSTs 200, the navigate result
+   * comes back, and the state updates. There was simply no path from that state
+   * to the request.
+   */
+  const setOpenPageId = (id: string | null) => {
+    setOpenPageIdState(id);
+    setPanes((prev) => {
+      const idx = prev.findIndex((p) => p.kind === "Wiki");
+      if (idx === -1) return prev;
+      const params = id ? { page_id: id } : undefined;
+      const nextId = paneKey("Wiki", params);
+      if (prev[idx].id === nextId) return prev;
+      const next = [...prev];
+      next[idx] = { ...next[idx], id: nextId, params };
+      setFocusedPaneId(nextId);
+      return next;
+    });
+  };
   const [selection, setSelection] = useState<WorkspaceSelection | null>(null);
   const [highlightedClaimId, setHighlightedClaimId] = useState<string | null>(null);
 
@@ -147,10 +191,9 @@ export function WorkspaceUIProvider({ children }: { children: ReactNode }) {
       openPane,
       closePane,
       activeSurface,
-      setActiveSurface: (tab: SurfaceTab) => {
-        setActiveSurface(tab);
-        openPane(tab);
-      },
+      // Setting the surface *is* opening/focusing its pane; `activeSurface`
+      // then follows from the focus rather than being tracked alongside it.
+      setActiveSurface: (tab: SurfaceTab) => openPane(tab),
       openPageTitle,
       setOpenPageTitle,
       openPageId,
