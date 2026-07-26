@@ -23,14 +23,14 @@ export function FindingCard({ component, onAction }: RendererProps) {
         />
       }
     >
-      <p className="text-sm text-slate-700">{p.summary}</p>
+      <p className="text-sm text-ink-soft">{p.summary}</p>
       <div className="mt-2 flex gap-2">
         <button
           type="button"
           onClick={() =>
             onAction("open", { target_id: p.finding_id, target_kind: "review_finding" })
           }
-          className="text-xs text-slate-500 hover:text-slate-900"
+          className="text-xs text-ink-muted hover:text-ink"
         >
           Open finding
         </button>

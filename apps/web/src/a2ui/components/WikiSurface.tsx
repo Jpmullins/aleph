@@ -81,11 +81,11 @@ export function WikiSurface({ component, onAction }: RendererProps) {
   if (open) {
     return (
       <div className="flex h-full flex-col">
-        <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-[var(--border-muted,#e2e8f0)] bg-[var(--surface-raised,#fff)] px-3 py-2">
+        <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-line bg-surface px-3 py-2">
           <button
             type="button"
             onClick={() => setOpenPageId(null)}
-            className="text-xs font-medium text-slate-500 hover:text-slate-900"
+            className="text-xs font-medium text-ink-muted hover:text-ink"
             data-testid="wiki-back"
           >
             ← Wiki
@@ -122,12 +122,12 @@ export function WikiSurface({ component, onAction }: RendererProps) {
   return (
     <div className="flex h-full flex-col">
       <SurfaceHeader title="Wiki" subtitle={`${pages.length} page${pages.length === 1 ? "" : "s"}`} />
-      <div className="border-b border-slate-200 px-3 py-2">
+      <div className="border-b border-line px-3 py-2">
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder="Filter pages…"
-          className="w-full rounded border border-slate-300 px-2 py-1 text-xs focus:border-slate-500 focus:outline-none"
+          className="w-full rounded border border-line-strong px-2 py-1 text-xs focus:border-line-strong focus:outline-none"
           data-testid="wiki-filter"
         />
       </div>
@@ -161,9 +161,9 @@ export function WikiSurface({ component, onAction }: RendererProps) {
 
 function WikiEmptyState() {
   return (
-    <div className="rounded-lg border border-dashed border-slate-300 p-6 text-center">
-      <p className="text-sm font-medium text-slate-700">No wiki pages yet</p>
-      <p className="mt-2 text-xs text-slate-500">
+    <div className="rounded-lg border border-dashed border-line-strong p-6 text-center">
+      <p className="text-sm font-medium text-ink-soft">No wiki pages yet</p>
+      <p className="mt-2 text-xs text-ink-muted">
         The wiki compiles from ingested sources. Click <strong>+ Upload source</strong> in the left
         panel to add a document — pages will appear here as the wiki agent compiles them.
       </p>
@@ -182,7 +182,7 @@ function PageGroup({
 }) {
   return (
     <section>
-      <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
+      <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-ink-muted">
         {label} ({pages.length})
       </h4>
       <ul className="space-y-1.5">
@@ -191,11 +191,11 @@ function PageGroup({
             <button
               type="button"
               onClick={() => onSelect(p.id)}
-              className="block w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-left transition-colors hover:border-slate-400"
+              className="block w-full rounded-md border border-line bg-surface px-3 py-2 text-left transition-colors hover:border-line-strong"
               data-testid={`wiki-page-${p.id}`}
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="truncate text-sm font-medium text-slate-900">{p.title}</span>
+                <span className="truncate text-sm font-medium text-ink">{p.title}</span>
                 <span className="flex items-center gap-1">
                   {p.retracted && (
                     <Pill tone="red">

@@ -28,7 +28,7 @@ async def auth_bypass(monkeypatch):
 async def test_open_synthesis_proposal_navigates_to_draft_page(http_client, auth_bypass):
     proj = await http_client.post(
         "/v1/projects",
-        json={"title": "Open nav", "description": "t", "budget_usd": "5.00"},
+        json={"title": "Open nav", "description": "t"},
     )
     assert proj.status_code == 201, proj.text
     project_id = UUID(proj.json()["id"])
@@ -65,7 +65,7 @@ async def test_open_synthesis_proposal_navigates_to_draft_page(http_client, auth
 async def test_open_hypothesis_navigates_to_hypotheses_tab(http_client, auth_bypass):
     proj = await http_client.post(
         "/v1/projects",
-        json={"title": "Open nav hyp", "description": "t", "budget_usd": "5.00"},
+        json={"title": "Open nav hyp", "description": "t"},
     )
     project_id = UUID(proj.json()["id"])
     hyp = await http_client.post(

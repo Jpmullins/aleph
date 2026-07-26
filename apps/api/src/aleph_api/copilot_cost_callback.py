@@ -293,12 +293,22 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
             )
             return
         pricing = self._resolve_pricing()
-        cost, savings = pricing.cost_for(
+        priced = pricing.breakdown(
             model=self._model,
             input_tokens=input_tokens,
             cached_tokens=cached_tokens,
             completion_tokens=completion_tokens,
         )
+        cost, savings = priced.cost_usd, priced.cache_savings_usd
+        if not priced.priced:
+            # Same failure as the transport path: recording $0 for a model we
+            # cannot price makes a broken pricing table look like a cheap day.
+            logger.error(
+                "agent model call could not be priced (model=%s purpose=%s); "
+                "recorded with pricing_source=unknown, not as free",
+                self._model,
+                self._purpose,
+            )
         trace_id: str | None
         try:
             from aleph_observability.tracing import current_trace_id
@@ -331,6 +341,9 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
                     completion_tokens=completion_tokens,
                     cost_usd=cost,
                     cache_savings_usd=savings,
+                    pricing_source=priced.source,
+                    input_rate_usd=priced.input_rate_usd,
+                    output_rate_usd=priced.output_rate_usd,
                     latency_ms=latency_ms,
                     trace_id=trace_id,
                     timestamp=utcnow(),

@@ -38,6 +38,34 @@ The one asset streaming route (`GET /v1/projects/{pid}/assets/{kind}/{id}`, see 
 
 Every mutation writes an `ActionLedgerEvent` in the same transaction (rule 4): hash-chained, append-only, no updates or deletes (Postgres immutability triggers). `verify_project_chain` walks the chain via `prev_event_id` from the chain head (not timestamp order), so a tampered `chain_hash` or broken link fails verification even if rows are timestamp-reordered.
 
+## Fixed 2026-07-26: the AG-UI agent endpoint was unauthenticated
+
+`AuthMiddleware` blanket-skipped its bearer check for the entire `/copilotkit`
+prefix, on a comment asserting "the route handler is responsible for its own
+verification". **No such verification existed** — `setup_copilotkit` mounts the
+LangGraph AG-UI endpoint with no `dependencies=` and no principal. Combined with
+agent tools that take their project scope from a client-supplied `thread_id`
+(`proj:<project_id>:<thread>`) with no membership check, any caller able to
+reach `:8000` — or the CORS-open runtime bridge on `:4000` in front of it —
+could drive the Deep Agent's **write** tools against an arbitrary project UUID,
+in **both** auth modes.
+
+`_SELF_AUTH_PREFIXES` is now empty and guarded by
+`apps/api/tests/unit/test_copilotkit_auth.py`, which asserts both that the
+endpoint 401s unauthenticated in `oidc` mode and that the exemption tuple stays
+empty. `local` mode is unchanged: a request with no bearer still synthesizes the
+dev principal.
+
+**Remaining, deliberately scoped:** the runtime bridge does not yet forward the
+caller's credential to the API (`new HttpAgent({ url })` sends no headers), so in
+`oidc` mode the chat path now correctly requires a credential it does not yet
+receive. This is the *same* class as the SSE gap below and joins it as
+out-of-scope until OIDC deployment is taken up as a whole. `local` mode — the
+only currently-deployed mode — is unaffected. Two sub-items remain open there:
+per-request header propagation (browser → runtime → API), and enforcing the
+agent token's signed `project_id` claim, which `verify_agent_token` returns and
+the middleware currently discards.
+
 ## Deferred: SSE × OIDC token transport (documented gap)
 
 The browser `EventSource` API cannot attach an `Authorization` header, so in **`oidc`** mode the SSE streams (agent-events, surfaces, assistant, `changes`) and the asset streaming route consumed by an `<iframe>` cannot carry a bearer token as written. This is a **known, accepted out-of-scope gap** (GOAL §out-of-scope: "Full OIDC deployment hardening beyond the agent-token fix — SSE token transport for EventSource remains a documented gap"). **`local` mode — the only currently-deployed mode — is unaffected** (no bearer is required). Closing it (a short-lived query-param/cookie token exchange for stream endpoints) is future work.

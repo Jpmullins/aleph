@@ -44,7 +44,6 @@ export const ACTION_NAMES = [
   "mark_handedit",
   "clear_handedit",
   "unpin",
-  "dismiss",
   "repair_links",
   "rename_note",
   "promote_note",

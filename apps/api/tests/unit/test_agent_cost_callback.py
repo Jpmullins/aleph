@@ -8,13 +8,36 @@ it records exactly one ModelCall + CostLedgerEvent via CostWriter.
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 from typing import Any
 
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 
 from aleph_api.copilot_cost_callback import AgentCostCallbackHandler
-from aleph_models.pricing import PricingTable
+from aleph_models.pricing import ModelPricing, PricingTable
+
+MODEL = "claude-sonnet-4-6"
+
+
+def _priced() -> PricingTable:
+    """A table that knows `MODEL`.
+
+    These tests used to pass `PricingTable()` and assert `cost_usd > 0`, which
+    worked only because the module shipped a built-in price list containing
+    this name. That list has been removed — it was wrong in every entry against
+    the real gateway — so a table with no rates now correctly yields $0, and
+    the test has to supply the rates it is asserting about.
+    """
+    return PricingTable(
+        {
+            MODEL: ModelPricing(
+                input_per_token=Decimal("0.000003"),
+                output_per_token=Decimal("0.000015"),
+            )
+        }
+    )
+
 
 PROJECT_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "test-project")
 
@@ -56,8 +79,8 @@ async def test_records_one_model_call_with_correct_tokens() -> None:
     session = _FakeSession()
     handler = AgentCostCallbackHandler(
         session_maker=_FakeSessionMaker(session),
-        pricing=PricingTable(),
-        model="claude-sonnet-4-6",
+        pricing=_priced(),
+        model=MODEL,
     )
     run_id = uuid.uuid4()
 
@@ -100,14 +123,66 @@ async def test_records_one_model_call_with_correct_tokens() -> None:
     assert call.cached_tokens == 200
     assert call.completion_tokens == 350
     assert call.cost_usd > 0
+    # Provenance travels with the row, so a zero can always be told apart from
+    # an unpriced one.
+    assert call.pricing_source == "static"
+    assert call.input_rate_usd == Decimal("0.000003")
+
+
+async def test_unpriceable_model_is_recorded_as_unknown_not_as_free() -> None:
+    """The failure that made a broken pricing table invisible.
+
+    An unrecognised model used to cost $0 with no trace, so a ledger full of
+    them read as a cheap day rather than a misconfiguration. The call must
+    still be recorded — losing it would be worse — but it must say so.
+    """
+    session = _FakeSession()
+    handler = AgentCostCallbackHandler(
+        session_maker=_FakeSessionMaker(session),
+        pricing=PricingTable(),  # knows nothing
+        model="a-model-nobody-priced",
+    )
+    run_id = uuid.uuid4()
+    await handler.on_chat_model_start(
+        serialized={}, messages=[[]], run_id=run_id, metadata={"projectId": str(PROJECT_ID)}
+    )
+    await handler.on_llm_end(
+        LLMResult(
+            generations=[
+                [
+                    ChatGeneration(
+                        message=AIMessage(
+                            content="hi",
+                            usage_metadata={
+                                "input_tokens": 100000,
+                                "output_tokens": 5000,
+                                "total_tokens": 105000,
+                            },
+                        )
+                    )
+                ]
+            ]
+        ),
+        run_id=run_id,
+    )
+
+    from aleph_db.models.cost import ModelCall
+
+    calls = [r for r in session.added if isinstance(r, ModelCall)]
+    assert len(calls) == 1, "the call was dropped entirely; it must still be recorded"
+    assert calls[0].pricing_source == "unknown", (
+        "a call we could not price claimed a real pricing source — this is how "
+        "100k Opus tokens get filed as $0.00 and nobody notices"
+    )
+    assert calls[0].cost_usd == 0
 
 
 async def test_extracts_from_llm_output_token_usage_shape() -> None:
     session = _FakeSession()
     handler = AgentCostCallbackHandler(
         session_maker=_FakeSessionMaker(session),
-        pricing=PricingTable(),
-        model="claude-sonnet-4-6",
+        pricing=_priced(),
+        model=MODEL,
     )
     run_id = uuid.uuid4()
     await handler.on_llm_start(
@@ -144,8 +219,8 @@ async def test_skips_when_no_project_id() -> None:
     session = _FakeSession()
     handler = AgentCostCallbackHandler(
         session_maker=_FakeSessionMaker(session),
-        pricing=PricingTable(),
-        model="claude-sonnet-4-6",
+        pricing=_priced(),
+        model=MODEL,
     )
     run_id = uuid.uuid4()
     # No metadata/configurable carrying a project → must not write.
@@ -188,8 +263,8 @@ async def test_skips_when_no_usage() -> None:
     session = _FakeSession()
     handler = AgentCostCallbackHandler(
         session_maker=_FakeSessionMaker(session),
-        pricing=PricingTable(),
-        model="claude-sonnet-4-6",
+        pricing=_priced(),
+        model=MODEL,
     )
     run_id = uuid.uuid4()
     await handler.on_chat_model_start(

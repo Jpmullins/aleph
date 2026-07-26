@@ -43,7 +43,7 @@ async def test_curator_repairs_overview_link_to_existing_page(
 
     proj = await http_client.post(
         "/v1/projects",
-        json={"title": "Curator Repair", "description": "x", "budget_usd": "1.00"},
+        json={"title": "Curator Repair", "description": "x"},
     )
     assert proj.status_code == 201, proj.text
     pid = UUID(proj.json()["id"])
@@ -169,9 +169,7 @@ async def test_curator_recurates_overview_with_new_topic(
     monkeypatch.setattr(asgi_app.state.settings, "bootstrap_auto_enabled", False)
 
     title = "Curator Overview Project"
-    proj = await http_client.post(
-        "/v1/projects", json={"title": title, "description": "x", "budget_usd": "1.00"}
-    )
+    proj = await http_client.post("/v1/projects", json={"title": title, "description": "x"})
     assert proj.status_code == 201, proj.text
     pid = UUID(proj.json()["id"])
 
@@ -278,7 +276,7 @@ async def test_curator_dedup_detect_creates_merge_proposal(
 
     proj = await http_client.post(
         "/v1/projects",
-        json={"title": "Dedup Test Project", "description": "x", "budget_usd": "1.00"},
+        json={"title": "Dedup Test Project", "description": "x"},
     )
     assert proj.status_code == 201, proj.text
     pid = UUID(proj.json()["id"])
@@ -364,7 +362,7 @@ async def test_curator_apply_merge_redirects_and_soft_deletes(
 
     proj = await http_client.post(
         "/v1/projects",
-        json={"title": "Merge Test Project", "description": "x", "budget_usd": "1.00"},
+        json={"title": "Merge Test Project", "description": "x"},
     )
     assert proj.status_code == 201, proj.text
     pid = UUID(proj.json()["id"])

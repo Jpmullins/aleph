@@ -32,13 +32,13 @@ export function HtmlFrameCard({ component }: RendererProps) {
   return (
     <div className="flex flex-col" data-testid="html-frame-card">
       {p.title && (
-        <div className="mb-1 truncate text-xs font-medium text-slate-700">{p.title}</div>
+        <div className="mb-1 truncate text-xs font-medium text-ink-soft">{p.title}</div>
       )}
       <iframe
         title={p.title ?? "Interactive artifact"}
         src={apiUrl(p.src)}
         sandbox="allow-scripts"
-        className="h-[60vh] w-full rounded-md border border-slate-200 bg-white"
+        className="h-[60vh] w-full rounded-md border border-line bg-surface"
         data-testid="html-frame-iframe"
       />
     </div>

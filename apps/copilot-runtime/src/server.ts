@@ -77,7 +77,23 @@ const ALEPH_A2UI_CATALOG = {
         properties: {
           claim_id: { type: "string" },
           text: { type: "string" },
-          confidence: { type: "string", enum: ["well-supported", "contested", "uncited", "initial"] },
+          // MUST match `_CLAIM_CONFIDENCE` in aleph_a2ui/catalog.py — this is
+          // what the agent is told it may emit. It previously offered "initial"
+          // (recognised by nothing) and omitted both "cited" (the most common
+          // real value) and "retracted" (the WP-6 state), so the agent could
+          // not express a retracted claim at all.
+          // Guarded by tests/unit/test_catalog_agreement.py.
+          confidence: {
+            type: "string",
+            enum: [
+              "cited",
+              "well-supported",
+              "weakly-supported",
+              "contested",
+              "uncited",
+              "retracted",
+            ],
+          },
           citations: {
             type: "array",
             items: {

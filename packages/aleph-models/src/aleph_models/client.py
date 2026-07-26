@@ -18,10 +18,12 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid4
 
 import httpx
+import structlog
 from pydantic import BaseModel, ConfigDict
 
 from aleph_core.errors import GatewayUnavailable, ValidationFailed
@@ -116,6 +118,58 @@ class _IdemCache:
         if self.redis is None:
             return
         await self.redis.set(f"aleph:idem:{key}", model_call_id, ex=ttl_seconds)
+
+
+#: Keys under which a gateway/provider may report cache-WRITE tokens.
+#:
+#: Anthropic names it `cache_creation_input_tokens`; LiteLLM passes that through
+#: at the top level and also mirrors some providers into
+#: `prompt_tokens_details`. Accepting every known spelling matters because the
+#: failure is silent: an unrecognised key means the write is billed as an
+#: ordinary uncached token and the call under-reports its cost.
+_CACHE_WRITE_KEYS = (
+    "cache_creation_input_tokens",
+    "cache_write_tokens",
+    "cached_write_tokens",
+)
+
+_log = structlog.get_logger(__name__)
+
+
+def _warn_unpriced(model: str, capability: str, purpose: str) -> None:
+    """Shout about a call we could not price.
+
+    Rule 5 says every LLM call writes a `ModelCall` + `CostLedgerEvent`. It
+    does not say the number has to be *right*, and for a while it was not: an
+    unrecognised model silently cost `$0`, so a pricing table that matched
+    none of the gateway's model names still produced a full ledger reading
+    $0.00. The row is still written — losing it would be worse — but it is
+    marked `pricing_source="unknown"` and announced here, because a spend
+    dashboard that is quietly wrong is more dangerous than one that is empty.
+    """
+    _log.error(
+        "model_call.unpriced",
+        model=model,
+        capability=capability,
+        purpose=purpose,
+        remediation=(
+            "model is absent from the pricing table; run gateway discovery so "
+            "rates are read from /model/info, or bind a model the gateway prices"
+        ),
+    )
+
+
+def _cache_write_tokens(usage: object, details: object) -> int:
+    """Cache-write token count from whichever key the gateway used."""
+    for source in (usage, details):
+        if not isinstance(source, dict):
+            continue
+        mapping = cast("dict[str, object]", source)
+        for key in _CACHE_WRITE_KEYS:
+            raw = mapping.get(key)
+            if raw is not None:
+                return int(raw)  # type: ignore[arg-type]
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -253,16 +307,27 @@ class LiteLLMClient:
             details = usage.get("prompt_tokens_details") or {}
             if isinstance(details, dict):
                 cached_tokens = int(details.get("cached_tokens", 0))
+            # Cache WRITES are billed at a premium and are reported separately
+            # from reads. Different gateway/provider shapes surface them under
+            # different keys, so accept the known spellings rather than silently
+            # treating a write as a free uncached token.
+            cache_write_tokens = _cache_write_tokens(usage, details)
 
-            cost, savings = self._pricing.cost_for(
+            priced = self._pricing.breakdown(
                 model=binding.model,
                 input_tokens=input_tokens,
                 cached_tokens=cached_tokens,
                 completion_tokens=completion_tokens,
+                cache_write_tokens=cache_write_tokens,
             )
+            cost, savings = priced.cost_usd, priced.cache_savings_usd
+            if not priced.priced:
+                _warn_unpriced(binding.model, capability.value, purpose)
 
+            span.set_attribute("aleph.pricing_source", priced.source)
             span.set_attribute("gen_ai.usage.input_tokens", input_tokens)
             span.set_attribute("gen_ai.usage.cached_tokens", cached_tokens)
+            span.set_attribute("gen_ai.usage.cache_write_tokens", cache_write_tokens)
             span.set_attribute("gen_ai.usage.output_tokens", completion_tokens)
             span.set_attribute("aleph.cost_usd", float(cost))
             span.set_attribute("aleph.latency_ms", latency_ms)
@@ -276,9 +341,13 @@ class LiteLLMClient:
                 purpose=purpose,
                 input_tokens=input_tokens,
                 cached_tokens=cached_tokens,
+                cache_write_tokens=cache_write_tokens,
                 completion_tokens=completion_tokens,
                 cost=cost,
                 savings=savings,
+                pricing_source=priced.source,
+                input_rate_usd=priced.input_rate_usd,
+                output_rate_usd=priced.output_rate_usd,
                 latency_ms=latency_ms,
                 trace_id=trace_id,
                 timestamp=utcnow(),
@@ -342,12 +411,16 @@ class LiteLLMClient:
 
             usage = body.get("usage") or {}
             input_tokens = int(usage.get("prompt_tokens", 0))
-            cost, savings = self._pricing.cost_for(
+            priced = self._pricing.breakdown(
                 model=binding.model,
                 input_tokens=input_tokens,
                 cached_tokens=0,
                 completion_tokens=0,
             )
+            cost, savings = priced.cost_usd, priced.cache_savings_usd
+            if not priced.priced:
+                _warn_unpriced(binding.model, Capability.EMBEDDING.value, purpose)
+            span.set_attribute("aleph.pricing_source", priced.source)
             span.set_attribute("gen_ai.usage.input_tokens", input_tokens)
             span.set_attribute("aleph.cost_usd", float(cost))
             trace_id = current_trace_id()
@@ -360,9 +433,13 @@ class LiteLLMClient:
                 purpose=purpose,
                 input_tokens=input_tokens,
                 cached_tokens=0,
+                cache_write_tokens=0,
                 completion_tokens=0,
                 cost=cost,
                 savings=savings,
+                pricing_source=priced.source,
+                input_rate_usd=priced.input_rate_usd,
+                output_rate_usd=priced.output_rate_usd,
                 latency_ms=latency_ms,
                 trace_id=trace_id,
                 timestamp=utcnow(),
@@ -415,6 +492,10 @@ class LiteLLMClient:
         latency_ms: int,
         trace_id: str | None,
         timestamp: datetime,
+        cache_write_tokens: int = 0,
+        pricing_source: str = "unknown",
+        input_rate_usd: Decimal = Decimal("0"),
+        output_rate_usd: Decimal = Decimal("0"),
     ) -> UUID:
         # Import here to avoid a hard dependency on aleph_db at module import.
         from aleph_db.repos.cost import CostWriter as _CostWriter
@@ -429,9 +510,13 @@ class LiteLLMClient:
                 purpose=purpose,
                 input_tokens=input_tokens,
                 cached_tokens=cached_tokens,
+                cache_write_tokens=cache_write_tokens,
                 completion_tokens=completion_tokens,
                 cost_usd=cost,
                 cache_savings_usd=savings,
+                pricing_source=pricing_source,
+                input_rate_usd=input_rate_usd,
+                output_rate_usd=output_rate_usd,
                 latency_ms=latency_ms,
                 trace_id=trace_id,
                 timestamp=timestamp,

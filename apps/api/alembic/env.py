@@ -84,10 +84,24 @@ config.set_main_option("sqlalchemy.url", db_url)
 
 target_metadata = Base.metadata
 
-# Tables created at runtime by langgraph's AsyncPostgresStore.setup() (Wave 6
-# cross-session memory). They are not Aleph ORM models, so they are absent from
-# Base.metadata; without this guard autogenerate would propose dropping them.
-_IGNORED_TABLES = {"store", "store_migrations"}
+# Tables langgraph creates at runtime, owned by its own migrations rather than
+# ours. They are not Aleph ORM models, so they are absent from Base.metadata;
+# without this guard autogenerate proposes dropping them and `alembic check`
+# fails on any database an API process has actually started against.
+#
+#   * `store` / `store_migrations`      — AsyncPostgresStore.setup() (Wave 6
+#                                          cross-session agent memory)
+#   * `checkpoint*`                     — AsyncPostgresSaver.setup(), the
+#                                          durable per-thread conversation state
+#                                          that replaced the in-memory saver
+_IGNORED_TABLES = {
+    "store",
+    "store_migrations",
+    "checkpoints",
+    "checkpoint_writes",
+    "checkpoint_blobs",
+    "checkpoint_migrations",
+}
 
 # Expression / partial indexes that alembic cannot reflect-compare and would
 # therefore re-flag on every run. `uq_chain_head_global` is a partial unique

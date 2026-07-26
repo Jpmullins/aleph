@@ -61,11 +61,20 @@ class BuilderState(TypedDict, total=False):
     agent_run_id: UUID
     artifact_id: UUID
     artifact_kind: str  # report_pdf | report_markdown_bundle | source_pack
+    # MUST be declared: LangGraph filters undeclared keys out of the INITIAL
+    # state too, not just node writes. Undeclared, `_node_persist` fell back to
+    # `1` and every rebuild overwrote version 1's bytes at the same asset key
+    # while the DB recorded an incrementing version_no.
+    version_no: int
     template_name: str
     csl_style: str
     wiki_page_ids: list[UUID]
     dataset_version_ids: list[UUID]
     outline: list[dict[str, Any]]
+    # MUST be declared: LangGraph silently drops node updates to keys absent
+    # from the state schema, so an undeclared channel makes `citations` a no-op
+    # and every artifact ships with an empty bibliography.
+    csl_items: list[dict[str, Any]]
     composed_markdown: str
     bibliography_markdown: str
     rendered_asset_ids: list[UUID]
@@ -185,7 +194,7 @@ async def _node_chart_freeze(state: BuilderState) -> dict[str, Any]:
 @with_phase("bibliography", ctx_getter=lambda: _ctx())
 async def _node_bibliography(state: BuilderState) -> dict[str, Any]:
     with start_span("builder.bibliography"):
-        items = state.get("csl_items") or []  # type: ignore[assignment]
+        items = state.get("csl_items") or []
         if not items:
             return {"bibliography_markdown": ""}
         md = format_bibliography(
@@ -246,7 +255,7 @@ async def _node_package(state: BuilderState) -> dict[str, Any]:
         storage_uri = await _put_artifact_bytes(
             project_id=state["project_id"],
             artifact_id=state["artifact_id"],
-            version_no=int(state.get("version_no", 1)),  # type: ignore[arg-type]
+            version_no=int(state.get("version_no", 1)),
             ext=ext,
             data=payload,
         )
@@ -345,7 +354,7 @@ class BuilderWorkflow:
                 "csl_style": csl_style,
                 "wiki_page_ids": wiki_page_ids,
                 "dataset_version_ids": dataset_version_ids,
-                "version_no": next_no,  # type: ignore[typeddict-unknown-key]
+                "version_no": next_no,
             }
             out: BuilderState = await self._compiled.ainvoke(state)  # type: ignore[assignment]
 

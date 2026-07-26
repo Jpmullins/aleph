@@ -29,9 +29,7 @@ async def test_apply_merge_rewrites_inbound_bodies(http_client, auth_bypass, asg
     from aleph_wiki.wiki_service import WikiLinkDraft, WikiService
 
     monkeypatch.setattr(asgi_app.state.settings, "bootstrap_auto_enabled", False)
-    proj = await http_client.post(
-        "/v1/projects", json={"title": "Merge Body", "description": "x", "budget_usd": "1.00"}
-    )
+    proj = await http_client.post("/v1/projects", json={"title": "Merge Body", "description": "x"})
     pid = UUID(proj.json()["id"])
     maker = asgi_app.state.session_maker
 

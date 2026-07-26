@@ -29,9 +29,7 @@ async def _seed_merge(http_client, asgi_app, monkeypatch):
     from aleph_wiki.wiki_service import WikiService
 
     monkeypatch.setattr(asgi_app.state.settings, "bootstrap_auto_enabled", False)
-    proj = await http_client.post(
-        "/v1/projects", json={"title": "MergeAct", "description": "x", "budget_usd": "1.00"}
-    )
+    proj = await http_client.post("/v1/projects", json={"title": "MergeAct", "description": "x"})
     pid = UUID(proj.json()["id"])
     maker = asgi_app.state.session_maker
     async with maker() as session:

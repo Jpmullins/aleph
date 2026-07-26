@@ -25,7 +25,7 @@ export function WikilinkChip({ text, onNavigate, broken = false }: Props) {
   return (
     <button
       type="button"
-      className="mx-0.5 inline-flex items-center rounded border border-slate-300 bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-200"
+      className="mx-0.5 inline-flex items-center rounded border border-line-strong bg-elevated px-1.5 py-0.5 text-xs font-medium text-ink-soft hover:bg-line"
       onClick={() => onNavigate?.(text)}
       data-testid="wikilink-chip"
     >

@@ -1197,6 +1197,24 @@ def build_agent_store(
     return pool, store
 
 
+def build_agent_checkpointer(pool: Any) -> Any:
+    """Durable per-thread conversation state for the AG-UI assistant.
+
+    Shares the store's already-open pool: `AsyncPostgresSaver` wants exactly the
+    connection configuration `build_agent_store` sets up (autocommit, no
+    prepared statements, dict rows), so there is no reason to open a second one.
+
+    This replaces an in-memory `MemorySaver`, which meant every API restart —
+    and every additional API replica — silently lost the agent's conversation
+    history, its `write_todos` plan (the Activity card's plan display), and the
+    summarization archive. `test_agent_checkpointer.py` keeps it from
+    regressing.
+    """
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+    return AsyncPostgresSaver(conn=pool)
+
+
 # Fallback agent model id, used only when no ModelProfile bindings are bound to
 # the runtime (e.g. the named template row is missing). Normally the model is
 # resolved per capability from the default profile's bindings (rule #7).
@@ -1276,8 +1294,17 @@ def subagent_model(settings: Settings, name: str, *, capability: Any = None) -> 
     )
 
 
-def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore):
+def build_assistant_deep_agent(
+    *, settings: Settings, store: AsyncPostgresStore, checkpointer: Any = None
+):
     """Compile the assistant Deep Agent (built once at app startup).
+
+    `checkpointer` holds per-thread conversation state. Production passes the
+    Postgres-backed `build_agent_checkpointer(...)`; it is optional only so
+    tests can compile the graph without a database, and falls back to an
+    in-memory saver in that case. Passing nothing in production silently
+    reverts to losing every conversation on restart — see
+    `build_agent_checkpointer`.
 
     Returns a LangGraph `CompiledStateGraph` suitable for
     `LangGraphAGUIAgent(graph=...)`. W3 extends this with subagents.
@@ -1397,5 +1424,5 @@ def build_assistant_deep_agent(*, settings: Settings, store: AsyncPostgresStore)
         middleware=[CopilotKitMiddleware()],
         backend=_memory_backend,
         store=store,
-        checkpointer=MemorySaver(),
+        checkpointer=checkpointer if checkpointer is not None else MemorySaver(),
     )

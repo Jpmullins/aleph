@@ -63,19 +63,10 @@ async def create_project(
     session.add(profile)
     await session.flush()
 
-    budget = project_repo.new_budget(
-        project_id=project_id,
-        cap_usd=body.budget_usd,
-        created_by=principal.user_id,
-    )
-    session.add(budget)
-    await session.flush()
-
     project = project_repo.new_project(
         title=body.title,
         description=body.description,
         model_profile_id=profile.id,
-        budget_id=budget.id,
         created_by=principal.user_id,
     )
     project.id = project_id
@@ -111,16 +102,6 @@ async def create_project(
         target_id=profile.id,
         target_kind="model_profile",
         payload={"template": template.name, "name": profile.name},
-        trace_id=trace_id,
-    )
-    await ledger.append(
-        project_id=project_id,
-        actor_id=principal.user_id,
-        actor_kind=principal.actor_kind,
-        action_kind="budget.set",
-        target_id=budget.id,
-        target_kind="budget",
-        payload={"cap_usd": str(body.budget_usd)},
         trace_id=trace_id,
     )
     await ledger.append(

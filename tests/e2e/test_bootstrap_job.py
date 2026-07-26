@@ -78,7 +78,7 @@ async def test_bootstrap_job_seeds_overview_and_caps_dispatch(
     # A real project (seeds profile + connector bindings).
     proj = await http_client.post(
         "/v1/projects",
-        json={"title": "Sandworm APT", "description": "OSINT on the group", "budget_usd": "5.00"},
+        json={"title": "Sandworm APT", "description": "OSINT on the group"},
     )
     assert proj.status_code == 201, proj.text
     pid = UUID(proj.json()["id"])

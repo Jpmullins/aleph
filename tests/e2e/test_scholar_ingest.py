@@ -38,7 +38,7 @@ async def auth_bypass(monkeypatch):
 async def _create_project(http_client) -> str:
     proj = await http_client.post(
         "/v1/projects",
-        json={"title": "Scholar ingest test", "description": "", "budget_usd": "5.00"},
+        json={"title": "Scholar ingest test", "description": ""},
     )
     assert proj.status_code == 201, proj.text
     return proj.json()["id"]

@@ -55,7 +55,7 @@ async def _scoped_project(http_client: Any, asgi_app: Any) -> tuple[UUID, Any]:
     from aleph_security.principal import Principal
 
     resp = await http_client.post(
-        "/v1/projects", json={"title": "surface-resume", "description": "", "budget_usd": "1.00"}
+        "/v1/projects", json={"title": "surface-resume", "description": ""}
     )
     assert resp.status_code == 201, resp.text
     pid = UUID(resp.json()["id"])

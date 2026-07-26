@@ -11,6 +11,7 @@ from arq.connections import RedisSettings
 
 from aleph_db.session import async_engine_for, async_sessionmaker_for
 from aleph_models.client import LiteLLMClient
+from aleph_models.discovery import GatewayCatalog
 from aleph_models.pricing import get_default_pricing
 from aleph_observability import (
     configure_logging,
@@ -71,11 +72,21 @@ async def _startup(ctx: dict[str, Any]) -> None:
     # Redis (the sandbox shares that bus; it must never reach the platform
     # Redis above, which carries tokens + privileged queues). WP-4c §6.
     code_runner_pool = await create_pool(RedisSettings.from_dsn(s.code_runner_redis_url))
+    # Workers price calls from the same discovered rates the API uses. Without
+    # this the table stays empty here and every worker-side ModelCall records
+    # pricing_source="unknown" — the research loop is the heaviest spender.
+    pricing = get_default_pricing()
+    gateway_catalog = GatewayCatalog(
+        base_url=s.litellm_base_url,
+        api_key=s.insights_litellm_api_key,
+        client=gateway_http,
+    )
+    await gateway_catalog.refresh_pricing(pricing)
     litellm = LiteLLMClient(
         base_url=s.litellm_base_url,
         api_key=s.insights_litellm_api_key,
         http_client=gateway_http,
-        pricing=get_default_pricing(),
+        pricing=pricing,
         session_maker=maker,
         redis_client=redis,
     )

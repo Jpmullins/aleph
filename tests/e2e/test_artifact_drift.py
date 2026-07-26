@@ -57,9 +57,7 @@ async def test_artifact_drift_flips_when_upstream_page_moves(
     from aleph_wiki.wiki_service import WikiService
 
     monkeypatch.setattr(asgi_app.state.settings, "bootstrap_auto_enabled", False)
-    proj = await http_client.post(
-        "/v1/projects", json={"title": "Drift", "description": "x", "budget_usd": "1.00"}
-    )
+    proj = await http_client.post("/v1/projects", json={"title": "Drift", "description": "x"})
     pid = UUID(proj.json()["id"])
     maker = asgi_app.state.session_maker
 

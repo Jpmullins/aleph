@@ -20,7 +20,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 async def _create_project(http_client) -> str:
     proj = await http_client.post(
         "/v1/projects",
-        json={"title": "Agent-tool ledger test", "description": "", "budget_usd": "5.00"},
+        json={"title": "Agent-tool ledger test", "description": ""},
     )
     assert proj.status_code == 201, proj.text
     return proj.json()["id"]
@@ -72,7 +72,7 @@ async def test_ingest_url_creates_source(http_client, auth_bypass):
     """Ingesting a URL fetches it server-side and registers a Source."""
     proj = await http_client.post(
         "/v1/projects",
-        json={"title": "Ingest URL test", "description": "", "budget_usd": "5.00"},
+        json={"title": "Ingest URL test", "description": ""},
     )
     assert proj.status_code == 201, proj.text
     project_id = proj.json()["id"]

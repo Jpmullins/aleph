@@ -27,6 +27,7 @@ from aleph_a2ui.components.cards import (
 from aleph_a2ui.components.surfaces import (
     artifacts_surface_v09,
     briefs_surface_v09,
+    grounding_surface_v09,
     hypotheses_surface_v09,
     notes_surface_v09,
     wiki_surface_v09,
@@ -132,8 +133,158 @@ async def _build_tab_messages(
         return await _hypotheses_messages(session, project_id, sid)
     if tab_lc == "briefs":
         return await _briefs_messages(session, project_id)
+    if tab_lc == "grounding":
+        return await _grounding_messages(session, project_id, page_id, sid)
     msg = f"unknown tab: {tab_lc}"
     raise NotFound(msg)
+
+
+#: Surface kinds a pane may name. "grounding" is parameterised by a claim id
+#: rather than reachable from the rail — it is opened *from* a claim.
+_PANE_KINDS = frozenset(
+    {"wiki", "library", "artifacts", "notes", "hypotheses", "briefs", "grounding"}
+)
+
+
+def _parse_pane_specs(raw: str) -> list[tuple[str, str, str | None]]:
+    """``"wiki,wiki:page_id=abc"`` → ``[(surface_id, tab, page_id), …]``.
+
+    The surface id is the spec verbatim, which is exactly the pane id the client
+    mints — so a delta stamped with it lands in the right pane without any
+    further mapping. Unknown tabs are dropped rather than raising: one bad pane
+    in a URL must not take down the whole workspace's stream.
+    """
+    out: list[tuple[str, str, str | None]] = []
+    seen: set[str] = set()
+    for raw_spec in raw.split(","):
+        spec = raw_spec.strip()
+        if not spec or spec in seen:
+            continue
+        tab, _, params = spec.partition(":")
+        tab = tab.lower()
+        if tab not in _PANE_KINDS:
+            continue
+        page_id = None
+        for kv in params.split("&"):
+            k, _, v = kv.partition("=")
+            if k == "page_id" and v:
+                page_id = v
+        seen.add(spec)
+        out.append((spec, tab, page_id))
+    return out
+
+
+@router.get("/{project_id}/surfaces/stream", response_model=None)
+async def stream_surfaces_multiplexed(
+    project_id: Annotated[UUID, Path(...)],
+    request: Request,
+    principal: PrincipalDep,
+    panes: str = Query(default="wiki"),
+) -> StreamingResponse:
+    """One SSE connection carrying deltas for EVERY open pane.
+
+    The workspace is a set of panes, not one surface, and a connection per pane
+    hits the browser's ~6-per-origin HTTP/1.1 cap at four panes — with two other
+    Aleph streams already open. This multiplexes them.
+
+    It is also *stronger* than one stream per pane, not merely cheaper:
+    `SurfaceStreamBuffer.stamp()` issues one monotonic `seq` per connection, so
+    multiplexed panes share a single total order. Independent connections each
+    have their own `seq` space and give no cross-pane ordering at all — a page
+    and the claim view beside it could render mutually inconsistent states.
+
+    The A2UI protocol was built for this: every message carries `surfaceId`, and
+    the client's `MessageProcessor` already holds a `surfacesMap`. One surface
+    per connection was a UI constraint, never a protocol one.
+    """
+    await assert_stream_access(request, project_id, principal)
+    specs = _parse_pane_specs(panes)
+    if not specs:
+        specs = [("wiki", "wiki", None)]
+
+    maker = request.app.state.session_maker
+    broker = request.app.state.change_broker
+    raw_cid = request.query_params.get("cid")
+    # Buffer key includes the pane set: resuming with a different set of panes
+    # must not replay another layout's buffered bytes.
+    cid = f"{project_id}:{panes}:{raw_cid}" if raw_cid else None
+    last_event_id = _parse_last_event_id(request.headers.get("last-event-id"))
+
+    async def _gen() -> AsyncIterator[bytes]:
+        _sweep_buffers()
+        buf = _STREAM_BUFFERS.get(cid) if cid else None
+
+        async def _build_all() -> dict[str, tuple[list[dict[str, Any]], Any]]:
+            out: dict[str, tuple[list[dict[str, Any]], Any]] = {}
+            async with maker() as session:
+                for surface_id, tab, page_id in specs:
+                    msgs = await _build_tab_messages(session, project_id, tab, page_id, surface_id)
+                    out[surface_id] = split_surface_messages(msgs)
+            return out
+
+        current = await _build_all()
+
+        if buf is None:
+            buf = SurfaceStreamBuffer(_RING_SIZE)
+            if cid:
+                _STREAM_BUFFERS[cid] = buf
+
+        resumable = last_event_id is not None and buf.can_replay(last_event_id) and buf.model
+        if resumable:
+            for m in buf.messages_after(last_event_id):
+                yield _sse(m)
+        else:
+            for surface_id, _tab, _pid in specs:
+                structural, _model = current[surface_id]
+                for m in structural:
+                    yield _sse(buf.stamp(m))
+                for surface_id2, (_s, model) in current.items():
+                    if surface_id2 != surface_id:
+                        continue
+                    for delta in data_model_patches_to_messages(
+                        surface_id=surface_id, patches=diff_data_model({}, model), next_model=model
+                    ):
+                        yield _sse(buf.stamp(delta))
+
+        # Per-surface previous state, so each pane diffs against its own model.
+        prev: dict[str, tuple[list[dict[str, Any]], Any]] = current
+        buf.structural = [m for s, _ in current.values() for m in s]
+        buf.model = {k: v[1] for k, v in current.items()}
+
+        async with broker.subscribe(project_id) as sub:
+            while True:
+                if await request.is_disconnected():
+                    return
+                await sub.wait(timeout=_STREAM_FALLBACK_SEC)
+                # Coalesce a burst: one ingest writes many ledger rows, and
+                # rebuilding every pane per row is the amplification this
+                # endpoint exists to avoid.
+                sub.drain()
+                if await request.is_disconnected():
+                    return
+
+                current = await _build_all()
+                for surface_id, (structural, model) in current.items():
+                    prev_structural, prev_model = prev[surface_id]
+                    if structural != prev_structural:
+                        for m in structural:
+                            if "updateComponents" in m:
+                                yield _sse(buf.stamp(m))
+                    for delta in data_model_patches_to_messages(
+                        surface_id=surface_id,
+                        patches=diff_data_model(prev_model, model),
+                        next_model=model,
+                    ):
+                        yield _sse(buf.stamp(delta))
+                prev = current
+                buf.model = {k: v[1] for k, v in current.items()}
+                yield b": heartbeat\n\n"
+
+    return StreamingResponse(
+        _gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/{project_id}/surfaces/{tab}", response_model=None)
@@ -493,30 +644,43 @@ async def _resolve_citations(
     )
     if not cite_rows:
         return []
+    # `Citation.source_page_id` is a `source_pages` PK — the same id-space the
+    # retraction blast radius, freshness, the refresh job and the mechanical
+    # reviewer all resolve it in. This reader previously treated it as a
+    # `wiki_pages` id; the two never disagreed only because the column was
+    # always NULL. Resolving it the wrong way would silently return
+    # `source_title: null, url: null` for every citation.
     source_page_ids = {c.source_page_id for c in cite_rows if c.source_page_id is not None}
     titles: dict[UUID, str] = {}
     urls: dict[UUID, str | None] = {}
+    wiki_page_of: dict[UUID, UUID] = {}
     if source_page_ids:
-        titles = dict(
-            (
-                await session.execute(
-                    select(WikiPage.id, WikiPage.title).where(WikiPage.id.in_(source_page_ids))
-                )
-            ).all()
-        )
-        # source_page_id → SourcePage.source_id → Source.url (best-effort).
         sp_rows = list(
             (
                 await session.execute(
-                    select(SourcePage.page_id, Source.title, Source.url)
+                    select(SourcePage.id, SourcePage.page_id, Source.title, Source.url)
                     .join(Source, Source.id == SourcePage.source_id)
-                    .where(SourcePage.page_id.in_(source_page_ids))
+                    .where(SourcePage.id.in_(source_page_ids))
                 )
             ).all()
         )
-        for page_id_, src_title, src_url in sp_rows:
-            urls[page_id_] = src_url
-            titles.setdefault(page_id_, src_title)
+        for sp_id, page_id_, src_title, src_url in sp_rows:
+            wiki_page_of[sp_id] = page_id_
+            urls[sp_id] = src_url
+            titles[sp_id] = src_title
+        # Prefer the wiki page's own title when it has one.
+        page_titles = dict(
+            (
+                await session.execute(
+                    select(WikiPage.id, WikiPage.title).where(
+                        WikiPage.id.in_(set(wiki_page_of.values()))
+                    )
+                )
+            ).all()
+        )
+        for sp_id, page_id_ in wiki_page_of.items():
+            if page_id_ in page_titles:
+                titles[sp_id] = page_titles[page_id_]
     out: list[dict[str, Any]] = []
     for c in cite_rows:
         spid = c.source_page_id
@@ -524,7 +688,11 @@ async def _resolve_citations(
             {
                 "marker": c.citation_marker,
                 "claim_id": str(c.claim_id),
-                "source_page_id": str(spid) if spid is not None else None,
+                # The client gets the *wiki page* id — the only one it can
+                # navigate to. The bridge PK is an internal join key.
+                "source_page_id": (
+                    str(wiki_page_of[spid]) if spid is not None and spid in wiki_page_of else None
+                ),
                 "source_title": titles.get(spid) if spid is not None else None,
                 "url": urls.get(spid) if spid is not None else None,
                 "chunk_ids": list(c.chunk_ids or []),
@@ -697,3 +865,111 @@ async def _briefs_messages(session: Any, project_id: UUID) -> list[dict[str, Any
             normal_pinned.append(payload)
     ordered = spotlighted + cards + normal_pinned
     return briefs_surface_v09(badge_count=len(ordered), children=ordered)
+
+
+async def _grounding_messages(
+    session: Any, project_id: UUID, claim_id: str | None, surface_id: str
+) -> list[dict[str, Any]]:
+    """Walk claim → citation → chunk → span → source, and bind the result.
+
+    The `page_id` pane param carries the CLAIM id here (panes pass one opaque
+    param); naming it `claim_id` locally keeps the walk readable.
+
+    Every hop is a real join. Nothing is synthesised: a claim with no citations,
+    or citations with no resolvable chunks, renders as exactly that, because an
+    ungrounded claim is the single most important thing this surface can tell an
+    analyst.
+    """
+    from aleph_rks.models import DocumentChunk, Source
+    from aleph_wiki.models import WikiClaim
+
+    if not claim_id:
+        return grounding_surface_v09(claim=None, groundings=[], surface_id=surface_id)
+    try:
+        cid = UUID(claim_id)
+    except ValueError:
+        return grounding_surface_v09(claim=None, groundings=[], surface_id=surface_id)
+
+    claim_row = (
+        await session.execute(
+            select(WikiClaim).where(WikiClaim.id == cid, WikiClaim.project_id == project_id)
+        )
+    ).scalar_one_or_none()
+    if claim_row is None:
+        return grounding_surface_v09(claim=None, groundings=[], surface_id=surface_id)
+
+    page_title = (
+        await session.execute(select(WikiPage.title).where(WikiPage.id == claim_row.page_id))
+    ).scalar_one_or_none()
+
+    claim = {
+        "id": str(claim_row.id),
+        "text": claim_row.text,
+        "confidence": claim_row.confidence,
+        "page_id": str(claim_row.page_id),
+        "page_title": page_title or "",
+    }
+
+    cites = list(
+        (await session.execute(select(Citation).where(Citation.claim_id == cid))).scalars().all()
+    )
+
+    groundings: list[dict[str, Any]] = []
+    for cite in cites:
+        source_info: dict[str, Any] | None = None
+        if cite.source_page_id is not None:
+            sp = await session.get(SourcePage, cite.source_page_id)
+            if sp is not None:
+                src = await session.get(Source, sp.source_id)
+                if src is not None:
+                    source_info = {
+                        "id": str(src.id),
+                        "short_id": src.short_id,
+                        "title": src.title,
+                        "url": src.url,
+                        "retracted": src.status == "retracted",
+                    }
+
+        chunk_ids = [UUID(x) for x in (cite.chunk_ids or []) if _is_uuid(x)]
+        chunks: list[dict[str, Any]] = []
+        if chunk_ids:
+            rows = list(
+                (
+                    await session.execute(
+                        select(DocumentChunk)
+                        .where(DocumentChunk.id.in_(chunk_ids))
+                        .order_by(DocumentChunk.ordinal)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            chunks = [
+                {
+                    "id": str(ch.id),
+                    "ordinal": ch.ordinal,
+                    "text": ch.text,
+                    "char_start": ch.char_start,
+                    "char_end": ch.char_end,
+                    "section_path": ch.section_path,
+                }
+                for ch in rows
+            ]
+
+        groundings.append(
+            {
+                "marker": cite.citation_marker,
+                "source": source_info,
+                "chunks": chunks,
+            }
+        )
+
+    return grounding_surface_v09(claim=claim, groundings=groundings, surface_id=surface_id)
+
+
+def _is_uuid(value: Any) -> bool:
+    try:
+        UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        return False
+    return True

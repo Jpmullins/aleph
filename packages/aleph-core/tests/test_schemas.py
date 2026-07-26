@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from decimal import Decimal
-
 from aleph_core.schemas.model_profile import (
     Capability,
     ModelBindingIn,
@@ -12,9 +10,8 @@ from aleph_core.schemas.model_profile import (
 from aleph_core.schemas.project import ProjectCreate
 
 
-def test_project_create_default_budget() -> None:
+def test_project_create_defaults() -> None:
     p = ProjectCreate(title="x")
-    assert p.budget_usd == Decimal("100.00")
     assert p.model_profile_name == "aleph-dev"
 
 

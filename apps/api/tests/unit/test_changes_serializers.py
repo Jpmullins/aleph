@@ -128,5 +128,5 @@ def test_domain_ledger_kinds_map_to_changed_signals() -> None:
 
 
 def test_unmapped_ledger_kinds_emit_nothing() -> None:
-    rows = [_ledger("project.update"), _ledger("budget.set")]
+    rows = [_ledger("project.update"), _ledger("model_profile.copy_from_template")]
     assert ledger_rows_to_signals(rows) == []

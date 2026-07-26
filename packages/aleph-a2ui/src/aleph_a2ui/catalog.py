@@ -50,6 +50,30 @@ def _comp(props: dict[str, Any], *, required: list[str] | None = None) -> dict[s
 
 _UUID = {"type": "string", "format": "uuid"}
 
+#: Canonical `WikiClaim.confidence` vocabulary — the ONE list every surface must
+#: agree on. Derived from what production writes and what the reader renders:
+#:
+#:   cited            `agent/workflow.py`, `synthesis_workflow.py` (the default)
+#:   retracted        `aleph_reviewer.retraction` when a cited source is retracted
+#:   contested        `a2ui_handlers` refresh-flag
+#:   well-supported   } reader vocabulary, kept so a curator/agent may promote
+#:   weakly-supported } a claim without a schema change
+#:   uncited          reader vocabulary for an unsupported claim
+#:
+#: Three different lists existed before (this file, the agent-facing catalog in
+#: `copilot-runtime/src/server.ts`, and the reader's tone map). None contained
+#: "cited", so the most common real value would have failed validation, and the
+#: agent-facing one offered "initial" — a value nothing else recognises — while
+#: omitting "retracted", making the WP-6 state unemittable by the agent.
+_CLAIM_CONFIDENCE: Final[tuple[str, ...]] = (
+    "cited",
+    "well-supported",
+    "weakly-supported",
+    "contested",
+    "uncited",
+    "retracted",
+)
+
 
 _COMPONENTS = {
     # ----- Surfaces ---------------------------------------------------------
@@ -84,16 +108,16 @@ _COMPONENTS = {
         {
             "claim_id": _UUID,
             "text": {"type": "string", "maxLength": 2048},
-            "confidence": {
-                "enum": [
-                    "well-supported",
-                    "weakly-supported",
-                    "contested",
-                    "uncited",
-                    # WP-6: a source cited by this claim was retracted.
-                    "retracted",
-                ]
-            },
+            # The canonical claim-confidence vocabulary. It must be the union of
+            # what production actually WRITES to `WikiClaim.confidence` and what
+            # the renderer's tone map handles — this list previously omitted
+            # "cited", which is the single most common value in the database
+            # (`agent/workflow.py` and `synthesis_workflow.py` both hardcode it),
+            # so validating a real card against this schema would have rejected
+            # it. `_CLAIM_CONFIDENCE` is asserted against the writers, the
+            # renderer, and the agent-facing catalog by
+            # `tests/unit/test_catalog_agreement.py`.
+            "confidence": {"enum": list(_CLAIM_CONFIDENCE)},
             "citations": {
                 "type": "array",
                 "items": {

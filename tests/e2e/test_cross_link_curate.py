@@ -33,7 +33,7 @@ async def test_curate_cross_links_sibling_mentioned_in_prose(
     monkeypatch.setattr(asgi_app.state.settings, "bootstrap_auto_enabled", False)
 
     proj = await http_client.post(
-        "/v1/projects", json={"title": "XLink Project", "description": "x", "budget_usd": "1.00"}
+        "/v1/projects", json={"title": "XLink Project", "description": "x"}
     )
     assert proj.status_code == 201, proj.text
     pid = UUID(proj.json()["id"])
@@ -136,7 +136,7 @@ async def test_cross_link_preserves_page_claims(http_client, auth_bypass, asgi_a
 
     monkeypatch.setattr(asgi_app.state.settings, "bootstrap_auto_enabled", False)
     proj = await http_client.post(
-        "/v1/projects", json={"title": "Claims XLink", "description": "x", "budget_usd": "1.00"}
+        "/v1/projects", json={"title": "Claims XLink", "description": "x"}
     )
     pid = UUID(proj.json()["id"])
     maker = asgi_app.state.session_maker

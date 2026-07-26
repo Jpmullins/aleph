@@ -174,7 +174,7 @@ requires-dist = [
     { name = "aleph-wiki", editable = "packages/aleph-wiki" },
     { name = "asyncpg", specifier = "==0.31.0" },
     { name = "copilotkit", specifier = ">=0.1.91" },
-    { name = "deepagents", specifier = ">=0.6" },
+    { name = "deepagents", specifier = ">=0.6,<0.7" },
     { name = "fastapi", specifier = "==0.136.3" },
     { name = "httpx", specifier = "==0.28.1" },
     { name = "langchain-openai", specifier = ">=1" },

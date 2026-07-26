@@ -28,10 +28,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp
 
-from aleph_core.errors import PermissionDenied
+from aleph_core.errors import NotFound, PermissionDenied
 from aleph_core.ids import uuid7
 from aleph_db.models.identity import User
 from aleph_db.repos.ledger import LedgerWriter
+from aleph_db.repos.project import get_member
 from aleph_observability.logging import bind_request_context
 from aleph_observability.tracing import current_trace_id
 from aleph_security.agent_token import verify_agent_token
@@ -50,10 +51,23 @@ _PUBLIC_PATHS = frozenset(
     }
 )
 
-# Routes that authenticate themselves with a different scheme. The
-# middleware skips its bearer check for these prefixes; the route
-# handler is responsible for its own verification.
-_SELF_AUTH_PREFIXES: tuple[str, ...] = ("/copilotkit",)
+# Prefixes the middleware skips entirely, on the promise that the mounted
+# handler verifies the caller itself.
+#
+# EMPTY, DELIBERATELY. `/copilotkit` lived here on exactly that promise and the
+# handler never kept it: `setup_copilotkit` mounts the LangGraph AG-UI endpoint
+# with no `dependencies=` and no principal, so the Deep Agent's write tools were
+# reachable unauthenticated in BOTH auth modes — while taking their project
+# scope from a client-supplied `thread_id` with no membership check.
+#
+# In `local` mode nothing changes: a request with no bearer still synthesizes
+# the dev principal below. In `oidc` mode the endpoint now requires a real
+# credential, which the runtime bridge forwards from the browser.
+#
+# Adding a prefix here re-opens that class of hole. Do not, without a handler
+# that provably authenticates — `test_no_blanket_auth_exemption_prefixes` guards
+# this.
+_SELF_AUTH_PREFIXES: tuple[str, ...] = ()
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -103,7 +117,47 @@ class AuthMiddleware(BaseHTTPMiddleware):
             user_id=principal.user_id,
         )
 
+        # AG-UI agent requests carry their project scope in the body (a
+        # `proj:<uuid>:<thread>` thread id). The graph never sees this
+        # principal, so the HTTP boundary is the only place that binding can be
+        # checked — see `middleware/agent_scope.py`.
+        if path.startswith(_AGENT_SCOPED_PREFIXES):
+            try:
+                await _assert_agent_request_scope(request, principal)
+            except NotFound as exc:
+                return _problem(404, "not_found", exc.message, request)
+            except PermissionDenied as exc:
+                return _problem(403, "permission_denied", exc.message, request)
+
         return await call_next(request)
+
+
+#: Paths whose body names the project the agent will act on.
+_AGENT_SCOPED_PREFIXES: tuple[str, ...] = ("/copilotkit",)
+
+
+async def _assert_agent_request_scope(request: Request, principal: Principal) -> None:
+    """Refuse an agent run naming a project the caller does not belong to.
+
+    Reading the body here is safe: Starlette's `BaseHTTPMiddleware` wraps the
+    request in a `_CachedRequest`, so the downstream handler still receives it.
+    """
+    from aleph_api.middleware.agent_scope import (
+        assert_caller_may_use_projects,
+        extract_project_ids,
+    )
+
+    project_ids = extract_project_ids(await request.body())
+    if not project_ids:
+        return
+
+    maker = request.app.state.session_maker
+
+    async def _is_member(user_id: UUID, project_id: UUID) -> bool:
+        async with maker() as session:
+            return (await get_member(session, project_id=project_id, user_id=user_id)) is not None
+
+    await assert_caller_may_use_projects(principal, project_ids, _is_member)
 
 
 def _looks_like_agent_token(token: str) -> bool:
@@ -194,6 +248,9 @@ async def _principal_from_agent_token(request: Request, token: str) -> Principal
         actor_kind=claims.actor_kind,
         agent_run_id=claims.agent_run_id,
         correlation_id=claims.correlation_id,
+        # The signed project binding. Discarding this is what made the mint-time
+        # OWNER gate decorative — see `project_scope_dep`.
+        project_id=claims.project_id,
     )
 
 

@@ -10,7 +10,7 @@ from uuid import UUID
 from sqlalchemy import desc, func, select
 
 from aleph_core.ids import uuid7
-from aleph_db.models.cost import Budget, CostLedgerEvent, ModelCall
+from aleph_db.models.cost import CostLedgerEvent, ModelCall
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,8 +19,8 @@ if TYPE_CHECKING:
 class CostWriter:
     """Inserts ModelCall + CostLedgerEvent in one transaction.
 
-    Trigger `cost_to_budget` (initial migration) rolls the cost into
-    the project's `budgets.spent_usd`.
+    Spend is not pre-aggregated anywhere; `total_cost` sums the model-call rows
+    on read.
     """
 
     def __init__(self, session: AsyncSession) -> None:
@@ -42,6 +42,10 @@ class CostWriter:
         latency_ms: int,
         trace_id: str | None,
         timestamp: datetime,
+        cache_write_tokens: int = 0,
+        pricing_source: str = "unknown",
+        input_rate_usd: Decimal = Decimal("0"),
+        output_rate_usd: Decimal = Decimal("0"),
     ) -> ModelCall:
         call_id = uuid7()
         call = ModelCall(
@@ -53,9 +57,13 @@ class CostWriter:
             purpose=purpose,
             input_tokens=input_tokens,
             cached_tokens=cached_tokens,
+            cache_write_tokens=cache_write_tokens,
             completion_tokens=completion_tokens,
             cost_usd=cost_usd,
             cache_savings_usd=cache_savings_usd,
+            pricing_source=pricing_source,
+            input_rate_usd=input_rate_usd,
+            output_rate_usd=output_rate_usd,
             latency_ms=latency_ms,
             trace_id=trace_id,
             timestamp=timestamp,
@@ -76,10 +84,16 @@ class CostWriter:
         return call
 
 
-async def get_budget(session: AsyncSession, project_id: UUID) -> Budget | None:
-    return (
-        await session.execute(select(Budget).where(Budget.project_id == project_id))
-    ).scalar_one_or_none()
+async def total_cost(session: AsyncSession, project_id: UUID) -> Decimal:
+    """Total USD spent on the project, summed straight from the model-call rows."""
+    total = (
+        await session.execute(
+            select(func.coalesce(func.sum(ModelCall.cost_usd), 0)).where(
+                ModelCall.project_id == project_id
+            )
+        )
+    ).scalar_one()
+    return Decimal(total)
 
 
 async def cost_by_phase(session: AsyncSession, project_id: UUID) -> list[tuple[str, Decimal, int]]:

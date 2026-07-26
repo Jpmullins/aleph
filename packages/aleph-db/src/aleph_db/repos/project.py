@@ -1,15 +1,13 @@
-"""Project + ProjectMember + Budget repository functions."""
+"""Project + ProjectMember repository functions."""
 
 from __future__ import annotations
 
-from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import select
 
 from aleph_core.ids import uuid7
-from aleph_db.models.cost import Budget
 from aleph_db.models.identity import ProjectMember
 from aleph_db.models.project import Project
 
@@ -51,7 +49,6 @@ def new_project(
     title: str,
     description: str,
     model_profile_id: UUID,
-    budget_id: UUID | None,
     created_by: UUID,
 ) -> Project:
     return Project(
@@ -59,7 +56,6 @@ def new_project(
         title=title,
         description=description,
         model_profile_id=model_profile_id,
-        budget_id=budget_id,
         created_by=created_by,
         access_scope="project",
     )
@@ -77,21 +73,6 @@ def new_member(
         project_id=project_id,
         user_id=user_id,
         role=role,
-        created_by=created_by,
-        access_scope="project",
-    )
-
-
-def new_budget(
-    *,
-    project_id: UUID,
-    cap_usd: Decimal,
-    created_by: UUID,
-) -> Budget:
-    return Budget(
-        id=uuid7(),
-        project_id=project_id,
-        cap_usd=cap_usd,
         created_by=created_by,
         access_scope="project",
     )

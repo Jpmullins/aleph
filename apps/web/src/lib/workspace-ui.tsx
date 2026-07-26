@@ -29,7 +29,19 @@ export interface WorkspaceSelection {
 }
 
 export interface WorkspaceUIState {
-  /** Which right-panel surface tab is active. */
+  /** Open panes, left to right. The workspace is these. */
+  panes: Pane[];
+  /** Pane the analyst last interacted with — what "this" refers to. */
+  focusedPaneId: string;
+  setFocusedPaneId: (id: string) => void;
+  /** Open a view, or focus it if already open. */
+  openPane: (kind: SurfaceTab, opts?: { title?: string; params?: Record<string, string> }) => void;
+  closePane: (id: string) => void;
+  /**
+   * The focused pane's kind. Kept because the agent's shared-state payload and
+   * its `focus_tab` tool speak in surface names; setting it opens/focuses the
+   * corresponding pane rather than swapping a single slot.
+   */
   activeSurface: SurfaceTab;
   setActiveSurface: (tab: SurfaceTab) => void;
   /** Title of the wiki page the analyst currently has open (if any). */
@@ -52,9 +64,75 @@ export interface WorkspaceUIState {
   setHighlightedClaimId: (claimId: string | null) => void;
 }
 
+/**
+ * A pane is one thing being read, and the unit the workspace is built from.
+ *
+ * Tabs assumed the app knows in advance what views exist — coherent for a CRUD
+ * app, incoherent here, because the A2UI premise is that the *agent composes
+ * the view*. Once `code_runner` can generate one there is no tab for "the
+ * grounding tree for this claim" or "these two contradictory claims side by
+ * side", and comparison is the thing the old shell structurally could not do.
+ *
+ * `id` is the wire `surfaceId`: the A2UI protocol already stamps it on every
+ * message and `MessageProcessor` already holds a `surfacesMap`, so many panes
+ * over one connection is what the protocol was built for. One-surface-at-a-time
+ * was a UI constraint imposed on a multi-surface protocol.
+ */
+export interface Pane {
+  /** Wire `surfaceId`. Stable for the pane's life. */
+  id: string;
+  /** Which builder renders it. */
+  kind: SurfaceTab;
+  /** Shown in the pane header. */
+  title: string;
+  /** Builder params, e.g. `{ page_id }`. Part of the stream URL. */
+  params?: Record<string, string>;
+}
+
+/** Tiling gets unreadable past three columns at any realistic window width. */
+export const MAX_PANES = 3;
+
+function paneKey(kind: SurfaceTab, params?: Record<string, string>): string {
+  const p = params ? Object.entries(params).sort().map(([k, v]) => `${k}=${v}`).join("&") : "";
+  return p ? `${kind.toLowerCase()}:${p}` : kind.toLowerCase();
+}
+
 const WorkspaceUIContext = createContext<WorkspaceUIState | null>(null);
 
 export function WorkspaceUIProvider({ children }: { children: ReactNode }) {
+  const [panes, setPanes] = useState<Pane[]>([
+    { id: "wiki", kind: "Wiki", title: "Wiki" },
+  ]);
+  const [focusedPaneId, setFocusedPaneId] = useState<string>("wiki");
+
+  /**
+   * Open a pane, or focus it if that exact view is already open.
+   *
+   * Re-opening the same thing must never duplicate it — that is how a pane
+   * workspace turns into clutter — so identity is (kind, params), not a fresh
+   * id per click.
+   */
+  const openPane = (kind: SurfaceTab, opts: { title?: string; params?: Record<string, string> } = {}) => {
+    const id = paneKey(kind, opts.params);
+    setPanes((prev) => {
+      if (prev.some((p) => p.id === id)) return prev;
+      const next = [...prev, { id, kind, title: opts.title ?? kind, params: opts.params }];
+      // Oldest unfocused pane makes way rather than refusing the open — the
+      // user asked for this view and should get it.
+      return next.length > MAX_PANES ? next.slice(next.length - MAX_PANES) : next;
+    });
+    setFocusedPaneId(id);
+  };
+
+  const closePane = (id: string) => {
+    setPanes((prev) => {
+      const next = prev.filter((p) => p.id !== id);
+      // Never leave an empty stage.
+      return next.length ? next : [{ id: "wiki", kind: "Wiki", title: "Wiki" }];
+    });
+    setFocusedPaneId((cur) => (cur === id ? "wiki" : cur));
+  };
+
   const [activeSurface, setActiveSurface] = useState<SurfaceTab>("Wiki");
   const [openPageTitle, setOpenPageTitle] = useState<string | null>(null);
   const [openPageId, setOpenPageId] = useState<string | null>(null);
@@ -63,8 +141,16 @@ export function WorkspaceUIProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<WorkspaceUIState>(
     () => ({
+      panes,
+      focusedPaneId,
+      setFocusedPaneId,
+      openPane,
+      closePane,
       activeSurface,
-      setActiveSurface,
+      setActiveSurface: (tab: SurfaceTab) => {
+        setActiveSurface(tab);
+        openPane(tab);
+      },
       openPageTitle,
       setOpenPageTitle,
       openPageId,
@@ -74,7 +160,7 @@ export function WorkspaceUIProvider({ children }: { children: ReactNode }) {
       highlightedClaimId,
       setHighlightedClaimId,
     }),
-    [activeSurface, openPageTitle, openPageId, selection, highlightedClaimId],
+    [panes, focusedPaneId, activeSurface, openPageTitle, openPageId, selection, highlightedClaimId],
   );
 
   return <WorkspaceUIContext.Provider value={value}>{children}</WorkspaceUIContext.Provider>;

@@ -48,7 +48,7 @@ export function SourceCard({ component, onAction }: RendererProps) {
               href={p.url}
               target="_blank"
               rel="noreferrer"
-              className="truncate text-xs text-slate-500 hover:text-slate-900"
+              className="truncate text-xs text-ink-muted hover:text-ink"
             >
               {p.url}
             </a>
@@ -68,14 +68,14 @@ export function SourceCard({ component, onAction }: RendererProps) {
         <button
           type="button"
           onClick={() => onAction("open", { target_id: p.source_id, target_kind: "source" })}
-          className="text-xs text-slate-500 hover:text-slate-900"
+          className="text-xs text-ink-muted hover:text-ink"
         >
           Open source
         </button>
         <button
           type="button"
           onClick={() => onAction("navigate_wiki", { page_id: p.source_id })}
-          className="text-xs text-slate-500 hover:text-slate-900"
+          className="text-xs text-ink-muted hover:text-ink"
         >
           Open source page
         </button>
@@ -91,7 +91,7 @@ export function SourceCard({ component, onAction }: RendererProps) {
         )}
       </div>
       {reading && preview && (
-        <div className="mt-2 max-h-[28rem] overflow-y-auto rounded-md border border-[var(--border-muted,#e2e8f0)] bg-[var(--surface-sunken,#f8fafc)] p-3">
+        <div className="mt-2 max-h-[28rem] overflow-y-auto rounded-md border border-line bg-sunken p-3">
           <WikiBodyMarkdown body={preview} />
         </div>
       )}

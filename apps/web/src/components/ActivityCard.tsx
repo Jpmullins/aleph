@@ -58,9 +58,9 @@ const TODO_GLYPH: Record<TodoStatus, string> = {
 };
 
 const TODO_TEXT: Record<TodoStatus, string> = {
-  pending: "text-slate-500",
-  in_progress: "text-slate-900 font-medium",
-  completed: "text-slate-500 line-through",
+  pending: "text-ink-muted",
+  in_progress: "text-ink font-medium",
+  completed: "text-ink-muted line-through",
 };
 
 interface Props {
@@ -210,24 +210,24 @@ export function ActivityCard({ projectId }: Props) {
   }, [running, phasesByRun]);
 
   return (
-    <div className="border-b border-slate-200 bg-white">
+    <div className="border-b border-line bg-surface">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center justify-between px-4 py-2 text-left text-xs hover:bg-slate-50"
+        className="flex w-full items-center justify-between px-4 py-2 text-left text-xs hover:bg-sunken"
         data-testid="activity-card-toggle"
       >
         <div className="flex items-center gap-2">
-          <span className="font-medium uppercase tracking-wider text-slate-500">Activity</span>
-          <span className="text-slate-700">{summary}</span>
+          <span className="font-medium uppercase tracking-wider text-ink-muted">Activity</span>
+          <span className="text-ink-soft">{summary}</span>
         </div>
-        <span className="text-slate-400">{expanded ? "▲" : "▼"}</span>
+        <span className="text-ink-muted">{expanded ? "▲" : "▼"}</span>
       </button>
       {expanded && (
         <div className="space-y-2 px-4 pb-3">
           {todos.length > 0 && <PlanSection todos={todos} />}
           {running.length === 0 && recent.length === 0 && todos.length === 0 && (
-            <p className="py-2 text-xs text-slate-400">No recent activity.</p>
+            <p className="py-2 text-xs text-ink-muted">No recent activity.</p>
           )}
           {running.map((r) => (
             <RunRow key={r.id} run={r} phases={phasesByRun.get(r.id) ?? []} live />
@@ -244,10 +244,10 @@ export function ActivityCard({ projectId }: Props) {
 function PlanSection({ todos }: { todos: Todo[] }) {
   const done = todos.filter((t) => t.status === "completed").length;
   return (
-    <div className="rounded-md border border-slate-200 bg-slate-50/60 px-3 py-2">
+    <div className="rounded-md border border-line bg-sunken/60 px-3 py-2">
       <div className="flex items-center justify-between text-xs">
-        <span className="font-medium text-slate-800">Plan</span>
-        <span className="text-slate-500">
+        <span className="font-medium text-ink">Plan</span>
+        <span className="text-ink-muted">
           {done} / {todos.length} done
         </span>
       </div>
@@ -259,7 +259,7 @@ function PlanSection({ todos }: { todos: Todo[] }) {
           >
             <span
               className={`mt-px inline-block w-3 shrink-0 text-center ${
-                t.status === "in_progress" ? "animate-pulse text-blue-600" : "text-slate-500"
+                t.status === "in_progress" ? "animate-pulse text-blue-600" : "text-ink-muted"
               }`}
               aria-hidden
             >
@@ -295,10 +295,10 @@ function RunRow({
     : null;
 
   return (
-    <div className={`rounded-md border border-slate-200 px-3 py-2 ${live ? "" : "opacity-70"}`}>
+    <div className={`rounded-md border border-line px-3 py-2 ${live ? "" : "opacity-70"}`}>
       <div className="flex items-center justify-between text-xs">
-        <span className="font-medium text-slate-800">{label}</span>
-        <span className="text-slate-500">
+        <span className="font-medium text-ink">{label}</span>
+        <span className="text-ink-muted">
           <StatusBadge status={run.status} /> {elapsed !== null ? `${elapsed}s` : "—"}
         </span>
       </div>
@@ -312,14 +312,14 @@ function RunRow({
                   p.status === "failed"
                     ? "text-red-700"
                     : p.status === "completed"
-                      ? "text-slate-600"
-                      : "text-slate-900"
+                      ? "text-ink-soft"
+                      : "text-ink"
                 }
               >
                 {p.name}
               </span>
               {p.durationMs !== null && p.status === "completed" && (
-                <span className="text-slate-400">· {Math.round(p.durationMs / 100) / 10}s</span>
+                <span className="text-ink-muted">· {Math.round(p.durationMs / 100) / 10}s</span>
               )}
               {p.error && <span className="ml-2 text-red-700">{p.error}</span>}
             </li>
@@ -333,11 +333,11 @@ function RunRow({
 
 function StatusBadge({ status }: { status: AgentRunOut["status"] }) {
   const cls: Record<string, string> = {
-    pending: "bg-slate-100 text-slate-600",
+    pending: "bg-elevated text-ink-soft",
     running: "bg-blue-100 text-blue-800",
     succeeded: "bg-emerald-100 text-emerald-800",
     failed: "bg-red-100 text-red-800",
-    cancelled: "bg-slate-100 text-slate-500",
+    cancelled: "bg-elevated text-ink-muted",
   };
   return (
     <span

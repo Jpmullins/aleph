@@ -38,11 +38,6 @@ class ValidationFailed(AlephError):
     http_status = 422
 
 
-class BudgetExceeded(AlephError):
-    code = "budget_exceeded"
-    http_status = 429
-
-
 class GatewayUnavailable(AlephError):
     """LiteLLM gateway is unreachable or returned a non-recoverable error."""
 

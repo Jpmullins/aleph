@@ -187,3 +187,39 @@ def briefs_surface_v09(
         props={"badge_count": badge_count},
         children=children or [],
     )
+
+
+def grounding_surface_v09(
+    *,
+    claim: dict[str, Any] | None,
+    groundings: list[dict[str, Any]],
+    surface_id: str = "grounding",
+    catalog_id: str = ALEPH_V09_CATALOG_ID,
+) -> list[dict[str, Any]]:
+    """The grounding inspector: what a claim actually rests on.
+
+    Data model: ``{claim: {id, text, confidence, page_title} | null,
+    groundings: [{marker, source: {...}, chunks: [{id, ordinal, text,
+    char_start, char_end, section_path}]}]}``.
+
+    This is the surface that makes the platform's claims about itself checkable:
+    it walks claim → citation → chunk → character span → the source text a
+    reader can read. Every hop existed in the schema and none of them carried
+    data until the three writers were fixed, so an inspector built earlier would
+    have rendered an authoritative-looking empty chain.
+
+    `groundings` being empty is a first-class state, not an error — an
+    ungrounded claim is exactly what an analyst most needs to see.
+    """
+    component = {
+        "id": "root",
+        "component": "GroundingSurface",
+        "claim": {"path": "/claim"},
+        "groundings": {"path": "/groundings"},
+    }
+    return full_surface(
+        surface_id=surface_id,
+        catalog_id=catalog_id,
+        components=[component],
+        data_model={"claim": claim, "groundings": groundings},
+    )

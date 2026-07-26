@@ -54,11 +54,11 @@ export function ArtifactsSurface({ component }: RendererProps) {
       />
       <div className="flex-1 space-y-4 overflow-y-auto p-3">
         <section data-testid="library-sources">
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-muted">
             Sources
           </h3>
           {sources.length === 0 && (
-            <div className="rounded-lg border border-dashed border-slate-300 p-4 text-center text-xs text-slate-500">
+            <div className="rounded-lg border border-dashed border-line-strong p-4 text-center text-xs text-ink-muted">
               No sources yet. Upload a document or ingest a URL, or run research.
             </div>
           )}
@@ -68,11 +68,11 @@ export function ArtifactsSurface({ component }: RendererProps) {
         </section>
 
         <section data-testid="library-artifacts">
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-muted">
             Artifacts
           </h3>
           {artifacts.length === 0 && (
-            <div className="rounded-lg border border-dashed border-slate-300 p-4 text-center text-xs text-slate-500">
+            <div className="rounded-lg border border-dashed border-line-strong p-4 text-center text-xs text-ink-muted">
               No artifacts yet.
             </div>
           )}
@@ -108,7 +108,7 @@ function SourceRow({ s, onView }: { s: SourceOut; onView: () => void }) {
           type="button"
           onClick={onView}
           data-testid="source-view"
-          className="text-xs font-medium text-slate-700 hover:text-slate-900"
+          className="text-xs font-medium text-ink-soft hover:text-ink"
         >
           Open ↗
         </button>
@@ -117,7 +117,7 @@ function SourceRow({ s, onView }: { s: SourceOut; onView: () => void }) {
             href={s.url}
             target="_blank"
             rel="noreferrer"
-            className="text-xs text-slate-500 hover:text-slate-900"
+            className="text-xs text-ink-muted hover:text-ink"
           >
             Original link
           </a>
@@ -140,22 +140,22 @@ function SourceViewer({
   onClose: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/50 p-4">
       <div
-        className="flex h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg bg-white shadow-xl"
+        className="flex h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg bg-surface shadow-xl"
         data-testid="source-viewer"
       >
-        <div className="flex items-center gap-3 border-b border-slate-200 p-3">
+        <div className="flex items-center gap-3 border-b border-line p-3">
           <h3 className="truncate text-sm font-semibold">{source.title}</h3>
           <button
             type="button"
             onClick={onClose}
-            className="ml-auto rounded px-2 py-1 text-slate-500 hover:text-slate-900"
+            className="ml-auto rounded px-2 py-1 text-ink-muted hover:text-ink"
           >
             ✕
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-auto bg-slate-50">
+        <div className="min-h-0 flex-1 overflow-auto bg-sunken">
           <iframe
             title={source.title}
             src={apiUrl(`/v1/projects/${projectId}/assets/source/${source.id}`)}
@@ -188,12 +188,12 @@ function ArtifactRow({ a, projectId }: { a: ArtifactOut; projectId: string }) {
       }
       footer={`created ${new Date(a.created_at).toLocaleString()}`}
     >
-      {a.description && <p className="text-xs text-slate-600">{a.description}</p>}
+      {a.description && <p className="text-xs text-ink-soft">{a.description}</p>}
       {ready && (
         <a
           href={apiUrl(`/v1/projects/${projectId}/assets/artifact-version/${a.current_version_id}`)}
           download
-          className="mt-1 inline-block text-xs font-medium text-slate-700 hover:text-slate-900"
+          className="mt-1 inline-block text-xs font-medium text-ink-soft hover:text-ink"
         >
           ⬇ Download latest
         </a>

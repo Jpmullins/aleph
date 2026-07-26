@@ -17,4 +17,3 @@ class Project(CommonColumns, Base):
     description: Mapped[str] = mapped_column(String(4096), nullable=False, server_default="")
     status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="active")
     model_profile_id: Mapped[UUID] = mapped_column(nullable=False)
-    budget_id: Mapped[UUID | None] = mapped_column(nullable=True)

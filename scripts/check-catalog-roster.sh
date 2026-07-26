@@ -31,28 +31,38 @@ DELETED=(MapCard GraphCard NotebookCellCard)
 # --- Ledgered producer map: name -> "path::grep-pattern" ---------------------
 # Each entry names the authoritative producer for that catalog component. The
 # sweep verifies the pattern is present in the file (the producer still exists).
-declare -A PRODUCER=(
-  [WikiSurface]="$CATALOG_PY-surfaces::def wiki_surface_v09"
-  [ArtifactsSurface]="surfaces::def artifacts_surface_v09"
-  [NotesSurface]="surfaces::def notes_surface_v09"
-  [HypothesesSurface]="surfaces::def hypotheses_surface_v09"
-  [BriefsSurface]="surfaces::def briefs_surface_v09"
-  [ClaimCard]="cards::def claim_card"
-  [SourceCard]="cards::def source_card"
-  [ArtifactCard]="server.ts::ArtifactCard:"
-  [ChartCard]="viz_builder::\"ChartCard\""
-  [ImageCard]="render_code::ImageCard"
-  [HtmlFrameCard]="render_code::HtmlFrameCard"
-  [TableCard]="cards::def table_card"
-  [ApprovalCard]="cards::def approval_card"
-  [FindingCard]="cards::def finding_card"
-  [HypothesisCard]="cards::def hypothesis_card"
-  [FormCard]="server.ts::FormCard:"
-  [DiffCard]="cards::def diff_card"
-  [WikiPageCard]="a2ui_handlers::\"WikiPageCard\""
-  [NoteEditorCard]="NotesSurface.tsx::NoteEditorCard"
-  [HtmlDocCard]="WikiPageCard.tsx::HtmlDocCard"
-)
+# NOTE: a plain newline-delimited list, NOT `declare -A`. macOS ships bash 3.2,
+# which has no associative arrays, so the sweep could not run on the primary dev
+# platform at all — it only ever ran in CI. Same data, portable form.
+PRODUCER_MAP='
+WikiSurface=surfaces::def wiki_surface_v09
+ArtifactsSurface=surfaces::def artifacts_surface_v09
+NotesSurface=surfaces::def notes_surface_v09
+HypothesesSurface=surfaces::def hypotheses_surface_v09
+BriefsSurface=surfaces::def briefs_surface_v09
+ClaimCard=cards::def claim_card
+SourceCard=cards::def source_card
+ArtifactCard=server.ts::ArtifactCard:
+ChartCard=viz_builder::"ChartCard"
+ImageCard=render_code::ImageCard
+HtmlFrameCard=render_code::HtmlFrameCard
+TableCard=cards::def table_card
+ApprovalCard=cards::def approval_card
+FindingCard=cards::def finding_card
+HypothesisCard=cards::def hypothesis_card
+FormCard=server.ts::FormCard:
+DiffCard=cards::def diff_card
+WikiPageCard=a2ui_handlers::"WikiPageCard"
+NoteEditorCard=NotesSurface.tsx::NoteEditorCard
+HtmlDocCard=WikiPageCard.tsx::HtmlDocCard
+'
+
+producer_spec() {
+  printf '%s\n' "$PRODUCER_MAP" | grep "^$1=" | head -1 | cut -d= -f2-
+}
+producer_names() {
+  printf '%s\n' "$PRODUCER_MAP" | grep -E '^[A-Za-z]+=' | cut -d= -f1
+}
 
 # Resolve a producer key's file path.
 producer_file() {
@@ -74,8 +84,8 @@ fail=0
 err() { echo "✗ $*"; fail=1; }
 
 # --- 1. Extract the two rosters ----------------------------------------------
-mapfile -t PY_NAMES < <(grep -oE '^    "[A-Za-z]+": _comp\(' "$CATALOG_PY" | grep -oE '"[A-Za-z]+"' | tr -d '"' | sort -u)
-mapfile -t TS_NAMES < <(sed -n '/COMPONENT_NAMES = \[/,/\] as const;/p' "$CATALOG_TS" | grep -oE '"[A-Za-z]+"' | tr -d '"' | sort -u)
+PY_NAMES=(); while IFS= read -r _l; do PY_NAMES+=("$_l"); done < <(grep -oE '^    "[A-Za-z]+": _comp\(' "$CATALOG_PY" | grep -oE '"[A-Za-z]+"' | tr -d '"' | sort -u)
+TS_NAMES=(); while IFS= read -r _l; do TS_NAMES+=("$_l"); done < <(sed -n '/COMPONENT_NAMES = \[/,/\] as const;/p' "$CATALOG_TS" | grep -oE '"[A-Za-z]+"' | tr -d '"' | sort -u)
 
 if [ "${PY_NAMES[*]}" != "${TS_NAMES[*]}" ]; then
   err "catalog.py and catalog.ts rosters differ:"
@@ -100,7 +110,7 @@ for name in "${PY_NAMES[@]}"; do
   grep -q "name: \"$name\"" "$IMPLS_TS" || err "$name: no v0_9 impl registered in $IMPLS_TS"
 
   # Producer: ledgered map entry that still resolves.
-  spec="${PRODUCER[$name]:-}"
+  spec="$(producer_spec "$name")"
   if [ -z "$spec" ]; then
     err "$name: no producer entry in the ledgered map (add name→producer)"
     continue
@@ -116,7 +126,7 @@ for name in "${PY_NAMES[@]}"; do
 done
 
 # --- 4. Every producer-map entry names a real roster component ---------------
-for name in "${!PRODUCER[@]}"; do
+for name in $(producer_names); do
   found=0
   for n in "${PY_NAMES[@]}"; do [ "$n" = "$name" ] && found=1; done
   [ "$found" -eq 1 ] || err "producer map lists '$name' which is not a catalog component"

@@ -14,6 +14,7 @@ from aleph_api.realtime import ChangeBroker, NotifyListener, asyncpg_dsn
 from aleph_api.settings import Settings, get_settings
 from aleph_db.session import async_engine_for, async_sessionmaker_for
 from aleph_models.client import LiteLLMClient
+from aleph_models.discovery import GatewayCatalog
 from aleph_models.pricing import get_default_pricing
 from aleph_observability import (
     configure_logging,
@@ -75,7 +76,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
 
+    # Rates are learned from the gateway, not shipped. `pricing` starts empty
+    # and is refreshed in place below, so the client constructed with it picks
+    # up discovered rates without being rebuilt.
     pricing = get_default_pricing()
+    gateway_catalog = GatewayCatalog(
+        base_url=settings.litellm_base_url,
+        api_key=settings.insights_litellm_api_key,
+        client=gateway_http,
+    )
     litellm = LiteLLMClient(
         base_url=settings.litellm_base_url,
         api_key=settings.insights_litellm_api_key,
@@ -146,6 +155,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         agent_bindings=agent_bindings,
     )
     app.state.litellm = litellm
+    app.state.gateway_catalog = gateway_catalog
+    app.state.pricing = pricing
     app.state.redis = redis_client
     app.state.gateway_http = gateway_http
     app.state.auth_http = auth_http
@@ -167,10 +178,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # (not at synchronous app construction). Open the pool, create the tables
     # once via `setup()`, then mount the agent endpoint with this store. The
     # CompositeBackend routes `/memories/` to it for persistence across sessions.
-    from aleph_api.copilot_agent import build_agent_store
+    from aleph_api.copilot_agent import build_agent_checkpointer, build_agent_store
     from aleph_api.copilotkit_endpoint import setup_copilotkit
 
     agent_store_pool, agent_store = build_agent_store(database_url=settings.database_url)
+    agent_checkpointer = build_agent_checkpointer(agent_store_pool)
 
     try:
         # Inside the try so a failure in open()/setup()/setup_copilotkit cannot
@@ -178,9 +190,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # runs once we have a pool to close.
         await agent_store_pool.open()
         await agent_store.setup()
+        # Creates the checkpointer's own tables on the same pool. Without this
+        # the agent falls back to in-memory state and loses every conversation,
+        # plan, and summarization archive on restart.
+        await agent_checkpointer.setup()
+        # Learn the gateway's model list + prices before serving traffic. A
+        # failure here is logged, not raised: an unreachable gateway must not
+        # stop the API booting, and calls made meanwhile record
+        # `pricing_source="unknown"` rather than a fabricated $0.
+        await gateway_catalog.refresh_pricing(pricing)
         app.state.agent_store_pool = agent_store_pool
         app.state.agent_store = agent_store
-        setup_copilotkit(app, settings=settings, store=agent_store)
+        app.state.agent_checkpointer = agent_checkpointer
+        setup_copilotkit(app, settings=settings, store=agent_store, checkpointer=agent_checkpointer)
         await notify_listener.start()
         yield
     finally:

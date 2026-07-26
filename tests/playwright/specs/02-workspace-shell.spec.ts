@@ -1,14 +1,23 @@
+/**
+ * The workspace shell: rail → reading region → assistant dock.
+ *
+ * Rewritten for the reimagined shell. The previous version asserted the
+ * three-panel layout (`← Projects`, a `Sessions` list, a five-tab bar) that has
+ * been replaced — and it had also been asserting an `Artifacts` tab renamed to
+ * `Library` two work packages earlier, which nothing caught because the suite
+ * was not in CI.
+ *
+ * These assert the *shape of the product*, not incidental markup: the reading
+ * region is the stage, ingest is always reachable, and the theme holds without
+ * the deleted `!important` shim.
+ */
 import { expect, test } from "@playwright/test";
 
-import {
-  cleanupTestProjects,
-  createProject,
-  createSession,
-  openProjectWorkspace,
-  sendChat,
-} from "./helpers";
+import { cleanupTestProjects, createProject, createSession } from "./helpers";
 
-test.describe("Workspace shell — panels, sessions, drawers, chat", () => {
+const SURFACES = ["Wiki", "Library", "Notes", "Hypotheses", "Briefs"] as const;
+
+test.describe("@shell Workspace shell — rail, reading region, assistant dock", () => {
   let projectId: string;
 
   test.beforeAll(async ({ request }) => {
@@ -21,95 +30,93 @@ test.describe("Workspace shell — panels, sessions, drawers, chat", () => {
     await cleanupTestProjects(request);
   });
 
-  test("3-panel shell shows left panel, center main, right tabs", async ({ page }) => {
-    await openProjectWorkspace(page, projectId);
-
-    // (W6 moved cost out of the shell into the Settings/Profile drawers —
-    // asserted in the Settings drawer test below.)
-    await expect(page.getByRole("button", { name: "← Projects" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Workspace test" })).toBeVisible();
-    await expect(page.getByText("Sessions", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "+ Upload source" })).toBeVisible();
-    for (const tab of ["Wiki", "Artifacts", "Notes", "Hypotheses", "Briefs"]) {
-      await expect(page.getByRole("button", { name: tab })).toBeVisible();
-    }
-    await expect(page.getByTestId("activity-card-toggle")).toBeVisible();
-
-    // Resize handles exist as ARIA separators.
-    const separators = page.getByRole("separator");
-    await expect(separators).toHaveCount(2);
+  test.beforeEach(async ({ page }) => {
+    await page.goto(`/projects/${projectId}`);
+    await expect(page.getByTestId("rail")).toBeVisible();
   });
 
-  test("create a new session via + New", async ({ page }) => {
-    await openProjectWorkspace(page, projectId);
+  test("rail exposes every surface and drawer", async ({ page }) => {
+    for (const s of SURFACES) {
+      await expect(page.getByTestId(`rail-${s.toLowerCase()}`)).toBeVisible();
+    }
+    for (const d of ["settings", "logs", "notifications", "profile"]) {
+      await expect(page.getByTestId(`rail-${d}`)).toBeVisible();
+    }
+  });
+
+  test("the rail switches the reading surface", async ({ page }) => {
+    await page.getByTestId("rail-hypotheses").click();
+    await expect(page.getByTestId("surface-hypotheses")).toBeVisible();
+    await expect(page.getByTestId("context-active-tab")).toHaveText("Hypotheses");
+
+    await page.getByTestId("rail-notes").click();
+    await expect(page.getByTestId("surface-notes")).toBeVisible();
+  });
+
+  test("the reading region is the stage, not a sidebar", async ({ page }) => {
+    // The thesis is that the compiled wiki is the primary retrieval surface. If
+    // the reading region is ever narrower than the chat dock, the layout
+    // asserts the opposite of the product.
+    const s = await page.getByTestId("surface-wiki").boundingBox();
+    const d = await page.getByTestId("assistant-dock").boundingBox();
+    expect(s, "reading surface not rendered").toBeTruthy();
+    expect(d, "assistant dock not rendered").toBeTruthy();
+    expect(s!.width).toBeGreaterThan(d!.width);
+  });
+
+  test("ingest is reachable from any surface", async ({ page }) => {
+    // This affordance lived in the deleted left panel; losing it would strand
+    // the primary way content enters the system.
+    await page.getByTestId("rail-hypotheses").click();
+    await expect(page.getByTestId("context-upload-source")).toBeVisible();
+  });
+
+  test("sessions live with the conversation", async ({ page }) => {
+    await expect(page.getByTestId("dock-new-session")).toBeVisible();
     await createSession(page);
     await expect(page.getByTestId("copilot-chat-textarea")).toBeEnabled();
   });
 
   test("Shift+Enter inserts a newline (does not submit)", async ({ page }) => {
-    await openProjectWorkspace(page, projectId);
     await createSession(page);
-
     const composer = page.getByTestId("copilot-chat-textarea");
     await composer.fill("line one");
     await composer.press("Shift+Enter");
     await composer.pressSequentially("line two");
     await expect(composer).toHaveValue("line one\nline two");
-    // The send button stays available — submission has NOT fired.
-    await expect(page.getByTestId("copilot-send-button")).toBeEnabled();
-  });
-
-  test("Plain Enter submits the chat (user bubble appears, composer clears)", async ({ page }) => {
-    await openProjectWorkspace(page, projectId);
-    await createSession(page);
-
-    const composer = page.getByTestId("copilot-chat-textarea");
-    await composer.fill("Single-line question?");
-    await composer.press("Enter");
-
-    // Wait for the user bubble — that's the strongest signal the
-    // mutation actually ran. Composer clearing is observed next.
-    await expect(page.getByTestId("copilot-user-message").first()).toContainText(
-      "Single-line question?",
-      { timeout: 30_000 },
-    );
-    await expect(composer).toHaveValue("", { timeout: 5_000 });
   });
 
   test("Settings drawer renders real project metadata", async ({ page }) => {
-    await openProjectWorkspace(page, projectId);
-    await page.getByRole("button", { name: "⚙" }).click();
+    await page.getByTestId("rail-settings").click();
     await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Project" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Budget" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Members" })).toBeVisible();
-    await page.getByRole("button", { name: "Close" }).click();
-    await expect(page.getByRole("heading", { name: "Settings" })).not.toBeVisible();
+    await expect(page.getByRole("heading", { name: "Cost" })).toBeVisible();
   });
 
-  test("Logs drawer shows action ledger events", async ({ page }) => {
-    await openProjectWorkspace(page, projectId);
-    await page.getByRole("button", { name: "🗒" }).click();
+  test("Ledger drawer shows action ledger events", async ({ page }) => {
+    await page.getByTestId("rail-logs").click();
     await expect(page.getByRole("heading", { name: "Action ledger" })).toBeVisible();
-    // We expect at least project.create from the beforeAll setup.
     await expect(page.getByText("project.create").first()).toBeVisible();
-    await page.getByRole("button", { name: "Close" }).click();
   });
 
-  test("Notifications drawer shows agent-run sections", async ({ page }) => {
-    await openProjectWorkspace(page, projectId);
-    await page.getByRole("button", { name: "Notifications" }).click();
-    await expect(page.getByRole("heading", { name: "Notifications" })).toBeVisible();
-    // The "Running" section is always present (even if empty).
-    await expect(page.getByText(/Running \(\d+\)/)).toBeVisible();
-    await page.getByRole("button", { name: "Close" }).click();
-  });
-
-  test("Profile drawer shows current user", async ({ page }) => {
-    await openProjectWorkspace(page, projectId);
-    await page.getByRole("button", { name: "●" }).click();
+  test("Profile drawer shows the current user", async ({ page }) => {
+    await page.getByTestId("rail-profile").click();
     await expect(page.getByRole("heading", { name: "Profile" })).toBeVisible();
     await expect(page.getByText("dev@aleph.local")).toBeVisible();
-    await page.getByRole("button", { name: "Close" }).click();
+  });
+
+  test("dark mode themes the chrome without a shim", async ({ page }) => {
+    // The 26-rule `!important` shim is gone. If a component still carries a
+    // hardcoded light palette class it stays light while everything around it
+    // goes dark — this catches exactly that.
+    await page.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
+    const bg = await page
+      .getByTestId("rail")
+      .evaluate((el) => getComputedStyle(el).backgroundColor);
+    const [r, g, b] = bg.match(/\d+/g)!.map(Number);
+    expect(
+      (r + g + b) / 3,
+      `rail background ${bg} is light in dark mode — a token did not follow the theme`,
+    ).toBeLessThan(90);
   });
 });

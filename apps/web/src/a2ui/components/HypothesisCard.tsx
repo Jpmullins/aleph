@@ -13,7 +13,7 @@ export function HypothesisCard({ component, onAction }: RendererProps) {
       subtitle={
         <span className="flex items-center gap-2">
           <Pill tone="sky">{p.confidence ?? "initial"}</Pill>
-          <span className="text-xs text-slate-500">
+          <span className="text-xs text-ink-muted">
             {p.evidence_count ?? 0} evidence
           </span>
         </span>
@@ -24,7 +24,7 @@ export function HypothesisCard({ component, onAction }: RendererProps) {
         onClick={() =>
           onAction("open", { target_id: p.hypothesis_id, target_kind: "hypothesis" })
         }
-        className="text-xs text-slate-500 hover:text-slate-900"
+        className="text-xs text-ink-muted hover:text-ink"
       >
         Open hypothesis →
       </button>

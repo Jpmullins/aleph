@@ -75,8 +75,8 @@ export function ThemeToggle({ className }: Props) {
       role="group"
       aria-label="Display theme"
       className={
-        "inline-flex items-center gap-0.5 rounded-md border border-[var(--border-muted,#e2e8f0)] " +
-        "bg-[var(--surface-sunken,#f8fafc)] p-0.5 " +
+        "inline-flex items-center gap-0.5 rounded-md border border-line " +
+        "bg-sunken p-0.5 " +
         (className ?? "")
       }
     >
@@ -94,7 +94,7 @@ export function ThemeToggle({ className }: Props) {
               "rounded px-2 py-1 text-sm leading-none transition-colors " +
               (active
                 ? "font-medium"
-                : "text-[var(--text-muted,#94a3b8)] hover:text-[var(--text-primary,#0f172a)]")
+                : "text-ink-muted hover:text-ink")
             }
             style={
               active

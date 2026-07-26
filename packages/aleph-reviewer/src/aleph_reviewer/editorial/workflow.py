@@ -59,6 +59,14 @@ class EditorialReviewState(TypedDict, total=False):
     project_id: UUID
     review_run_id: UUID
     agent_run_id: UUID
+    # Per-node finding counts — MUST be declared here: LangGraph silently drops
+    # node updates to keys absent from the state schema, so without these the
+    # `_wrap(..., "n_x")` slots vanish and `finding_count` is always 0.
+    n_c: int
+    n_w: int
+    n_n: int
+    n_g: int
+    n_f: int
     finding_count: int
 
 
@@ -280,11 +288,11 @@ async def _node_factual_freshness(state: EditorialReviewState) -> dict[str, int]
 @with_phase("finalize", ctx_getter=lambda: _ctx())
 async def _node_finalize(state: EditorialReviewState) -> dict[str, int]:
     total = (
-        (state.get("n_c") or 0)  # type: ignore[arg-type]
-        + (state.get("n_w") or 0)  # type: ignore[arg-type]
-        + (state.get("n_n") or 0)  # type: ignore[arg-type]
-        + (state.get("n_g") or 0)  # type: ignore[arg-type]
-        + (state.get("n_f") or 0)  # type: ignore[arg-type]
+        (state.get("n_c") or 0)
+        + (state.get("n_w") or 0)
+        + (state.get("n_n") or 0)
+        + (state.get("n_g") or 0)
+        + (state.get("n_f") or 0)
     )
     ctx = _ctx()
     async with ctx.session_maker() as session:

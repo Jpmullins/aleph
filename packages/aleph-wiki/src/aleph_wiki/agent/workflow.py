@@ -27,7 +27,7 @@ state is the typed dict below; transitions are pure functions.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 from uuid import UUID
@@ -44,7 +44,7 @@ from aleph_models.client import ChatMessage
 from aleph_observability.tracing import start_span
 from aleph_wiki.alias_service import AliasService
 from aleph_wiki.feedback_service import mark_addressed, pending_for_concept
-from aleph_wiki.models import RejectionFeedback, SourcePage
+from aleph_wiki.models import Citation, RejectionFeedback, SourcePage, WikiClaim
 from aleph_wiki.wiki_service import (
     CitationDraft,
     ClaimDraft,
@@ -570,6 +570,80 @@ async def _node_wikilink_resolve(state: WikiIngestState) -> dict:
         return {}
 
 
+async def _ground_claims_in_chunks(
+    session: Any, *, source_id: UUID, claims: list[ClaimDraft]
+) -> dict[str, list[UUID]]:
+    """`claim text → supporting chunk ids`, resolved against the real chunks.
+
+    `Citation.chunk_ids` is what makes a claim *checkable*: claim → chunks →
+    `char_start`/`char_end` → the exact span of source text a reader can be
+    shown. It was `[]` at every write site, so the wire format existed
+    end-to-end and carried nothing.
+
+    Chunks are produced by `chunk_embed_job`, which is enqueued alongside
+    `wiki_ingest_job` rather than before it, so at commit time they may not
+    exist yet. That is why this returns per-claim results instead of raising —
+    an unground-able claim gets `[]`, which is the honest answer, and a later
+    backfill can fill it in. Recording a guess would be worse than recording
+    nothing.
+    """
+    from sqlalchemy import select as _select
+
+    from aleph_rks.claim_grounding import ChunkRef, chunks_for_claim
+    from aleph_rks.models import DocumentChunk
+
+    rows = list(
+        (
+            await session.execute(
+                _select(DocumentChunk.id, DocumentChunk.text, DocumentChunk.ordinal)
+                .where(DocumentChunk.source_id == source_id)
+                .order_by(DocumentChunk.ordinal)
+            )
+        ).all()
+    )
+    if not rows:
+        return {}
+    refs = [ChunkRef(id=cid, text=text, ordinal=ordinal) for cid, text, ordinal in rows]
+    out: dict[str, list[UUID]] = {}
+    for claim in claims:
+        matched = chunks_for_claim(claim.text, refs)
+        if matched:
+            out[claim.text] = [m for m in matched if isinstance(m, UUID)]
+    return out
+
+
+async def _link_citations_to_source_page(
+    session: Any, *, revision_id: UUID, source_page_id: UUID
+) -> int:
+    """Point this revision's citations at the source page they came from.
+
+    `Citation` has no `revision_id` of its own, so the rows are reached through
+    the claims of the revision just committed. Only NULL rows are updated, so a
+    citation that already resolved (a topic page citing a *different* source) is
+    never overwritten.
+
+    Returns the number of rows linked, so callers and tests can assert the write
+    actually happened rather than trusting that it did.
+    """
+    from sqlalchemy import select as _select
+    from sqlalchemy import update as _update
+
+    claim_ids = list(
+        (await session.execute(_select(WikiClaim.id).where(WikiClaim.revision_id == revision_id)))
+        .scalars()
+        .all()
+    )
+    if not claim_ids:
+        return 0
+    result = await session.execute(
+        _update(Citation)
+        .where(Citation.claim_id.in_(claim_ids), Citation.source_page_id.is_(None))
+        .values(source_page_id=source_page_id)
+    )
+    await session.flush()
+    return int(result.rowcount or 0)
+
+
 @with_phase("commit_revision", ctx_getter=lambda: _ctx())
 async def _node_commit_revision(state: WikiIngestState) -> dict:
     with start_span(
@@ -590,6 +664,29 @@ async def _node_commit_revision(state: WikiIngestState) -> dict:
 
             # Source page first.
             sd = state["source_page_draft"]
+
+            # Ground each claim in the chunks it came from BEFORE committing, so
+            # the citation rows carry real `chunk_ids` instead of the `[]` every
+            # write site used to hardcode. A claim with no confident match keeps
+            # `[]` — honest, and re-groundable later — rather than a guess.
+            grounding = await _ground_claims_in_chunks(
+                session, source_id=state["source_id"], claims=sd.claims
+            )
+            if grounding:
+                sd = replace(
+                    sd,
+                    claims=[
+                        replace(
+                            c,
+                            citations=[
+                                replace(cit, chunk_ids=grounding.get(c.text, cit.chunk_ids))
+                                for cit in c.citations
+                            ],
+                        )
+                        for c in sd.claims
+                    ],
+                )
+
             result = await svc.commit_revision(
                 principal=ctx.principal,
                 ledger=ledger,
@@ -606,36 +703,49 @@ async def _node_commit_revision(state: WikiIngestState) -> dict:
                 respect_hand_edits=True,
             )
             committed.append(result.revision_id)
-            # Bridge SourcePage row.
-            existing_sp = await session.get(SourcePage, result.page_id)
-            if existing_sp is None:
-                # We index by (source_id, page_id) UNIQUE — explicit insert if missing.
-                from sqlalchemy import select as _select
 
-                existing = (
-                    await session.execute(
-                        _select(SourcePage).where(SourcePage.source_id == state["source_id"])
-                    )
-                ).scalar_one_or_none()
-                if existing is None:
-                    session.add(
-                        SourcePage(
-                            id=uuid7(),
-                            project_id=state["project_id"],
-                            source_id=state["source_id"],
-                            page_id=result.page_id,
-                            extracted_claims_jsonb=[
-                                {
-                                    "text": c.text,
-                                    "marker": (
-                                        c.citations[0].citation_marker if c.citations else ""
-                                    ),
-                                }
-                                for c in sd.claims
-                            ],
-                            extracted_at=utcnow(),
-                        )
-                    )
+            # Bridge SourcePage row. `source_pages` is UNIQUE on source_id, so
+            # look it up that way — a PK lookup by `result.page_id` (a WikiPage
+            # id) can never hit and was always falling through to the select.
+            from sqlalchemy import select as _select
+
+            bridge = (
+                await session.execute(
+                    _select(SourcePage).where(SourcePage.source_id == state["source_id"])
+                )
+            ).scalar_one_or_none()
+            if bridge is None:
+                bridge = SourcePage(
+                    id=uuid7(),
+                    project_id=state["project_id"],
+                    source_id=state["source_id"],
+                    page_id=result.page_id,
+                    extracted_claims_jsonb=[
+                        {
+                            "text": c.text,
+                            "marker": (c.citations[0].citation_marker if c.citations else ""),
+                        }
+                        for c in sd.claims
+                    ],
+                    extracted_at=utcnow(),
+                )
+                session.add(bridge)
+                await session.flush()
+
+            # Keep the promise made at the CitationDraft site: the drafts were
+            # built with `source_page_id=None` and a comment saying it is "set
+            # in commit step (self-citation)". It never was — so every Citation
+            # in the system had a NULL join key and every mechanism that walks
+            # Source → SourcePage → Citation → WikiClaim (retraction blast
+            # radius, freshness citation-health and source-freshness, the
+            # refresh fact-diff, mechanical stale-source and DOI checks)
+            # returned empty on real data while reporting success.
+            #
+            # The value is the SourcePage PK: five of the six readers resolve it
+            # that way, and both e2e fixtures seed it that way.
+            await _link_citations_to_source_page(
+                session, revision_id=result.revision_id, source_page_id=bridge.id
+            )
 
             # Topic stubs.
             for draft in state.get("topic_page_drafts", []):

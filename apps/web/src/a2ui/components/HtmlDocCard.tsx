@@ -37,16 +37,16 @@ export function HtmlDocCard({ component }: RendererProps) {
   return (
     <div className="flex flex-col" data-testid="html-doc-card">
       {p.title && (
-        <div className="mb-1 flex items-center gap-2 text-xs text-slate-500">
-          <span className="truncate font-medium text-slate-700">{p.title}</span>
-          {p.derived && <span className="rounded bg-slate-100 px-1.5 py-0.5">derived</span>}
+        <div className="mb-1 flex items-center gap-2 text-xs text-ink-muted">
+          <span className="truncate font-medium text-ink-soft">{p.title}</span>
+          {p.derived && <span className="rounded bg-elevated px-1.5 py-0.5">derived</span>}
         </div>
       )}
       <iframe
         title={p.title ?? "Compiled document"}
         src={src}
         sandbox=""
-        className="h-[60vh] w-full rounded-md border border-slate-200 bg-white"
+        className="h-[60vh] w-full rounded-md border border-line bg-surface"
         data-testid="html-doc-frame"
       />
     </div>

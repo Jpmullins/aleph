@@ -1,65 +1,44 @@
-import { A2UIStreamSurfaceView } from "@/a2ui/A2UISurfaceView";
-import { SURFACE_TABS, useWorkspaceUI } from "@/lib/workspace-ui";
+/**
+ * One pane's content: an A2UI surface read out of the shared workspace stream.
+ *
+ * This used to own surface selection and open its own `EventSource`. Both moved:
+ * selection lives in the pane model, and the connection is multiplexed at the
+ * region level, so a pane is now purely a renderer for one `surfaceId`.
+ *
+ * Still no self-fetching — the CI-enforced rule holds, and now more strongly:
+ * a pane has no transport of its own at all.
+ */
+import { A2uiSurface } from "@a2ui/react/v0_9";
 
-const TABS = SURFACE_TABS;
+import { useSurfaceStream } from "@/a2ui/SurfaceStreamProvider";
+import { SurfaceProvider } from "@/a2ui/surface-context";
+import type { Pane } from "@/lib/workspace-ui";
 
-interface Props {
-  projectId: string;
-}
-
-export function A2UIRightPanel({ projectId }: Props) {
-  return <RealPanel projectId={projectId} />;
-}
-
-function RealPanel({ projectId }: Props) {
-  // Tab state is shared so the assistant agent can drive it (useFrontendTool).
-  const { activeSurface: tab, setActiveSurface: setTab, openPageId } = useWorkspaceUI();
-
-  // WP-4: every canonical tab is server-built + data-bound and rendered through
-  // the delta SurfaceStreamer. The `…/surfaces/{tab}/stream` SSE endpoint emits
-  // the full v0.9 surface on connect (createSurface + updateComponents + root
-  // updateDataModel), then incremental `updateDataModel` deltas woken by
-  // LISTEN/NOTIFY. A persistent MessageProcessor applies those deltas in place,
-  // so a hypothesis edit / new note patches the bound prop without re-mounting.
-  //
-  // Opening a wiki page is an `open` action that sets `openPageId`; we thread it
-  // into the Wiki stream as `?page_id=`, so the surface builder populates the
-  // bound `open` reader payload. The `key` includes it so switching pages
-  // re-streams cleanly (a fresh connection = fresh full snapshot).
-  const baseUrl =
-    (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8000";
-  const tabLc = tab.toLowerCase();
-  const pageQuery = tabLc === "wiki" && openPageId ? `?page_id=${encodeURIComponent(openPageId)}` : "";
-  const streamUrl = `${baseUrl}/v1/projects/${projectId}/surfaces/${tabLc}/stream${pageQuery}`;
-  const streamKey = tabLc === "wiki" ? `${tab}:${openPageId ?? ""}` : tab;
+export function A2UIRightPanel({ projectId, pane }: { projectId: string; pane: Pane }) {
+  const { surfaces, connected, error } = useSurfaceStream();
+  const surface = surfaces.get(pane.id);
 
   return (
-    <aside className="flex h-full min-h-0 w-full min-w-0 flex-col border-l border-slate-200 bg-white">
-      <nav className="flex border-b border-slate-200">
-        {TABS.map((t) => (
-          <button
-            key={t}
-            type="button"
-            onClick={() => setTab(t)}
-            className={
-              "flex-1 px-2 py-2 text-xs font-medium " +
-              (t === tab
-                ? "border-b-2 border-slate-900 text-slate-900"
-                : "text-slate-500 hover:text-slate-900")
-            }
-          >
-            {t}
-          </button>
-        ))}
-      </nav>
+    <section
+      className="flex h-full min-h-0 w-full min-w-0 flex-col bg-surface"
+      aria-label={`${pane.kind} surface`}
+      data-testid={`surface-${pane.kind.toLowerCase()}`}
+    >
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <A2UIStreamSurfaceView
-          key={streamKey}
-          streamUrl={streamUrl}
-          projectId={projectId}
-          surface={`${tab}Surface`}
-        />
+        {error ? (
+          <p className="p-6 text-sm text-red-700" role="alert">
+            This surface stopped updating: {error}
+          </p>
+        ) : surface ? (
+          <SurfaceProvider projectId={projectId} surface={`${pane.kind}Surface`}>
+            <A2uiSurface surface={surface} />
+          </SurfaceProvider>
+        ) : (
+          <p className="p-6 text-sm text-ink-muted">
+            {connected ? "Loading surface…" : "Reconnecting…"}
+          </p>
+        )}
       </div>
-    </aside>
+    </section>
   );
 }

@@ -23,7 +23,7 @@ async def auth_bypass(monkeypatch):
 async def _make_project_and_note(http_client) -> tuple[UUID, UUID]:
     proj = await http_client.post(
         "/v1/projects",
-        json={"title": "Notes rename", "description": "t", "budget_usd": "5.00"},
+        json={"title": "Notes rename", "description": "t"},
     )
     assert proj.status_code == 201, proj.text
     project_id = UUID(proj.json()["id"])

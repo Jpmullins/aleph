@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
@@ -23,7 +22,6 @@ class ProjectCreate(BaseModel):
         pattern=r"^aleph-(dev|production)$",
         description="Template name to copy. Must match a seeded template.",
     )
-    budget_usd: Decimal = Field(default=Decimal("100.00"), ge=Decimal("0.01"))
 
 
 class ProjectUpdate(BaseModel):
@@ -42,7 +40,6 @@ class ProjectOut(BaseModel):
     description: str
     status: ProjectStatusStr
     model_profile_id: UUID
-    budget_id: UUID | None
     created_at: datetime
     updated_at: datetime
     created_by: UUID

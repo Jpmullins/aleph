@@ -42,9 +42,7 @@ async def _seed_page_with_source(http_client, asgi_app, monkeypatch, *, title: s
     from aleph_wiki.wiki_service import CitationDraft, ClaimDraft, WikiService
 
     monkeypatch.setattr(asgi_app.state.settings, "bootstrap_auto_enabled", False)
-    proj = await http_client.post(
-        "/v1/projects", json={"title": title, "description": "x", "budget_usd": "1.00"}
-    )
+    proj = await http_client.post("/v1/projects", json={"title": title, "description": "x"})
     pid = UUID(proj.json()["id"])
     maker = asgi_app.state.session_maker
     asset_store = asgi_app.state.asset_store

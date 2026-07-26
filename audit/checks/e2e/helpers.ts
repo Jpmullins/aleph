@@ -21,7 +21,6 @@ export async function createProject(
       title: title.startsWith(E2E_PREFIX) ? title : `${E2E_PREFIX}${title}`,
       description,
       model_profile_name: "aleph-dev",
-      budget_usd: "25.00",
     },
   });
   if (!resp.ok()) throw new Error(`create project failed: ${resp.status()} ${await resp.text()}`);

@@ -32,7 +32,7 @@ export function NotesSurface({ component, onAction }: RendererProps) {
           <button
             type="button"
             onClick={() => onAction("create_note", {})}
-            className="rounded-md bg-[var(--accent,#0f172a)] px-3 py-1 text-xs font-medium text-white hover:opacity-90"
+            className="rounded-md bg-[var(--accent,#0f172a)] px-3 py-1 text-xs font-medium text-ink-inverse hover:opacity-90"
             data-testid="new-note"
           >
             + New
@@ -40,9 +40,9 @@ export function NotesSurface({ component, onAction }: RendererProps) {
         }
       />
       <div className="flex min-h-0 flex-1">
-        <ul className="w-40 shrink-0 overflow-y-auto border-r border-[var(--border-muted,#e2e8f0)] p-2">
+        <ul className="w-40 shrink-0 overflow-y-auto border-r border-line p-2">
           {notes.length === 0 && (
-            <li className="p-2 text-xs text-[var(--text-muted,#94a3b8)]">No notes. Click + New.</li>
+            <li className="p-2 text-xs text-ink-muted">No notes. Click + New.</li>
           )}
           {notes.map((n) => (
             <li key={n.id}>
@@ -53,7 +53,7 @@ export function NotesSurface({ component, onAction }: RendererProps) {
                   "w-full truncate rounded px-2 py-1.5 text-left text-xs " +
                   (n.id === selected
                     ? "bg-[var(--accent-muted,rgba(249,115,22,0.1))] text-[var(--accent,#0f172a)]"
-                    : "text-[var(--text-secondary,#475569)] hover:bg-[var(--surface-sunken,#f8fafc)]")
+                    : "text-ink-soft hover:bg-sunken")
                 }
                 data-testid={`note-${n.id}`}
               >
@@ -79,7 +79,7 @@ export function NotesSurface({ component, onAction }: RendererProps) {
               onAction={onAction}
             />
           ) : (
-            <div className="p-6 text-sm text-[var(--text-muted,#94a3b8)]">
+            <div className="p-6 text-sm text-ink-muted">
               Select a note, or click <strong>+ New</strong> to start writing.
             </div>
           )}
