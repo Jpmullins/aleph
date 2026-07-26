@@ -21,6 +21,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 CATALOG_PY="packages/aleph-a2ui/src/aleph_a2ui/catalog.py"
+# The component definitions moved out of catalog.py into the canonical JSON
+# that both it and the generated TS views load; names come from there now.
+CATALOG_JSON="packages/aleph-a2ui/src/aleph_a2ui/catalog.json"
 CATALOG_TS="apps/web/src/a2ui/catalog.ts"
 IMPLS_TS="apps/web/src/a2ui/aleph-catalog-v09.tsx"
 CTX_TS="apps/web/src/a2ui/surface-context.tsx"
@@ -43,7 +46,7 @@ BriefsSurface=surfaces::def briefs_surface_v09
 GroundingSurface=surfaces::def grounding_surface_v09
 ClaimCard=cards::def claim_card
 SourceCard=cards::def source_card
-ArtifactCard=server.ts::ArtifactCard:
+ArtifactCard=catalog_json::"ArtifactCard"
 ChartCard=viz_builder::"ChartCard"
 ImageCard=render_code::ImageCard
 HtmlFrameCard=render_code::HtmlFrameCard
@@ -51,7 +54,7 @@ TableCard=cards::def table_card
 ApprovalCard=cards::def approval_card
 FindingCard=cards::def finding_card
 HypothesisCard=cards::def hypothesis_card
-FormCard=server.ts::FormCard:
+FormCard=catalog_json::"FormCard"
 DiffCard=cards::def diff_card
 WikiPageCard=a2ui_handlers::"WikiPageCard"
 NoteEditorCard=NotesSurface.tsx::NoteEditorCard
@@ -72,6 +75,7 @@ producer_file() {
     "$CATALOG_PY-surfaces") echo "packages/aleph-a2ui/src/aleph_a2ui/components/surfaces.py" ;;
     cards) echo "packages/aleph-a2ui/src/aleph_a2ui/components/cards.py" ;;
     server.ts) echo "apps/copilot-runtime/src/server.ts" ;;
+    catalog_json) echo "packages/aleph-a2ui/src/aleph_a2ui/catalog.json" ;;
     viz_builder) echo "apps/api/src/aleph_api/subagents/viz_builder.py" ;;
     render_code) echo "apps/workers/src/aleph_workers/jobs/render_code.py" ;;
     a2ui_handlers) echo "apps/api/src/aleph_api/a2ui_handlers.py" ;;
@@ -85,7 +89,10 @@ fail=0
 err() { echo "✗ $*"; fail=1; }
 
 # --- 1. Extract the two rosters ----------------------------------------------
-PY_NAMES=(); while IFS= read -r _l; do PY_NAMES+=("$_l"); done < <(grep -oE '^    "[A-Za-z]+": _comp\(' "$CATALOG_PY" | grep -oE '"[A-Za-z]+"' | tr -d '"' | sort -u)
+PY_NAMES=(); while IFS= read -r _l; do PY_NAMES+=("$_l"); done < <(python3 -c '
+import json, sys
+print("\n".join(sorted(json.load(open(sys.argv[1]))["components"])))
+' "$CATALOG_JSON")
 TS_NAMES=(); while IFS= read -r _l; do TS_NAMES+=("$_l"); done < <(sed -n '/COMPONENT_NAMES = \[/,/\] as const;/p' "$CATALOG_TS" | grep -oE '"[A-Za-z]+"' | tr -d '"' | sort -u)
 
 if [ "${PY_NAMES[*]}" != "${TS_NAMES[*]}" ]; then
@@ -95,7 +102,7 @@ fi
 
 # --- 2. Deleted names appear nowhere in any catalog layer --------------------
 for d in "${DELETED[@]}"; do
-  hits="$(grep -rnE "\\b$d\\b" "$CATALOG_PY" "$CATALOG_TS" "$IMPLS_TS" "$CTX_TS" "$VIEWS_DIR" \
+  hits="$(grep -rnE "\\b$d\\b" "$CATALOG_JSON" "$CATALOG_TS" "$IMPLS_TS" "$CTX_TS" "$VIEWS_DIR" \
     "packages/aleph-a2ui/src/aleph_a2ui/components" "apps/copilot-runtime/src/server.ts" \
     2>/dev/null || true)"
   if [ -n "$hits" ]; then

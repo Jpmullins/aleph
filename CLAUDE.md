@@ -110,7 +110,8 @@ Enforced by code review, the committed sweeps, and the eval gates — not aspira
 
 CI (`.github/workflows/ci.yml`) fails the build on drift in any of:
 - `scripts/check-no-self-fetch.sh` — no `useQuery`/`refetchInterval`/`EventSource`/`fetch(`/`api.*` inside `apps/web/src/a2ui/components` (empty allowlist).
-- `scripts/check-catalog-roster.sh` — every catalog component has a renderer + a producer; `catalog.py` ⟷ `catalog.ts` agree; deleted cards (`MapCard`/`GraphCard`/`NotebookCellCard`) appear nowhere.
+- `scripts/check-catalog-roster.sh` — every catalog component has a renderer + a producer; `catalog.json` ⟷ `catalog.ts` agree; deleted cards (`MapCard`/`GraphCard`/`NotebookCellCard`) appear nowhere.
+- `scripts/check-catalog-generated.sh` — the A2UI catalog has **one** editable copy, `packages/aleph-a2ui/src/aleph_a2ui/catalog.json`; `apps/web/src/a2ui/catalog.ts` and `apps/copilot-runtime/src/catalog.generated.ts` are rendered from it by `scripts/gen_catalog.py` and must match.
 - `scripts/check-route-reachability.sh` — every mounted router is reached by a real web/agent/script/test caller.
 - `scripts/check-docs-drift.sh` — stale deleted-subsystem / object-store references appear only under `docs/archive/` + `docs/implementation-log.md`.
 - `scripts/check-claude-commands.sh` — every command/script/file/compose-service named in this file exists.
@@ -151,7 +152,7 @@ Hard, enforced by CI:
 - **New service method** that mutates state → also writes the `ActionLedgerEvent` in the same transaction; integration test asserts the ledger row.
 - **New LLM call site** → through `LiteLLMClient.chat()`/`.embed()` with a `Capability` and a `purpose`; produces a `ModelCall` + `CostLedgerEvent`.
 - **New row type** → must have `project_id` + `access_scope`; no globally-scoped tables.
-- **New A2UI component** → schema bump in the catalog + renderer + a producer, all in the same PR (the roster sweep enforces producer+renderer together). Right-panel components render only from bound props — no self-fetch.
+- **New A2UI component** → add it to `catalog.json`, run `python scripts/gen_catalog.py`, then renderer + producer, all in the same PR (the roster sweep enforces producer+renderer together). Right-panel components render only from bound props — no self-fetch.
 - **New connector** → implement complete (`search`/`fetch`/`normalize`), register in `get_registry()`, declare `output_kind ∈ {document, dataset_rows}`. Credentials come from `ConnectorCredential` via `ConnectorCredentialService` — never from container env vars.
 - **New Python package** → add to `[tool.uv.workspace] members`, `[tool.uv.sources]`, ruff/pyright `src`/`include` lists in root `pyproject.toml`; `uv sync`.
 - **Migrations** → never edit an existing revision; add a new one.

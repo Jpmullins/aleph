@@ -63,6 +63,9 @@ jobs:
       - name: LangGraph state-key sweep (undeclared writes are dropped silently)
         run: ./scripts/check-graph-state-keys.sh
 
+      - name: A2UI catalog regeneration diff (one canonical catalog)
+        run: ./scripts/check-catalog-generated.sh
+
       - name: Ruff lint
         run: uv run ruff check .
 
