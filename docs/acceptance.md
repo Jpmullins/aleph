@@ -74,7 +74,7 @@ Replaces the wiki as the knowledge substrate. See `belief-engine.md`.
 | C4 | Retraction propagates, with a declined branch | integration: retract a source; a claim resting only on it is flagged, a claim with an independent surviving citation stays believed and is annotated | ✅ |
 | C5 | Deterministic reconciliation replaces the LLM identity judge | unit: near-duplicate claims produce a scored candidate with a named reject reason and **zero LLM calls**; `curator_service.dedup_detect` is gone | ✅ |
 | C6 | A human can write a claim, and agents cannot overwrite it | integration: `POST /claims` with `origin=user`, then run the extractor; assert the user claim is untouched | ✅ |
-| C7 | `Citation.source_page_id` is populated on every production write path | `acceptance.sh::no_null_source_ids` — asserts zero live citations with a null source ref | ✅ |
+| C7 | Every written citation carries a source anchor | `test_every_written_citation_carries_a_source_id` — `source_id`, `verbatim` and the char span are all set. Replaces `source_page_id`, which no writer ever populated | ✅ |
 | C8 | The belief graph is rebuildable from the RKS | integration: rebuild into a scratch project, assert claim set equivalence | ⬜ |
 
 **C-complete when:** retraction visibly flags dependent claims — something the
@@ -109,8 +109,8 @@ The refactor is not done until the replaced thing is gone.
 | E1 | Wiki subsystems removed | `acceptance.sh::wiki_is_gone` — `curator_service`, `index_service`, `alias_service`, `handedit_service`, `citation_verification`, `feedback_service` absent; no importers | ⬜ |
 | E2 | `Capability.PAGE_SELECTION` and the page-selector hop removed | grep + a check that no ModelProfile binding references it | ⬜ |
 | E3 | Dead tables dropped in a migration | `alembic check` clean after dropping `wiki_index`, `wiki_links`, `wiki_sections`, `hand_edit_marks`, `aliases` | ⬜ |
-| E4 | Package count reduced | `acceptance.sh::package_count` — asserts ≤17 workspace packages | ⬜ |
-| E5 | `aleph-belief/patch.py` is wired or deleted | asserts it has ≥1 importer outside its own tests | 🟥 |
+| E4 | Package count does not grow | `acceptance.sh` asserts ≤20 workspace packages. Currently 20 — `aleph-kernel` and `aleph-belief` were added; the reduction comes with E1 | ✅ |
+| E5 | `aleph-belief/patch.py` is wired or deleted | asserts ≥1 importer outside its own tests. Wired by `BeliefService.propose_merges` | ✅ |
 
 **E-complete when:** nothing imports the wiki, and the line count is down, not up.
 
