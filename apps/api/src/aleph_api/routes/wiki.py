@@ -200,7 +200,17 @@ async def get_page_by_slug(
 
 
 class RejectPageIn(BaseModel):
-    reason: str = Field(default="", max_length=2048)
+    """A rejection must say why.
+
+    The reason is not decoration: `feedback_service.pending_for_concept` reads
+    it back at compile time so the agent does not reproduce the rejected
+    content. This field defaulted to `""` and the handler wrote feedback only
+    `if body.reason`, while the only UI that calls this endpoint hardcoded an
+    empty string — so the corrective loop existed end to end and had never
+    carried a single row. Requiring the reason is what connects it.
+    """
+
+    reason: str = Field(min_length=1, max_length=2048)
 
 
 async def _load_draft_page(project_id: UUID, page_id: UUID, session: SessionDep) -> WikiPage:
@@ -289,7 +299,7 @@ async def reject_page(
         target_kind="wiki_page",
         target_id=page_id,
         decision="rejected",
-        reason=body.reason or None,
+        reason=body.reason,
         decided_by=principal.user_id,
         decided_at=utcnow(),
         created_by=principal.user_id,
@@ -297,16 +307,18 @@ async def reject_page(
     )
     session.add(decision)
     page.status = "archived"
-    if body.reason:
-        await write_feedback(
-            session,
-            project_id=project_id,
-            page_id=page_id,
-            concept_name=page.title,
-            rejected_revision_id=page.current_revision_id,
-            reason=body.reason,
-            rejected_by=principal.user_id,
-        )
+    # Unconditional: the schema now guarantees a non-empty reason, so every
+    # rejection reaches the agent instead of only the ones that happened to
+    # carry one.
+    await write_feedback(
+        session,
+        project_id=project_id,
+        page_id=page_id,
+        concept_name=page.title,
+        rejected_revision_id=page.current_revision_id,
+        reason=body.reason,
+        rejected_by=principal.user_id,
+    )
     await session.flush()
     await ledger.append(
         project_id=project_id,

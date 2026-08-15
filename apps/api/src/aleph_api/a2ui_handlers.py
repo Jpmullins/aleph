@@ -599,6 +599,13 @@ async def _reject(
         if page.status == "archived":
             msg = "page already archived"
             raise ValidationFailed(msg)
+        # A rejection must say why. The reason is read back at compile time by
+        # feedback_service.pending_for_concept so the agent does not reproduce
+        # the rejected content; writing it only `if reason` while the UI sent
+        # an empty string meant the corrective loop never carried a row.
+        if not reason or not reason.strip():
+            msg = "rejecting a wiki page requires a reason"
+            raise ValidationFailed(msg)
         prior = page.status
         decision = ApprovalDecision(
             id=uuid7(),
@@ -606,7 +613,7 @@ async def _reject(
             target_kind="wiki_page",
             target_id=target_id,
             decision="rejected",
-            reason=reason or None,
+            reason=reason,
             decided_by=principal.user_id,
             decided_at=utcnow(),
             created_by=principal.user_id,
@@ -614,16 +621,15 @@ async def _reject(
         )
         session.add(decision)
         page.status = "archived"
-        if reason:
-            await write_feedback(
-                session,
-                project_id=project_id,
-                page_id=target_id,
-                concept_name=page.title,
-                rejected_revision_id=page.current_revision_id,
-                reason=reason,
-                rejected_by=principal.user_id,
-            )
+        await write_feedback(
+            session,
+            project_id=project_id,
+            page_id=target_id,
+            concept_name=page.title,
+            rejected_revision_id=page.current_revision_id,
+            reason=reason,
+            rejected_by=principal.user_id,
+        )
         await session.flush()
         await ledger.append(
             project_id=project_id,
