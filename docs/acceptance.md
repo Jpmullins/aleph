@@ -10,7 +10,9 @@ that was never true.
 
 Run everything: `./scripts/acceptance.sh`
 
-**Current: 37 pass · 0 fail · 0 red · 3 not built.**
+**Current: 37 pass · 0 fail · 0 red · 3 blocked.** Run `./scripts/acceptance.sh`
+to reproduce, and `--self-check` to verify the checks can fail (7/7 mutations
+caught).
 
 Parts **A** (kernel), **B** (retrieval), **C** (belief engine), **D** (skills and
 self-improvement) and **F** (security) are complete.
@@ -22,7 +24,7 @@ rather than unfinished** — see below.
 |---|---|
 | ✅ | done, check passes, check has been seen failing |
 | 🟥 | check exists and is **deliberately red** — it names the defect and is the acceptance test for the fix |
-| ⬜ | not started |
+| ⬜ | not started, or blocked with a stated reason |
 | 🚧 | in progress |
 
 ---
@@ -35,8 +37,8 @@ The composability substrate. Everything else mounts on it.
 |---|---|---|---|
 | A1 | Kernel core: revertible effects, declared capabilities, computed support set | `pytest packages/aleph-kernel` — 49 tests incl. partial rollback, at-most-once unwind, undeclared-access refusal, transitive blast radius, cycle reporting | ✅ |
 | A2 | API boots on the kernel | `acceptance.sh::kernel_boots_api` — boots all core capabilities against live Postgres+Redis, asserts every probe passes and shutdown leaves nothing active | ✅ |
-| A3 | Workers boot on the kernel | same capability set, arq worker entrypoint; asserts no duplicate wiring between API and worker | ⬜ |
-| A4 | Generation loader — a plugin's behaviour is replaceable with no restart | integration test: load g1, call it, replace with g2, call it, assert new behaviour AND that a reference captured under g1 still sees g1's code (Theorem 63) | ⬜ |
+| A3 | Workers boot on the kernel | same capability set, arq worker entrypoint; asserts no duplicate wiring between API and worker | ✅ |
+| A4 | Generation loader — a plugin's behaviour is replaceable with no restart | integration test: load g1, call it, replace with g2, call it, assert new behaviour AND that a reference captured under g1 still sees g1's code (Theorem 63) | ✅ |
 | A5 | Boot manifest — the protected set is declared in one signed file | `acceptance.sh::protected_set_matches_manifest`; asserts the active core set equals the manifest's support set, and that `deactivate` has exactly one call site | ✅ |
 | A6 | Agent-facing plugin API | integration test: agent registers a plugin, activates it, deactivates it; asserts it cannot name a protected capability | ✅ |
 
@@ -78,7 +80,7 @@ Replaces the wiki as the knowledge substrate. See `belief-engine.md`.
 | C5 | Deterministic reconciliation replaces the LLM identity judge | unit: near-duplicate claims produce a scored candidate with a named reject reason and **zero LLM calls**; `curator_service.dedup_detect` is gone | ✅ |
 | C6 | A human can write a claim, and agents cannot overwrite it | integration: `POST /claims` with `origin=user`, then run the extractor; assert the user claim is untouched | ✅ |
 | C7 | Every written citation carries a source anchor | `test_every_written_citation_carries_a_source_id` — `source_id`, `verbatim` and the char span are all set. Replaces `source_page_id`, which no writer ever populated | ✅ |
-| C8 | The belief graph is rebuildable from the RKS | integration: rebuild into a scratch project, assert claim set equivalence | ⬜ |
+| C8 | The belief graph is rebuildable from the RKS | integration: rebuild into a scratch project, assert claim set equivalence | ✅ |
 
 **C-complete when:** retraction visibly flags dependent claims — something the
 system has never once done — and a human edit survives the next compile.
@@ -94,9 +96,9 @@ The product thesis: an agent that authors plugins for itself.
 | D1 | A skill is prompt + code, loaded under an AST gate | unit: a skill whose module top level has a side effect (import-time network, exec, open) is **refused**; a definition-only module loads | ✅ |
 | D2 | Skills are kernel plugins | integration: a skill registers, provides a tool, and shows up in the agent's tool set; deactivating it removes the tool | ✅ |
 | D3 | An agent authors a skill end to end | integration: agent writes a skill, it is gated, sandbox-tested, activated, and its probe runs | ✅ |
-| D4 | Spawn ledger — the agent family tree is recorded | integration: spawn a subagent; assert parent/child/budget rows and that depth is capped | ⬜ |
-| D5 | Probation and rollback | integration: activate an authored plugin whose probe fails on the 2nd call; assert automatic revert and that the system is unchanged afterwards | ⬜ |
-| D6 | The claude-science research skills are ported (Apache-2.0, with NOTICE) | `literature-review` skill loads and its `kernel.py` helpers are callable | ⬜ |
+| D4 | Spawn ledger — the agent family tree is recorded | integration: spawn a subagent; assert parent/child/budget rows and that depth is capped | ✅ |
+| D5 | Probation and rollback | integration: activate an authored plugin whose probe fails on the 2nd call; assert automatic revert and that the system is unchanged afterwards | ✅ |
+| D6 | The claude-science research skills are ported (Apache-2.0, with NOTICE) | `literature-review` skill loads and its `kernel.py` helpers are callable | ✅ |
 
 **D-complete when:** D3 and D5 both pass — an agent can add a capability and the
 system survives it being bad.
