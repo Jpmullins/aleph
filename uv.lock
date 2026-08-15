@@ -684,6 +684,7 @@ name = "aleph-wiki"
 version = "0.1.0"
 source = { editable = "packages/aleph-wiki" }
 dependencies = [
+    { name = "aleph-belief" },
     { name = "aleph-core" },
     { name = "aleph-db" },
     { name = "aleph-hypotheses" },
@@ -698,6 +699,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aleph-belief", editable = "packages/aleph-belief" },
     { name = "aleph-core", editable = "packages/aleph-core" },
     { name = "aleph-db", editable = "packages/aleph-db" },
     { name = "aleph-hypotheses", editable = "packages/aleph-hypotheses" },

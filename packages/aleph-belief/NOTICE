@@ -35,6 +35,10 @@ Derived files and their upstream sources
                                  OntologyPatchOperation, OntologyPatchStatus,
                                  OntologyPatch, OntologyPatchIssue,
                                  OntologyPatchValidationResult)
+  src/aleph_belief/reconcile.py <- src/entity-linking.ts (candidate scoring on
+                                 shared normalized terms) and
+                                 differentEntityReason (named reject reasons
+                                 instead of a bare threshold)
 
 The ports are adaptations, not transliterations: naming follows Aleph's belief
 domain, the models are Pydantic, and validation is split into an envelope-only

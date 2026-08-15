@@ -29,6 +29,8 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
+from aleph_belief.patch import BeliefPatch
+from aleph_belief.reconcile import Candidate, ClaimRef, propose
 from aleph_core.errors import PermissionDenied
 from aleph_core.grounding import ground
 from aleph_core.ids import uuid7
@@ -356,6 +358,32 @@ class BeliefService:
             await self._session.flush()
         return result
 
+    async def propose_merges(
+        self, *, project_id: UUID, profile_hash: str = "", graph_hash: str = ""
+    ) -> list[tuple[Candidate, BeliefPatch | None]]:
+        """Deterministically find duplicate beliefs. No model is called.
+
+        Replaces `CuratorService.dedup_detect`, which spent one judge-tier LLM
+        call per new page deciding whether two claims were the same thing —
+        expensive, non-reproducible, and untestable.
+
+        Returns proposals, never mutations. A pair in the ambiguous band comes
+        back with ``patch=None``: that is what the LLM adjudicator is handed,
+        and it is the only place model spend belongs.
+
+        The hashes stamp what the proposals were computed against, so a decision
+        made against an older graph is detected at apply time instead of
+        applying blindly.
+        """
+        claims = await self.live_claims(project_id=project_id)
+        refs = [ClaimRef(id=c.id, text=c.text, origin=c.origin) for c in claims]
+        return propose(
+            refs,
+            project_id=project_id,
+            profile_hash=profile_hash or "unset",
+            graph_hash=graph_hash or _graph_hash_for(refs),
+        )
+
     async def live_claims(self, *, project_id: UUID) -> list[WikiClaim]:
         return list(
             (
@@ -369,6 +397,16 @@ class BeliefService:
             .scalars()
             .all()
         )
+
+
+def _graph_hash_for(refs: list[ClaimRef]) -> str:
+    """A digest of the belief set the proposals were computed against.
+
+    Cheap and order-independent, so the same set of claims always produces the
+    same hash and a patch can tell whether the graph has moved under it.
+    """
+    joined = "|".join(sorted(f"{r.id}:{claim_key_for(r.text)}" for r in refs))
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
 def _split_proposition(text: str, rationale: str) -> tuple[str, str]:

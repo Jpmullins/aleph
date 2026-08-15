@@ -233,10 +233,13 @@ if [ $NEEDS_SERVICES -eq 1 ]; then
     tests/e2e/test_belief_spine.py::test_a_fabricated_quote_is_refused
   run_pytest C4 "retraction propagates, with a declined branch" \
     tests/e2e/test_retraction_walk.py
+  run_pytest C5 "reconciliation is deterministic and proposes, never applies" \
+    packages/aleph-belief/tests/test_reconcile.py \
+    tests/e2e/test_belief_spine.py::test_duplicate_beliefs_are_proposed_for_merge_without_a_model
 else
-  for p in C1 C3 C4 C6 C7; do skip "$p" "needs postgres"; done
+  for p in C1 C3 C4 C5 C6 C7; do skip "$p" "needs postgres"; done
 fi
-for p in C5 C8; do skip "$p" "not started — deterministic reconciliation, rebuild-from-RKS"; done
+skip C8 "not started — rebuild-from-RKS"
 
 # ---------------------------------------------------------------------------
 # D — Skills / self-improvement

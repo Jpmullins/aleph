@@ -450,3 +450,44 @@ async def test_supersession_keeps_the_old_belief_walkable(asgi_app) -> None:
     assert previous.superseded_by == new.claim_id, "history is not walkable"
     assert previous.status == "superseded"
     assert [e.kind for e in edges] == ["supersedes"]
+
+
+# -- C5: deterministic reconciliation ----------------------------------------
+
+
+async def test_duplicate_beliefs_are_proposed_for_merge_without_a_model(asgi_app) -> None:
+    """The curator this replaces spent a judge-tier LLM call per pair."""
+    maker = asgi_app.state.session_maker
+    project_id, page_id = uuid7(), uuid7()
+    principal = principal_for(project_id)
+
+    for text in (
+        "Sedimentation rates rose sharply after 8.2 ka in the basin.",
+        "Rates rose after 8.2 ka.",
+        "Tidal range reached 4.2 metres at spring tide.",
+    ):
+        session, svc, ledger = await _service(maker)
+        async with session:
+            await svc.upsert_claim(
+                principal=principal,
+                ledger=ledger,
+                project_id=project_id,
+                draft=draft(text, page_id),
+            )
+            await session.commit()
+
+    from aleph_wiki.belief_service import BeliefService
+
+    async with maker() as session:
+        proposals = await BeliefService(session).propose_merges(project_id=project_id)
+
+    accepted = [(c, p) for c, p in proposals if c.verdict == "accept"]
+    assert accepted, "the two restatements were not proposed as a merge"
+    for _, patch in accepted:
+        assert patch is not None
+        assert patch.operation.value == "accept_match"
+        assert patch.status.value == "proposed", "reconciliation applied something"
+        assert patch.graph_hash, "the proposal does not record what graph it saw"
+
+    rejected = [c for c, _ in proposals if c.verdict == "reject"]
+    assert all(c.reason is not None for c in rejected), "a rejection gave no reason"
