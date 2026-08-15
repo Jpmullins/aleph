@@ -248,7 +248,12 @@ skip C8 "not started — rebuild-from-RKS"
 # ---------------------------------------------------------------------------
 run_pytest D1 "agent-authored code is AST-gated: loading is not running" \
   packages/aleph-kernel/tests/test_ast_gate.py
-for p in D2 D3 D4 D5 D6; do skip "$p" "not started"; done
+run_pytest D2 "a skill is a kernel plugin, probed for usability" \
+  packages/aleph-kernel/tests/test_skills.py
+run_shell D3 "an agent authors a skill end to end" \
+  "uv run pytest packages/aleph-kernel/tests/test_skills.py -q -p no:randomly \
+     -k 'agent' 2>&1 | tail -1"
+for p in D4 D5 D6; do skip "$p" "not started — spawn ledger, probation, ported skills"; done
 
 # ---------------------------------------------------------------------------
 # E — Deletion

@@ -85,6 +85,25 @@ def _call_name(node: ast.AST) -> str | None:
     return None
 
 
+def _check_assignment_target(target: ast.AST, line: int) -> list[GateViolation]:
+    """A top-level assignment may bind a new name and nothing else."""
+    if isinstance(target, ast.Name):
+        return []
+    if isinstance(target, ast.Tuple | ast.List):
+        out: list[GateViolation] = []
+        for element in target.elts:
+            out.extend(_check_assignment_target(element, line))
+        return out
+    kind = "a subscript" if isinstance(target, ast.Subscript) else "an attribute"
+    return [
+        GateViolation(
+            getattr(target, "lineno", line),
+            f"top-level assignment to {kind} — that mutates something that "
+            f"already exists. Move it into a function body.",
+        )
+    ]
+
+
 def _check_value_expression(value: ast.AST, line: int) -> list[GateViolation]:
     """A top-level assignment's right-hand side must not do work."""
     violations: list[GateViolation] = []
@@ -142,6 +161,13 @@ def check_source(source: str, *, filename: str = "<skill>") -> list[GateViolatio
             continue
 
         if isinstance(node, ast.Assign | ast.AnnAssign | ast.AugAssign):
+            # The TARGET matters as much as the value. `os.environ['X'] = '1'`
+            # has a constant right-hand side and mutates the process — checking
+            # only the value misses it entirely. A top-level binding may name
+            # something new; it may not reach into something that exists.
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                violations.extend(_check_assignment_target(target, line))
             value = node.value
             if value is not None:
                 violations.extend(_check_value_expression(value, line))
