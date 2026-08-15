@@ -16,6 +16,7 @@ members = [
     "aleph-db",
     "aleph-evals",
     "aleph-hypotheses",
+    "aleph-kernel",
     "aleph-models",
     "aleph-notes",
     "aleph-observability",
@@ -425,6 +426,21 @@ requires-dist = [
     { name = "aleph-db", editable = "packages/aleph-db" },
     { name = "pydantic", specifier = "==2.13.4" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = "==2.0.50" },
+]
+
+[[package]]
+name = "aleph-kernel"
+version = "0.1.0"
+source = { editable = "packages/aleph-kernel" }
+dependencies = [
+    { name = "aleph-core" },
+    { name = "aleph-observability" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aleph-core", editable = "packages/aleph-core" },
+    { name = "aleph-observability", editable = "packages/aleph-observability" },
 ]
 
 [[package]]
