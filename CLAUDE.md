@@ -165,26 +165,46 @@ These are genuine design commitments with no automated enforcement. Do not descr
 
 ## Known broken — do not trust these
 
-Verified during the 2026-08 review. Fix or delete; do not build on top of.
+Verified during the 2026-08 review. Fix or delete; do not build on top of. Entries move to *Fixed*
+below only with a test that would have caught them.
 
 - **Retrieval is body-blind.** `wiki_index.index_tsv` covers `title + summary + aliases` only, queried
-  with `plainto_tsquery` (ANDs every term). Most natural-language questions match nothing and fall
-  through to "here are some recent pages." `POST /wiki/search` has the same defect.
+  with `plainto_tsquery` (ANDs every term). `POST /wiki/search` has the same defect.
+  **Now measured:** `tests/e2e/test_retrieval_finds_body_text.py` has two deliberately red tests
+  pinning this. They are the acceptance tests for the retrieval work — do not `xfail` them, and do not
+  delete them to get a green board.
 - **`Citation.source_page_id` is `None` on every production write path.** It has five consumers. This
   one column silently voids retraction blast-radius, two of four freshness dimensions, the reviewer's
   source registry, and the citation popover. Integration tests pass because fixtures hand-build the row.
-- **Stale-link expansion.** `wiki_service.py` deletes `WikiLink` rows for the *new* revision id (always
-  a no-op), and `retrieval/router.py` expands links with no `src_revision_id` filter — so retrieval
-  traverses every historical revision's links forever.
 - **`commit_revision` is not atomic on the path agents use.** It only row-locks when given a
   `page_id`; the by-title path returns the page unlocked and computes `revision_no` as `max+1`.
-- **The eval harness never invokes the system.** Scorers read `expected` and `actual` from the same
-  fixture dict. The datasets and the CI gate have been deleted; the scorers remain and need a real
-  harness before they mean anything.
+- **The eval scorers have no harness.** They read `expected` and `actual` from the same fixture dict.
+  The datasets and the CI gate are deleted; the metrics are correct and need a harness that actually
+  calls Aleph.
 - **Freshness is the constant 50** on every page, and the Wiki tab sorts by it.
 - **The agent endpoint bypasses auth middleware.** It is on the skip list, performs no verification of
   its own, and derives project scope from client-supplied state. Every other route is correctly gated.
+  **This is the one to fix before any deployment.**
 - **Cost attribution has a hole.** The `ChatOpenAI` agent path does not always produce `ModelCall` rows.
+- **`audit/` assertions are weak.** The harness is restored and runs against a live stack, but most
+  checks assert shape rather than behaviour. `wiki-first-retrieval.sh` has been rewritten as a real
+  known-answer probe; the rest have not.
+
+### Fixed (2026-08-14), with the test that pins each
+
+- **Stale-link expansion** — `retrieval/router.py` expanded links with no `src_revision_id` filter, so
+  it walked every historical revision's links forever.
+  → `test_expansion_ignores_links_from_superseded_revisions`.
+- **Empty-search confabulation** — an FTS miss fell back to the most-recently-indexed pages and handed
+  them to the composer as if they were matches. Now short-circuits with a diagnostic naming the likely
+  cause. This is also what kept the retrieval audit check green.
+- **`style_pass` ran on nothing** — it matched `[N]` while the research composer emits `[cN]`, so every
+  report passed through unchanged. → six `[cN]` tests in `test_scholar_style.py`.
+- **Citation expansion returned arbitrary papers** — backward sliced OpenAlex storage order before
+  resolving; forward sent no `sort`. Both now rank by citation count.
+  → three ordering tests in `test_scholar_citations.py`.
+- **Rejection feedback never carried a row** — schema defaulted the reason to `""`, both handlers wrote
+  feedback only `if reason`, and the UI hardcoded `""`. Reason is now required end to end.
 
 ---
 
