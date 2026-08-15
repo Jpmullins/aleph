@@ -686,6 +686,7 @@ source = { editable = "packages/aleph-wiki" }
 dependencies = [
     { name = "aleph-core" },
     { name = "aleph-db" },
+    { name = "aleph-hypotheses" },
     { name = "aleph-models" },
     { name = "aleph-observability" },
     { name = "aleph-rks" },
@@ -699,6 +700,7 @@ dependencies = [
 requires-dist = [
     { name = "aleph-core", editable = "packages/aleph-core" },
     { name = "aleph-db", editable = "packages/aleph-db" },
+    { name = "aleph-hypotheses", editable = "packages/aleph-hypotheses" },
     { name = "aleph-models", editable = "packages/aleph-models" },
     { name = "aleph-observability", editable = "packages/aleph-observability" },
     { name = "aleph-rks", editable = "packages/aleph-rks" },

@@ -215,7 +215,26 @@ print('honest-miss diagnostic names its cause; fallback plumbing gone')
 run_pytest C0 "belief patch contract + trust lattice" packages/aleph-belief/tests
 run_pytest C2 "evidence is verbatim-verified against the source" \
   packages/aleph-core/tests/test_grounding.py
-for p in C1 C3 C4 C5 C6 C7 C8; do skip "$p" "not started — Claim Spine"; done
+if [ $NEEDS_SERVICES -eq 1 ]; then
+  run_pytest C1 "a claim survives a page rewrite" \
+    tests/e2e/test_belief_spine.py::test_reasserting_a_claim_keeps_its_identity \
+    tests/e2e/test_belief_spine.py::test_citations_accumulate_across_reassertions \
+    tests/e2e/test_belief_spine.py::test_re_deriving_the_same_span_unions_rather_than_duplicates \
+    tests/e2e/test_belief_spine.py::test_supersession_keeps_the_old_belief_walkable
+  run_pytest C3 "confidence is derived from evidence, not asserted" \
+    tests/e2e/test_belief_spine.py::test_confidence_rises_with_supporting_evidence \
+    tests/e2e/test_belief_spine.py::test_contradicting_evidence_moves_a_claim_to_contested \
+    tests/e2e/test_belief_spine.py::test_support_counts_are_recomputed_not_asserted
+  run_pytest C6 "a human's claim is immutable to agents" \
+    tests/e2e/test_belief_spine.py::test_an_agent_cannot_overwrite_a_user_claim \
+    tests/e2e/test_belief_spine.py::test_a_user_may_revise_their_own_claim
+  run_pytest C7 "every written citation carries a source id" \
+    tests/e2e/test_belief_spine.py::test_every_written_citation_carries_a_source_id \
+    tests/e2e/test_belief_spine.py::test_a_fabricated_quote_is_refused
+else
+  for p in C1 C3 C6 C7; do skip "$p" "needs postgres"; done
+fi
+for p in C4 C5 C8; do skip "$p" "not started — retraction walk, reconciliation, rebuild"; done
 
 # ---------------------------------------------------------------------------
 # D — Skills / self-improvement
