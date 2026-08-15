@@ -18,13 +18,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
+import structlog
 from sqlalchemy import select
 
 from aleph_core.schemas.model_profile import Capability
 from aleph_models.client import ChatMessage
 from aleph_observability.tracing import start_span
 from aleph_rks.models import Source
-from aleph_rks.retrieval import descend_into_source
+from aleph_rks.retrieval import descend_into_source, search_corpus
 from aleph_wiki.index_service import IndexService, PageSelectionResult
 from aleph_wiki.models import WikiPage, WikiRevision
 
@@ -36,6 +37,8 @@ if TYPE_CHECKING:
     from aleph_models.client import LiteLLMClient
     from aleph_security.principal import Principal
 
+
+_log = structlog.get_logger(__name__)
 
 _PROMPT_DIR = Path(__file__).parent / "prompts"
 
@@ -163,7 +166,13 @@ class WikiFirstRetrievalRouter:
                 "aleph.thread_id": str(thread_id),
             },
         ) as span:
-            # Step 1 — candidate generation via FTS.
+            # Step 1 — candidate generation, over both surfaces in parallel.
+            #
+            # Pages are the compiled view; chunks are the sources themselves.
+            # Searching only pages meant a fact present verbatim in an ingested
+            # document was unreachable unless a compile step had lifted it into
+            # a page — so the answer depended on what the wiki agent had
+            # happened to summarise, not on what the project actually knows.
             async with self._maker() as session:
                 index = IndexService(session)
                 candidates = await index.select_pages(
@@ -172,15 +181,24 @@ class WikiFirstRetrievalRouter:
                     top_k=top_k_pages * 3,
                 )
 
-            # No candidates means no coverage, and saying so is the correct
-            # answer. This used to fall back to `list_pages` — the project's
-            # most-recently-indexed pages, which are not topical matches — and
-            # hand them to the page-selector and composer as if they were.
-            # That is what kept the retrieval audit check green: the generic
-            # probe query missed FTS, the fallback supplied unrelated pages,
-            # and the composer wrote plausible prose over them. Short-circuit
-            # instead, and name the likely cause rather than guessing.
-            if not candidates:
+            corpus_chunks = await self._search_corpus(
+                principal=principal,
+                project_id=project_id,
+                agent_run_id=agent_run_id,
+                profile_bindings=profile.bindings_jsonb,
+                query=query,
+                budget=descent_budget_chunks,
+            )
+            span.set_attribute("aleph.corpus_chunks", len(corpus_chunks))
+
+            # Nothing on EITHER surface means no coverage, and saying so is the
+            # correct answer. This used to fall back to `list_pages` — the
+            # project's most-recently-indexed pages, which are not topical
+            # matches — and hand them to the page-selector and composer as if
+            # they were. That is what kept the retrieval audit check green: the
+            # generic probe query missed FTS, the fallback supplied unrelated
+            # pages, and the composer wrote plausible prose over them.
+            if not candidates and not corpus_chunks:
                 span.set_attribute("aleph.coverage_judgment", "synthesis_needed")
                 return RetrievalResult(
                     selected_pages=[],
@@ -193,16 +211,22 @@ class WikiFirstRetrievalRouter:
                     page_selection_reason=_MISS_REASON,
                 )
 
-            # Step 1b — LLM page-selector picks from the candidates.
-            selected = await self._select_pages_llm(
-                principal=principal,
-                project_id=project_id,
-                agent_run_id=agent_run_id,
-                profile_bindings=profile.bindings_jsonb,
-                query=query,
-                prior_messages=prior_messages,
-                candidates=candidates,
-                top_k=top_k_pages,
+            # Step 1b — LLM page-selector picks from the candidates. Skipped
+            # entirely when FTS found no pages: there is nothing to select from,
+            # and the corpus hits alone are a legitimate answer.
+            selected = (
+                _SelectionOutcome(pages=[], reason="no page candidates; answering from sources")
+                if not candidates
+                else await self._select_pages_llm(
+                    principal=principal,
+                    project_id=project_id,
+                    agent_run_id=agent_run_id,
+                    profile_bindings=profile.bindings_jsonb,
+                    query=query,
+                    prior_messages=prior_messages,
+                    candidates=candidates,
+                    top_k=top_k_pages,
+                )
             )
 
             # Hydrate body_md from the current revision for each selected page.
@@ -241,7 +265,7 @@ class WikiFirstRetrievalRouter:
                 prior_messages=prior_messages,
                 selected=selected_full,
                 expanded=expanded,
-                descent_chunks=[],
+                descent_chunks=corpus_chunks,
             )
 
             # Step 4 — descent if requested.
@@ -257,7 +281,9 @@ class WikiFirstRetrievalRouter:
                     budget=descent_budget_chunks,
                 )
                 if descent_chunks:
-                    # Re-compose with descent context.
+                    # Re-compose with the extra passages folded in alongside
+                    # what corpus search already found.
+                    descent_chunks = _dedupe_chunks([*corpus_chunks, *descent_chunks])
                     composer_out = await self._compose(
                         principal=principal,
                         project_id=project_id,
@@ -284,7 +310,7 @@ class WikiFirstRetrievalRouter:
             return RetrievalResult(
                 selected_pages=selected_full,
                 expanded_pages=expanded,
-                descent_chunks=descent_chunks,
+                descent_chunks=descent_chunks or corpus_chunks,
                 descent_requests=composer_out["descent_requests"],
                 synthesis_requests=composer_out["synthesis_requests"],
                 coverage_judgment=coverage,
@@ -293,6 +319,64 @@ class WikiFirstRetrievalRouter:
             )
 
     # ---- step helpers ------------------------------------------------------
+
+    async def _search_corpus(
+        self,
+        *,
+        principal: Principal,
+        project_id: UUID,
+        agent_run_id: UUID | None,
+        profile_bindings: dict,
+        query: str,
+        budget: int,
+    ) -> list[DescentChunk]:
+        """Hybrid search over the project's source chunks.
+
+        Runs up front rather than only when the composer asks for it. Descent
+        was reactive — the composer had to already have a page citing a source
+        before it could request more of that source — so a fact present verbatim
+        in an ingested document was unreachable until some compile step had
+        lifted it into a page.
+
+        An embedding failure degrades to no corpus hits rather than failing the
+        whole turn: page retrieval is still a usable answer, and a hard failure
+        here would make the assistant unavailable whenever the embedding model is.
+        """
+        try:
+            embedded = await self._litellm.embed(
+                principal=principal,
+                project_id=project_id,
+                agent_run_id=agent_run_id,
+                profile_bindings=profile_bindings,
+                input=[query],
+                purpose="assistant.corpus_search.query_embed",
+            )
+        except Exception:
+            _log.warning("assistant.corpus_search.embed_failed", project_id=str(project_id))
+            return []
+        if not embedded.embeddings:
+            return []
+
+        async with self._maker() as session:
+            hits = await search_corpus(
+                session,
+                project_id=project_id,
+                query_text=query,
+                query_embedding=embedded.embeddings[0],
+                top_k=budget,
+            )
+            short_ids = await _source_short_ids(session, {h.source_id for h in hits if h.source_id})
+
+        return [
+            DescentChunk(
+                chunk_id=h.chunk_id,
+                source_short_id=short_ids.get(h.source_id, "") if h.source_id else "",
+                section_path=h.section_path,
+                text=h.text,
+                score=h.score,
+            )
+            for h in hits
+        ]
 
     async def _select_pages_llm(
         self,
@@ -657,6 +741,28 @@ def _safe_json(content: str) -> Any:
             except json.JSONDecodeError:
                 return {}
         return {}
+
+
+async def _source_short_ids(session: AsyncSession, source_ids: set[UUID]) -> dict[UUID, str]:
+    """Map source ids to the short ids the composer cites."""
+    if not source_ids:
+        return {}
+    rows = (
+        await session.execute(select(Source.id, Source.short_id).where(Source.id.in_(source_ids)))
+    ).all()
+    return {row.id: row.short_id for row in rows}
+
+
+def _dedupe_chunks(chunks: list[DescentChunk]) -> list[DescentChunk]:
+    """First occurrence wins, so corpus hits keep their (higher) fused rank."""
+    seen: set[UUID] = set()
+    out: list[DescentChunk] = []
+    for chunk in chunks:
+        if chunk.chunk_id in seen:
+            continue
+        seen.add(chunk.chunk_id)
+        out.append(chunk)
+    return out
 
 
 async def _hydrate_bodies(session: AsyncSession, page_ids: set[UUID]) -> dict[UUID, str]:

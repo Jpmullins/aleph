@@ -165,6 +165,18 @@ else
   skip B3 "needs postgres"; skip B7 "needs postgres"
 fi
 run_pytest B4 "reciprocal rank fusion" packages/aleph-core/tests/test_rrf.py
+run_shell B9 "corpus search is WIRED, not merely built" \
+  "uv run python -c \"
+import inspect
+from aleph_assistant.retrieval import router as r
+src = inspect.getsource(r)
+# The dominant defect in this codebase is a write path with no read path.
+# search_corpus existing is not the same as retrieval using it.
+assert 'search_corpus' in src, 'the router does not call search_corpus'
+assert 'corpus_chunks' in src, 'corpus hits never reach the composer'
+assert 'and not corpus_chunks' in src, 'an empty page search still short-circuits before consulting sources'
+print('router searches the corpus and feeds it to the composer')
+\""
 skip B5 "not started — eval harness does not invoke Aleph"
 skip B6 "not started — no retrieval dataset"
 # Asserted by import, not by grep: `grep -q '_MISS_REASON'` also matched
