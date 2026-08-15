@@ -34,16 +34,19 @@ for key, value in _DEFAULTS.items():
 
 
 async def main() -> int:
-    from aleph_api.capabilities import core_capabilities
+    from aleph_api.lifespan import BOOT_MANIFEST
     from aleph_api.settings import get_settings
     from aleph_kernel import Kernel, ProbeFailed
+    from aleph_kernel.manifest import load_manifest, mount_manifest
     from aleph_kernel.support import topological_order
 
     settings = get_settings()
-    specs = core_capabilities(settings)
     kernel = Kernel()
-    for spec in specs:
-        kernel.register_core(spec)
+    # Through the manifest, exactly as the app boots — otherwise this checks a
+    # code path production does not take.
+    entries = load_manifest(BOOT_MANIFEST)
+    mount_manifest(kernel, entries, settings=settings)
+    specs = [m.spec for m in kernel._mounted.values()]
 
     order = topological_order({s.name: s for s in specs})
 
@@ -69,13 +72,28 @@ async def main() -> int:
         print("blast_radius(database) reported safe; the dependency graph is not being read")
         return 1
 
+    # Addressability: nothing mounted from the manifest may be nameable by an
+    # agent, which is the primary guardrail.
+    from aleph_kernel.agent_api import AgentPluginAPI
+
+    addressable = [v.name for v in AgentPluginAPI(kernel).inspect() if v.plugin_id is not None]
+    if addressable:
+        print(f"manifest capabilities are agent-addressable: {addressable}")
+        return 1
+
+    protected = {e.name for e in entries if e.protected}
+    if not protected:
+        print("the manifest protects nothing")
+        return 1
+
     await kernel.shutdown()
     if kernel.active():
         print(f"shutdown left {sorted(kernel.active())} active")
         return 1
 
     print(
-        f"{len(order)} capabilities booted, all probes passed, "
+        f"{len(order)} capabilities booted from the manifest, all probes passed, "
+        f"{len(protected)} protected and none agent-addressable, "
         f"blast_radius(database)->{sorted(radius.collateral)}, shutdown clean"
     )
     return 0

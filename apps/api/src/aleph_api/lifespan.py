@@ -13,6 +13,7 @@ constructor raised.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from aleph_api.a2ui_handlers import build_action_router
@@ -22,10 +23,14 @@ from aleph_api.capabilities import (
     LITELLM,
     SETTINGS,
     bind_to_app_state,
-    core_capabilities,
 )
 from aleph_api.settings import Settings, get_settings
 from aleph_kernel import Context, EffectScope, Kernel
+from aleph_kernel.manifest import load_manifest, mount_manifest
+
+#: Ships beside the app, not in the working directory: the set of core
+#: capabilities must not depend on where the process happened to start.
+BOOT_MANIFEST = Path(__file__).resolve().parents[2] / "aleph.toml"
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -37,8 +42,11 @@ if TYPE_CHECKING:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     kernel = Kernel()
-    for spec in core_capabilities(settings):
-        kernel.register_core(spec)
+    # The manifest is the only source of core capability, and the only place
+    # `protected = true` can be set. Nothing mounted from it receives a
+    # PluginId, so no argument value an agent can construct names it —
+    # deactivating core capability is unexpressible rather than refused.
+    mount_manifest(kernel, load_manifest(BOOT_MANIFEST), settings=settings)
 
     # Every capability sets up and then proves itself against the live system.
     # A failed probe unwinds that capability completely and aborts the boot, so

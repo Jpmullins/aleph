@@ -145,8 +145,10 @@ fi
 
 skip A3 "not started — workers still wire their own singletons"
 skip A4 "not started — generation loader"
-skip A5 "not started — boot manifest"
-skip A6 "not started — agent-facing plugin API"
+run_pytest A5 "boot manifest is the only source of protected capability" \
+  packages/aleph-kernel/tests/test_manifest.py
+run_pytest A6 "agent plugin API: install, disable, and the addressability guard" \
+  packages/aleph-kernel/tests/test_agent_api.py
 
 # ---------------------------------------------------------------------------
 # B — Retrieval
