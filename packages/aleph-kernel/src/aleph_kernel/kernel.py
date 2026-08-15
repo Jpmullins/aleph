@@ -237,6 +237,55 @@ class Kernel:
             span.set_attribute("aleph.kernel.outcome", "active")
             span.set_attribute("aleph.kernel.probe", result.detail or "ok")
 
+    async def replace(self, plugin_id: PluginId, spec: CapabilitySpec) -> PluginId:
+        """Swap a live capability's implementation with no process restart.
+
+        The precondition for anything an agent authors: a plugin it improves
+        must be replaceable while the system serves requests, or every
+        self-modification costs a restart and discards all process-local state.
+
+        THE VALUABLE PROPERTY IS THE ROLLBACK, not the swap. If the replacement
+        fails to set up or fails its probe, the PREVIOUS implementation is
+        brought back and the caller is told the swap was refused. A hot-reload
+        that can leave a capability absent is worse than no hot-reload: the
+        agent believes it improved something and instead removed it.
+
+        Refused when other capabilities depend on this one and the replacement
+        does not provide everything the old one did — the dependents are live,
+        and taking their footing away mid-flight is not a swap, it is a break.
+        """
+        async with self._lock:
+            name = self._name_for(plugin_id)
+            mounted = self._mounted[name]
+            if mounted.spec.protected:  # pragma: no cover - unreachable via PluginId
+                raise ProtectedCapability(name)
+
+            previous = mounted.spec
+            lost = previous.provides - spec.provides
+            if lost:
+                radius = self.blast_radius(name)
+                if radius.collateral:
+                    raise DependentsWouldBreak(
+                        name,
+                        tuple(sorted(radius.collateral)),
+                        tuple(sorted(radius.protected_collateral)),
+                    )
+
+            await self._teardown(name)
+            mounted.spec = spec
+            try:
+                await self._activate(name)
+            except Exception:
+                # Put the working version back. The caller asked to improve a
+                # capability, not to lose it.
+                mounted.spec = previous
+                await self._activate(name)
+                raise
+
+            new_id = PluginId(uuid7())
+            mounted.plugin_id = new_id
+            return new_id
+
     async def reprobe(self, name: str) -> ProbeResult:
         """Re-run an active capability's probe, and retire it if it now fails.
 

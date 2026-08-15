@@ -110,8 +110,11 @@ run_shell() {
   part_selected "$id" || return 0
   local out rc
   out="$(bash -c "$cmd" 2>&1)"; rc=$?
-  if [ $rc -eq 0 ]; then record "$id" PASS "${out:-$desc}"
-  else record "$id" FAIL "${out:-$desc}"; fi
+  # The LAST line, not the first: a script that prints its verdict at the end
+  # would otherwise be reported by whatever warning a library emitted first.
+  local last; last="$(printf '%s' "$out" | grep -v '^\s*$' | tail -1)"
+  if [ $rc -eq 0 ]; then record "$id" PASS "${last:-$desc}"
+  else record "$id" FAIL "${last:-$desc}"; fi
 }
 
 skip() { part_selected "$1" && record "$1" SKIP "$2"; }
@@ -149,7 +152,8 @@ if [ $NEEDS_SERVICES -eq 1 ]; then
 else
   skip A3 "needs postgres+redis"
 fi
-skip A4 "not started — generation loader"
+run_pytest A4 "a live plugin is replaceable, and a failed swap rolls back" \
+  packages/aleph-kernel/tests/test_replace.py
 run_pytest A5 "boot manifest is the only source of protected capability" \
   packages/aleph-kernel/tests/test_manifest.py
 run_pytest A6 "agent plugin API: install, disable, and the addressability guard" \
