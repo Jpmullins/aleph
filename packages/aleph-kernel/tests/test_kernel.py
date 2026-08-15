@@ -349,3 +349,40 @@ async def test_reading_its_own_provisions_does_not_widen_anything_else() -> None
     )
     with pytest.raises(ProbeFailed, match="UndeclaredAccess"):
         await k.boot()
+
+
+async def test_a_setup_that_raises_leaves_no_trace() -> None:
+    """A capability whose setup fails partway must unwind what it had built.
+
+    Distinct from the EffectScope-level test: this pins that the KERNEL calls
+    unwind on the setup-failure path. Removing that call left every kernel test
+    green until this existed — found by scripts/_acceptance/self_check.sh.
+    """
+    log: list[str] = []
+
+    async def setup(ctx: Context) -> AsyncIterator[Inv]:
+        log.append("opened")
+
+        async def close() -> None:
+            log.append("closed")
+
+        yield close
+        ctx.provide("halfbuilt", object())
+        msg = "constructor blew up after publishing"
+        raise RuntimeError(msg)
+
+    async def probe(ctx: Context) -> ProbeResult:  # never reached
+        return ok()
+
+    k = Kernel()
+    k.register_core(
+        CapabilitySpec(
+            name="halfbuilt", setup=setup, probe=probe, provides=frozenset({"halfbuilt"})
+        )
+    )
+    with pytest.raises(RuntimeError, match="blew up"):
+        await k.boot()
+
+    assert log == ["opened", "closed"], "the failed setup leaked its resource"
+    assert not k.is_provided("halfbuilt"), "a failed setup left its service published"
+    assert k.state_of("halfbuilt") is State.FAILED

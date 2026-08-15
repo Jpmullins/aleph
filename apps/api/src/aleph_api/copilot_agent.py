@@ -27,6 +27,8 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
 from aleph_core.ids import uuid7
+from aleph_security.request_context import require_project_access
+from aleph_security.roles import ProjectRole
 from aleph_wiki.index_service import IndexService
 
 if TYPE_CHECKING:
@@ -275,15 +277,40 @@ def _project_id_from_thread_id(thread_id: object) -> UUID | None:
     return None
 
 
-def _project_id_from_config(config: RunnableConfig | None) -> UUID | None:
-    """Resolve the project scope for this agent run.
+def _authorized(project_id: UUID | None) -> UUID | None:
+    """Return ``project_id`` only if the request's principal may act on it.
 
-    `ag-ui-langgraph` only threads `thread_id` into `configurable` (it
-    ignores request-level config and routes `forwarded_props` elsewhere),
-    so the reliable channel is a project-prefixed thread id of the form
-    `proj:<uuid>:<thread>`, which the Node CopilotRuntime formats. We also
-    accept an explicit `projectId`/`project_id` in configurable/metadata
-    for direct callers (curl, tests).
+    Fails closed: an unbound principal raises rather than being treated as
+    permitted, so an agent tool invoked outside an authenticated request cannot
+    reach project data.
+    """
+    if project_id is None:
+        return None
+    require_project_access(project_id, at_least=ProjectRole.VIEWER)
+    return project_id
+
+
+def _project_id_from_config(config: RunnableConfig | None) -> UUID | None:
+    """Resolve AND AUTHORIZE the project scope for this agent run.
+
+    `ag-ui-langgraph` only threads `thread_id` into `configurable` (it ignores
+    request-level config and routes `forwarded_props` elsewhere), so the
+    reliable channel is a project-prefixed thread id of the form
+    `proj:<uuid>:<thread>`, which the Node CopilotRuntime formats. An explicit
+    `projectId`/`project_id` in configurable/metadata is accepted for direct
+    callers (curl, tests).
+
+    **Every one of those channels is client-supplied.** This function used to
+    return whatever the client named, and its ~8 call sites — the agent's wiki,
+    notes, hypotheses, artifact and synthesis tools — then operated on that
+    project. Combined with `/copilotkit` sitting on the auth middleware's
+    exemption list, that was an unauthenticated read/write primitive against any
+    project in the database.
+
+    So the id is now authorized against the request's principal before it is
+    returned, here rather than at each call site: a check every caller must
+    remember is a check that will eventually be forgotten, and this one was
+    forgotten in all eight places at once.
     """
     if not config:
         return None
@@ -294,9 +321,9 @@ def _project_id_from_config(config: RunnableConfig | None) -> UUID | None:
         or (config.get("metadata") or {}).get("projectId")
     )
     if not raw:
-        return _project_id_from_thread_id(configurable.get("thread_id"))
+        return _authorized(_project_id_from_thread_id(configurable.get("thread_id")))
     try:
-        return UUID(str(raw))
+        return _authorized(UUID(str(raw)))
     except ValueError:
         return None
 

@@ -37,6 +37,7 @@ from aleph_observability.tracing import current_trace_id
 from aleph_security.agent_token import verify_agent_token
 from aleph_security.jwt import verify_user_jwt
 from aleph_security.principal import Principal
+from aleph_security.request_context import bind_principal, reset_principal
 
 _log = structlog.get_logger(__name__)
 
@@ -50,10 +51,20 @@ _PUBLIC_PATHS = frozenset(
     }
 )
 
-# Routes that authenticate themselves with a different scheme. The
-# middleware skips its bearer check for these prefixes; the route
-# handler is responsible for its own verification.
-_SELF_AUTH_PREFIXES: tuple[str, ...] = ("/copilotkit",)
+# Routes that authenticate themselves with a different scheme, and are
+# therefore exempt from this middleware's bearer check.
+#
+# EMPTY, DELIBERATELY. `/copilotkit` used to sit here on the stated promise
+# that "the route handler is responsible for its own verification". The route
+# handler performed none — `copilotkit_endpoint.py` had no auth code at all —
+# while the agent's tools read their project id from client-supplied
+# RunnableConfig metadata. Any unauthenticated caller could name any project.
+#
+# The exemption bought nothing: in local mode the branch below synthesizes the
+# dev principal with no header required, and in oidc mode a 401 for an
+# unauthenticated agent request is the correct answer. Adding an entry here
+# requires demonstrating that the handler actually verifies — with a test.
+_SELF_AUTH_PREFIXES: tuple[str, ...] = ()
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -98,12 +109,20 @@ class AuthMiddleware(BaseHTTPMiddleware):
             )
 
         request.state.principal = principal
+        # Also bind it task-locally: the AG-UI agent endpoint is owned by
+        # `add_langgraph_fastapi_endpoint`, so its tools have no request to read
+        # a principal from. Reset in `finally` so a pooled worker task cannot
+        # inherit the previous request's identity.
+        principal_token = bind_principal(principal)
         bind_request_context(
             request_id=getattr(request.state, "request_id", ""),
             user_id=principal.user_id,
         )
 
-        return await call_next(request)
+        try:
+            return await call_next(request)
+        finally:
+            reset_principal(principal_token)
 
 
 def _looks_like_agent_token(token: str) -> bool:
