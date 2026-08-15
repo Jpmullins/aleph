@@ -166,3 +166,105 @@ async def test_natural_language_question_retrieves_its_page(asgi_app):
         "nothing. plainto_tsquery ANDs every term, so every content word must "
         "appear in title+summary+aliases for the page to be a candidate at all."
     )
+
+
+async def test_expansion_ignores_links_from_superseded_revisions(asgi_app):
+    """A link removed in a later revision must stop pulling its target into context.
+
+    WikiLink rows are per-revision and never deleted — wiki_service's
+    `delete(WikiLink).where(src_revision_id == revision_id)` targets the
+    brand-new revision id and is therefore always a no-op. So a page rewritten
+    N times has N sets of outgoing links in the table, and the expansion query
+    must join on the page's CURRENT revision or it walks the union of all of
+    them forever.
+    """
+    from sqlalchemy import select
+
+    from aleph_wiki.models import WikiLink, WikiPage, WikiRevision
+
+    maker = asgi_app.state.session_maker
+    project_id = uuid7()
+    src_id = await _make_page(maker, project_id)
+
+    dropped_id, kept_id = uuid7(), uuid7()
+    old_rev, new_rev = uuid7(), uuid7()
+
+    async with maker() as session:
+        for pid, title, slug in (
+            (dropped_id, "Dropped Target", "dropped-target"),
+            (kept_id, "Kept Target", "kept-target"),
+        ):
+            session.add(
+                WikiPage(
+                    id=pid,
+                    project_id=project_id,
+                    title=title,
+                    slug=slug,
+                    page_kind="topic",
+                    current_revision_id=None,
+                    is_stub=False,
+                    status="approved",
+                    created_by=uuid4(),
+                    access_scope="project",
+                )
+            )
+        # Revision 2 supersedes revision 1 on the source page.
+        session.add(
+            WikiRevision(
+                id=new_rev,
+                page_id=src_id,
+                project_id=project_id,
+                revision_no=2,
+                body_md=BODY,
+                summary=SUMMARY,
+                author_kind="agent",
+                author_id=uuid4(),
+                parent_revision_id=old_rev,
+                body_sha256="1" * 64,
+                commit_message="dropped a link",
+                ledger_event_id=uuid7(),
+            )
+        )
+        # The old revision linked to Dropped; the current one links to Kept.
+        session.add(
+            WikiLink(
+                id=uuid7(),
+                project_id=project_id,
+                src_page_id=src_id,
+                src_revision_id=old_rev,
+                dst_page_id=dropped_id,
+                dst_title="Dropped Target",
+                occurrences=9,  # high, so a broken query would rank it FIRST
+            )
+        )
+        session.add(
+            WikiLink(
+                id=uuid7(),
+                project_id=project_id,
+                src_page_id=src_id,
+                src_revision_id=new_rev,
+                dst_page_id=kept_id,
+                dst_title="Kept Target",
+                occurrences=1,
+            )
+        )
+        page = (await session.execute(select(WikiPage).where(WikiPage.id == src_id))).scalar_one()
+        page.current_revision_id = new_rev
+        await session.commit()
+
+    from aleph_assistant.retrieval.router import WikiFirstRetrievalRouter
+
+    router = WikiFirstRetrievalRouter(session_maker=maker, litellm=None)  # type: ignore[arg-type]
+    expanded = await router._expand(
+        project_id=project_id,
+        primary_ids=[src_id],
+        already_selected={src_id},
+        limit=8,
+    )
+    got = {p.page_id for p in expanded}
+
+    assert kept_id in got, "the current revision's link was not followed"
+    assert dropped_id not in got, (
+        "expansion followed a link that only exists on a superseded revision — "
+        "removed links keep pulling their targets into answer context forever"
+    )
