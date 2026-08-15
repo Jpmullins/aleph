@@ -246,7 +246,9 @@ skip C8 "not started — rebuild-from-RKS"
 # ---------------------------------------------------------------------------
 # D — Skills / self-improvement
 # ---------------------------------------------------------------------------
-for p in D1 D2 D3 D4 D5 D6; do skip "$p" "not started"; done
+run_pytest D1 "agent-authored code is AST-gated: loading is not running" \
+  packages/aleph-kernel/tests/test_ast_gate.py
+for p in D2 D3 D4 D5 D6; do skip "$p" "not started"; done
 
 # ---------------------------------------------------------------------------
 # E — Deletion
