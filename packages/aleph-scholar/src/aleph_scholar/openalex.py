@@ -19,6 +19,15 @@ from aleph_scholar.types import WorkRef
 _API = "https://api.openalex.org"
 OPENALEX_DOI_BATCH_SIZE = 50
 _MAX_PER_PAGE = 200
+#: Ceiling on how many referenced-work ids one backward walk will resolve.
+#: Applied to the id list before any request, so cost stays bounded (4 batches)
+#: no matter how long the bibliography is.
+_MAX_EXPANSION_IDS = 200
+
+
+def _by_influence(refs: list[WorkRef]) -> list[WorkRef]:
+    """Most-cited first; unknown counts sort last, ties keep source order."""
+    return sorted(refs, key=lambda r: (r.cited_by_count is None, -(r.cited_by_count or 0)))
 
 
 @dataclass(frozen=True)
@@ -126,26 +135,48 @@ class OpenAlexClient:
         return parse_work(raw) if raw is not None else None
 
     async def referenced_works(self, ref: str, *, limit: int = 25) -> list[WorkRef]:
-        """Backward citations: the works `ref` cites, resolved to WorkRefs."""
+        """Backward citations: the works `ref` cites, most-cited first.
+
+        `referenced_works` comes back in OpenAlex's own storage order, which
+        carries no meaning. Slicing it to `limit` before resolving therefore
+        returned an arbitrary subset of a paper's bibliography — for a paper
+        with 80 references, an arbitrary 25 — which is precisely the opposite
+        of a backward citation walk, whose whole purpose is to surface the
+        foundational work a field is built on.
+
+        So: resolve up to `_MAX_EXPANSION_IDS` references, rank the resolved
+        works by citation count, and return the top `limit`. The cap is a real
+        limit and is applied to the id list before any network call, so a paper
+        with a very long bibliography costs a bounded number of requests.
+        """
         work_raw = await self._raw_work(ref)
         if work_raw is None:
             return []
-        w_ids = [str(w) for w in as_list(work_raw.get("referenced_works"))[:limit]]
+        w_ids = [str(w) for w in as_list(work_raw.get("referenced_works"))[:_MAX_EXPANSION_IDS]]
         if not w_ids:
             return []
         out: list[WorkRef] = []
         for start in range(0, len(w_ids), OPENALEX_DOI_BATCH_SIZE):
             batch = w_ids[start : start + OPENALEX_DOI_BATCH_SIZE]
             out.extend(work.ref for work in await self.works_by_ids(batch))
-        return out[:limit]
+        return _by_influence(out)[:limit]
 
     async def citing_works(self, ref: str, *, limit: int = 25) -> list[WorkRef]:
-        """Forward citations: works citing `ref` (`filter=cites:W...`)."""
+        """Forward citations: works citing `ref` (`filter=cites:W...`), most-cited first.
+
+        Without an explicit `sort` OpenAlex returns its default ordering, so a
+        forward walk over a well-cited paper surfaced an arbitrary slice of its
+        citing literature rather than the work that actually took it up.
+        """
         openalex_id = await self._resolve_id(ref)
         if openalex_id is None:
             return []
         works = await self._list_works(
-            {"filter": f"cites:{openalex_id}", "per-page": str(min(limit, _MAX_PER_PAGE))}
+            {
+                "filter": f"cites:{openalex_id}",
+                "sort": "cited_by_count:desc",
+                "per-page": str(min(limit, _MAX_PER_PAGE)),
+            }
         )
         return [work.ref for work in works[:limit]]
 
