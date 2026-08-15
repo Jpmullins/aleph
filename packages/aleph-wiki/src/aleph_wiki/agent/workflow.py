@@ -419,7 +419,14 @@ async def _node_source_page_compose(state: WikiIngestState) -> dict:
                     citations=[
                         CitationDraft(
                             chunk_ids=[],  # Inc 1 binds claims to the source page itself.
-                            source_page_id=None,  # Set in commit step (self-citation).
+                            # The source this claim was extracted from. It was
+                            # `source_page_id=None` with a comment saying the
+                            # commit step would set it; the commit step never
+                            # did, so every citation this path wrote had no
+                            # source anchor and retraction blast-radius returned
+                            # nothing for the life of the feature.
+                            source_id=state["source_id"],
+                            source_page_id=None,
                             citation_marker=marker,
                         )
                     ],

@@ -54,6 +54,12 @@ class CitationDraft:
     chunk_ids: list[UUID]
     source_page_id: UUID | None
     citation_marker: str
+    #: The retraction join key. `source_page_id` pointed at a SourcePage row and
+    #: was the only anchor a citation had — and no production writer ever set
+    #: it, so retraction blast-radius returned nothing for the life of the
+    #: feature. This is the direct link, and the legacy compile path sets it too
+    #: so that a claim written by either path is reachable from its source.
+    source_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -334,6 +340,7 @@ class WikiService:
                             project_id=project_id,
                             claim_id=claim.id,
                             chunk_ids=[str(cid) for cid in cite.chunk_ids],
+                            source_id=cite.source_id,
                             source_page_id=cite.source_page_id,
                             citation_marker=cite.citation_marker[:16],
                         )

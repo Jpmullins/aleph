@@ -8,7 +8,7 @@ the manual EDITOR ``POST .../retract`` route, and the WP-2 reviewer
   and writes a ``source.retract`` ledger event;
 - walks the **blast-radius join** (the reviewer's ``_registry_sources``
   inverted) — ``Source → SourcePage → Citation → WikiClaim`` — and for every
-  dependent claim sets ``confidence="retracted"`` / ``status="contested"`` with a
+  dependent claim sets ``status="retracted"`` (confidence stays derived) with a
   per-claim ``wiki_claim.retract_flag`` ledger event;
 - emits a ``retracted_source`` ``ReviewFinding`` (severity critical) under a
   minimal ``kind="retraction"`` ``ReviewRun`` so it lands in Briefs — the same
@@ -251,8 +251,15 @@ async def retract_source(
             .all()
         )
         for claim in claims:
-            claim.confidence = "retracted"
-            claim.status = "contested"
+            # `status` carries the retraction; `confidence` does not. Confidence
+            # is DERIVED from the evidence by
+            # `aleph_hypotheses.confidence.next_confidence_from_evidence`, and
+            # "retracted" is not one of its states — writing it here would put a
+            # value in the column that the state machine can never produce, so
+            # the next recompute would silently erase it. A claim whose support
+            # was withdrawn is `retracted` in status; what it is now worth is
+            # whatever its remaining evidence says.
+            claim.status = "retracted"
             page_ids.add(claim.page_id)
             claim_ids.add(claim.id)
             await ledger.append(

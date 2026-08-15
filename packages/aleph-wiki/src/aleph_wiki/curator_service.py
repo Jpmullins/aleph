@@ -842,6 +842,9 @@ class CuratorService:
                                 x if isinstance(x, UUID) else UUID(str(x))
                                 for x in (cite.chunk_ids or [])
                             ],
+                            # Carried through a merge: folding two claims must
+                            # not drop the anchor retraction walks.
+                            source_id=cite.source_id,
                             source_page_id=cite.source_page_id,
                             citation_marker=cite.citation_marker,
                         )

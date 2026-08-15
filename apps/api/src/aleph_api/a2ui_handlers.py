@@ -677,7 +677,7 @@ async def _reject(
                             WikiClaim.revision_id == page.current_revision_id,
                             # A retracted claim is already the strongest marker;
                             # do not overwrite it with the weaker `contested`.
-                            WikiClaim.confidence != "retracted",
+                            WikiClaim.status != "retracted",
                         )
                     )
                 )

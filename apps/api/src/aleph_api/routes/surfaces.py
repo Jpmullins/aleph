@@ -451,7 +451,7 @@ async def _retracted_page_ids(session: Any, project_id: UUID, page_ids: list[UUI
     current revision. One query; drives the WP-6 `retracted` reader marker.
 
     A retraction (``aleph_reviewer.retraction.retract_source``) sets the
-    dependent claims' ``confidence="retracted"``; a page is marked retracted iff
+    dependent claims' ``status="retracted"``; a page is marked retracted iff
     such a claim exists on the page's *current* revision."""
     from aleph_wiki.models import WikiClaim
 
@@ -464,7 +464,7 @@ async def _retracted_page_ids(session: Any, project_id: UUID, page_ids: list[UUI
             .where(
                 WikiClaim.project_id == project_id,
                 WikiClaim.page_id.in_(page_ids),
-                WikiClaim.confidence == "retracted",
+                WikiClaim.status == "retracted",
                 WikiClaim.revision_id == WikiPage.current_revision_id,
             )
             .distinct()
