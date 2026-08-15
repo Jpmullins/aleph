@@ -29,39 +29,44 @@ from dataclasses import dataclass
 
 __all__ = ["GroundedSpan", "defang", "ground", "normalize_for_match"]
 
-# Characters that are representational noise: different bytes, same reading.
+# Every non-ASCII character in this module is written as a \uXXXX escape.
+# A module about invisible characters must not contain invisible characters:
+# there is no glyph to read, a reviewer cannot tell one from another, and a
+# copy-paste through any tool can silently substitute them.
+#
+# Representational noise: different bytes, same reading.
 _LIGATURES = {
-    "ﬀ": "ff",
-    "ﬁ": "fi",
-    "ﬂ": "fl",
-    "ﬃ": "ffi",
-    "ﬄ": "ffl",
-    "ﬅ": "st",
-    "ﬆ": "st",
-    "æ": "ae",
-    "œ": "oe",
+    "\ufb00": "ff",
+    "\ufb01": "fi",
+    "\ufb02": "fl",
+    "\ufb03": "ffi",
+    "\ufb04": "ffl",
+    "\ufb05": "st",
+    "\ufb06": "st",
+    "\u00e6": "ae",
+    "\u0153": "oe",
 }
-_QUOTES = dict.fromkeys("‘’‚‛′‵", "'") | dict.fromkeys(
-    "“”„‟″‶", '"'
+_QUOTES = dict.fromkeys("\u2018\u2019\u201a\u201b\u2032\u2035", "'") | dict.fromkeys(
+    "\u201c\u201d\u201e\u201f\u2033\u2036", '"'
 )
-_DASHES = dict.fromkeys("‐‑‒–—―−", "-")
+_DASHES = dict.fromkeys("\u2010\u2011\u2012\u2013\u2014\u2015\u2212", "-")
 
 #: Zero-width and directional characters. These are invisible, so they are both
 #: a normalisation problem (a quote that "looks identical" fails to match) and a
 #: security one (they hide text from a human reviewer while the model reads it).
 _INVISIBLE = re.compile(
     "["
-    "​‌‍⁠﻿"  # zero-width space/non-joiner/joiner/word-joiner/BOM
-    "‎‏"  # LTR/RTL marks
-    "‪-‮"  # embedding/override
-    "⁦-⁩"  # isolates
-    "­"  # soft hyphen
+    "\u200b\u200c\u200d\u2060\ufeff"  # zero-width space/non-joiner/joiner/word-joiner/BOM
+    "\u200e\u200f"  # LTR/RTL marks
+    "\u202a-\u202e"  # embedding/override
+    "\u2066-\u2069"  # isolates
+    "\u00ad"  # soft hyphen
     "]"
 )
 
 #: Line/paragraph separators. JSON-legal, and they terminate a line in most
 #: renderers — so text after one can be invisible in a UI that shows the rest.
-_LINE_SEPARATORS = re.compile("[  ]")
+_LINE_SEPARATORS = re.compile("[\u2028\u2029]")
 
 
 def defang(text: str) -> str:
