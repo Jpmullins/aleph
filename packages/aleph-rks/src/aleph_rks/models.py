@@ -122,7 +122,15 @@ class NormalizedDocument(CommonColumns, Base):
 
 
 class DocumentChunk(Base):
-    """Embedded retrieval unit. INTRA-SOURCE DESCENT ONLY."""
+    """Embedded retrieval unit — the corpus-wide retrieval substrate.
+
+    Was "INTRA-SOURCE DESCENT ONLY": embeddings were forbidden as first-line
+    retrieval, so this table could only be searched within one source. That
+    restriction, plus a wiki index that never covered page bodies, is why the
+    system could not find text by the words it was written in. Both entry points
+    now live in `aleph_rks.retrieval` — `search_corpus` across a project, and
+    `descend_into_source` pinned to one document.
+    """
 
     __tablename__ = "document_chunks"
     __table_args__ = (

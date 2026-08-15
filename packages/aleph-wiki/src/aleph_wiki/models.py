@@ -217,6 +217,10 @@ class WikiIndex(Base):
     slug: Mapped[str] = mapped_column(String(512), nullable=False)
     aliases_jsonb: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
     summary: Mapped[str] = mapped_column(String(2048), nullable=False, server_default="")
+    # The page body, so the index covers the words a page is actually written
+    # in. Weighted below title/summary by the trigger — see the
+    # wiki_index_body migration.
+    body_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     wikilinks_out_jsonb: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
     page_kind: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)

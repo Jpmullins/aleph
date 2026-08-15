@@ -152,17 +152,19 @@ skip A6 "not started — agent-facing plugin API"
 # B — Retrieval
 # ---------------------------------------------------------------------------
 if [ $NEEDS_SERVICES -eq 1 ]; then
-  run_expected_red B1 "a page is not retrievable by words in its body" \
+  run_pytest B1 "a page is retrievable by words in its body" \
     tests/e2e/test_retrieval_finds_body_text.py::test_body_phrase_retrieves_its_page
-  run_expected_red B2 "a natural-language question retrieves nothing" \
+  run_pytest B2 "a natural-language question retrieves its page" \
     tests/e2e/test_retrieval_finds_body_text.py::test_natural_language_question_retrieves_its_page
+  run_pytest B3 "corpus-wide hybrid search, scoped and diversity-capped" \
+    tests/e2e/test_search_corpus.py
   run_pytest B7 "stale links are not expanded" \
     tests/e2e/test_retrieval_finds_body_text.py::test_expansion_ignores_links_from_superseded_revisions
 else
-  skip B1 "needs postgres"; skip B2 "needs postgres"; skip B7 "needs postgres"
+  skip B1 "needs postgres"; skip B2 "needs postgres"
+  skip B3 "needs postgres"; skip B7 "needs postgres"
 fi
-skip B3 "not started — corpus-wide hybrid search"
-skip B4 "not started — RRF fusion"
+run_pytest B4 "reciprocal rank fusion" packages/aleph-core/tests/test_rrf.py
 skip B5 "not started — eval harness does not invoke Aleph"
 skip B6 "not started — no retrieval dataset"
 # Asserted by import, not by grep: `grep -q '_MISS_REASON'` also matched
