@@ -253,7 +253,9 @@ run_pytest D2 "a skill is a kernel plugin, probed for usability" \
 run_shell D3 "an agent authors a skill end to end" \
   "uv run pytest packages/aleph-kernel/tests/test_skills.py -q -p no:randomly \
      -k 'agent' 2>&1 | tail -1"
-for p in D4 D5 D6; do skip "$p" "not started — spawn ledger, probation, ported skills"; done
+run_pytest D6 "the ported literature-review skill loads and works" \
+  packages/aleph-kernel/tests/test_ported_skills.py
+for p in D4 D5; do skip "$p" "not started — spawn ledger, probation"; done
 
 # ---------------------------------------------------------------------------
 # E — Deletion

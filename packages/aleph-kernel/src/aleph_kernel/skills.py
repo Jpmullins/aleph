@@ -192,4 +192,6 @@ def skill_capability(skill: Skill, *, requires: frozenset[str] = frozenset()) ->
 
 
 #: Names an instruction may plausibly reference without the skill defining them.
-_PYTHON_BUILTINS = frozenset({"print", "len", "open", "range", "str", "int", "list", "dict"})
+_PYTHON_BUILTINS = frozenset(
+    {"print", "len", "open", "range", "str", "int", "list", "dict", "dir", "type", "repr"}
+)
