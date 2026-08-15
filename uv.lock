@@ -23,6 +23,7 @@ members = [
     "aleph-research",
     "aleph-reviewer",
     "aleph-rks",
+    "aleph-runtime",
     "aleph-scholar",
     "aleph-security",
     "aleph-wiki",
@@ -131,6 +132,7 @@ dependencies = [
     { name = "aleph-research" },
     { name = "aleph-reviewer" },
     { name = "aleph-rks" },
+    { name = "aleph-runtime" },
     { name = "aleph-scholar" },
     { name = "aleph-security" },
     { name = "aleph-wiki" },
@@ -171,6 +173,7 @@ requires-dist = [
     { name = "aleph-research", editable = "packages/aleph-research" },
     { name = "aleph-reviewer", editable = "packages/aleph-reviewer" },
     { name = "aleph-rks", editable = "packages/aleph-rks" },
+    { name = "aleph-runtime", editable = "packages/aleph-runtime" },
     { name = "aleph-scholar", editable = "packages/aleph-scholar" },
     { name = "aleph-security", editable = "packages/aleph-security" },
     { name = "aleph-wiki", editable = "packages/aleph-wiki" },
@@ -642,6 +645,39 @@ requires-dist = [
 ]
 
 [[package]]
+name = "aleph-runtime"
+version = "0.1.0"
+source = { editable = "packages/aleph-runtime" }
+dependencies = [
+    { name = "aleph-core" },
+    { name = "aleph-db" },
+    { name = "aleph-kernel" },
+    { name = "aleph-models" },
+    { name = "aleph-observability" },
+    { name = "aleph-rks" },
+    { name = "aleph-scholar" },
+    { name = "aleph-security" },
+    { name = "httpx" },
+    { name = "redis" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aleph-core", editable = "packages/aleph-core" },
+    { name = "aleph-db", editable = "packages/aleph-db" },
+    { name = "aleph-kernel", editable = "packages/aleph-kernel" },
+    { name = "aleph-models", editable = "packages/aleph-models" },
+    { name = "aleph-observability", editable = "packages/aleph-observability" },
+    { name = "aleph-rks", editable = "packages/aleph-rks" },
+    { name = "aleph-scholar", editable = "packages/aleph-scholar" },
+    { name = "aleph-security", editable = "packages/aleph-security" },
+    { name = "httpx", specifier = "==0.28.1" },
+    { name = "redis", specifier = ">=5,<6" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = "==2.0.50" },
+]
+
+[[package]]
 name = "aleph-scholar"
 version = "0.1.0"
 source = { editable = "packages/aleph-scholar" }
@@ -725,6 +761,7 @@ dependencies = [
     { name = "aleph-research" },
     { name = "aleph-reviewer" },
     { name = "aleph-rks" },
+    { name = "aleph-runtime" },
     { name = "aleph-scholar" },
     { name = "aleph-security" },
     { name = "aleph-wiki" },
@@ -748,6 +785,7 @@ requires-dist = [
     { name = "aleph-research", editable = "packages/aleph-research" },
     { name = "aleph-reviewer", editable = "packages/aleph-reviewer" },
     { name = "aleph-rks", editable = "packages/aleph-rks" },
+    { name = "aleph-runtime", editable = "packages/aleph-runtime" },
     { name = "aleph-scholar", editable = "packages/aleph-scholar" },
     { name = "aleph-security", editable = "packages/aleph-security" },
     { name = "aleph-wiki", editable = "packages/aleph-wiki" },

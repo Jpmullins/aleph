@@ -17,16 +17,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from aleph_api.a2ui_handlers import build_action_router
-from aleph_api.capabilities import (
+from aleph_api.settings import Settings, get_settings
+from aleph_kernel import Context, EffectScope, Kernel
+from aleph_kernel.manifest import load_manifest, mount_manifest
+from aleph_runtime.capabilities import (
     BOUND_KEYS,
     DB_SESSIONS,
     LITELLM,
     SETTINGS,
     bind_to_app_state,
 )
-from aleph_api.settings import Settings, get_settings
-from aleph_kernel import Context, EffectScope, Kernel
-from aleph_kernel.manifest import load_manifest, mount_manifest
 
 #: Ships beside the app, not in the working directory: the set of core
 #: capabilities must not depend on where the process happened to start.

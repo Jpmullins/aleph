@@ -10,49 +10,49 @@
 
 [[capability]]
 name = "observability"
-factory = "aleph_api.capabilities:observability"
+factory = "aleph_runtime.capabilities:observability"
 protected = true
 
 [[capability]]
 name = "database"
-factory = "aleph_api.capabilities:database"
+factory = "aleph_runtime.capabilities:database"
 protected = true
 
 [[capability]]
 name = "http"
-factory = "aleph_api.capabilities:http_clients"
+factory = "aleph_runtime.capabilities:http_clients"
 protected = true
 
 [[capability]]
 name = "redis"
-factory = "aleph_api.capabilities:redis_client"
+factory = "aleph_runtime.capabilities:redis_client"
 protected = true
 
 [[capability]]
 name = "auth"
-factory = "aleph_api.capabilities:auth_jwks"
+factory = "aleph_runtime.capabilities:auth_jwks"
 protected = true
 
 [[capability]]
 name = "models"
-factory = "aleph_api.capabilities:models"
+factory = "aleph_runtime.capabilities:models"
 protected = true
 
 [[capability]]
 name = "assets"
-factory = "aleph_api.capabilities:assets"
+factory = "aleph_runtime.capabilities:assets"
 protected = true
 
 # Research capabilities. Not protected: the research suite is a plugin suite,
 # and an operator may legitimately run Aleph without it.
 [[capability]]
 name = "scholar"
-factory = "aleph_api.capabilities:scholar"
+factory = "aleph_runtime.capabilities:scholar"
 
 [[capability]]
 name = "realtime"
-factory = "aleph_api.capabilities:realtime"
+factory = "aleph_runtime.capabilities:realtime"
 
 [[capability]]
 name = "agent_store"
-factory = "aleph_api.capabilities:agent_store"
+factory = "aleph_runtime.capabilities:agent_store"

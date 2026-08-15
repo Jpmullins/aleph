@@ -49,7 +49,10 @@ from aleph_security.jwt import JWKSCache
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
 
-    from aleph_api.settings import Settings
+#: Structurally typed rather than imported: the API and the workers each have
+#: their own Settings class, and a package may not import from an app. Every
+#: capability below reads attributes off whichever one it is handed.
+Settings = Any
 
 Inv = "Callable[[], Awaitable[None]]"
 
@@ -583,3 +586,86 @@ __all__ = [
     "bind_to_app_state",
     "core_capabilities",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Worker-only capabilities. The API does not enqueue jobs, so it does not mount
+# these — which is the point of a per-process manifest: two processes share the
+# factories and differ in what they boot.
+# ---------------------------------------------------------------------------
+
+ARQ_POOL = "arq.pool"
+CODE_RUNNER_POOL = "arq.code_runner_pool"
+
+
+def arq_pool() -> CapabilitySpec:
+    """The platform job bus.
+
+    Distinct from the plain Redis client: job-to-job enqueue needs the ArqRedis
+    pool that only `arq.create_pool` returns, while `LiteLLMClient` wants an
+    ordinary client for idempotency caching. Both exist for real reasons and
+    conflating them breaks one of the two.
+    """
+
+    async def setup(ctx: Context) -> AsyncIterator[Callable[[], Awaitable[None]]]:
+        from arq import create_pool
+        from arq.connections import RedisSettings
+
+        settings: Settings = ctx.get(SETTINGS)
+        pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+        yield pool.aclose
+        ctx.provide(ARQ_POOL, pool)
+
+    async def probe(ctx: Context) -> ProbeResult:
+        pool = ctx.get(ARQ_POOL)
+        if not await pool.ping():
+            return problem("the job bus did not answer PING")
+        return ok("job bus reachable")
+
+    return CapabilitySpec(
+        name="arq_pool",
+        setup=setup,
+        probe=probe,
+        requires=frozenset({SETTINGS}),
+        provides=frozenset({ARQ_POOL}),
+    )
+
+
+def code_runner_pool() -> CapabilitySpec:
+    """The isolated bus the sandbox shares.
+
+    Deliberately a separate Redis from the platform one, which carries agent
+    tokens and privileged queues. The sandbox must never reach that, so the
+    separation is a security boundary rather than a scaling choice — and a probe
+    that accidentally proved connectivity to the WRONG bus would hide exactly
+    the misconfiguration that matters, so it checks the configured URL differs.
+    """
+
+    async def setup(ctx: Context) -> AsyncIterator[Callable[[], Awaitable[None]]]:
+        from arq import create_pool
+        from arq.connections import RedisSettings
+
+        settings: Settings = ctx.get(SETTINGS)
+        pool = await create_pool(RedisSettings.from_dsn(settings.code_runner_redis_url))
+        yield pool.aclose
+        ctx.provide(CODE_RUNNER_POOL, pool)
+
+    async def probe(ctx: Context) -> ProbeResult:
+        settings: Settings = ctx.get(SETTINGS)
+        if settings.code_runner_redis_url == settings.redis_url:
+            return problem(
+                "the code-runner bus is the same Redis as the platform bus; the "
+                "sandbox would share a channel with agent tokens and privileged queues"
+            )
+        pool = ctx.get(CODE_RUNNER_POOL)
+        if not await pool.ping():
+            return problem("the code-runner bus did not answer PING")
+        return ok("code-runner bus reachable and separate from the platform bus")
+
+    return CapabilitySpec(
+        name="code_runner_pool",
+        setup=setup,
+        probe=probe,
+        requires=frozenset({SETTINGS}),
+        provides=frozenset({CODE_RUNNER_POOL}),
+    )

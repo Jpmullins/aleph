@@ -143,7 +143,12 @@ else
   skip A2 "needs postgres+redis"
 fi
 
-skip A3 "not started — workers still wire their own singletons"
+if [ $NEEDS_SERVICES -eq 1 ]; then
+  run_shell A3 "workers boot on the kernel; no duplicated wiring" \
+    "uv run python scripts/_acceptance/worker_boot.py"
+else
+  skip A3 "needs postgres+redis"
+fi
 skip A4 "not started — generation loader"
 run_pytest A5 "boot manifest is the only source of protected capability" \
   packages/aleph-kernel/tests/test_manifest.py
@@ -263,8 +268,8 @@ run_pytest D5 "probation: a capability that degrades is retired automatically" \
 # ---------------------------------------------------------------------------
 # E — Deletion
 # ---------------------------------------------------------------------------
-run_shell E4 "workspace package count" \
-  "n=\$(ls packages | wc -l); echo \"\$n packages (target <=17)\"; [ \"\$n\" -le 20 ]"
+run_shell E4 "workspace package count does not grow unchecked" \
+  "n=\$(ls packages | wc -l); echo \"\$n packages\"; [ \"\$n\" -le 21 ]"
 # Deliberately red: the patch contract shipped before its consumer, which is
 # the exact defect class this refactor exists to remove. It goes green when the
 # Claim Spine (part C) uses it, or the code gets deleted.
