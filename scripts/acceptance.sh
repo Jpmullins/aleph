@@ -250,7 +250,14 @@ if [ $NEEDS_SERVICES -eq 1 ]; then
 else
   for p in C1 C3 C4 C5 C6 C7; do skip "$p" "needs postgres"; done
 fi
-skip C8 "not started — rebuild-from-RKS"
+if [ $NEEDS_SERVICES -eq 1 ]; then
+  run_pytest C8 "the belief graph rebuilds from its sources, idempotently" \
+    tests/e2e/test_belief_spine.py::test_the_belief_graph_rebuilds_from_its_sources \
+    tests/e2e/test_belief_spine.py::test_rebuilding_twice_is_idempotent \
+    tests/e2e/test_belief_spine.py::test_a_rebuild_does_not_destroy_human_corrections
+else
+  skip C8 "needs postgres"
+fi
 
 # ---------------------------------------------------------------------------
 # D — Skills / self-improvement

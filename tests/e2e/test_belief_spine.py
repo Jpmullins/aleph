@@ -491,3 +491,132 @@ async def test_duplicate_beliefs_are_proposed_for_merge_without_a_model(asgi_app
 
     rejected = [c for c, _ in proposals if c.verdict == "reject"]
     assert all(c.reason is not None for c in rejected), "a rejection gave no reason"
+
+
+# -- C8: the belief graph is rebuildable from its sources --------------------
+
+
+def fixture_extractor(source):
+    """A deterministic stand-in for LLM extraction.
+
+    Injected so the REBUILD MACHINERY can be tested without a gateway. The
+    property under test is that re-deriving is deterministic, idempotent and
+    non-destructive — none of which depends on what the extractor is.
+    """
+    from aleph_wiki.belief_service import ClaimUpsert, EvidenceDraft
+
+    out = []
+    for sentence in [s.strip() for s in source.text.split(".") if len(s.strip()) > 20]:
+        out.append(
+            ClaimUpsert(
+                text=sentence + ".",
+                page_id=uuid7(),
+                origin="research",
+                evidence=[
+                    EvidenceDraft(
+                        source_id=source.source_id,
+                        quote=sentence[:40],
+                        source_text=source.text,
+                    )
+                ],
+            )
+        )
+    return out
+
+
+async def test_the_belief_graph_rebuilds_from_its_sources(asgi_app) -> None:
+    """The wiki could not be rebuilt from anything — it was the only copy."""
+    from aleph_wiki.belief_service import SourceText
+
+    maker = asgi_app.state.session_maker
+    project_id = uuid7()
+    principal = principal_for(project_id)
+    sources = [SourceText(source_id=uuid7(), text=SOURCE_TEXT, title="Chronology")]
+
+    session, svc, ledger = await _service(maker)
+    async with session:
+        first = await svc.rebuild(
+            principal=principal,
+            ledger=ledger,
+            project_id=project_id,
+            extract=fixture_extractor,
+            sources=sources,
+        )
+        await session.commit()
+
+    assert first.claims_after > 0, "rebuilding produced no beliefs"
+    assert first.citations_written > 0
+
+
+async def test_rebuilding_twice_is_idempotent(asgi_app) -> None:
+    """A function of its sources, not an accumulation of runs."""
+    from aleph_wiki.belief_service import SourceText
+
+    maker = asgi_app.state.session_maker
+    project_id = uuid7()
+    principal = principal_for(project_id)
+    sources = [SourceText(source_id=uuid7(), text=SOURCE_TEXT)]
+
+    results = []
+    for _ in range(2):
+        session, svc, ledger = await _service(maker)
+        async with session:
+            results.append(
+                await svc.rebuild(
+                    principal=principal,
+                    ledger=ledger,
+                    project_id=project_id,
+                    extract=fixture_extractor,
+                    sources=sources,
+                )
+            )
+            await session.commit()
+
+    assert results[1].claims_after == results[0].claims_after
+    assert results[1].new_claims == 0, "the second rebuild forked existing beliefs"
+
+
+async def test_a_rebuild_does_not_destroy_human_corrections(asgi_app) -> None:
+    """THE property that makes rebuilding safe to run.
+
+    A user's claim is not derived from a source, so re-deriving cannot produce
+    it. A rebuild that dropped it would destroy exactly the corrections a human
+    bothered to make — which is the reason nobody would ever run one.
+    """
+    from aleph_wiki.belief_service import SourceText
+
+    maker = asgi_app.state.session_maker
+    project_id, page_id = uuid7(), uuid7()
+    principal = principal_for(project_id)
+
+    session, svc, ledger = await _service(maker)
+    async with session:
+        correction = await svc.upsert_claim(
+            principal=principal,
+            ledger=ledger,
+            project_id=project_id,
+            draft=draft("The 8.2 ka signal is not resolvable here.", page_id, origin="user"),
+        )
+        await session.commit()
+
+    session, svc, ledger = await _service(maker)
+    async with session:
+        result = await svc.rebuild(
+            principal=principal,
+            ledger=ledger,
+            project_id=project_id,
+            extract=fixture_extractor,
+            sources=[SourceText(source_id=uuid7(), text=SOURCE_TEXT)],
+        )
+        await session.commit()
+
+    assert result.user_claims_preserved >= 1
+
+    from aleph_wiki.models import WikiClaim
+
+    async with maker() as session:
+        survivor = (
+            await session.execute(select(WikiClaim).where(WikiClaim.id == correction.claim_id))
+        ).scalar_one()
+    assert survivor.superseded_by is None, "a rebuild superseded a human correction"
+    assert survivor.origin == "user"

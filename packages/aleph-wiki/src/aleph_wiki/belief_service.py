@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -111,6 +112,31 @@ class ClaimUpsert:
     section_anchor: str | None = None
     revision_id: UUID | None = None
     evidence: list[EvidenceDraft] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class SourceText:
+    """One source, as the extractor sees it."""
+
+    source_id: UUID
+    text: str
+    title: str = ""
+
+
+#: Turns a source into claim drafts. Deliberately a plain callable: the rebuild
+#: machinery does not care whether it is an LLM, a rule set, or a fixture, and
+#: keeping it injectable is what makes the machinery testable without one.
+Extractor = Callable[[SourceText], Sequence["ClaimUpsert"]]
+
+
+@dataclass(frozen=True)
+class RebuildResult:
+    claims_before: int
+    claims_after: int
+    new_claims: int
+    citations_written: int
+    citations_rejected: int
+    user_claims_preserved: int
 
 
 @dataclass
@@ -383,6 +409,65 @@ class BeliefService:
             profile_hash=profile_hash or "unset",
             graph_hash=graph_hash or _graph_hash_for(refs),
         )
+
+    async def rebuild(
+        self,
+        *,
+        principal: Principal,
+        ledger: LedgerWriter,
+        project_id: UUID,
+        extract: Extractor,
+        sources: Sequence[SourceText],
+    ) -> RebuildResult:
+        """Re-derive the belief graph from its sources.
+
+        The property this exists to make true: **the belief graph is a function
+        of (sources x extraction x decisions), not primary state.** The wiki it
+        replaces could not be rebuilt from anything — it was the only copy of
+        what the system believed, so a bad compile was unrecoverable and a
+        changed extraction prompt could never be applied retroactively.
+
+        ``extract`` is injected rather than hard-wired. The rebuild machinery
+        and the extractor are separate concerns: this can be tested for
+        determinism and idempotence with a fixture extractor, and swapping in a
+        better model later does not change any of the guarantees below.
+
+        Claims with ``origin='user'`` are NOT touched. They are not derived from
+        a source, so re-deriving cannot produce them — a rebuild that dropped
+        them would destroy exactly the corrections a human bothered to make.
+
+        Idempotent: running twice over the same sources leaves the same graph,
+        because identity is `claim_key` and evidence is deduped by locator.
+        """
+        with start_span("belief.rebuild", **{"aleph.project_id": str(project_id)}) as span:
+            before = {c.claim_key for c in await self.live_claims(project_id=project_id)}
+            written = 0
+            rejected = 0
+
+            for source in sources:
+                for draft in extract(source):
+                    result = await self.upsert_claim(
+                        principal=principal,
+                        ledger=ledger,
+                        project_id=project_id,
+                        draft=draft,
+                    )
+                    written += result.citations_written
+                    rejected += len(result.citations_rejected)
+
+            after_claims = await self.live_claims(project_id=project_id)
+            after = {c.claim_key for c in after_claims}
+            preserved = sum(1 for c in after_claims if c.origin in _PROTECTED_ORIGINS)
+
+            span.set_attribute("aleph.belief.rebuilt", len(after))
+            return RebuildResult(
+                claims_before=len(before),
+                claims_after=len(after),
+                new_claims=len(after - before),
+                citations_written=written,
+                citations_rejected=rejected,
+                user_claims_preserved=preserved,
+            )
 
     async def live_claims(self, *, project_id: UUID) -> list[WikiClaim]:
         return list(
