@@ -10,10 +10,13 @@ that was never true.
 
 Run everything: `./scripts/acceptance.sh`
 
-**Current: 31 pass · 0 fail · 0 red · 9 not built.** Parts B (retrieval), F
-(security) and D1–D3 (skills) are complete; C is complete except rebuild-from-RKS.
-Part E is blocked by design — the wiki cannot be deleted until its replacement
-wins on the retrieval eval, and its services still have live callers.
+**Current: 37 pass · 0 fail · 0 red · 3 not built.**
+
+Parts **A** (kernel), **B** (retrieval), **C** (belief engine), **D** (skills and
+self-improvement) and **F** (security) are complete.
+
+The remaining three are all Part E, and they are **blocked for a stated reason
+rather than unfinished** — see below.
 
 | symbol | meaning |
 |---|---|
@@ -111,6 +114,29 @@ The refactor is not done until the replaced thing is gone.
 | E3 | Dead tables dropped in a migration | `alembic check` clean after dropping `wiki_index`, `wiki_links`, `wiki_sections`, `hand_edit_marks`, `aliases` | ⬜ |
 | E4 | Package count does not grow | `acceptance.sh` asserts ≤20 workspace packages. Currently 20 — `aleph-kernel` and `aleph-belief` were added; the reduction comes with E1 | ✅ |
 | E5 | `aleph-belief/patch.py` is wired or deleted | asserts ≥1 importer outside its own tests. Wired by `BeliefService.propose_merges` | ✅ |
+
+**Why E is blocked, and what unblocks it.**
+
+Deleting the wiki services is not a deletion job. `curator_service`,
+`alias_service`, `feedback_service` and `citation_verification` are woven through
+the ingest→compile pipeline (`agent/workflow.py`, `synthesis_workflow.py`), so
+removing them means replacing that pipeline with belief extraction — turning an
+ingested source into claim drafts.
+
+`BeliefService.rebuild` already accepts that extractor as an injected callable
+and is tested for determinism, idempotence and not destroying human corrections
+(C8). What does not exist is the extractor itself, and its acceptance test is
+*"does it produce good claims"* — which requires a live LLM gateway to answer.
+This environment has none, so writing it would mean shipping an unmeasured
+component into the exact position the wiki occupied.
+
+**E unblocks when:** a gateway is available, an extractor is written against
+`Extractor`, and the belief path beats the wiki path on the retrieval eval
+(`python -m aleph_evals.retrieval_eval`, currently recall@1 0.60 / @3 0.96).
+Until then the wiki stays, degraded but working, and nothing new is built on it.
+
+Deleting it first would trade a measured-mediocre path for an unmeasured one,
+which is the mistake this whole refactor exists to correct.
 
 **E-complete when:** nothing imports the wiki, and the line count is down, not up.
 

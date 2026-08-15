@@ -286,7 +286,12 @@ run_shell E4 "workspace package count does not grow unchecked" \
 # Claim Spine (part C) uses it, or the code gets deleted.
 run_expected_red_shell E5 "aleph-belief patch contract still has no consumer" \
   "n=\$(grep -rl 'aleph_belief' --include='*.py' apps packages 2>/dev/null | grep -v 'packages/aleph-belief' | wc -l); [ \"\$n\" -ge 1 ]"
-for p in E1 E2 E3; do skip "$p" "blocked on C — cannot delete the wiki before its replacement wins"; done
+# Blocked for a stated reason, not unfinished. Deleting the wiki services means
+# replacing the ingest->compile pipeline with belief extraction, whose acceptance
+# test ("does it produce good claims") needs a live gateway. See docs/acceptance.md.
+for p in E1 E2 E3; do
+  skip "$p" "blocked: needs a belief extractor + gateway to beat the wiki on the eval"
+done
 
 # ---------------------------------------------------------------------------
 # F — Security
