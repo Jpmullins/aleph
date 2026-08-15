@@ -213,7 +213,9 @@ print('honest-miss diagnostic names its cause; fallback plumbing gone')
 # C — Belief engine
 # ---------------------------------------------------------------------------
 run_pytest C0 "belief patch contract + trust lattice" packages/aleph-belief/tests
-for p in C1 C2 C3 C4 C5 C6 C7 C8; do skip "$p" "not started — Claim Spine"; done
+run_pytest C2 "evidence is verbatim-verified against the source" \
+  packages/aleph-core/tests/test_grounding.py
+for p in C1 C3 C4 C5 C6 C7 C8; do skip "$p" "not started — Claim Spine"; done
 
 # ---------------------------------------------------------------------------
 # D — Skills / self-improvement
@@ -241,7 +243,8 @@ for p in E1 E2 E3; do skip "$p" "blocked on C — cannot delete the wiki before 
 # that passes for the wrong reason is the thing this whole file exists to stop.
 run_pytest F1 "agent endpoint is authenticated; project scope is authorized" \
   packages/aleph-security/tests/test_request_context.py
-skip F2 "not started — ingest defang"
+run_pytest F2 "untrusted ingested text is defanged at the boundary" \
+  packages/aleph-rks/tests/test_ingest_defang.py packages/aleph-core/tests/test_grounding.py
 run_pytest F3 "agent token scoping" packages/aleph-security/tests
 
 # ---------------------------------------------------------------------------

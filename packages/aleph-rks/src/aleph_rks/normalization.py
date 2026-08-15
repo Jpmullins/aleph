@@ -19,10 +19,12 @@ from __future__ import annotations
 
 import io
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 import tiktoken
+
+from aleph_core.grounding import defang
 
 
 class NormalizationFailed(Exception):
@@ -402,13 +404,40 @@ def normalizer_for(mime_type: str) -> Normalizer:
 
 
 def normalize_bytes(data: bytes, mime_type: str) -> NormalizationResult:
+    """The single boundary every ingested byte crosses. Defang happens here.
+
+    Ingested text is untrusted: it reaches the model's context, and under the
+    research loop it reaches it without a human reading it first. Zero-width
+    characters, bidi overrides and Unicode line separators let a document show
+    a reviewer one thing while the model reads another — the reviewer approves
+    a summary, and the instructions hidden after a U+2028 never appear on their
+    screen.
+
+    Stripping them is not a prompt-injection filter and does not claim to be.
+    It removes a class of *invisibility*, which is decidable, rather than
+    attempting to detect intent, which is not. Visible adversarial text stays
+    visible — that is the point, because a reviewer can then see it.
+
+    Applied at the single choke point rather than at each normalizer, so a new
+    format cannot arrive without it.
+    """
     primary = normalizer_for(mime_type)
     try:
-        return primary.normalize(data)
+        result = primary.normalize(data)
     except NormalizationFailed:
         if mime_type.split(";", maxsplit=1)[0].strip().lower() == "application/pdf":
-            return PDFMinerNormalizer().normalize(data)
-        raise
+            result = PDFMinerNormalizer().normalize(data)
+        else:
+            raise
+
+    cleaned = defang(result.markdown)
+    if cleaned == result.markdown:
+        return result
+    return replace(
+        result,
+        markdown=cleaned,
+        quality_flags=[*result.quality_flags, "defanged_invisible_characters"],
+    )
 
 
 # ---------------------------------------------------------------------------
