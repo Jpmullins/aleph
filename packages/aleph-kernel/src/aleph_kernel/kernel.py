@@ -29,6 +29,7 @@ from aleph_core.ids import uuid7
 from aleph_kernel.context import ROOT_REALM, Context, Store
 from aleph_kernel.effects import EffectScope
 from aleph_kernel.errors import DependentsWouldBreak, ProbeFailed, ProtectedCapability
+from aleph_kernel.spec import ProbeResult, problem
 from aleph_kernel.support import BlastRadius, dependent_closure, topological_order
 from aleph_observability.tracing import start_span
 
@@ -235,6 +236,34 @@ class Kernel:
             mounted.failure = ""
             span.set_attribute("aleph.kernel.outcome", "active")
             span.set_attribute("aleph.kernel.probe", result.detail or "ok")
+
+    async def reprobe(self, name: str) -> ProbeResult:
+        """Re-run an active capability's probe, and retire it if it now fails.
+
+        The activation gate catches a capability that is broken when it loads.
+        This catches one that breaks later — a dependency that went away, a
+        resource that closed, an agent-authored plugin whose fault only appears
+        on the second call. Without it, "probed once at boot" decays into
+        "assumed working forever", which is the same green-while-broken failure
+        the gate exists to prevent, just deferred.
+
+        A failure tears the capability down rather than leaving it ACTIVE and
+        broken: a capability nobody can rely on is worse than one that is
+        visibly absent, because callers keep reaching for it.
+        """
+        async with self._lock:
+            mounted = self._mounted[name]
+            if mounted.state is not State.ACTIVE or mounted.context is None:
+                return problem(f"{name} is {mounted.state.value}, not active")
+            try:
+                result = await mounted.spec.probe(mounted.context)
+            except Exception as exc:
+                result = problem(f"probe raised {exc!r}")
+            if not result.passed:
+                await self._teardown(name)
+                mounted.state = State.FAILED
+                mounted.failure = result.detail
+            return result
 
     async def deactivate(self, plugin_id: PluginId, *, force: bool = False) -> BlastRadius:
         """Retire a dynamically registered capability.

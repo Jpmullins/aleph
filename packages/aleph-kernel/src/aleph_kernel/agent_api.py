@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from aleph_kernel.errors import DependentsWouldBreak, ProbeFailed
+from aleph_kernel.kernel import State
 
 if TYPE_CHECKING:
     from aleph_kernel.kernel import Kernel, PluginId
@@ -134,6 +135,34 @@ class AgentPluginAPI:
         except ProbeFailed as exc:
             return InstallOutcome(installed=False, plugin_id=None, detail=f"refused: {exc.detail}")
         return InstallOutcome(installed=True, plugin_id=None, detail=f"{name} active")
+
+    async def check_health(self) -> dict[str, str]:
+        """Re-probe every agent-installed capability; retire the ones that fail.
+
+        Probation, expressed as a recurring check rather than a timer. A plugin
+        that passed at activation and fails later is retired automatically —
+        the agent does not have to notice, and a broken capability does not sit
+        ACTIVE while callers keep reaching for it.
+
+        Core capability is deliberately NOT re-probed here. This is the agent's
+        surface, and a probe is a live read against a running system; letting an
+        agent trigger repeated reads of the ledger or the asset store from an
+        untrusted loop is a denial-of-service it should not have. Core health is
+        the operator's business.
+
+        Returns ``{name: detail}`` for everything checked.
+        """
+        report: dict[str, str] = {}
+        for name in sorted(self._kernel._mounted):
+            mounted = self._kernel._mounted[name]
+            if mounted.plugin_id is None or mounted.spec.protected:
+                continue
+            if mounted.state is not State.ACTIVE:
+                report[name] = f"not active ({mounted.state.value})"
+                continue
+            result = await self._kernel.reprobe(name)
+            report[name] = "ok" if result.passed else f"retired: {result.detail}"
+        return report
 
     async def disable(self, plugin_id: PluginId, *, force: bool = False) -> InstallOutcome:
         """Take down an agent-installed capability.

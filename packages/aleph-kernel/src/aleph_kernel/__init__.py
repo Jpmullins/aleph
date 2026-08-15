@@ -30,6 +30,7 @@ from aleph_kernel.errors import (
     UndeclaredAccess,
 )
 from aleph_kernel.kernel import Kernel, PluginId, State
+from aleph_kernel.spawn_ledger import SpawnDenied, SpawnLedger, SpawnRecord, SpawnState
 from aleph_kernel.spec import CapabilitySpec, Probe, ProbeResult, Setup, ok, problem
 from aleph_kernel.support import BlastRadius, dependent_closure, support_set, topological_order
 
@@ -51,6 +52,10 @@ __all__ = [
     "ProbeResult",
     "ProtectedCapability",
     "Setup",
+    "SpawnDenied",
+    "SpawnLedger",
+    "SpawnRecord",
+    "SpawnState",
     "State",
     "Store",
     "UndeclaredAccess",

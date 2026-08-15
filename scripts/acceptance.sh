@@ -255,7 +255,10 @@ run_shell D3 "an agent authors a skill end to end" \
      -k 'agent' 2>&1 | tail -1"
 run_pytest D6 "the ported literature-review skill loads and works" \
   packages/aleph-kernel/tests/test_ported_skills.py
-for p in D4 D5; do skip "$p" "not started — spawn ledger, probation"; done
+run_pytest D4 "spawn ledger: lineage, depth, fan-out and budget brakes" \
+  packages/aleph-kernel/tests/test_spawn_ledger.py
+run_pytest D5 "probation: a capability that degrades is retired automatically" \
+  packages/aleph-kernel/tests/test_probation.py
 
 # ---------------------------------------------------------------------------
 # E — Deletion
