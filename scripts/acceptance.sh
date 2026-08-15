@@ -231,10 +231,12 @@ if [ $NEEDS_SERVICES -eq 1 ]; then
   run_pytest C7 "every written citation carries a source id" \
     tests/e2e/test_belief_spine.py::test_every_written_citation_carries_a_source_id \
     tests/e2e/test_belief_spine.py::test_a_fabricated_quote_is_refused
+  run_pytest C4 "retraction propagates, with a declined branch" \
+    tests/e2e/test_retraction_walk.py
 else
-  for p in C1 C3 C6 C7; do skip "$p" "needs postgres"; done
+  for p in C1 C3 C4 C6 C7; do skip "$p" "needs postgres"; done
 fi
-for p in C4 C5 C8; do skip "$p" "not started — retraction walk, reconciliation, rebuild"; done
+for p in C5 C8; do skip "$p" "not started — deterministic reconciliation, rebuild-from-RKS"; done
 
 # ---------------------------------------------------------------------------
 # D — Skills / self-improvement
