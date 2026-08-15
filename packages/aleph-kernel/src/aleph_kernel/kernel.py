@@ -116,6 +116,16 @@ class Kernel:
 
     # -- introspection -------------------------------------------------------
 
+    @property
+    def store(self) -> Store:
+        """The coeffect store, for a host building its own reader context.
+
+        Handing out the store does not weaken the declaration check: a `Context`
+        still refuses any key absent from its own `requires`, so a reader must
+        declare what it reads exactly like a capability does.
+        """
+        return self._store
+
     def state_of(self, name: str) -> State:
         return self._mounted[name].state
 
@@ -177,9 +187,15 @@ class Kernel:
         spec = mounted.spec
         with start_span("kernel.activate", **{"aleph.capability": name}) as span:
             scope = EffectScope(name)
+            # Readable = what it declared it needs, PLUS what it declared it
+            # supplies. A capability can obviously see its own provisions, and a
+            # probe must be able to: proving a capability works means exercising
+            # the service it just published. Everything else is still refused,
+            # so the declaration remains an enforced boundary rather than a
+            # suggestion.
             ctx = Context(
                 owner=name,
-                requires=spec.requires,
+                requires=spec.requires | spec.provides,
                 store=self._store,
                 scope=scope,
             )

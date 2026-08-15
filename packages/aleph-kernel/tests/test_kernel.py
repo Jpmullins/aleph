@@ -306,3 +306,46 @@ async def test_activate_reports_a_missing_provider_clearly() -> None:
     k.register_core(consumer("reports", "db"))
     with pytest.raises(MissingProvider, match="requires db"):
         await k.activate("reports")
+
+
+async def test_a_capability_can_read_back_its_own_provisions() -> None:
+    """A probe proves a capability works by exercising what it just published."""
+    seen: list[object] = []
+
+    async def setup(ctx: Context) -> AsyncIterator[Inv]:
+        ctx.provide("thing", "VALUE")
+        if False:  # pragma: no cover
+            yield
+
+    async def probe(ctx: Context) -> ProbeResult:
+        seen.append(ctx.get("thing"))  # its own provision
+        return ok()
+
+    k = Kernel()
+    k.register_core(
+        CapabilitySpec(name="publisher", setup=setup, probe=probe, provides=frozenset({"thing"}))
+    )
+    await k.boot()
+    assert seen == ["VALUE"]
+
+
+async def test_reading_its_own_provisions_does_not_widen_anything_else() -> None:
+    """Self-provisions are readable; a neighbour's are still refused."""
+
+    async def setup(ctx: Context) -> AsyncIterator[Inv]:
+        ctx.provide("mine", 1)
+        if False:  # pragma: no cover
+            yield
+
+    async def probe(ctx: Context) -> ProbeResult:
+        ctx.get("mine")
+        ctx.get("secrets")  # a neighbour's, never declared
+        return ok()
+
+    k = Kernel()
+    k.register_core(provider("vault", "secrets"))
+    k.register_core(
+        CapabilitySpec(name="nosy", setup=setup, probe=probe, provides=frozenset({"mine"}))
+    )
+    with pytest.raises(ProbeFailed, match="UndeclaredAccess"):
+        await k.boot()
