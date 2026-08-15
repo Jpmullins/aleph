@@ -1,1 +1,0 @@
-{"id": "cost-001", "phase": "wiki_compile", "baselines": {"aleph-dev": 0.05, "aleph-production": 0.20}, "actual": {"cost_usd": 0.05}, "drift_pct": 15.0}
