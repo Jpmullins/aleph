@@ -177,8 +177,17 @@ assert 'corpus_chunks' in src, 'corpus hits never reach the composer'
 assert 'and not corpus_chunks' in src, 'an empty page search still short-circuits before consulting sources'
 print('router searches the corpus and feeds it to the composer')
 \""
-skip B5 "not started — eval harness does not invoke Aleph"
-skip B6 "not started — no retrieval dataset"
+if [ $NEEDS_SERVICES -eq 1 ]; then
+  # B5 asserts the harness INVOKES the system. The eval it replaced read
+  # `expected` and `actual` out of the same fixture line, so it could not fail.
+  run_shell B5 "the retrieval eval invokes Aleph and reports a number" \
+    "uv run python -m aleph_evals.retrieval_eval -k 3 --min-recall 0.80 | head -2"
+else
+  skip B5 "needs postgres"
+fi
+run_shell B6 "retrieval dataset has >=40 labelled pairs" \
+  "n=\$(wc -l < packages/aleph-evals/datasets/retrieval/questions.jsonl); \
+   echo \"\$n question/source pairs\"; [ \"\$n\" -ge 40 ]"
 # Asserted by import, not by grep: `grep -q '_MISS_REASON'` also matched
 # `_MISS_REASON_UNUSED`, so the check survived its own subject being renamed
 # away. Substring matching is not a check.

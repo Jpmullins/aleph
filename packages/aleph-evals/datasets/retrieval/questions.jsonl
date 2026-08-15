@@ -1,0 +1,45 @@
+{"id": "q01", "question": "how were the cores collected", "expect": ["d01"], "phrasing": "paraphrase"}
+{"id": "q02", "question": "vibracorer deployed from a shallow-draft vessel", "expect": ["d01"], "phrasing": "verbatim"}
+{"id": "q03", "question": "what depositional environment does the stratification indicate", "expect": ["d01"], "phrasing": "paraphrase"}
+{"id": "q04", "question": "how was grain size measured", "expect": ["d01"], "phrasing": "paraphrase"}
+{"id": "q05", "question": "which calibration curve was used for the dates", "expect": ["d02"], "phrasing": "paraphrase"}
+{"id": "q06", "question": "Marine20 reservoir correction", "expect": ["d02"], "phrasing": "verbatim"}
+{"id": "q07", "question": "when did sedimentation rates increase", "expect": ["d02"], "phrasing": "paraphrase"}
+{"id": "q08", "question": "why were some dates discarded", "expect": ["d02"], "phrasing": "paraphrase"}
+{"id": "q09", "question": "what do the benthic assemblages say about water depth", "expect": ["d03"], "phrasing": "paraphrase"}
+{"id": "q10", "question": "Uvigerina assemblage outer shelf", "expect": ["d03"], "phrasing": "verbatim"}
+{"id": "q11", "question": "was there any shell dissolution", "expect": ["d03"], "phrasing": "paraphrase"}
+{"id": "q12", "question": "describe the clinoform geometry seen in the seismic data", "expect": ["d04"], "phrasing": "paraphrase"}
+{"id": "q13", "question": "what is the vertical resolution of the boomer profiles", "expect": ["d04"], "phrasing": "near-verbatim"}
+{"id": "q14", "question": "how many seismic units were defined", "expect": ["d04"], "phrasing": "paraphrase"}
+{"id": "q15", "question": "what does the unconformity at the base represent", "expect": ["d04"], "phrasing": "paraphrase"}
+{"id": "q16", "question": "where did the sediment come from", "expect": ["d05"], "phrasing": "paraphrase"}
+{"id": "q17", "question": "zircon tourmaline rutile index", "expect": ["d05"], "phrasing": "verbatim"}
+{"id": "q18", "question": "what density liquid was used to separate the heavy minerals", "expect": ["d05"], "phrasing": "paraphrase"}
+{"id": "q19", "question": "detrital zircon age populations", "expect": ["d05"], "phrasing": "verbatim"}
+{"id": "q20", "question": "how much land-derived organic matter is present", "expect": ["d06"], "phrasing": "paraphrase"}
+{"id": "q21", "question": "carbon to nitrogen ratio terrestrial", "expect": ["d06"], "phrasing": "verbatim"}
+{"id": "q22", "question": "what happens to the carbon isotopes up-section", "expect": ["d06"], "phrasing": "paraphrase"}
+{"id": "q23", "question": "how big were the tides in the past", "expect": ["d07"], "phrasing": "paraphrase"}
+{"id": "q24", "question": "bed shear stress threshold fine sand transport", "expect": ["d07"], "phrasing": "verbatim"}
+{"id": "q25", "question": "what forcing did the hydrodynamic model use", "expect": ["d07"], "phrasing": "paraphrase"}
+{"id": "q26", "question": "how many generations of cement are there", "expect": ["d08"], "phrasing": "paraphrase"}
+{"id": "q27", "question": "isopachous high-magnesium calcite fringe", "expect": ["d08"], "phrasing": "verbatim"}
+{"id": "q28", "question": "was cementation early or late", "expect": ["d08"], "phrasing": "paraphrase"}
+{"id": "q29", "question": "what controls the station groupings, depth or sediment", "expect": ["d09"], "phrasing": "paraphrase"}
+{"id": "q30", "question": "how many macrofaunal taxa were found", "expect": ["d09"], "phrasing": "near-verbatim"}
+{"id": "q31", "question": "is there evidence of organic enrichment", "expect": ["d09"], "phrasing": "paraphrase"}
+{"id": "q32", "question": "which metals exceed the guideline values", "expect": ["d10"], "phrasing": "paraphrase"}
+{"id": "q33", "question": "enrichment factor normalised to aluminium", "expect": ["d10"], "phrasing": "verbatim"}
+{"id": "q34", "question": "was mercury detected", "expect": ["d10"], "phrasing": "paraphrase"}
+{"id": "q35", "question": "is the coast eroding and why", "expect": ["d11"], "phrasing": "paraphrase"}
+{"id": "q36", "question": "cliff recession supply versus longshore transport capacity", "expect": ["d11"], "phrasing": "verbatim"}
+{"id": "q37", "question": "how fast is the shoreline retreating", "expect": ["d11"], "phrasing": "paraphrase"}
+{"id": "q38", "question": "how accurate was the seabed classification", "expect": ["d12"], "phrasing": "paraphrase"}
+{"id": "q39", "question": "random forest classifier kappa statistic", "expect": ["d12"], "phrasing": "verbatim"}
+{"id": "q40", "question": "which sediment classes get confused acoustically", "expect": ["d12"], "phrasing": "paraphrase"}
+{"id": "q41", "question": "what dating method was applied to the shells", "expect": ["d02"], "phrasing": "paraphrase"}
+{"id": "q42", "question": "which analytical technique measured the trace metals", "expect": ["d10"], "phrasing": "paraphrase"}
+{"id": "q43", "question": "storm deposition above fair-weather wave base", "expect": ["d01"], "phrasing": "verbatim"}
+{"id": "q44", "question": "evidence for a tidally reworked seabed", "expect": ["d07"], "phrasing": "paraphrase"}
+{"id": "q45", "question": "what does strontium isotope data tell us about the cement", "expect": ["d08"], "phrasing": "paraphrase"}
