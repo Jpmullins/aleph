@@ -19,7 +19,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 async def _create_project(http_client, title: str) -> str:
     resp = await http_client.post(
         "/v1/projects",
-        json={"title": title, "description": "", "budget_usd": "1.00"},
+        json={"title": title, "description": ""},
     )
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]

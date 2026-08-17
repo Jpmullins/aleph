@@ -78,10 +78,10 @@ CI (`.github/workflows/ci.yml`) runs four jobs, and each one can genuinely fail:
 
 | job | what it runs |
 |---|---|
-| `python-quality` | `ruff check` · `ruff format --check` · `pyright` (strict, 0 errors) |
+| `python-quality` | `ruff check` · `ruff format --check` · `pyright` (strict, 0 errors) · `check-catalog-generated.sh` · `check-graph-state-keys.sh` |
 | `python-unit` | `pytest -m "not integration"` |
 | `python-integration` | postgres + redis services · `alembic upgrade head` · `alembic check` · `pytest -m integration` |
-| `web` | `pnpm lint` · `pnpm build` |
+| `web` | `pnpm lint` · `pnpm build` · `npm ci` + `tsc --noEmit` for `apps/copilot-runtime` |
 
 Run them locally with the commands in [`CLAUDE.md`](../CLAUDE.md#commands).
 
@@ -93,9 +93,22 @@ job was green regardless of the code. The datasets and the gate have been delete
 `packages/aleph-evals/src/aleph_evals/scorers/` are kept because the metrics themselves are correct;
 they need a harness that actually calls Aleph plus a real dataset before they mean anything.
 
-The former `scripts/check-*.sh` sweeps have also been deleted. Two of them read files that no longer
-exist, and the set was presented as equivalent "living invariants" when one was a two-token grep.
-When a real invariant needs enforcing, add a check that can fail for a real reason.
+The five `scripts/check-*.sh` "living invariant" sweeps have also been deleted. Two of them read files
+that no longer exist, and the set was presented as equivalent invariants when one was a two-token
+grep. When a real invariant needs enforcing, add a check that can fail for a real reason.
+
+Two `scripts/check-*.sh` remain, and they are held to exactly that rule rather than grandfathered
+past it — each regenerates an artifact from its source and diffs, so each has a concrete failing
+input:
+
+- `check-catalog-generated.sh` — `apps/web/src/a2ui/catalog.ts` and
+  `apps/copilot-runtime/src/catalog.generated.ts` must match what `scripts/gen_catalog.py` renders
+  from `catalog.json`. Fails on a hand-edit to a generated file, or on a `catalog.json` change
+  committed without re-running the generator.
+- `check-graph-state-keys.sh` — every key a LangGraph node writes must be declared on its state
+  `TypedDict`; undeclared writes are discarded silently. It imports the analyzer from
+  `tests/unit/test_graph_state_keys.py` rather than copying it, so the sweep and the behavioural
+  tests cannot disagree.
 
 ## Observability
 

@@ -17,7 +17,7 @@ export function AlephLogo({ size = 40, showWordmark = true, tagline }: Props) {
     <div className="flex items-center gap-3">
       <span
         aria-hidden
-        className="grid shrink-0 place-items-center rounded-xl font-serif leading-none text-white shadow-sm"
+        className="grid shrink-0 place-items-center rounded-xl font-serif leading-none text-ink-inverse shadow-sm"
         style={{
           width: size,
           height: size,
@@ -30,11 +30,11 @@ export function AlephLogo({ size = 40, showWordmark = true, tagline }: Props) {
       </span>
       {showWordmark && (
         <span className="flex flex-col leading-tight">
-          <span className="font-serif text-2xl font-semibold tracking-tight text-[var(--text-primary,#0f172a)]">
+          <span className="font-serif text-2xl font-semibold tracking-tight text-ink">
             Aleph
           </span>
           {tagline && (
-            <span className="text-xs text-[var(--text-muted,#64748b)]">{tagline}</span>
+            <span className="text-xs text-ink-muted">{tagline}</span>
           )}
         </span>
       )}

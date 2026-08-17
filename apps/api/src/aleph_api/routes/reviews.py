@@ -147,6 +147,9 @@ async def start_editorial_review(
         correlation_id=correlation_id,
         ttl_seconds=3600,
     )
+    # No commit needed here: this route writes only a ledger event, and the
+    # worker creates the ReviewRun itself rather than reading anything written
+    # above. There is no row for it to race against.
     from arq import create_pool
     from arq.connections import RedisSettings
 

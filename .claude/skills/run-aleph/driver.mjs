@@ -108,11 +108,12 @@ const commands = {
     const r = await fetch(`${API}/v1/projects`, {
       method: "POST",
       headers: { ...AUTH, "Content-Type": "application/json" },
+      // `ProjectCreate` is `extra="forbid"` — an obsolete field is a 422, not
+      // an ignored key. `budget_usd` went with the `budgets` table.
       body: JSON.stringify({
         title,
         description: "Created by run-aleph driver",
         model_profile_name: "aleph-dev",
-        budget_usd: "100.00",
       }),
     });
     if (!r.ok) throw new Error(`POST /v1/projects -> ${r.status} ${await r.text()}`);
@@ -135,9 +136,16 @@ const commands = {
     await withPage(async (page) => {
       await openWorkspace(page, projectId);
       await page.waitForTimeout(2000);
-      for (const tab of ["Wiki", "Artifacts", "Notes", "Hypotheses", "Briefs"]) {
-        const visible = await page.getByRole("button", { name: tab }).first().isVisible().catch(() => false);
-        console.log(`${visible ? "✓" : "✗"} tab: ${tab}`);
+      // The surface switcher is the left Rail (`SURFACE_TABS` in
+      // apps/web/src/lib/workspace-ui.tsx). Probe it by testid rather than by
+      // label: several surfaces render their own like-named buttons, so a
+      // by-name lookup can report a surface as reachable when it is not.
+      for (const tab of ["Wiki", "Library", "Notes", "Hypotheses", "Briefs"]) {
+        const visible = await page
+          .getByTestId(`rail-${tab.toLowerCase()}`)
+          .isVisible()
+          .catch(() => false);
+        console.log(`${visible ? "✓" : "✗"} rail: ${tab}`);
       }
       await page.screenshot({ path: out });
       console.log(`screenshot: ${out}`);
@@ -149,7 +157,9 @@ const commands = {
     projectId ||= await firstProjectId();
     await withPage(async (page) => {
       await openWorkspace(page, projectId);
-      await page.getByRole("button", { name: "+ New" }).first().click();
+      // Session creation moved from the (now unrendered) LeftPanel into the
+      // AssistantDock; "+ New" is no longer unique on the page.
+      await page.getByTestId("dock-new-session").click();
       const composer = page.getByTestId("copilot-chat-textarea");
       await composer.waitFor({ state: "visible", timeout: 15_000 });
       await page.waitForTimeout(2000); // composer enables once the AG-UI thread resolves

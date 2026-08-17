@@ -15,6 +15,7 @@ from aleph_runtime.capabilities import (
     CODE_RUNNER_POOL,
     DB_ENGINE,
     DB_SESSIONS,
+    GATEWAY_CATALOG,
     HTTP_GATEWAY,
     LITELLM,
     REDIS,
@@ -71,6 +72,7 @@ async def _startup(ctx: dict[str, Any]) -> None:
                 HTTP_GATEWAY,
                 REDIS,
                 LITELLM,
+                GATEWAY_CATALOG,
                 ASSET_STORE,
                 SCHOLAR,
                 ARQ_POOL,
@@ -88,6 +90,13 @@ async def _startup(ctx: dict[str, Any]) -> None:
     ctx["session_maker"] = reader.get(DB_SESSIONS)
     ctx["litellm_client"] = reader.get(LITELLM)
     ctx["gateway_http"] = reader.get(HTTP_GATEWAY)
+    # Workers price calls from the same discovered rates the API uses: the
+    # `models` capability runs discovery and refreshes its pricing table in
+    # place before handing it to the LiteLLMClient, so a worker-side ModelCall
+    # is priced rather than recording pricing_source="unknown" — the research
+    # loop is the heaviest spender. The catalog is on ctx so a job that needs
+    # fresh rates can force a refresh instead of opening its own.
+    ctx["gateway_catalog"] = reader.get(GATEWAY_CATALOG)
     ctx["redis"] = reader.get(REDIS)
     ctx["redis_pool"] = reader.get(ARQ_POOL)
     ctx["code_runner_pool"] = reader.get(CODE_RUNNER_POOL)

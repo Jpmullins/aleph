@@ -17,7 +17,7 @@ from uuid import UUID
 import httpx
 from fastapi import APIRouter, Body, File, Form, Request, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 
 from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
@@ -114,8 +114,16 @@ async def _kick_off_normalize(
     """Mint an agent token, ledger an AgentRun, and enqueue `normalize_job`.
 
     Shared by the upload and ingest-url routes so both kick the normalize
-    pipeline off the same way. On enqueue failure the source is marked
-    `failed` so the UI surfaces it (the row is committed by the caller).
+    pipeline off the same way.
+
+    **Commits before enqueueing.** `normalize_job` looks the `SourceVersion` up
+    by id the instant it dequeues, and arq workers are fast enough to win that
+    race against a transaction that has not landed yet. The docstring here used
+    to say "the row is committed by the caller" — which was true, and happened
+    *after* this function had already published the job. The worker then raised
+    on a row that did not exist yet, and `normalize_job` raises a plain
+    `RuntimeError`, which arq treats as terminal: no retry, and the source sits
+    in `ingested` forever with nothing saying why.
     """
     # Mint an agent token + create an AgentRun so the worker can authenticate.
     agent_run_id = uuid7()
@@ -165,6 +173,9 @@ async def _kick_off_normalize(
         ttl_seconds=3600,
     )
 
+    # Make the rows durable BEFORE publishing the job (see docstring).
+    await session.commit()
+
     # Enqueue normalize job via the shared Redis (arq.create_pool API works
     # through the same redis URL the app uses).
     try:
@@ -177,9 +188,19 @@ async def _kick_off_normalize(
         finally:
             await pool.aclose()
     except Exception as exc:
-        # Job enqueue failed — mark source as failed so the UI surfaces it.
-        created.source.status = "failed"
-        created.source.failure_reason = f"failed to enqueue normalize job: {exc}"[:2048]
+        # Enqueue failed — mark the source failed so the UI surfaces it rather
+        # than showing a source that will never progress. Written as an explicit
+        # UPDATE because the commit above expired the ORM instance, and touching
+        # an expired attribute here would lazy-load outside the request greenlet.
+        await session.execute(
+            update(Source)
+            .where(Source.id == created.source.id)
+            .values(
+                status="failed",
+                failure_reason=f"failed to enqueue normalize job: {exc}"[:2048],
+            )
+        )
+        await session.commit()
 
 
 class IngestUrlIn(BaseModel):
@@ -347,6 +368,13 @@ async def retract_source_route(
         session, ledger, principal, source_id=source_id, reason=body.reason
     )
 
+    # Durable before dispatched: `curate_page_job` recomputes freshness from the
+    # retraction `retract_source` just wrote. Enqueueing first means the curator
+    # can read the pre-retraction state and recompute a score that says the page
+    # is fine — the retraction silently failing to propagate, which is the whole
+    # point of the blast-radius machinery.
+    await session.commit()
+
     # Best-effort: enqueue a curator freshness recompute for each affected page.
     if result.page_ids:
         try:
@@ -421,4 +449,67 @@ async def get_normalized(
         token_count=nd.token_count,
         quality_flags=nd.quality_flags_jsonb,
         markdown=md,
+    )
+
+
+#: The corpus pipeline, in the order a source actually moves through it. Each
+#: stage is *cumulative*: a source that reached `indexed` has necessarily been
+#: normalized, so a stage's count includes everything downstream of it. Showing
+#: non-cumulative counts made the strip read as though work had been lost —
+#: sources "disappeared" from `normalized` as they advanced.
+_PIPELINE_STAGES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("ingested", "Ingested", ("ingested", "normalized", "indexed", "wiki_done")),
+    ("normalized", "Normalized", ("normalized", "indexed", "wiki_done")),
+    ("indexed", "Chunked + embedded", ("indexed", "wiki_done")),
+    ("wiki_done", "On the wiki", ("wiki_done",)),
+)
+
+#: Terminal failures. Counted separately and never folded into a stage: a
+#: failed source that silently vanished from the strip is the corpus-level
+#: version of the empty-path failure this codebase keeps finding.
+_PIPELINE_FAILED: tuple[str, ...] = ("failed", "wiki_failed")
+
+
+class PipelineStageOut(BaseModel):
+    key: str
+    label: str
+    count: int
+
+
+class PipelineOut(BaseModel):
+    """Corpus-level progress: how far the whole source set has actually got."""
+
+    stages: list[PipelineStageOut]
+    failed: int
+    total: int
+
+
+@router.get("/{project_id}/pipeline", response_model=PipelineOut)
+async def get_pipeline(project_id: ProjectScopeDep, session: SessionDep) -> PipelineOut:
+    """Counts per ingest stage for the project's whole corpus.
+
+    The gap this closes: a source's journey (fetch → normalize → chunk+embed →
+    wiki) ran entirely in workers with no corpus-level view, so "is my library
+    ready to ask questions of?" was unanswerable without reading logs. A run
+    that stalled after normalization looked exactly like one that had finished.
+    """
+    rows = (
+        await session.execute(
+            select(Source.status, func.count())
+            .where(Source.project_id == project_id)
+            .group_by(Source.status)
+        )
+    ).all()
+    counts = {str(status): int(n) for status, n in rows}
+    return PipelineOut(
+        stages=[
+            PipelineStageOut(
+                key=key,
+                label=label,
+                count=sum(counts.get(s, 0) for s in members),
+            )
+            for key, label, members in _PIPELINE_STAGES
+        ],
+        failed=sum(counts.get(s, 0) for s in _PIPELINE_FAILED),
+        total=sum(counts.values()),
     )

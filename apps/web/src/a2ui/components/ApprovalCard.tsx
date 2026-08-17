@@ -24,9 +24,9 @@ export function ApprovalCard({ component, onAction }: RendererProps) {
         </span>
       }
     >
-      <p className="mb-2 text-sm text-slate-700">{p.summary}</p>
+      <p className="mb-2 text-sm text-ink-soft">{p.summary}</p>
       {p.evidence_refs && p.evidence_refs.length > 0 && (
-        <ul className="mb-3 list-disc pl-5 text-xs text-slate-500">
+        <ul className="mb-3 list-disc pl-5 text-xs text-ink-muted">
           {p.evidence_refs.map((e) => (
             <li key={e.id}>
               {e.kind}: {e.label ?? e.id}
@@ -40,14 +40,14 @@ export function ApprovalCard({ component, onAction }: RendererProps) {
           onClick={() =>
             onAction("approve", { target_id: p.target_id, target_kind: p.target_kind })
           }
-          className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-medium text-white hover:bg-emerald-700"
+          className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-medium text-ink-inverse hover:bg-emerald-700"
         >
           Approve
         </button>
         <button
           type="button"
           onClick={() => setShowReject(true)}
-          className="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium hover:border-slate-500"
+          className="rounded-md border border-line-strong px-3 py-1 text-xs font-medium hover:border-line-strong"
         >
           Reject
         </button>
@@ -56,19 +56,19 @@ export function ApprovalCard({ component, onAction }: RendererProps) {
           onClick={() =>
             onAction("open", { target_id: p.target_id, target_kind: p.target_kind })
           }
-          className="ml-auto text-xs text-slate-500 hover:text-slate-900"
+          className="ml-auto text-xs text-ink-muted hover:text-ink"
         >
           Open →
         </button>
       </div>
       {showReject && (
-        <div className="mt-3 rounded border border-slate-200 bg-slate-50 p-2">
+        <div className="mt-3 rounded border border-line bg-sunken p-2">
           <textarea
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             rows={2}
             placeholder="Reason for rejection…"
-            className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
+            className="w-full rounded border border-line-strong px-2 py-1 text-xs"
           />
           <div className="mt-2 flex justify-end gap-2">
             <button
@@ -77,7 +77,7 @@ export function ApprovalCard({ component, onAction }: RendererProps) {
                 setShowReject(false);
                 setReason("");
               }}
-              className="rounded border border-slate-300 px-2 py-1 text-xs hover:border-slate-500"
+              className="rounded border border-line-strong px-2 py-1 text-xs hover:border-line-strong"
             >
               Cancel
             </button>
@@ -93,7 +93,7 @@ export function ApprovalCard({ component, onAction }: RendererProps) {
                 setShowReject(false);
                 setReason("");
               }}
-              className="rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+              className="rounded bg-red-600 px-2 py-1 text-xs font-medium text-ink-inverse hover:bg-red-700 disabled:opacity-50"
             >
               Confirm reject
             </button>

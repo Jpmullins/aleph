@@ -124,7 +124,7 @@ export function A2UISurfaceView({ messages, projectId, surface }: Props) {
   }, [catalog, messages]);
 
   if (surfaces.length === 0) {
-    return <div className="p-6 text-sm text-slate-500">No surface.</div>;
+    return <div className="p-6 text-sm text-ink-muted">No surface.</div>;
   }
   return (
     <SurfaceProvider projectId={projectId} surface={surface}>
@@ -223,7 +223,7 @@ export function A2UIStreamSurfaceView({ streamUrl, projectId, surface }: StreamP
   }, [catalog, streamUrl]);
 
   if (surfaces.length === 0) {
-    return <div className="p-6 text-sm text-slate-500">Loading surface…</div>;
+    return <div className="p-6 text-sm text-ink-muted">Loading surface…</div>;
   }
   return (
     <SurfaceProvider projectId={projectId} surface={surface}>

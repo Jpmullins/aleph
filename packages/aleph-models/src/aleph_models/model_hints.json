@@ -1,0 +1,204 @@
+{
+  "note": [
+    "Operator-supplied facts, used ONLY for fields the gateway did not report.",
+    "Aleph prefers /model/info, which reports a gateway's own modes, windows and",
+    "rates. That endpoint is admin-only, so an application virtual key usually",
+    "sees just /v1/models (ids and nothing else). These entries fill that gap.",
+    "",
+    "CAPABILITY fields (mode, max_input_tokens, supports_*) are properties of the",
+    "MODEL and are safe to state here.",
+    "",
+    "RATE fields are properties of YOUR DEPLOYMENT. Those below are publisher",
+    "list prices in USD per token and are an ESTIMATE \u2014 verify against a bill.",
+    "They are recorded as pricing_source=\"static\", never \"gateway\", so an",
+    "auditor can tell asserted numbers from reported ones.",
+    "",
+    "Self-hosted / open-weight models are deliberately left UNPRICED: their cost",
+    "depends on your infrastructure, and a guess would be recorded as fact. A",
+    "bound model with no rate records pricing_source=\"unknown\" and logs an error,",
+    "which is the intended, visible outcome. Fill in your own numbers below.",
+    "",
+    "Keys may be an exact model id or a 'prefix*' pattern; longest match wins.",
+    "Override this whole file with ALEPH_MODEL_HINTS_PATH."
+  ],
+  "models": {
+    "claude-opus-4-7": {
+      "mode": "chat",
+      "max_input_tokens": 200000,
+      "max_output_tokens": 64000,
+      "supports_vision": true,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": true,
+      "input_per_token": "0.000015",
+      "output_per_token": "0.000075",
+      "cache_read_per_token": "0.0000015",
+      "cache_write_per_token": "0.00001875"
+    },
+    "claude-opus-4-6": {
+      "mode": "chat",
+      "max_input_tokens": 200000,
+      "max_output_tokens": 64000,
+      "supports_vision": true,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": true,
+      "input_per_token": "0.000015",
+      "output_per_token": "0.000075",
+      "cache_read_per_token": "0.0000015",
+      "cache_write_per_token": "0.00001875"
+    },
+    "claude-sonnet-5": {
+      "mode": "chat",
+      "max_input_tokens": 200000,
+      "max_output_tokens": 64000,
+      "supports_vision": true,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": true,
+      "input_per_token": "0.000003",
+      "output_per_token": "0.000015",
+      "cache_read_per_token": "0.0000003",
+      "cache_write_per_token": "0.00000375"
+    },
+    "claude-sonnet-4-6": {
+      "mode": "chat",
+      "max_input_tokens": 200000,
+      "max_output_tokens": 64000,
+      "supports_vision": true,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": true,
+      "input_per_token": "0.000003",
+      "output_per_token": "0.000015",
+      "cache_read_per_token": "0.0000003",
+      "cache_write_per_token": "0.00000375"
+    },
+    "claude-sonnet-4-5*": {
+      "mode": "chat",
+      "max_input_tokens": 200000,
+      "max_output_tokens": 64000,
+      "supports_vision": true,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": true,
+      "input_per_token": "0.000003",
+      "output_per_token": "0.000015",
+      "cache_read_per_token": "0.0000003",
+      "cache_write_per_token": "0.00000375"
+    },
+    "claude-haiku-4-5*": {
+      "mode": "chat",
+      "max_input_tokens": 200000,
+      "max_output_tokens": 64000,
+      "supports_vision": true,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": true,
+      "input_per_token": "0.000001",
+      "output_per_token": "0.000005",
+      "cache_read_per_token": "0.0000001",
+      "cache_write_per_token": "0.00000125"
+    },
+    "cohere-embed-v4": {
+      "mode": "embedding",
+      "max_input_tokens": 128000,
+      "input_per_token": "0.00000012",
+      "output_per_token": "0"
+    },
+    "cohere-embed-english-v3": {
+      "mode": "embedding",
+      "max_input_tokens": 512,
+      "input_per_token": "0.0000001",
+      "output_per_token": "0"
+    },
+    "titan-embed-v2": {
+      "mode": "embedding",
+      "max_input_tokens": 8192,
+      "input_per_token": "0.00000002",
+      "output_per_token": "0"
+    },
+    "deepseek-r1": {
+      "mode": "chat",
+      "max_input_tokens": 128000,
+      "supports_reasoning": true,
+      "supports_function_calling": true
+    },
+    "deepseek-v3*": {
+      "mode": "chat",
+      "max_input_tokens": 128000,
+      "supports_function_calling": true
+    },
+    "kimi-k2*": {
+      "mode": "chat",
+      "max_input_tokens": 256000,
+      "supports_function_calling": true
+    },
+    "qwen3-coder*": {
+      "mode": "chat",
+      "max_input_tokens": 256000,
+      "supports_function_calling": true
+    },
+    "qwen3*": {
+      "mode": "chat",
+      "max_input_tokens": 128000,
+      "supports_function_calling": true
+    },
+    "glm-5": {
+      "mode": "chat",
+      "max_input_tokens": 200000,
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    },
+    "glm-4.7*": {
+      "mode": "chat",
+      "max_input_tokens": 128000,
+      "supports_function_calling": true
+    },
+    "minimax-m2*": {
+      "mode": "chat",
+      "max_input_tokens": 200000,
+      "supports_function_calling": true
+    },
+    "nemotron-super*": {
+      "mode": "chat",
+      "max_input_tokens": 128000,
+      "supports_function_calling": true
+    },
+    "nemotron-nano*": {
+      "mode": "chat",
+      "max_input_tokens": 128000
+    },
+    "llama3-3-70b": {
+      "mode": "chat",
+      "max_input_tokens": 128000,
+      "supports_function_calling": true
+    },
+    "ministral-3-8b": {
+      "mode": "chat",
+      "max_input_tokens": 128000,
+      "supports_function_calling": true
+    },
+    "gpt-oss-120b": {
+      "mode": "chat",
+      "max_input_tokens": 128000,
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    },
+    "gpt-oss-20b": {
+      "mode": "chat",
+      "max_input_tokens": 128000,
+      "supports_function_calling": true
+    },
+    "gemma-3-27b": {
+      "mode": "chat",
+      "max_input_tokens": 128000,
+      "supports_vision": true
+    },
+    "gemma-3-12b": {
+      "mode": "chat",
+      "max_input_tokens": 128000,
+      "supports_vision": true
+    }
+  }
+}

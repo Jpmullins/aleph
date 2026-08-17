@@ -74,6 +74,7 @@ import { ApprovalCard as ApprovalCardView } from "./components/ApprovalCard";
 import { ArtifactCard as ArtifactCardView } from "./components/ArtifactCard";
 import { ArtifactsSurface as ArtifactsSurfaceView } from "./components/ArtifactsSurface";
 import { BriefsSurface as BriefsSurfaceView } from "./components/BriefsSurface";
+import { GroundingSurface as GroundingSurfaceView } from "./components/GroundingSurface";
 import { ChartCard as ChartCardView } from "./components/ChartCard";
 import { ClaimCard as ClaimCardView } from "./components/ClaimCard";
 import { DiffCard as DiffCardView } from "./components/DiffCard";
@@ -508,6 +509,19 @@ export const BriefsSurfaceImpl = createComponentImplementation(
   adapt("BriefsSurface", BriefsSurfaceView, "briefs"),
 );
 
+export const GroundingSurfaceApi = {
+  name: "GroundingSurface",
+  schema: z3.object({
+    claim: z3.any().optional(),
+    groundings: z3.any().optional(),
+    children: z3.array(z3.any()).optional(),
+  }),
+};
+export const GroundingSurfaceImpl = createComponentImplementation(
+  GroundingSurfaceApi,
+  adapt("GroundingSurface", GroundingSurfaceView, "grounding"),
+);
+
 /**
  * Every Aleph domain impl (13 cards + 5 surfaces). The shared catalog
  * (`A2UISurfaceView.buildAlephCatalog`) merges these with the basic-catalog
@@ -537,4 +551,5 @@ export const ALEPH_CARD_IMPLS = [
   NotesSurfaceImpl,
   HypothesesSurfaceImpl,
   BriefsSurfaceImpl,
+  GroundingSurfaceImpl,
 ];

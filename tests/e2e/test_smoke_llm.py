@@ -3,7 +3,7 @@
 The gateway is not reachable in CI, so we monkey-patch the LiteLLM client's
 underlying httpx POST to return a canned OpenAI-shaped response. The rest
 of the path is real: profile lookup, ModelCall + CostLedgerEvent writes,
-OTEL spans, budget rollup trigger.
+OTEL spans, cost rollup.
 """
 
 from __future__ import annotations
@@ -70,7 +70,7 @@ async def test_smoke_llm_writes_model_call_and_cost_ledger(
 ):
     proj = await http_client.post(
         "/v1/projects",
-        json={"title": "smoke", "description": "", "budget_usd": "1.00"},
+        json={"title": "smoke", "description": ""},
     )
     assert proj.status_code == 201
     pid = proj.json()["id"]
@@ -109,8 +109,8 @@ async def test_smoke_llm_writes_model_call_and_cost_ledger(
     assert len(events) == 1
     assert events[0].model_call_id == calls[0].id
 
-    # The budget rollup trigger must have updated budgets.spent_usd.
+    # The cost rollup sums the model-call rows this smoke run just wrote.
     cost = await http_client.get(f"/v1/projects/{pid}/cost")
     assert cost.status_code == 200
-    spent = Decimal(cost.json()["spent_usd"])
+    spent = Decimal(cost.json()["total_usd"])
     assert spent >= Decimal("0")

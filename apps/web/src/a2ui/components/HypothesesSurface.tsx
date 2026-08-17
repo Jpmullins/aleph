@@ -44,7 +44,7 @@ export function HypothesesSurface({ component, onAction }: RendererProps) {
           <button
             type="button"
             onClick={() => setShowCreate(true)}
-            className="rounded-md bg-slate-900 px-3 py-1 text-xs font-medium text-white hover:bg-slate-700"
+            className="rounded-md bg-ink px-3 py-1 text-xs font-medium text-ink-inverse hover:bg-ink-soft"
             data-testid="new-hypothesis"
           >
             + New
@@ -54,7 +54,7 @@ export function HypothesesSurface({ component, onAction }: RendererProps) {
       <div className="flex-1 space-y-2 overflow-y-auto p-3">
         <HypothesisMatrix ach={ach} />
         {items.length === 0 && (
-          <div className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">
+          <div className="rounded-lg border border-dashed border-line-strong p-6 text-center text-sm text-ink-muted">
             No hypotheses yet. Click <strong>+ New</strong> to add your first.
           </div>
         )}
@@ -102,7 +102,7 @@ function HypothesisRow({
       }
       footer={updated ? `updated ${new Date(updated).toLocaleString()}` : undefined}
     >
-      <p className="text-sm text-slate-700">{h.statement}</p>
+      <p className="text-sm text-ink-soft">{h.statement}</p>
     </CardShell>
   );
 }
@@ -117,8 +117,8 @@ function NewHypothesisModal({
   const [title, setTitle] = useState("");
   const [statement, setStatement] = useState("");
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 px-4">
-      <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-ink/40 px-4">
+      <div className="w-full max-w-md rounded-lg bg-surface p-5 shadow-xl">
         <h3 className="mb-3 text-base font-semibold">New hypothesis</h3>
         <form
           onSubmit={(e) => {
@@ -128,22 +128,22 @@ function NewHypothesisModal({
           className="space-y-3"
         >
           <label className="block">
-            <span className="text-xs font-medium text-slate-700">Title</span>
+            <span className="text-xs font-medium text-ink-soft">Title</span>
             <input
               required
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm"
             />
           </label>
           <label className="block">
-            <span className="text-xs font-medium text-slate-700">Statement</span>
+            <span className="text-xs font-medium text-ink-soft">Statement</span>
             <textarea
               required
               value={statement}
               onChange={(e) => setStatement(e.target.value)}
               rows={4}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm"
               placeholder="A precise, falsifiable claim. e.g. 'CoT prompting improves GSM8K accuracy by >5 pts on models ≥7B params.'"
             />
           </label>
@@ -151,14 +151,14 @@ function NewHypothesisModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-md border border-slate-300 px-3 py-1.5 text-xs hover:border-slate-500"
+              className="rounded-md border border-line-strong px-3 py-1.5 text-xs hover:border-line-strong"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={!title || !statement}
-              className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+              className="rounded-md bg-ink px-3 py-1.5 text-xs font-medium text-ink-inverse hover:bg-ink-soft disabled:opacity-50"
             >
               Create
             </button>

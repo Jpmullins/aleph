@@ -35,10 +35,7 @@ class CostBucket(BaseModel):
 class CostRollup(BaseModel):
     """Returned by GET /v1/projects/{id}/cost."""
 
-    cap_usd: Decimal
-    spent_usd: Decimal
-    soft_pct: Decimal
-    hard_pct: Decimal
+    total_usd: Decimal
     by_phase: list[CostBucket]
     by_model: list[CostBucket]
     recent_calls: list[ModelCallRecord]

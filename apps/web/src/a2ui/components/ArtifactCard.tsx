@@ -56,7 +56,7 @@ export function ArtifactCard({ component, onAction }: RendererProps) {
           Open in Library
         </button>
         {!terminal && (
-          <span className="ml-auto text-xs text-slate-400" data-surface={surface}>
+          <span className="ml-auto text-xs text-ink-muted" data-surface={surface}>
             building…
           </span>
         )}

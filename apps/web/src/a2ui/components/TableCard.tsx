@@ -48,7 +48,7 @@ export function TableCard({ component }: RendererProps) {
   if (p._placeholder || rows.length === 0) {
     return (
       <CardShell title={p.title || "Table"} subtitle={<Pill tone="slate">No data bound</Pill>}>
-        <p className="text-xs text-slate-500">Bind a DatasetVersion or pass rows to render.</p>
+        <p className="text-xs text-ink-muted">Bind a DatasetVersion or pass rows to render.</p>
       </CardShell>
     );
   }
@@ -66,16 +66,16 @@ export function TableCard({ component }: RendererProps) {
         value={filter}
         onChange={(e) => setFilter(e.target.value)}
         placeholder="Filter…"
-        className="mb-2 w-full rounded border border-slate-200 px-2 py-1 text-xs focus:border-slate-500 focus:outline-none"
+        className="mb-2 w-full rounded border border-line px-2 py-1 text-xs focus:border-line-strong focus:outline-none"
       />
       <div className="max-h-72 overflow-auto">
         <table className="w-full border-collapse text-xs">
-          <thead className="sticky top-0 bg-slate-50 text-left">
+          <thead className="sticky top-0 bg-sunken text-left">
             <tr>
               {headers.map((c) => (
                 <th
                   key={c.name}
-                  className="cursor-pointer border-b border-slate-200 px-2 py-1.5 font-medium text-slate-700 hover:bg-slate-100"
+                  className="cursor-pointer border-b border-line px-2 py-1.5 font-medium text-ink-soft hover:bg-elevated"
                   onClick={() => {
                     if (sortBy === c.name) setSortDir(sortDir === "asc" ? "desc" : "asc");
                     else {
@@ -94,9 +94,9 @@ export function TableCard({ component }: RendererProps) {
           </thead>
           <tbody>
             {filtered.map((r, i) => (
-              <tr key={i} className="border-b border-slate-100 hover:bg-slate-50">
+              <tr key={i} className="border-b border-line hover:bg-sunken">
                 {headers.map((c) => (
-                  <td key={c.name} className="px-2 py-1 text-slate-700">
+                  <td key={c.name} className="px-2 py-1 text-ink-soft">
                     {formatCell(r[c.name])}
                   </td>
                 ))}
@@ -104,7 +104,7 @@ export function TableCard({ component }: RendererProps) {
             ))}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={headers.length} className="px-2 py-4 text-center text-slate-400">
+                <td colSpan={headers.length} className="px-2 py-4 text-center text-ink-muted">
                   No rows match.
                 </td>
               </tr>

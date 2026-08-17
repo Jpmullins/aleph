@@ -8,7 +8,7 @@ export function BriefsSurface({ component, onAction }: RendererProps) {
   return (
     <div className="flex h-full flex-col p-3">
       <div className="mb-2 flex items-center justify-between">
-        <div className="text-xs uppercase tracking-wider text-slate-400">
+        <div className="text-xs uppercase tracking-wider text-ink-muted">
           Briefs
         </div>
         {(p.badge_count ?? 0) > 0 && (
@@ -18,7 +18,7 @@ export function BriefsSurface({ component, onAction }: RendererProps) {
         )}
       </div>
       {children.length === 0 ? (
-        <p className="text-sm text-slate-500">No pending briefs.</p>
+        <p className="text-sm text-ink-muted">No pending briefs.</p>
       ) : (
         <div className="flex-1 space-y-2 overflow-y-auto">
           {children.map((c) => {
@@ -33,7 +33,7 @@ export function BriefsSurface({ component, onAction }: RendererProps) {
                     onClick={() => onAction("unpin", { card_id: pinnedCardId })}
                     title="Unpin from Briefs"
                     aria-label="Unpin from Briefs"
-                    className="absolute right-2 top-2 z-10 hidden rounded px-1.5 py-0.5 text-xs text-[var(--text-muted,#94a3b8)] hover:bg-[var(--surface-sunken,#f8fafc)] hover:text-[var(--text-primary,#0f172a)] group-hover:block"
+                    className="absolute right-2 top-2 z-10 hidden rounded px-1.5 py-0.5 text-xs text-ink-muted hover:bg-sunken hover:text-ink group-hover:block"
                     data-testid={`unpin-${pinnedCardId}`}
                   >
                     ✕ Unpin

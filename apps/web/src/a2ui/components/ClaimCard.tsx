@@ -29,9 +29,9 @@ export function ClaimCard({ component, onAction }: RendererProps) {
         />
       }
     >
-      <p className="text-sm text-slate-700">{p.text}</p>
+      <p className="text-sm text-ink-soft">{p.text}</p>
       {p.citations && p.citations.length > 0 && (
-        <div className="mt-2 text-xs text-slate-500">
+        <div className="mt-2 text-xs text-ink-muted">
           {p.citations.map((c) => (
             <span
               key={c.marker}
@@ -46,7 +46,7 @@ export function ClaimCard({ component, onAction }: RendererProps) {
       <button
         type="button"
         onClick={() => onAction("open", { target_id: p.claim_id, target_kind: "claim" })}
-        className="mt-2 text-xs text-slate-500 hover:text-slate-900"
+        className="mt-2 text-xs text-ink-muted hover:text-ink"
       >
         Open claim →
       </button>

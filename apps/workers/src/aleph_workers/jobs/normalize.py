@@ -71,6 +71,29 @@ async def _set_run_status(
         await session.commit()
 
 
+#: How many times a missing row is treated as "not visible yet" before it is
+#: treated as "genuinely absent".
+_MISSING_ROW_RETRIES = 3
+
+
+def _missing_row(ctx: dict[str, Any], what: str) -> Exception:
+    """A row the job cannot find: retry a few times, then fail for real.
+
+    The API now commits before enqueueing, so this should not fire. It is kept
+    because the failure it guards is silent and expensive: a plain exception
+    here is TERMINAL in arq — no retry — so a source that lost the race sat in
+    `ingested` forever with nothing recorded to say why. Deferring a few times
+    lets a transient visibility gap heal itself, while a row that truly does not
+    exist still fails loudly rather than retrying forever.
+    """
+    from arq.worker import Retry
+
+    attempt = int(ctx.get("job_try", 1) or 1)
+    if attempt <= _MISSING_ROW_RETRIES:
+        return Retry(defer=2**attempt)
+    return RuntimeError(f"{what} (after {attempt} attempts)")
+
+
 async def normalize_job(
     ctx: dict[str, Any], normalize_input_str: str, agent_token: str
 ) -> dict[str, Any]:
@@ -105,20 +128,17 @@ async def normalize_job(
                 await session.execute(select(SourceVersion).where(SourceVersion.id == version_id))
             ).scalar_one_or_none()
             if version is None:
-                msg = f"source version {version_id} not found"
-                raise RuntimeError(msg)
+                raise _missing_row(ctx, f"source version {version_id} not found")
             source = (
                 await session.execute(select(Source).where(Source.id == version.source_id))
             ).scalar_one_or_none()
             if source is None:
-                msg = f"source {version.source_id} not found"
-                raise RuntimeError(msg)
+                raise _missing_row(ctx, f"source {version.source_id} not found")
             asset = (
                 await session.execute(select(SourceAsset).where(SourceAsset.id == version.asset_id))
             ).scalar_one_or_none()
             if asset is None:
-                msg = f"source asset {version.asset_id} not found"
-                raise RuntimeError(msg)
+                raise _missing_row(ctx, f"source asset {version.asset_id} not found")
 
             try:
                 data = asset_store.get(asset.storage_uri, expected_sha256=asset.sha256)

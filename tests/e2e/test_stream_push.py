@@ -55,9 +55,7 @@ async def _scoped_project(http_client: Any, asgi_app: Any) -> tuple[UUID, Any]:
     from aleph_db.models.project import Project
     from aleph_security.principal import Principal
 
-    resp = await http_client.post(
-        "/v1/projects", json={"title": "stream-push", "description": "", "budget_usd": "1.00"}
-    )
+    resp = await http_client.post("/v1/projects", json={"title": "stream-push", "description": ""})
     assert resp.status_code == 201, resp.text
     pid = UUID(resp.json()["id"])
     maker = asgi_app.state.session_maker
@@ -81,7 +79,14 @@ def _fake_request(asgi_app: Any) -> Any:
     # reconnect cursor (`?cid=`, `Last-Event-ID`); real Starlette requests
     # always carry them, so the fake supplies empty stand-ins.
     return SimpleNamespace(
-        app=asgi_app, is_disconnected=is_disconnected, query_params={}, headers={}
+        # `assert_stream_access` consults project status, which needs
+        # method + path. Streams are always GET.
+        method="GET",
+        url=SimpleNamespace(path="/v1/projects/stream"),
+        app=asgi_app,
+        is_disconnected=is_disconnected,
+        query_params={},
+        headers={},
     )
 
 

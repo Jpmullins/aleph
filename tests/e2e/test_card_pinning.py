@@ -39,7 +39,7 @@ async def auth_bypass(monkeypatch):
 async def _make_project(http_client) -> UUID:
     resp = await http_client.post(
         "/v1/projects",
-        json={"title": "Card pinning", "description": "t", "budget_usd": "5.00"},
+        json={"title": "Card pinning", "description": "t"},
     )
     assert resp.status_code == 201, resp.text
     return UUID(resp.json()["id"])

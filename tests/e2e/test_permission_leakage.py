@@ -71,7 +71,7 @@ async def test_b_cannot_read_a_project(oidc_client, monkeypatch):
     monkeypatch.setattr(auth_mod, "verify_user_jwt", _claims_for("user-a", "a@test.local", "A"))
     resp = await oidc_client.post(
         "/v1/projects",
-        json={"title": "secret", "description": "", "budget_usd": "1.00"},
+        json={"title": "secret", "description": ""},
     )
     assert resp.status_code == 201, resp.text
     pid = resp.json()["id"]

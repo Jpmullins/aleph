@@ -65,19 +65,19 @@ export function CardShell({
   children: ReactNode;
 }) {
   return (
-    <div className="rounded-lg border border-[var(--border-muted,#e2e8f0)] bg-[var(--surface-raised,#fff)] p-3 shadow-sm">
+    <div className="rounded-lg border border-line bg-surface p-3 shadow-sm">
       {(title || actions) && (
         <div className="mb-1 flex items-start justify-between gap-2">
           {title && (
-            <div className="text-sm font-semibold text-[var(--text-primary,#0f172a)]">{title}</div>
+            <div className="text-sm font-semibold text-ink">{title}</div>
           )}
           {actions && <div className="flex items-center gap-1">{actions}</div>}
         </div>
       )}
-      {subtitle && <div className="mb-2 text-xs text-[var(--text-muted,#94a3b8)]">{subtitle}</div>}
+      {subtitle && <div className="mb-2 text-xs text-ink-muted">{subtitle}</div>}
       {children}
       {footer && (
-        <div className="mt-2 border-t border-[var(--border-muted,#e2e8f0)] pt-2 text-[11px] text-[var(--text-muted,#94a3b8)]">
+        <div className="mt-2 border-t border-line pt-2 text-[11px] text-ink-muted">
           {footer}
         </div>
       )}
@@ -95,12 +95,12 @@ export function SurfaceHeader({
   actions?: ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between border-b border-[var(--border-muted,#e2e8f0)] px-4 py-3">
+    <div className="flex items-center justify-between border-b border-line px-4 py-3">
       <div>
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--text-secondary,#475569)]">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-ink-soft">
           {title}
         </h3>
-        {subtitle && <p className="mt-0.5 text-xs text-[var(--text-muted,#94a3b8)]">{subtitle}</p>}
+        {subtitle && <p className="mt-0.5 text-xs text-ink-muted">{subtitle}</p>}
       </div>
       {actions && <div className="flex items-center gap-2">{actions}</div>}
     </div>
@@ -174,7 +174,7 @@ export function FeedbackButton({ targetKind, targetId, surface, onAction }: Feed
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="rounded p-1 text-xs text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+        className="rounded p-1 text-xs text-ink-muted hover:bg-elevated hover:text-ink-soft"
         title="Flag a problem with this card"
         data-testid={`feedback-${targetKind}-${targetId}`}
       >
@@ -182,17 +182,17 @@ export function FeedbackButton({ targetKind, targetId, surface, onAction }: Feed
       </button>
       {open && (
         <div
-          className="absolute right-0 z-10 mt-1 w-56 rounded-md border border-[var(--border-muted,#e2e8f0)] bg-[var(--surface-elevated,#fff)] p-2 text-xs shadow-lg"
+          className="absolute right-0 z-10 mt-1 w-56 rounded-md border border-line bg-elevated p-2 text-xs shadow-lg"
           onClick={(e) => e.stopPropagation()}
         >
-          <p className="mb-2 font-medium text-[var(--text-secondary,#475569)]">What's wrong?</p>
+          <p className="mb-2 font-medium text-ink-soft">What's wrong?</p>
           <ul className="mb-2 space-y-1">
             {FEEDBACK_OPTIONS.map((opt) => (
               <li key={opt.signal}>
                 <button
                   type="button"
                   onClick={() => submit(opt.signal)}
-                  className="w-full rounded px-2 py-1 text-left text-slate-700 hover:bg-slate-100"
+                  className="w-full rounded px-2 py-1 text-left text-ink-soft hover:bg-elevated"
                 >
                   {opt.label}
                 </button>
@@ -204,13 +204,13 @@ export function FeedbackButton({ targetKind, targetId, surface, onAction }: Feed
             onChange={(e) => setNote(e.target.value)}
             placeholder="Optional note (e.g. 'cited chunk doesn't say this')"
             rows={2}
-            className="w-full resize-none rounded border border-slate-200 px-2 py-1 text-xs focus:border-slate-500 focus:outline-none"
+            className="w-full resize-none rounded border border-line px-2 py-1 text-xs focus:border-line-strong focus:outline-none"
           />
           <div className="mt-2 flex justify-end">
             <button
               type="button"
               onClick={() => setOpen(false)}
-              className="text-[10px] text-slate-500 hover:text-slate-900"
+              className="text-[10px] text-ink-muted hover:text-ink"
             >
               Cancel
             </button>

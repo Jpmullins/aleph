@@ -19,7 +19,7 @@ dependencies = [
     # the Insights gateway only — see CLAUDE.md rule #2.
     "copilotkit>=0.1.91",
     "ag-ui-langgraph>=0.0.36",
-    "deepagents>=0.6",
+    "deepagents>=0.6,<0.7",
     "langgraph>=1.2,<2",
     # Postgres-backed langgraph store for cross-session Deep Agent memory (Wave 6 D1).
     # Provides langgraph.store.postgres.AsyncPostgresStore; pulls psycopg (sync+async).

@@ -48,10 +48,14 @@ pick_project_with() {
 }
 
 # create_project "title" "description" -> project id
+#
+# `ProjectCreate` is `extra="forbid"`, so an obsolete field is a 422, not a
+# silently ignored key. `budget_usd` went with the `budgets` table; the e2e
+# twin of this helper (`e2e/helpers.ts`) dropped it at the same time.
 create_project() {
   local title="$1" desc="${2:-audit probe}"
   api POST /v1/projects \
-    "{\"title\":\"[audit] $title\",\"description\":\"$desc\",\"model_profile_name\":\"aleph-dev\",\"budget_usd\":\"25.00\"}" \
+    "{\"title\":\"[audit] $title\",\"description\":\"$desc\",\"model_profile_name\":\"aleph-dev\"}" \
     | jq -r '.id'
 }
 

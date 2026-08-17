@@ -32,6 +32,7 @@ from aleph_core.ids import uuid7
 from aleph_db.session import async_engine_for, async_sessionmaker_for
 from aleph_kernel import CapabilitySpec, Context, ProbeResult, ok, problem
 from aleph_models.client import LiteLLMClient
+from aleph_models.discovery import GatewayCatalog
 from aleph_models.pricing import get_default_pricing
 from aleph_observability import (
     configure_logging,
@@ -67,6 +68,7 @@ HTTP_CONSENSUS = "http.consensus_token"
 REDIS = "redis"
 LITELLM = "litellm"
 PRICING = "pricing"
+GATEWAY_CATALOG = "models.gateway_catalog"
 ASSET_STORE = "asset_store"
 SCHOLAR = "scholar"
 JWKS = "jwks_cache"
@@ -249,11 +251,27 @@ def auth_jwks() -> CapabilitySpec:
 
 
 def models() -> CapabilitySpec:
-    """The LLM gateway client and its pricing table."""
+    """The LLM gateway client, its pricing table, and the catalog behind both."""
 
     async def setup(ctx: Context) -> AsyncIterator[Callable[[], Awaitable[None]]]:
         settings: Settings = ctx.get(SETTINGS)
+        # Rates are learned from the gateway, not shipped: `get_default_pricing`
+        # returns an EMPTY table. Discovery has to run here, inside the
+        # capability that owns the table, because the probe below reads it and
+        # nothing outside can populate it before that probe runs.
+        #
+        # The table is refreshed **in place**, so the client built from it a few
+        # lines down needs no rebuilding when rates arrive. `refresh_pricing`
+        # logs rather than raises: an unreachable gateway must not stop a
+        # process booting, and calls made meanwhile record
+        # `pricing_source="unknown"` instead of a fabricated $0.
         pricing = get_default_pricing()
+        catalog = GatewayCatalog(
+            base_url=settings.litellm_base_url,
+            api_key=settings.insights_litellm_api_key,
+            client=ctx.get(HTTP_GATEWAY),
+        )
+        await catalog.refresh_pricing(pricing)
         client = LiteLLMClient(
             base_url=settings.litellm_base_url,
             api_key=settings.insights_litellm_api_key,
@@ -264,18 +282,18 @@ def models() -> CapabilitySpec:
         )
         ctx.provide(PRICING, pricing)
         ctx.provide(LITELLM, client)
+        # The same catalog the Settings model picker reads
+        # (`GET /v1/gateway/models`) — Aleph ships no committed model list, so
+        # one cached view of the gateway serves discovery, pricing and the UI.
+        ctx.provide(GATEWAY_CATALOG, catalog)
         if False:  # pragma: no cover - the shared http client owns the socket
             yield
 
     async def probe(ctx: Context) -> ProbeResult:
-        # No network: a gateway key is not required to boot, so probing the
-        # gateway would fail in local development for the wrong reason.
-        #
-        # Probe the read path that is local AND silently lossy instead. Every
-        # model the default profile binds must exist in the pricing table,
-        # because `PricingTable.cost_for` returns (0, 0) for an unknown model
-        # rather than raising — so a profile bound to an unpriced model makes
-        # every CostLedgerEvent for it zero, and nothing anywhere complains.
+        # The read path every LLM call starts from: resolve the default profile
+        # out of the database and confirm it names models at all. A profile that
+        # is missing or empty cannot resolve a capability, so the first call
+        # would fail — that is what this refuses to come up with.
         from aleph_db.repos.model_profile import get_template
 
         settings: Settings = ctx.get(SETTINGS)
@@ -302,21 +320,38 @@ def models() -> CapabilitySpec:
                     bound.add(value.strip())
         if not bound:
             return problem(f"profile {settings.aleph_default_model_profile!r} binds no models")
+
+        # Whether every bound model carries a rate is reported, not enforced.
+        #
+        # It used to be enforced, when the pricing table was a static list
+        # shipped in the repo and an unknown model silently cost $0. Neither
+        # premise holds now: rates come from whichever gateway this deployment
+        # points at, so an empty table means only that discovery has not
+        # succeeded yet (unreachable gateway, or the ids-only `/v1/models`
+        # fallback — `refresh_pricing` swallows both by design), and an unpriced
+        # call is no longer silent — `PricingTable.breakdown` returns
+        # `priced=False, source="unknown"`, which `LiteLLMClient` logs and
+        # persists on every `ModelCall`.
+        #
+        # Enforcing it would also deadlock the fix: a seeded profile naming
+        # models this gateway does not serve is exactly what
+        # `POST /v1/projects/{id}/model-profile/autoconfigure` repairs, and that
+        # endpoint lives behind the process that would be refusing to boot.
+        priced_count = len(pricing.models())
         unpriced = sorted(m for m in bound if not pricing.has(m))
         if unpriced:
-            return problem(
-                f"profile {settings.aleph_default_model_profile!r} binds models absent from the "
-                f"pricing table, so their cost ledger rows would silently be zero: "
-                f"{', '.join(unpriced)}"
+            return ok(
+                f"{len(bound)} bound models, {priced_count} priced by the gateway; "
+                f"unpriced (will record pricing_source=unknown): {', '.join(unpriced)}"
             )
-        return ok(f"{len(bound)} bound models all priced")
+        return ok(f"{len(bound)} bound models all priced from {priced_count} gateway rates")
 
     return CapabilitySpec(
         name="models",
         setup=setup,
         probe=probe,
         requires=frozenset({SETTINGS, HTTP_GATEWAY, DB_SESSIONS, REDIS}),
-        provides=frozenset({LITELLM, PRICING}),
+        provides=frozenset({LITELLM, PRICING, GATEWAY_CATALOG}),
     )
 
 
@@ -531,6 +566,7 @@ def bind_to_app_state(app: Any, ctx: Context) -> None:
     app.state.jwks_cache = ctx.get(JWKS)
     app.state.litellm = ctx.get(LITELLM)
     app.state.pricing = ctx.get(PRICING)
+    app.state.gateway_catalog = ctx.get(GATEWAY_CATALOG)
     app.state.redis = ctx.get(REDIS)
     app.state.gateway_http = ctx.get(HTTP_GATEWAY)
     app.state.auth_http = ctx.get(HTTP_AUTH)
@@ -552,6 +588,7 @@ BOUND_KEYS = frozenset(
         JWKS,
         LITELLM,
         PRICING,
+        GATEWAY_CATALOG,
         REDIS,
         HTTP_GATEWAY,
         HTTP_AUTH,
@@ -573,6 +610,7 @@ __all__ = [
     "CHANGE_BROKER",
     "DB_ENGINE",
     "DB_SESSIONS",
+    "GATEWAY_CATALOG",
     "HTTP_AUTH",
     "HTTP_CONSENSUS",
     "HTTP_GATEWAY",

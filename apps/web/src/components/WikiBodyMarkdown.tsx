@@ -147,7 +147,7 @@ function renderBlock(
     );
   }
   return (
-    <p key={i} className="my-3 leading-relaxed text-slate-700">
+    <p key={i} className="my-3 leading-relaxed text-ink-soft">
       {renderInline(block.text, onNavigate, resolveLink, renderCitation)}
     </p>
   );

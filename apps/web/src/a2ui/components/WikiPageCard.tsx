@@ -83,12 +83,12 @@ function CitationBadge({ marker, citation }: { marker: string; citation: Citatio
       </button>
       {open && (
         <span
-          className="absolute left-0 top-5 z-20 w-64 rounded-md border border-slate-300 bg-white p-2 text-xs shadow-lg"
+          className="absolute left-0 top-5 z-20 w-64 rounded-md border border-line-strong bg-surface p-2 text-xs shadow-lg"
           data-testid={`citation-popover-${marker}`}
         >
           {citation ? (
             <>
-              <span className="block font-medium text-slate-800">
+              <span className="block font-medium text-ink">
                 {citation.source_title ?? "Unknown source"}
               </span>
               {citation.url && (
@@ -103,7 +103,7 @@ function CitationBadge({ marker, citation }: { marker: string; citation: Citatio
               )}
             </>
           ) : (
-            <span className="text-slate-500">No citation resolved for {marker}.</span>
+            <span className="text-ink-muted">No citation resolved for {marker}.</span>
           )}
         </span>
       )}
@@ -174,7 +174,7 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
     <div className="p-4" data-testid="wiki-page-card" onMouseUp={publishTextSelection}>
       <div className="mb-2 flex flex-wrap items-center gap-2">
         {meta.title && (
-          <span className="text-sm font-semibold text-slate-900">{meta.title}</span>
+          <span className="text-sm font-semibold text-ink">{meta.title}</span>
         )}
         {status && (
           <Pill tone={STATUS_TONE[status] ?? "slate"}>
@@ -194,7 +194,7 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
           <button
             type="button"
             onClick={() => setView((v) => (v === "reader" ? "document" : "reader"))}
-            className="rounded border border-slate-300 px-2 py-0.5 text-xs text-slate-600 hover:bg-slate-100"
+            className="rounded border border-line-strong px-2 py-0.5 text-xs text-ink-soft hover:bg-elevated"
             data-testid="wiki-view-toggle"
           >
             {view === "reader" ? "Document view" : "Reader view"}
@@ -221,7 +221,7 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
                 onClick={() =>
                   onAction("approve", { target_id: meta.page_id, target_kind: "wiki_page" })
                 }
-                className="rounded bg-emerald-600 px-3 py-1 text-xs font-medium text-white hover:bg-emerald-700"
+                className="rounded bg-emerald-600 px-3 py-1 text-xs font-medium text-ink-inverse hover:bg-emerald-700"
                 data-testid="wiki-approve"
               >
                 Approve
@@ -229,7 +229,7 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
               <button
                 type="button"
                 onClick={() => setRejecting(true)}
-                className="rounded border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                className="rounded border border-line-strong px-3 py-1 text-xs font-medium text-ink-soft hover:bg-elevated"
                 data-testid="wiki-reject"
               >
                 Reject
@@ -240,11 +240,12 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
             // the next compile so it does not reproduce the rejected content.
             // Rejecting with an empty reason discards the only signal the
             // analyst has, so the confirm button stays disabled until there is
-            // one and the server rejects an empty reason outright.
-            <div className="rounded-md border border-slate-300 bg-slate-50 p-2">
+            // one and the server rejects an empty reason outright
+            // (`RejectPageIn.reason` is `min_length=1`).
+            <div className="rounded-md border border-line bg-sunken p-2">
               <label
                 htmlFor="wiki-reject-reason"
-                className="mb-1 block text-xs font-medium text-slate-700"
+                className="mb-1 block text-xs font-medium text-ink-soft"
               >
                 Why is this page wrong? The agent reads this before rewriting it.
               </label>
@@ -255,7 +256,7 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
                 value={rejectReason}
                 onChange={(e) => setRejectReason(e.target.value)}
                 placeholder="e.g. conflates two different trials; the 2019 figure is from the retracted paper"
-                className="w-full rounded border border-slate-300 px-2 py-1 text-xs focus:border-slate-500 focus:outline-none"
+                className="w-full rounded border border-line px-2 py-1 text-xs focus:border-line-strong focus:outline-none"
                 data-testid="wiki-reject-reason"
               />
               <div className="mt-2 flex items-center gap-2">
@@ -271,7 +272,7 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
                     setRejecting(false);
                     setRejectReason("");
                   }}
-                  className="rounded bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  className="rounded bg-red-600 px-3 py-1 text-xs font-medium text-ink-inverse hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
                   data-testid="wiki-reject-confirm"
                 >
                   Reject page
@@ -282,7 +283,7 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
                     setRejecting(false);
                     setRejectReason("");
                   }}
-                  className="rounded border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                  className="rounded border border-line-strong px-3 py-1 text-xs font-medium text-ink-soft hover:bg-elevated"
                   data-testid="wiki-reject-cancel"
                 >
                   Cancel
@@ -322,14 +323,14 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
           )}
         />
       ) : (
-        <p className="text-sm italic text-slate-500">
+        <p className="text-sm italic text-ink-muted">
           This page is a stub — no compiled revision yet.
         </p>
       )}
 
       {claims.length > 0 && (
         <section className="mt-5">
-          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-muted">
             Claims ({claims.length})
           </h4>
           <ul className="space-y-2">
@@ -350,7 +351,7 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
                       </Pill>
                     }
                   >
-                    <p className="text-sm text-slate-700">{c.text}</p>
+                    <p className="text-sm text-ink-soft">{c.text}</p>
                   </CardShell>
                 </button>
               </li>
@@ -362,7 +363,7 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
       {wikilinks.length > 0 && (
         <section className="mt-5">
           <div className="mb-2 flex items-center justify-between">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-muted">
               Links out ({wikilinks.length})
             </h4>
             {brokenLinks > 0 && !readOnly && (
@@ -383,11 +384,11 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
                   key={`${l.dst_title}-${i}`}
                   type="button"
                   onClick={() => openPageId(l.dst_page_id as string)}
-                  className="inline-flex items-center rounded border border-slate-300 bg-slate-100 px-2 py-0.5 text-xs text-slate-700 hover:bg-slate-200"
+                  className="inline-flex items-center rounded border border-line-strong bg-elevated px-2 py-0.5 text-xs text-ink-soft hover:bg-line"
                   data-testid="wiki-linkout"
                 >
                   [[{l.dst_title}]]
-                  {l.occurrences > 1 && <span className="ml-1 text-slate-400">×{l.occurrences}</span>}
+                  {l.occurrences > 1 && <span className="ml-1 text-ink-muted">×{l.occurrences}</span>}
                 </button>
               ) : (
                 <span

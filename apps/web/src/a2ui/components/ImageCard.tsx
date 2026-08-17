@@ -30,7 +30,7 @@ export function ImageCard({ component }: RendererProps) {
       <img
         src={apiUrl(p.src)}
         alt={p.alt ?? p.title ?? "Rendered image"}
-        className="max-h-[60vh] w-full rounded-md border border-slate-200 bg-white object-contain"
+        className="max-h-[60vh] w-full rounded-md border border-line bg-surface object-contain"
         data-testid="image-card-img"
       />
     </CardShell>

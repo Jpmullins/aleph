@@ -50,19 +50,19 @@ export function HypothesisMatrix({ ach }: { ach: AchMatrix | null }) {
     cells.find((c) => c.hypothesis_id === hid && c.target_id === tid);
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-[var(--border-muted,#e2e8f0)] bg-[var(--surface-raised,#fff)]">
+    <div className="overflow-x-auto rounded-lg border border-line bg-surface">
       <div className="flex items-center justify-between px-3 py-2">
-        <span className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary,#475569)]">
+        <span className="text-xs font-semibold uppercase tracking-wide text-ink-soft">
           ACH matrix
         </span>
-        <span className="text-[10px] text-[var(--text-muted,#94a3b8)]">
+        <span className="text-[10px] text-ink-muted">
           fewest disconfirming = leading
         </span>
       </div>
       <table className="w-full border-collapse text-xs">
         <thead>
           <tr>
-            <th className="sticky left-0 z-10 bg-[var(--surface-raised,#fff)] px-2 py-1 text-left font-medium text-[var(--text-muted,#94a3b8)]">
+            <th className="sticky left-0 z-10 bg-surface px-2 py-1 text-left font-medium text-ink-muted">
               Evidence
             </th>
             {hypotheses.map((h) => {
@@ -75,12 +75,12 @@ export function HypothesisMatrix({ ach }: { ach: AchMatrix | null }) {
                     "px-2 py-1 text-center font-semibold " +
                     (leading
                       ? "bg-[var(--accent-muted,rgba(249,115,22,0.1))] text-[var(--accent,#f97316)]"
-                      : "text-[var(--text-secondary,#475569)]")
+                      : "text-ink-soft")
                   }
                 >
                   {h.short_id}
                   {leading && <span className="ml-1" title="fewest disconfirming">★</span>}
-                  <div className="font-normal text-[9px] text-[var(--text-muted,#94a3b8)]">
+                  <div className="font-normal text-[9px] text-ink-muted">
                     {h.disconfirming_count}✗
                   </div>
                 </th>
@@ -90,9 +90,9 @@ export function HypothesisMatrix({ ach }: { ach: AchMatrix | null }) {
         </thead>
         <tbody>
           {targets.map((t) => (
-            <tr key={t.target_id} className="border-t border-[var(--border-muted,#e2e8f0)]">
+            <tr key={t.target_id} className="border-t border-line">
               <td
-                className="sticky left-0 z-10 max-w-[12rem] truncate bg-[var(--surface-raised,#fff)] px-2 py-1 text-[var(--text-primary,#0f172a)]"
+                className="sticky left-0 z-10 max-w-[12rem] truncate bg-surface px-2 py-1 text-ink"
                 title={t.label}
               >
                 {t.label}

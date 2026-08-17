@@ -25,19 +25,29 @@ if TYPE_CHECKING:
 _AGENT_PATH = "/copilotkit/agent/assistant"
 
 
-def setup_copilotkit(app: FastAPI, *, settings: Settings, store: AsyncPostgresStore) -> None:
+def setup_copilotkit(
+    app: FastAPI,
+    *,
+    settings: Settings,
+    store: AsyncPostgresStore,
+    checkpointer: object = None,
+) -> None:
     """Build the assistant Deep Agent and mount its AG-UI endpoint.
 
     Called from the FastAPI lifespan startup (not app construction): the agent's
     Postgres-backed memory `store` must be created inside the running event loop,
     and the AG-UI route is only consulted after startup completes.
+
+    `checkpointer` carries per-thread conversation state and must be the durable
+    Postgres saver in production; without it every restart drops the agent's
+    history and plan.
     """
     from ag_ui_langgraph import add_langgraph_fastapi_endpoint
     from copilotkit import LangGraphAGUIAgent
 
     from aleph_api.copilot_agent import build_assistant_deep_agent
 
-    graph = build_assistant_deep_agent(settings=settings, store=store)
+    graph = build_assistant_deep_agent(settings=settings, store=store, checkpointer=checkpointer)
     add_langgraph_fastapi_endpoint(
         app,
         LangGraphAGUIAgent(

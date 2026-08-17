@@ -25,7 +25,7 @@ async def auth_bypass(monkeypatch):
 async def _make_project(http_client) -> str:
     resp = await http_client.post(
         "/v1/projects",
-        json={"title": "Asset Stream", "description": "wp1", "budget_usd": "1.00"},
+        json={"title": "Asset Stream", "description": "wp1"},
     )
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]

@@ -6,7 +6,7 @@ via the `auth_bypass` fixture which monkey-patches the JWT verifier.
 This test:
   1. Creates a project as user A
   2. Lists it
-  3. Confirms 5 ledger events were written (create + profile + budget + member)
+  3. Confirms the ledger events were written (create + profile + member)
   4. Asserts chain hash is continuous across the events
 """
 
@@ -50,13 +50,13 @@ async def test_project_create_and_ledger(http_client, auth_bypass, asgi_app):
       * POST /v1/projects returns 201 with a UUID id
       * GET /v1/projects/{id} returns the project
       * The ledger has project.create, model_profile.copy_from_template,
-        budget.set, project_member.add, and connector_bindings.seed events
+        project_member.add, and connector_bindings.seed events
         (plus an earlier user.create event).
       * chain_hash is continuous (each event's prev_event_id == previous id).
     """
     resp = await http_client.post(
         "/v1/projects",
-        json={"title": "Integration test", "description": "", "budget_usd": "5.00"},
+        json={"title": "Integration test", "description": ""},
     )
     assert resp.status_code == 201, resp.text
     body = resp.json()
@@ -85,7 +85,6 @@ async def test_project_create_and_ledger(http_client, auth_bypass, asgi_app):
     kinds = [r.action_kind for r in rows]
     assert "project.create" in kinds
     assert "model_profile.copy_from_template" in kinds
-    assert "budget.set" in kinds
     assert "project_member.add" in kinds
 
     # Chain continuity within this project's events.

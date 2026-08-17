@@ -1,4 +1,4 @@
-"""ModelCall, CostLedgerEvent, Budget."""
+"""ModelCall, CostLedgerEvent."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from uuid import UUID
 from sqlalchemy import DateTime, Numeric, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from aleph_db.base import Base, CommonColumns
+from aleph_db.base import Base
 
 
 class ModelCall(Base):
@@ -23,8 +23,31 @@ class ModelCall(Base):
     purpose: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     input_tokens: Mapped[int] = mapped_column(nullable=False, server_default="0")
     cached_tokens: Mapped[int] = mapped_column(nullable=False, server_default="0")
+    #: Tokens WRITTEN into the prompt cache, billed at a premium. Without this
+    #: the row cannot explain its own cost: a cache-write call costs more than
+    #: `input_tokens` at the base rate implies, and the difference looked like
+    #: an arithmetic error rather than a recorded fact.
+    cache_write_tokens: Mapped[int] = mapped_column(nullable=False, server_default="0")
     completion_tokens: Mapped[int] = mapped_column(nullable=False, server_default="0")
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False, server_default="0")
+    #: Where the rates came from: `gateway` (discovered from /model/info),
+    #: `static` (an operator-supplied table), or `unknown`.
+    #:
+    #: `unknown` means `cost_usd` is 0 because nothing knew how to price the
+    #: model — NOT because the call was free. Persisting the distinction is the
+    #: whole point: a pricing table that matched none of the gateway's model
+    #: names produced a $0.00 spend dashboard that read as a quiet day.
+    pricing_source: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="unknown"
+    )
+    #: The exact rates used, so a historical cost stays re-derivable after the
+    #: gateway's prices change underneath us.
+    input_rate_usd: Mapped[Decimal] = mapped_column(
+        Numeric(20, 12), nullable=False, server_default="0"
+    )
+    output_rate_usd: Mapped[Decimal] = mapped_column(
+        Numeric(20, 12), nullable=False, server_default="0"
+    )
     cache_savings_usd: Mapped[Decimal] = mapped_column(
         Numeric(12, 6), nullable=False, server_default="0"
     )
@@ -53,14 +76,3 @@ class CostLedgerEvent(Base):
         server_default=func.now(),
         index=True,
     )
-
-
-class Budget(CommonColumns, Base):
-    __tablename__ = "budgets"
-    __table_args__ = (UniqueConstraint("project_id", name="uq_budgets_project_id"),)
-
-    project_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
-    cap_usd: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
-    soft_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, server_default="80")
-    hard_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, server_default="100")
-    spent_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), nullable=False, server_default="0")

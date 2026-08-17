@@ -63,19 +63,10 @@ async def create_project(
     session.add(profile)
     await session.flush()
 
-    budget = project_repo.new_budget(
-        project_id=project_id,
-        cap_usd=body.budget_usd,
-        created_by=principal.user_id,
-    )
-    session.add(budget)
-    await session.flush()
-
     project = project_repo.new_project(
         title=body.title,
         description=body.description,
         model_profile_id=profile.id,
-        budget_id=budget.id,
         created_by=principal.user_id,
     )
     project.id = project_id
@@ -111,16 +102,6 @@ async def create_project(
         target_id=profile.id,
         target_kind="model_profile",
         payload={"template": template.name, "name": profile.name},
-        trace_id=trace_id,
-    )
-    await ledger.append(
-        project_id=project_id,
-        actor_id=principal.user_id,
-        actor_kind=principal.actor_kind,
-        action_kind="budget.set",
-        target_id=budget.id,
-        target_kind="budget",
-        payload={"cap_usd": str(body.budget_usd)},
         trace_id=trace_id,
     )
     await ledger.append(
@@ -217,6 +198,12 @@ async def create_project(
         try:
             from arq.connections import RedisSettings
 
+            # Durable before dispatched: bootstrap_project_job authenticates with
+            # the AgentRun flushed above and resolves the project by id. An arq
+            # worker beats an uncommitted transaction, and the job would fail on
+            # rows that do not exist yet.
+            await session.commit()
+
             pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
             try:
                 await pool.enqueue_job(
@@ -233,8 +220,20 @@ async def create_project(
 
 
 @router.get("", response_model=list[ProjectOut])
-async def list_projects(session: SessionDep, principal: PrincipalDep) -> list[ProjectOut]:
-    rows = await project_repo.list_member_projects(session, user_id=principal.user_id)
+async def list_projects(
+    session: SessionDep, principal: PrincipalDep, include_deleted: bool = False
+) -> list[ProjectOut]:
+    """The caller's projects. Deleted ones are hidden unless asked for.
+
+    `include_deleted` is what makes the restore path reachable. Refusing writes
+    to a deleted project is only half a fix — the other half is being able to
+    *find* the project the 409 tells you to restore. Without this, a deleted
+    project is discoverable only by someone who kept its UUID, which is how a
+    real research corpus (20 sources, 223 wiki pages) became unreachable.
+    """
+    rows = await project_repo.list_member_projects(
+        session, user_id=principal.user_id, include_deleted=include_deleted
+    )
     return [ProjectOut.model_validate(p) for p in rows]
 
 

@@ -92,7 +92,7 @@ class Settings(BaseSettings):
     # Bootstrap-on-create. When a project is created, a background
     # `bootstrap_project_job` scopes the title+description into seed topics,
     # seeds an overview wiki page, and fans out research per topic. Cost is
-    # bounded by `bootstrap_max_topics` (no per-action gating — see budget docs).
+    # bounded solely by `bootstrap_max_topics`; there is no per-action gating.
     bootstrap_auto_enabled: bool = True
     bootstrap_max_topics: int = 3
     bootstrap_depth: Literal["shallow", "deep"] = "shallow"

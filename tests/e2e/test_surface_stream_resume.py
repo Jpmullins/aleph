@@ -55,7 +55,7 @@ async def _scoped_project(http_client: Any, asgi_app: Any) -> tuple[UUID, Any]:
     from aleph_security.principal import Principal
 
     resp = await http_client.post(
-        "/v1/projects", json={"title": "surface-resume", "description": "", "budget_usd": "1.00"}
+        "/v1/projects", json={"title": "surface-resume", "description": ""}
     )
     assert resp.status_code == 201, resp.text
     pid = UUID(resp.json()["id"])
@@ -82,7 +82,15 @@ def _fake_request(
     if cid is not None:
         query["cid"] = cid
     return SimpleNamespace(
-        app=asgi_app, is_disconnected=is_disconnected, headers=headers, query_params=query
+        app=asgi_app,
+        is_disconnected=is_disconnected,
+        headers=headers,
+        query_params=query,
+        # `assert_stream_access` now consults the project's status, which needs
+        # the method + path. Streams are always GET; spelling that out keeps the
+        # stub honest about what production hands the dependency.
+        method="GET",
+        url=SimpleNamespace(path="/v1/projects/stream"),
     )
 
 

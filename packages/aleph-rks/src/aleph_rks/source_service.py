@@ -33,10 +33,29 @@ class SourceCreated:
     asset: SourceAsset
 
 
+#: Allocated by Postgres, not by Python. See the docstring below.
+_SHORT_ID_SEQUENCE = "sources_short_id_seq"
+
+
 async def _next_short_id(session: AsyncSession) -> str:
-    """Allocate the next `S0001`-style id by counting existing sources."""
-    n = (await session.execute(select(func.count()).select_from(Source))).scalar_one()
-    return f"S{int(n) + 1:04d}"
+    """Allocate the next `S0001`-style id from a sequence.
+
+    This used to be `COUNT(*) + 1`, which is a lost-update race against a column
+    carrying a **global** unique constraint. Every concurrent caller read the
+    same count and returned the same id; the first insert won and the rest died
+    with `UniqueViolationError`, surfacing as `ingest-url failed (500)`.
+
+    It only failed under concurrency — which is exactly what a research run is.
+    Eight papers ingested in the same second meant one success and seven
+    failures, while ingesting the same papers one at a time worked perfectly.
+
+    Counting was also non-monotonic: deleting a source lowered the count, so the
+    next allocation reused an id already cited as `[[Source:S0042]]` in
+    committed wiki prose, silently re-pointing those citations at a different
+    paper. A sequence never goes backwards, so an id is issued at most once.
+    """
+    n = (await session.execute(select(func.nextval(_SHORT_ID_SEQUENCE)))).scalar_one()
+    return f"S{int(n):04d}"
 
 
 async def register_uploaded_source(

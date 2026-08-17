@@ -2,7 +2,6 @@
 
 from aleph_core.errors import (
     AlephError,
-    BudgetExceeded,
     GatewayUnavailable,
     NotFound,
     PermissionDenied,
@@ -13,7 +12,6 @@ from aleph_core.time import utcnow
 
 __all__ = [
     "AlephError",
-    "BudgetExceeded",
     "GatewayUnavailable",
     "NotFound",
     "PermissionDenied",

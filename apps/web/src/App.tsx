@@ -57,7 +57,7 @@ export function App() {
 
   if (route.kind === "loading" || route.kind === "callback") {
     return (
-      <div className="flex h-full items-center justify-center text-slate-500">
+      <div className="flex h-full items-center justify-center text-ink-muted">
         Loading…
       </div>
     );
@@ -68,7 +68,7 @@ export function App() {
         <button
           type="button"
           onClick={() => login()}
-          className="rounded-lg bg-slate-900 px-6 py-3 text-sm font-medium text-white shadow hover:bg-slate-700"
+          className="rounded-lg bg-ink px-6 py-3 text-sm font-medium text-ink-inverse shadow hover:bg-ink-soft"
         >
           Sign in to Aleph
         </button>

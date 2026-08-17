@@ -8,6 +8,17 @@ What that replaced: ten singletons constructed in a hand-written sequence, and a
 `finally` block of bare awaits where one raising `aclose()` skipped every close
 after it — while anything built before the `try` leaked entirely if a later
 constructor raised.
+
+Two things still live here rather than in a capability, because each one binds a
+*running FastAPI app* to the booted kernel and has no meaningful inverse:
+building the agent's durable checkpointer, and mounting the AG-UI route. Both sit
+inside the `try`, so a failure in either still unwinds the kernel completely.
+
+Gateway model discovery is deliberately NOT one of them. The pricing table it
+fills belongs to the `models` capability and is read by that capability's own
+probe, so discovery has to happen inside it — nothing out here can run early
+enough. `app.state.gateway_catalog`, which `GET /v1/gateway/models` reads, comes
+through `bind_to_app_state` like every other shared service.
 """
 
 from __future__ import annotations
@@ -21,6 +32,8 @@ from aleph_api.settings import Settings, get_settings
 from aleph_kernel import Context, EffectScope, Kernel
 from aleph_kernel.manifest import load_manifest, mount_manifest
 from aleph_runtime.capabilities import (
+    AGENT_STORE,
+    AGENT_STORE_POOL,
     BOUND_KEYS,
     DB_SESSIONS,
     LITELLM,
@@ -54,48 +67,62 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # discovering at first request that the asset store cannot serve a read.
     await kernel.boot()
 
-    # A reader context declaring everything the app shim needs. It is scoped
-    # like any capability, so it cannot reach a service nobody published.
-    reader = Context(
-        owner="aleph-api",
-        requires=BOUND_KEYS,
-        store=kernel.store,
-        scope=EffectScope("aleph-api"),
-    )
-    bind_to_app_state(app, reader)
-    app.state.kernel = kernel
-    app.state.action_router = build_action_router()
-
-    session_maker = reader.get(DB_SESSIONS)
-
-    # Rule 7: resolve the agent's model from the default named ModelProfile
-    # rather than a hardcoded id, so the conversational surface uses the
-    # configured tier.
-    agent_bindings: dict[str, Any] | None = None
     try:
-        from aleph_db.repos.model_profile import get_template
+        # A reader context declaring everything the app shim needs. It is scoped
+        # like any capability, so it cannot reach a service nobody published.
+        reader = Context(
+            owner="aleph-api",
+            requires=BOUND_KEYS,
+            store=kernel.store,
+            scope=EffectScope("aleph-api"),
+        )
+        bind_to_app_state(app, reader)
+        app.state.kernel = kernel
+        app.state.action_router = build_action_router()
 
-        async with session_maker() as session:
-            template = await get_template(session, settings.aleph_default_model_profile)
-            if template is not None:
-                agent_bindings = dict(template.bindings_jsonb)
-    except Exception:
-        agent_bindings = None
+        session_maker = reader.get(DB_SESSIONS)
 
-    from aleph_api.copilot_agent import bind_runtime
-    from aleph_api.copilotkit_endpoint import setup_copilotkit
+        # Rule 7: resolve the agent's model from the default named ModelProfile
+        # rather than a hardcoded id, so the conversational surface uses the
+        # configured tier.
+        agent_bindings: dict[str, Any] | None = None
+        try:
+            from aleph_db.repos.model_profile import get_template
 
-    bind_runtime(
-        session_maker=session_maker,
-        settings=settings,
-        litellm=reader.get(LITELLM),
-        agent_bindings=agent_bindings,
-    )
-    # Mounts routes on `app`; not modelled as a capability because adding a
-    # route to a running FastAPI app has no meaningful inverse.
-    setup_copilotkit(app, settings=settings, store=app.state.agent_store)
+            async with session_maker() as session:
+                template = await get_template(session, settings.aleph_default_model_profile)
+                if template is not None:
+                    agent_bindings = dict(template.bindings_jsonb)
+        except Exception:
+            agent_bindings = None
 
-    try:
+        from aleph_api.copilot_agent import bind_runtime, build_agent_checkpointer
+        from aleph_api.copilotkit_endpoint import setup_copilotkit
+
+        bind_runtime(
+            session_maker=session_maker,
+            settings=settings,
+            litellm=reader.get(LITELLM),
+            agent_bindings=agent_bindings,
+        )
+
+        # Durable per-thread conversation state, sharing the agent store's
+        # already-open pool. `setup()` creates the saver's own tables; without
+        # this the agent falls back to in-memory state and every restart drops
+        # its history, its `write_todos` plan, and the summarization archive.
+        agent_checkpointer = build_agent_checkpointer(reader.get(AGENT_STORE_POOL))
+        await agent_checkpointer.setup()
+        app.state.agent_checkpointer = agent_checkpointer
+
+        # Mounts routes on `app`; not modelled as a capability because adding a
+        # route to a running FastAPI app has no meaningful inverse.
+        setup_copilotkit(
+            app,
+            settings=settings,
+            store=reader.get(AGENT_STORE),
+            checkpointer=agent_checkpointer,
+        )
+
         yield
     finally:
         # Dependents before providers, every inverse runs, failures aggregate.

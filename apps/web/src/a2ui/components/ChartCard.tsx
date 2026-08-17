@@ -84,7 +84,7 @@ export function ChartCard({ component, onAction }: RendererProps) {
   if (source === null) {
     return (
       <CardShell title={p.title || "Chart"} subtitle={<Pill tone="slate">No chart data</Pill>}>
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-ink-muted">
           This chart has no bound spec. An agent produces one via the sandbox
           (code_runner) or supplies an inline Vega-Lite spec.
         </p>

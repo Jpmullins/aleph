@@ -23,7 +23,7 @@
   check_type: e2e
   status: unverified
   wired: true
-  notes: "POST /v1/projects (title, description, model_profile_name, budget_usd) → 201; UI routes to workspace."
+  notes: "POST /v1/projects (title, description, model_profile_name) → 201; UI routes to workspace."
 
 - id: project-soft-delete
   intent: "A project can be soft-deleted (status=deleted) and disappears from the active list."

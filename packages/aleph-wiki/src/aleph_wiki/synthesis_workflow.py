@@ -100,6 +100,10 @@ class SynthesisState(TypedDict, total=False):
     profile_bindings: dict[str, Any]
     normalized_topic: str
     verified_markers: dict[str, ResearchSourceRef]
+    # MUST be declared: LangGraph silently drops node updates to keys absent
+    # from the state schema, so an undeclared channel makes `wikilink_resolve`
+    # a no-op and commits every synthesis page with zero wikilinks.
+    resolved_wikilinks: list[WikiLinkDraft]
     committed_revision_ids: list[UUID]
     committed_page_ids: list[UUID]
     proposal_ids: list[UUID]
@@ -204,7 +208,7 @@ async def _node_commit_revision(state: SynthesisState) -> dict:
             )
 
         report = state["report"]
-        wikilinks = state.get("resolved_wikilinks") or []  # type: ignore[assignment]
+        wikilinks = state.get("resolved_wikilinks") or []
 
         claim_drafts: list[ClaimDraft] = []
         for c in report.claims:

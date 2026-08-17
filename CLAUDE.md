@@ -32,10 +32,19 @@ Aleph is **mid-transition on two axes at once.** Be careful: much of the code pr
 **Axis 1 — the knowledge layer.** Built around an LLM-maintained wiki as the primary retrieval
 surface; being removed. See `docs/decisions.md` D1.
 
-- **Being removed:** wiki page compilation, the curator, the alias service, the LLM page-selector,
-  FTS-over-summaries retrieval.
+- **Being removed:** wiki page compilation, the curator, the alias service, the LLM page-selector.
+- **Built and measured:** corpus-wide hybrid retrieval — `aleph_rks.retrieval.search_corpus` fuses a
+  dense (pgvector cosine) and a lexical (`ts_rank`) ranking with RRF at k=60. Reproduce the number
+  with `uv run python -m aleph_evals.retrieval_eval` over the 45-pair set in
+  `packages/aleph-evals/datasets/retrieval/`: recall@1 is 0.91 hybrid vs 0.60 lexical-only. That is
+  the bar the belief engine has to beat (`docs/acceptance.md` §B).
 - **Being built:** the **Claim Spine** (`docs/belief-engine.md`) — durable claims, verbatim-anchored
-  evidence, typed claim edges, derived confidence.
+  evidence, typed claim edges, derived confidence. The write path is
+  `aleph_wiki.belief_service.BeliefService`; the patch contract, trust lattice and deterministic
+  reconciler are in `packages/aleph-belief`.
+- **Why the wiki is still here:** deleting it means replacing the ingest→compile pipeline with claim
+  extraction, and that extractor does not exist yet. `docs/acceptance.md` §E states the condition that
+  unblocks the deletion. Until then the wiki stays and nothing new is built on it.
 
 **Axis 2 — the harness.** Aleph is being rebuilt on an own-implemented kernel modelled on the
 spatiotemporal-composability paper (revertible effects, reactive coeffects, scoped capability access).
@@ -43,11 +52,35 @@ spatiotemporal-composability paper (revertible effects, reactive coeffects, scop
 Python for the kernel; do assume Python for the belief/scholarship plugins, which are bound to
 Postgres and the transactional ledger.
 
+Today both processes boot on it: `apps/api/src/aleph_api/lifespan.py` and
+`apps/workers/src/aleph_workers/arq.py` each mount a boot manifest (`aleph.toml`) onto a `Kernel`, and
+the shared services are kernel capabilities declared in `packages/aleph-runtime` — the composition
+root, with a live read-path probe per capability and LIFO unwind on shutdown.
+
 **Unchanged and healthy on both axes:** ingest/RKS, `aleph-scholar`, the action ledger, model routing,
 the sandboxed code runner, the asset store.
 
 Treat wiki code as **legacy under removal**. Do not extend it, do not fix its cosmetics, do not add
 tests to it. Migrate callers off it.
+
+### Recently landed, and worth knowing before you touch these areas
+
+- **Model discovery is gateway-driven.** Aleph ships no model list and no price list — see
+  *Rules that are real but only held by review*, below.
+- **The workspace shell** — `Rail`, `ContextBar`, `PipelineStrip`, `ReadingRegion`, `AssistantDock`,
+  `GroundingSurface` under `apps/web/src/components` and `apps/web/src/a2ui/components`. The pipeline
+  strip is fed by `GET /v1/projects/{id}/pipeline`. The right-hand strip of surface **tabs** is gone:
+  the reading region tiles up to three **panes** (`MAX_PANES` in `apps/web/src/lib/workspace-ui.tsx`),
+  and `SurfaceStreamProvider` gives the whole region one multiplexed SSE connection, so a pane is
+  purely a renderer for one `surfaceId` and owns no transport of its own.
+- **One canonical A2UI catalog.** `packages/aleph-a2ui/src/aleph_a2ui/catalog.json` is the only
+  editable copy; `apps/web/src/a2ui/catalog.ts` and `apps/copilot-runtime/src/catalog.generated.ts`
+  are generated from it by `scripts/gen_catalog.py`.
+- **Claim → chunk grounding.** `aleph_rks.claim_grounding.chunks_for_claim` (deterministic token
+  overlap, no LLM) fills `Citation.chunk_ids` at commit time, so the claim → chunk → char-span chain
+  is populated on the real write path instead of only in fixtures. The span at the bottom of that
+  chain is exact: `packages/aleph-rks/tests/test_chunk_offsets.py` asserts
+  `markdown[char_start:char_end] == chunk.text` over real documents.
 
 ### A standing constraint
 
@@ -66,17 +99,30 @@ cp deploy/compose/.env.example deploy/compose/.env   # then set INSIGHTS_LITELLM
 uv sync --all-packages --all-extras                   # Python deps (MUST be --all-packages)
 pnpm -C apps/web install                              # JS deps
 
-# Quality gates (these are exactly what CI runs)
+# Quality gates
 uv run ruff check .
 uv run ruff format --check .
 uv run pyright                                        # strict, must be 0 errors
 pnpm -C apps/web lint
-pnpm -C apps/web build
+pnpm -C apps/web build                                # tsc --noEmit && vite build
+./scripts/check-catalog-generated.sh                  # generated catalogs match catalog.json
+./scripts/check-graph-state-keys.sh                   # no LangGraph node writes an undeclared key
 
 # Tests
 uv run pytest -m "not integration" -q                 # unit
 uv run pytest -m integration -q                       # needs postgres+redis (see CI for env)
 uv run pytest path/to/test_file.py::test_name         # single test
+
+# Acceptance — the per-part table in docs/acceptance.md
+./scripts/acceptance.sh                               # everything runnable here
+./scripts/acceptance.sh --quick                       # skip anything needing services
+./scripts/acceptance.sh --self-check                  # prove the checks can fail
+
+# Retrieval number (needs a gateway with a chat model + an embedder)
+uv run python -m aleph_evals.retrieval_eval
+
+# A2UI catalog: edit catalog.json, then regenerate
+uv run python scripts/gen_catalog.py
 
 # Migrations (Alembic lives in apps/api)
 cd apps/api && uv run alembic upgrade head
@@ -91,7 +137,8 @@ docker compose -f deploy/compose/docker-compose.yml logs -f aleph-api
 
 Endpoints after bootstrap: web `:5173`, api `:8000`, copilot-runtime `:4000`, Langfuse `:3000`.
 An S3-compatible object store is opt-in (`docker compose --profile s3 up -d`); the default asset
-backend is the local filesystem at `data/assets`.
+backend is the local filesystem at `data/assets`. A local chat+embedding gateway is opt-in
+(`--profile local-llm`) — see `docs/operations.md`.
 
 ---
 
@@ -101,32 +148,37 @@ backend is the local filesystem at `data/assets`.
 
 ```
 apps/
-  api/              FastAPI — HTTP + SSE, owns Alembic, hosts the in-process agent
+  api/              FastAPI — HTTP + SSE, owns Alembic, hosts the in-process agent. Boots on the kernel.
   web/              React 19 + Vite + Tailwind + @a2ui/react + CopilotKit
-  workers/          arq workers — ingest, research loop, reviewers
+  workers/          arq workers — ingest, research loop, reviewers. Boots on the same kernel manifest.
   code-runner/      sandboxed, credential-less, network-partitioned Python executor
-  copilot-runtime/  Node bridge (:4000) — one file, thin AG-UI adapter
+  copilot-runtime/  Node bridge (:4000) — thin AG-UI adapter + the generated catalog
 packages/
-  aleph-core          primitives, Pydantic schemas, UUIDv7. LEAF — imports nothing else.
+  aleph-core          primitives, Pydantic schemas, UUIDv7, grounding/defang. LEAF — imports nothing else.
+  aleph-kernel        the composability kernel — effects, capabilities, manifest, AST gate, skills, spawn ledger
+  aleph-runtime       the composition root — shared services as kernel capabilities, each with a probe
   aleph-db            SQLAlchemy ORM + repositories + ledger
   aleph-security      auth, Principal, JWT, role gates, agent tokens
   aleph-observability OTEL + Langfuse + structlog
-  aleph-models        LiteLLMClient, pricing, ModelProfile resolver
+  aleph-models        LiteLLMClient, gateway discovery + hints, pricing, ModelProfile resolver
   aleph-scholar       Crossref/OpenAlex/Consensus, DOI verification. Pure HTTP, ZERO LLM calls.
-  aleph-rks           Raw Knowledge Store — sources, normalization, chunks, embeddings
-  aleph-belief        web of belief — patch contract, trust lattice  (NEW, incomplete)
+  aleph-rks           Raw Knowledge Store — sources, normalization, chunks, embeddings, hybrid retrieval
+  aleph-belief        web of belief — patch contract, trust lattice, deterministic reconciliation
   aleph-research      deep-research loop (plan→search→ingest→reflect→compose)
-  aleph-connectors    typed connector plugins
+  aleph-connectors    typed connector plugins + encrypted ConnectorCredential
   aleph-assistant     chat orchestration + retrieval
   aleph-reviewer      verification passes
   aleph-hypotheses    analyst hypotheses + the derived-confidence engine
   aleph-artifacts     builder agent, rendered assets, exporters
-  aleph-a2ui          A2UI catalog + Python SDK glue
+  aleph-a2ui          A2UI catalog (`catalog.json`) + Python SDK glue
   aleph-notes         analyst notes
   aleph-datasets      Dataset / DatasetVersion / Observation
-  aleph-evals         eval runner and scorers  (harness is NOT wired — see Known broken)
-  aleph-wiki          LEGACY, under removal
+  aleph-evals         eval runner, scorers, and the retrieval eval that calls the real path
+  aleph-wiki          LEGACY, under removal — also currently hosts the Claim Spine write path
 ```
+
+21 workspace packages. `docs/acceptance.md` E4 asserts the count does not grow; the reduction comes
+with the wiki deletion.
 
 **Strict DAG, higher → lower.** `aleph-core` is the leaf. Apps depend on packages; packages never
 depend on apps; no cycles. `aleph-scholar` carries no workspace deps.
@@ -140,16 +192,29 @@ depend on apps; no cycles. `aleph-scholar` carries no workspace deps.
 3. **`alembic check` produces no diff.** New schema → new migration; never edit an existing one.
    Pattern: `apps/api/alembic/versions/YYYYMMDD_HHMM_<slug>_<message>.py`.
 4. **Tests split by marker.** `@pytest.mark.integration` for anything needing postgres/redis.
-5. **All LLM traffic goes through the LiteLLM gateway.** Non-agent code uses `LiteLLMClient` from
-   `aleph-models`. Agent-framework code may use `langchain_openai.ChatOpenAI` **only** pointed at the
-   gateway. No provider SDK is called directly.
-6. **Every row carries `project_id`**, plus `created_at`, `updated_at`, `created_by`, `access_scope`.
-   The only exception is `ModelProfile` templates.
+5. **The A2UI catalog has exactly one editable copy.** Edit `catalog.json`, run
+   `scripts/gen_catalog.py`; `scripts/check-catalog-generated.sh` fails on a hand-edited generated
+   copy or a regenerated-but-not-committed one. Three hand-maintained copies previously disagreed
+   about `ClaimCard.confidence` in ways no test noticed.
+6. **Every key a LangGraph node writes is declared on its state `TypedDict`.**
+   `scripts/check-graph-state-keys.sh`. Undeclared writes are discarded silently, so the reader's
+   `state.get(k, [])` returns empty and the feature is inert while every step reports success; four
+   shipped defects had exactly this shape.
+7. **The agent path talks to the gateway and nothing else.** Every agent `ChatOpenAI` — orchestrator
+   and every subagent — is built by the one constructor `copilot_agent._gateway_chat_model`, pointed
+   at the LiteLLM gateway. `test_subagents.py::test_subagent_model_points_at_gateway` asserts the
+   built model's `base_url` is the configured gateway, and `test_agent_gateway_base_url.py` pins the
+   URL shaping (`/v1` exactly once, never the raw setting). Neither is a sweep: they pin the
+   constructor that exists, not the absence of a new un-pointed one. The wider rule (non-agent code
+   goes through `LiteLLMClient`; no provider SDK is called directly) is held by review only.
 
 ## Rules that are real but only held by review
 
 These are genuine design commitments with no automated enforcement. Do not describe them as enforced.
 
+- **Every row carries `project_id`**, plus `created_at`, `updated_at`, `created_by`, `access_scope`.
+  The only exception is `ModelProfile` templates. No sweep checks this; new models are caught in
+  review or not at all.
 - **Every state mutation writes an `ActionLedgerEvent` in the same transaction.** Hash-chained,
   append-only. Verified by hand and by targeted integration tests, not by a sweep.
 - **Every LLM/embed call writes a `ModelCall` + `CostLedgerEvent`.** The agent path partially bypasses
@@ -158,39 +223,93 @@ These are genuine design commitments with no automated enforcement. Do not descr
   over HTTP with a minted agent token.
 - **No agent-emitted code runs in the app context.** Agent code runs only in `code-runner`; its output
   is a versioned artifact rendered in a `sandbox` iframe. No agent-emitted SQL.
-- **`ModelProfile` resolves capability → model.** Call sites pass a `Capability` and the project
-  profile; `LiteLLMClient` resolves the binding.
+- **`ModelProfile` resolves capability → model; the gateway decides what those models are.** Call
+  sites pass a `Capability` and the project profile; `LiteLLMClient` resolves the binding. Aleph ships
+  no model list and no price list: `aleph_models.discovery` reads what it can from the gateway,
+  preferring `/model/info` (modes, context windows, capability flags, exact rates) and falling back to
+  `/v1/models` (ids only) when the virtual key is restricted to `llm_api_routes`, which is the normal
+  case. `aleph_models.hints` fills unreported fields from an operator-editable file
+  (`ALEPH_MODEL_HINTS_PATH`), never overriding the gateway and always labelled `static`. This feeds
+  the Settings picker and `POST /v1/projects/{id}/model-profile/autoconfigure`, which chooses by
+  *requirements over metadata* (mode, context window, tool/vision support, price) — never by model
+  name — and probes each model before binding it, because a gateway's list states configuration, not
+  reachability. Priced models outrank unpriced; a capability no available model satisfies is left
+  **unbound** rather than bound to a guess.
+- **Cost provenance is recorded, never assumed.** `aleph_models.pricing` stamps `pricing_source` on
+  every priced row — `gateway` (reported), `static` (asserted from hints), `unknown` (unpriced) — plus
+  the rates used, so a cost stays re-derivable and an unpriced call is never a silent `$0`.
 
 ---
 
 ## Known broken — do not trust these
 
-Verified during the 2026-08 review. Fix or delete; do not build on top of. Entries move to *Fixed*
+Verified against the tree as merged. Fix or delete; do not build on top of. Entries move to *Fixed*
 below only with a test that would have caught them.
 
-- **Retrieval is body-blind.** `wiki_index.index_tsv` covers `title + summary + aliases` only, queried
-  with `plainto_tsquery` (ANDs every term). `POST /wiki/search` has the same defect.
-  **Now measured:** `tests/e2e/test_retrieval_finds_body_text.py` has two deliberately red tests
-  pinning this. They are the acceptance tests for the retrieval work — do not `xfail` them, and do not
-  delete them to get a green board.
-- **`Citation.source_page_id` is `None` on every production write path.** It has five consumers. This
-  one column silently voids retraction blast-radius, two of four freshness dimensions, the reviewer's
-  source registry, and the citation popover. Integration tests pass because fixtures hand-build the row.
 - **`commit_revision` is not atomic on the path agents use.** It only row-locks when given a
-  `page_id`; the by-title path returns the page unlocked and computes `revision_no` as `max+1`.
-- **The eval scorers have no harness.** They read `expected` and `actual` from the same fixture dict.
-  The datasets and the CI gate are deleted; the metrics are correct and need a harness that actually
-  calls Aleph.
-- **Freshness is the constant 50** on every page, and the Wiki tab sorts by it.
-- **The agent endpoint bypasses auth middleware.** It is on the skip list, performs no verification of
-  its own, and derives project scope from client-supplied state. Every other route is correctly gated.
-  **This is the one to fix before any deployment.**
-- **Cost attribution has a hole.** The `ChatOpenAI` agent path does not always produce `ModelCall` rows.
-- **`audit/` assertions are weak.** The harness is restored and runs against a live stack, but most
-  checks assert shape rather than behaviour. `wiki-first-retrieval.sh` has been rewritten as a real
-  known-answer probe; the rest have not.
+  `page_id`; the by-title path (`_lock_or_create_page` with `page_id=None`) returns the page unlocked
+  and computes `revision_no` as `max+1`.
+- **Cost attribution has a hole.** `AgentCostCallbackHandler` writes a `ModelCall` only when the
+  response carries token usage *and* a project id is resolvable from the run metadata; a
+  `ChatOpenAI` response without usage (no `stream_usage=True`, or a provider that omits it) is
+  silently uncosted. `test_skips_when_no_usage` / `test_skips_when_no_project_id` pin the current
+  behaviour, not the desired one.
+- **A green `audit/run.sh` is weaker evidence than it looks.** It probes a live stack, and a check
+  whose precondition is missing exits `skip` (e.g. "no project has recorded LLM spend yet"). `run.sh`
+  labels skips rather than hiding them, but a run over an empty stack exercises almost nothing while
+  reporting no failures. `scripts/acceptance.sh` — which counts skips separately and can verify its
+  own checks fail (`--self-check`) — is the gate to trust.
+- **The runtime bridge does not forward the caller's credential.** `apps/copilot-runtime/src/server.ts`
+  constructs `new HttpAgent({ url: AGENT_URL })` with no headers. In `oidc` mode the agent endpoint
+  now correctly demands a credential it never receives, so the chat path is unusable there until
+  browser → runtime → API header propagation lands. `local` mode — the only deployed mode — is
+  unaffected. Same class as the SSE gap below.
+- **SSE cannot carry a bearer token.** `EventSource` cannot set an `Authorization` header, so in
+  `oidc` mode the SSE streams (agent-events, surfaces, assistant, `changes`) and the `<iframe>`-consumed
+  asset route have no token transport. Deliberately out of scope until OIDC deployment is taken up as
+  a whole; `local` mode is unaffected.
 
-### Fixed (2026-08-14), with the test that pins each
+### Fixed, with the test that pins each
+
+**2026-08-15 → 2026-08-17 (the harness refactor, and the gateway/shell merge)**
+
+- **The agent endpoint bypassed auth middleware.** `/copilotkit` sat on the middleware skip list on a
+  comment promising the handler verified callers; it performed no verification, and the agent's tools
+  took their project scope from a client-supplied thread id. Two independent defences now stand:
+  `_SELF_AUTH_PREFIXES` is empty, so the endpoint is authenticated like every other route
+  (`test_copilotkit_auth.py::test_copilotkit_requires_auth_in_oidc_mode`,
+  `::test_no_blanket_auth_exemption_prefixes`); and the project a request names is checked at both
+  ends — at the HTTP boundary by `middleware/agent_scope.py` (`test_agent_thread_scope.py`, incl.
+  `test_thread_parsers_agree`, which pins the extractor to the agent's own thread-id parser) and
+  inside the graph by `copilot_agent`'s `_authorized` helper against the task-local principal
+  (`test_agent_project_authorization.py`). Acceptance check F1.
+- **An agent token's signed `project_id` was discarded.** The middleware now carries it onto the
+  `Principal`, and `project_scope.py::_assert_credential_scope` refuses a token used against another
+  project — for streams too. → `test_agent_token_project_scope.py`.
+- **Retrieval was body-blind.** `wiki_index` now carries `body_text` with weighted `ts_rank`
+  (title A / summary+aliases B / body C), the query gate ORs terms instead of ANDing them, and
+  `search_corpus` searches the whole corpus. → `tests/e2e/test_retrieval_finds_body_text.py`
+  (`test_body_phrase_retrieves_its_page`, `test_natural_language_question_retrieves_its_page`),
+  `tests/e2e/test_search_corpus.py`. Acceptance B1–B4.
+- **The eval scorers had no harness.** `python -m aleph_evals.retrieval_eval` runs the real retrieval
+  path against a 45-pair labelled set and reports recall as a number, naming `hybrid` vs `lexical`
+  mode and why. Acceptance B5/B6/B10.
+- **A citation carried no anchor.** Retraction blast-radius no longer hangs on `source_page_id`,
+  which was `None` at every write site: the join key is now `Citation.source_id`, written at commit
+  time and what `aleph_reviewer.retraction` selects on. `source_page_id` survives as the older bridge
+  key the citation popover, the refresh job and the curator resolve, and the legacy wiki ingest path
+  links it after commit (`_link_citations_to_source_page`, which returns the row count so a caller can
+  assert the write happened). Claim Spine citations also record the verbatim quote and a char span
+  (`tests/e2e/test_belief_spine.py::test_every_written_citation_carries_a_source_id`, acceptance C7),
+  and the legacy wiki write path fills `Citation.chunk_ids` via `aleph_rks.claim_grounding`
+  (`packages/aleph-rks/tests/test_claim_grounding.py`, `tests/e2e/test_grounding_surface.py`).
+- **Freshness could not tell a grounded page from a claimless one** — both scored 50, because
+  `_citation_health([])` returned full marks and `_verification` short-circuited before checking
+  whether any claim existed. Both now return 0 for an empty citation set. NOTE: the regression test
+  went with the wiki test suite; the fix lives in `packages/aleph-wiki/src/aleph_wiki/freshness.py`
+  and is currently unpinned.
+
+**2026-08-14**
 
 - **Stale-link expansion** — `retrieval/router.py` expanded links with no `src_revision_id` filter, so
   it walked every historical revision's links forever.
@@ -214,10 +333,17 @@ below only with a test that would have caught them.
   and add an integration test asserting the ledger row.
 - **New LLM call site** → `LiteLLMClient.chat()`/`.embed()` with a `Capability` and a `purpose`.
 - **New row type** → `project_id` + `access_scope`. No globally-scoped tables.
+- **New A2UI component** → edit `packages/aleph-a2ui/src/aleph_a2ui/catalog.json`, run
+  `scripts/gen_catalog.py`, and ship the renderer and the producer in the same change. Surface
+  components render only from bound props — no self-fetch. The sweep that enforced that is gone; the
+  pane model makes it structural, since a pane owns no transport.
 - **New connector** → implement `search`/`fetch`/`normalize`, register in `get_registry()`, declare
   `output_kind`. Credentials come from `ConnectorCredential`, never from container env.
 - **New Python package** → add to `[tool.uv.workspace] members`, `[tool.uv.sources]`, and both the
   ruff `src` and pyright `include` lists in the root `pyproject.toml`; then `uv sync`.
+- **New kernel capability** → declare it in `packages/aleph-runtime/src/aleph_runtime/capabilities.py`
+  with an inverse next to the thing it undoes and a probe that exercises its real read path. A
+  capability that cannot answer a live query must not come up.
 - **Ported code** → add a `NOTICE` recording upstream, license, and per-file lineage. See
   `packages/aleph-belief/NOTICE`.
 
@@ -232,7 +358,10 @@ Distribution `aleph-xxx` · module `aleph_xxx` · tables plural snake_case · ac
 
 ## Docs
 
-- `docs/architecture.md` — what exists today, honestly
+- `docs/architecture.md` — what exists today, honestly, including the security posture
+- `docs/acceptance.md` — the refactor decomposed into parts, each with a check that can fail
 - `docs/belief-engine.md` — the Claim Spine design being built
 - `docs/decisions.md` — why the wiki is being removed, and what was borrowed from where
-- `docs/operations.md` — stack, migrations, gates
+- `docs/operations.md` — stack, migrations, gates, running against local models
+- `docs/update/` — pre-refactor audit reports (dated 2026-07-26, written against `bcc478a`). Useful as
+  history; **superseded** wherever they disagree with the five documents above.

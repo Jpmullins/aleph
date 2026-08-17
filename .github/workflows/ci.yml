@@ -4,6 +4,11 @@ name: CI
 # real regression it does not belong in this file — a green light that means
 # nothing is worse than no light, and that is exactly how the previous eval
 # gate hid a broken retrieval path for seven work packages.
+#
+# The two `scripts/check-*.sh` steps below are kept under that same rule, not
+# grandfathered past it: both regenerate an artifact from its source and diff,
+# so each has a concrete, reproducible failing input. The five sweeps deleted
+# with the old gate did not.
 
 on:
   push:
@@ -34,6 +39,23 @@ jobs:
         run: uv run ruff format --check .
       - name: pyright (strict, 0 errors)
         run: uv run pyright
+
+      # `catalog.json` is the only catalog a human edits; `apps/web/src/a2ui/
+      # catalog.ts` and `apps/copilot-runtime/src/catalog.generated.ts` are
+      # written by `scripts/gen_catalog.py`. Fails on a hand-edit to either
+      # generated file, or on a `catalog.json` change committed without
+      # re-running the generator — the drift that let the agent-facing catalog
+      # offer a confidence value nothing recognised.
+      - name: A2UI generated catalogs match catalog.json
+        run: ./scripts/check-catalog-generated.sh
+
+      # LangGraph silently discards node writes to channels its state TypedDict
+      # does not declare: the reader gets an empty default and reports success.
+      # Four shipped defects had that shape. The analyzer is the one in
+      # tests/unit/test_graph_state_keys.py — imported, not copied, so the two
+      # entry points cannot disagree; this is the fast named gate for it.
+      - name: LangGraph state-key sweep
+        run: ./scripts/check-graph-state-keys.sh
 
   python-unit:
     name: unit tests
@@ -102,3 +124,14 @@ jobs:
       - run: pnpm -C apps/web install --frozen-lockfile
       - run: pnpm -C apps/web lint
       - run: pnpm -C apps/web build
+
+      # The copilot-runtime bridge is a separate npm project, and it was never
+      # typechecked or lockfile-pinned: its manifest floated and the deployed
+      # container ran versions the manifest did not describe. `npm ci` fails on
+      # lockfile drift; `tsc` fails on API drift between the pinned
+      # @ag-ui/client and @copilotkit/runtime — and on a generated
+      # `catalog.generated.ts` that no longer compiles against server.ts.
+      - name: copilot-runtime install + typecheck
+        run: |
+          npm --prefix apps/copilot-runtime ci
+          npm --prefix apps/copilot-runtime run typecheck

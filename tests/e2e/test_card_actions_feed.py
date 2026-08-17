@@ -37,7 +37,7 @@ async def auth_bypass(monkeypatch):
 async def test_recent_card_actions_listed(http_client, auth_bypass):
     proj = await http_client.post(
         "/v1/projects",
-        json={"title": "Actions feed", "description": "t", "budget_usd": "5.00"},
+        json={"title": "Actions feed", "description": "t"},
     )
     assert proj.status_code == 201, proj.text
     project_id = UUID(proj.json()["id"])

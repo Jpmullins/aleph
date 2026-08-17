@@ -10,6 +10,7 @@ gain a paired `ApprovalRequest` for analyst review.
 from __future__ import annotations
 
 import json
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypedDict
 from uuid import UUID
@@ -45,20 +46,39 @@ class _Ctx:
     profile: ModelProfile
 
 
-_active_ctx: _Ctx | None = None
+# Held in a ContextVar, NOT a module global.
+#
+# arq runs jobs concurrently in a single event loop. With a global, job B
+# overwrites job A's context, A's `finally` then clears it, and B's next node
+# reads `None` — surfacing as "context not initialized" and failing the job.
+# That is not hypothetical: it failed 11 of 14 papers in one research run,
+# because a research run is exactly the concurrent case. A ContextVar is
+# per-task, so each job sees only its own context.
+_active_ctx_var: ContextVar[_Ctx | None] = ContextVar(
+    "aleph_editorial_review_active_ctx", default=None
+)
 
 
 def _ctx() -> _Ctx:
-    if _active_ctx is None:
+    ctx = _active_ctx_var.get()
+    if ctx is None:
         msg = "EditorialReviewerWorkflow context not initialized"
         raise RuntimeError(msg)
-    return _active_ctx
+    return ctx
 
 
 class EditorialReviewState(TypedDict, total=False):
     project_id: UUID
     review_run_id: UUID
     agent_run_id: UUID
+    # Per-node finding counts — MUST be declared here: LangGraph silently drops
+    # node updates to keys absent from the state schema, so without these the
+    # `_wrap(..., "n_x")` slots vanish and `finding_count` is always 0.
+    n_c: int
+    n_w: int
+    n_n: int
+    n_g: int
+    n_f: int
     finding_count: int
 
 
@@ -280,11 +300,11 @@ async def _node_factual_freshness(state: EditorialReviewState) -> dict[str, int]
 @with_phase("finalize", ctx_getter=lambda: _ctx())
 async def _node_finalize(state: EditorialReviewState) -> dict[str, int]:
     total = (
-        (state.get("n_c") or 0)  # type: ignore[arg-type]
-        + (state.get("n_w") or 0)  # type: ignore[arg-type]
-        + (state.get("n_n") or 0)  # type: ignore[arg-type]
-        + (state.get("n_g") or 0)  # type: ignore[arg-type]
-        + (state.get("n_f") or 0)  # type: ignore[arg-type]
+        (state.get("n_c") or 0)
+        + (state.get("n_w") or 0)
+        + (state.get("n_n") or 0)
+        + (state.get("n_g") or 0)
+        + (state.get("n_f") or 0)
     )
     ctx = _ctx()
     async with ctx.session_maker() as session:
@@ -338,8 +358,7 @@ class EditorialReviewerWorkflow:
         self._compiled = graph.compile()
 
     async def run(self, *, project_id: UUID, agent_run_id: UUID, trigger: str) -> int:
-        global _active_ctx
-        _active_ctx = self._ctx
+        token = _active_ctx_var.set(self._ctx)
         async with self._ctx.session_maker() as session:
             run = await start_run(
                 session,
@@ -362,4 +381,4 @@ class EditorialReviewerWorkflow:
             out = await self._compiled.ainvoke(state)
             return int(out.get("finding_count", 0))  # type: ignore[arg-type]
         finally:
-            _active_ctx = None
+            _active_ctx_var.reset(token)

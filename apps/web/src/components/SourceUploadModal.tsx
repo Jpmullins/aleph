@@ -46,8 +46,8 @@ export function SourceUploadModal({ projectId, onClose, onUploaded }: Props) {
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
-      <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 px-4">
+      <div className="w-full max-w-md rounded-lg bg-surface p-6 shadow-xl">
         <h2 className="mb-4 text-xl font-semibold">Upload source</h2>
         <form
           onSubmit={(e) => {
@@ -57,7 +57,7 @@ export function SourceUploadModal({ projectId, onClose, onUploaded }: Props) {
           className="space-y-4"
         >
           <label className="block">
-            <span className="text-sm font-medium text-slate-700">File</span>
+            <span className="text-sm font-medium text-ink-soft">File</span>
             <input
               required
               type="file"
@@ -67,11 +67,11 @@ export function SourceUploadModal({ projectId, onClose, onUploaded }: Props) {
             />
           </label>
           <label className="block">
-            <span className="text-sm font-medium text-slate-700">Title (optional)</span>
+            <span className="text-sm font-medium text-ink-soft">Title (optional)</span>
             <input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm"
             />
           </label>
           {upload.isError && (
@@ -83,14 +83,14 @@ export function SourceUploadModal({ projectId, onClose, onUploaded }: Props) {
             <button
               type="button"
               onClick={onClose}
-              className="rounded-md border border-slate-300 px-4 py-2 text-sm hover:border-slate-500"
+              className="rounded-md border border-line-strong px-4 py-2 text-sm hover:border-line-strong"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={!file || upload.isPending}
-              className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+              className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-ink-inverse hover:bg-ink-soft disabled:opacity-50"
             >
               {upload.isPending ? "Uploading…" : "Upload"}
             </button>

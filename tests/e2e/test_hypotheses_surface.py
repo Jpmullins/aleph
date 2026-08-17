@@ -37,7 +37,7 @@ def _components(messages: list[dict]) -> list[dict]:
 async def test_hypotheses_tab_mounts_the_rich_surface(http_client, auth_bypass):
     proj = await http_client.post(
         "/v1/projects",
-        json={"title": "Hyp surface", "description": "t", "budget_usd": "5.00"},
+        json={"title": "Hyp surface", "description": "t"},
     )
     assert proj.status_code == 201, proj.text
     project_id = UUID(proj.json()["id"])

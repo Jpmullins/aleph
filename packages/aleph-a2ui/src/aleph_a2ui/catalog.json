@@ -1,0 +1,2093 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aleph.research/a2ui/catalog/v1.json",
+  "title": "Aleph A2UI Catalog",
+  "version": "1.0.0",
+  "catalogId": "aleph-v1",
+  "agentCatalogId": "aleph://v1",
+  "components": {
+    "ApprovalCard": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "target_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "target_kind": {
+                "enum": [
+                  "synthesis_proposal",
+                  "review_finding",
+                  "wiki_revision",
+                  "agent_action",
+                  "refresh_result"
+                ]
+              },
+              "title": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "summary": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "severity": {
+                "enum": [
+                  "info",
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              "evidence_refs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "claim",
+                        "source",
+                        "chunk",
+                        "page"
+                      ]
+                    },
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "label": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "diff_card_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "approve_action": {
+                "const": "approve"
+              },
+              "reject_action": {
+                "const": "reject"
+              },
+              "view_diff_action": {
+                "const": "open"
+              }
+            },
+            "required": [
+              "target_id",
+              "target_kind",
+              "title",
+              "summary",
+              "approve_action",
+              "reject_action"
+            ],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      },
+      "agent": {
+        "description": "An approve/reject gate for a consequential action (an agent_action build/connector change, a synthesis proposal, a review finding). Render this when a tool result asks you to surface an approval — the analyst clicks Approve/Reject and the ActionRouter executes. `target_id` + `target_kind` come from the tool result; do not fabricate them.",
+        "props": {
+          "type": "object",
+          "properties": {
+            "target_id": {
+              "type": "string"
+            },
+            "target_kind": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "severity": {
+              "type": "string",
+              "description": "info | low | medium | high"
+            },
+            "evidence_refs": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "diff_card_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "target_id",
+            "target_kind",
+            "title",
+            "summary"
+          ]
+        }
+      }
+    },
+    "ArtifactCard": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "artifact_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "short_id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "artifact_kind": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "drifted": {
+                "type": "boolean"
+              },
+              "open_action": {
+                "const": "open"
+              }
+            },
+            "required": [
+              "artifact_id",
+              "title",
+              "artifact_kind",
+              "status"
+            ],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      },
+      "agent": {
+        "description": "A built product artifact (report/deck/source-pack) with its status.",
+        "props": {
+          "type": "object",
+          "properties": {
+            "artifact_id": {
+              "type": "string"
+            },
+            "short_id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "artifact_kind": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "drifted": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "artifact_id",
+            "title",
+            "artifact_kind",
+            "status"
+          ]
+        }
+      }
+    },
+    "ArtifactsSurface": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "current_artifact_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "BriefsSurface": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "filters": {
+                "type": "object"
+              },
+              "badge_count": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "ChartCard": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "vega_lite_spec": {
+                "type": "object"
+              },
+              "chart_url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "artifact_version_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "type": "string"
+              },
+              "chart_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "open_action": {
+                "const": "open"
+              }
+            },
+            "required": [],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      },
+      "agent": {
+        "description": "A chart visualizing quantitative data. Provide a self-contained Vega-Lite spec in `vega_lite_spec` with data embedded under `data.values` (array of row objects). Use for comparisons, trends, distributions, or benchmark numbers the analyst asks you to plot.",
+        "props": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "vega_lite_spec": {
+              "type": "object",
+              "description": "A complete Vega-Lite spec with embedded data."
+            },
+            "dataset_version_id": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "ClaimCard": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "claim_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "text": {
+                "type": "string",
+                "maxLength": 2048
+              },
+              "confidence": {
+                "enum": [
+                  "cited",
+                  "well-supported",
+                  "weakly-supported",
+                  "contested",
+                  "uncited",
+                  "retracted"
+                ]
+              },
+              "citations": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "marker": {
+                      "type": "string"
+                    },
+                    "source_short_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "chunk_ids": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "format": "uuid"
+                      }
+                    }
+                  }
+                }
+              },
+              "open_action": {
+                "const": "open"
+              }
+            },
+            "required": [
+              "claim_id",
+              "text",
+              "confidence"
+            ],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      },
+      "agent": {
+        "description": "A single factual claim with its confidence and citations. Use when surfacing one well-scoped assertion grounded in the wiki.",
+        "props": {
+          "type": "object",
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "confidence": {
+              "type": "string",
+              "enum": [
+                "cited",
+                "well-supported",
+                "weakly-supported",
+                "contested",
+                "uncited",
+                "retracted"
+              ]
+            },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "marker": {
+                    "type": "string"
+                  },
+                  "source_short_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "required": [
+            "claim_id",
+            "text",
+            "confidence"
+          ]
+        }
+      }
+    },
+    "DiffCard": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "from_revision_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "to_revision_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "page_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "from_body_md": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "to_body_md": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "open_action": {
+                "const": "open"
+              }
+            },
+            "required": [
+              "from_revision_id",
+              "to_revision_id",
+              "page_id"
+            ],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      },
+      "agent": {
+        "description": "A revision diff for a wiki page (from_revision_id → to_revision_id). Render when showing what changed between two wiki revisions. Supply `from_body_md`/`to_body_md` to render a real line diff.",
+        "props": {
+          "type": "object",
+          "properties": {
+            "from_revision_id": {
+              "type": "string"
+            },
+            "to_revision_id": {
+              "type": "string"
+            },
+            "page_id": {
+              "type": "string"
+            },
+            "from_body_md": {
+              "type": "string"
+            },
+            "to_body_md": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "from_revision_id",
+            "to_revision_id",
+            "page_id"
+          ]
+        }
+      }
+    },
+    "FindingCard": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "finding_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "severity": {
+                "enum": [
+                  "info",
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              "kind": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "evidence_refs": {
+                "type": "array"
+              },
+              "open_action": {
+                "const": "open"
+              },
+              "approve_action": {
+                "const": "approve"
+              },
+              "reject_action": {
+                "const": "reject"
+              }
+            },
+            "required": [
+              "finding_id",
+              "severity",
+              "kind",
+              "summary"
+            ],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      },
+      "agent": {
+        "description": "A reviewer finding (contradiction, weak source, coverage gap) with a severity.",
+        "props": {
+          "type": "object",
+          "properties": {
+            "finding_id": {
+              "type": "string"
+            },
+            "severity": {
+              "type": "string",
+              "enum": [
+                "info",
+                "low",
+                "medium",
+                "high"
+              ]
+            },
+            "kind": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "finding_id",
+            "severity",
+            "kind",
+            "summary"
+          ]
+        }
+      }
+    },
+    "FormCard": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "form_id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "text",
+                        "textarea",
+                        "select",
+                        "boolean"
+                      ]
+                    },
+                    "options": {
+                      "type": "array"
+                    },
+                    "required": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "label",
+                    "type"
+                  ]
+                }
+              },
+              "submit_action": {
+                "const": "submit_form"
+              }
+            },
+            "required": [
+              "form_id",
+              "title",
+              "fields"
+            ],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      },
+      "agent": {
+        "description": "A dynamic input form. Use to collect structured input conversationally (parameters, choices) instead of free text. `fields` is an array of field specs ([{name,label,type,options?}]).",
+        "props": {
+          "type": "object",
+          "properties": {
+            "form_id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "fields": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          },
+          "required": [
+            "form_id",
+            "title",
+            "fields"
+          ]
+        }
+      }
+    },
+    "GroundingSurface": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "claim": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "groundings": {
+                "type": "array"
+              }
+            },
+            "required": [],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "HtmlDocCard": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "src": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "derived": {
+                "type": "boolean"
+              },
+              "read_only": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "src"
+            ],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "HtmlFrameCard": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "src": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "artifact_version_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "src"
+            ],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "HypothesesSurface": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "current_hypothesis_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "HypothesisCard": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "hypothesis_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "title": {
+                "type": "string"
+              },
+              "confidence": {
+                "enum": [
+                  "initial",
+                  "weakly-supported",
+                  "well-supported",
+                  "rejected"
+                ]
+              },
+              "evidence_count": {
+                "type": "integer"
+              },
+              "open_action": {
+                "const": "open"
+              }
+            },
+            "required": [
+              "hypothesis_id",
+              "title"
+            ],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      },
+      "agent": {
+        "description": "A research hypothesis with its current confidence and evidence count.",
+        "props": {
+          "type": "object",
+          "properties": {
+            "hypothesis_id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "confidence": {
+              "type": "string"
+            },
+            "evidence_count": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "hypothesis_id",
+            "title"
+          ]
+        }
+      }
+    },
+    "ImageCard": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "src": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "alt": {
+                "type": "string"
+              },
+              "artifact_version_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "src"
+            ],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "NoteEditorCard": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "note_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "section_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "type": "string"
+              },
+              "body_md": {
+                "type": "string"
+              },
+              "edit_action": {
+                "const": "edit_note"
+              },
+              "rename_action": {
+                "const": "rename_note"
+              },
+              "promote_action": {
+                "const": "promote_note"
+              }
+            },
+            "required": [
+              "note_id",
+              "body_md"
+            ],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "NotesSurface": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "current_note_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "current_section_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "SourceCard": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "source_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "short_id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": "string"
+              },
+              "normalized_preview": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "retracted": {
+                "type": "boolean"
+              },
+              "open_action": {
+                "const": "open"
+              },
+              "navigate_wiki_action": {
+                "const": "navigate_wiki"
+              }
+            },
+            "required": [
+              "source_id",
+              "short_id",
+              "title"
+            ],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      },
+      "agent": {
+        "description": "A reference to an ingested source with its processing status.",
+        "props": {
+          "type": "object",
+          "properties": {
+            "source_id": {
+              "type": "string"
+            },
+            "short_id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "normalized_preview": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source_id",
+            "short_id",
+            "title",
+            "status"
+          ]
+        }
+      }
+    },
+    "TableCard": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "dataset_version_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "columns": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "rows": {
+                "type": "array"
+              },
+              "title": {
+                "type": "string"
+              },
+              "open_action": {
+                "const": "open"
+              }
+            },
+            "required": [],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      },
+      "agent": {
+        "description": "A sortable, filterable data table. Provide `columns` ([{name,label}]) and `rows` (array of objects keyed by column name).",
+        "props": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "columns": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "WikiPageCard": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "page_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "body_md": {
+                "type": "string"
+              },
+              "claims": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "citations": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "wikilinks_out": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "page_meta": {
+                "type": "object"
+              },
+              "html_url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "retracted": {
+                "type": "boolean"
+              },
+              "derived": {
+                "type": "boolean"
+              },
+              "read_only": {
+                "type": "boolean"
+              },
+              "navigate_wiki_action": {
+                "const": "navigate_wiki"
+              },
+              "approve_action": {
+                "const": "approve"
+              },
+              "reject_action": {
+                "const": "reject"
+              },
+              "repair_links_action": {
+                "const": "repair_links"
+              }
+            },
+            "required": [
+              "body_md"
+            ],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "WikiSurface": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "current_page_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "view_mode": {
+                "enum": [
+                  "page",
+                  "graph",
+                  "list",
+                  "recent"
+                ]
+              },
+              "filters": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "view_mode"
+            ],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "primitives": {
+    "Button": {
+      "description": "A clickable button. `child` is the id of its label component.",
+      "props": {
+        "type": "object",
+        "properties": {
+          "child": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "Card": {
+      "description": "A bordered container wrapping one child component (id in `child`).",
+      "props": {
+        "type": "object",
+        "properties": {
+          "child": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "Column": {
+      "description": "A vertical stack of child components (referenced by id in `children`).",
+      "props": {
+        "type": "object",
+        "properties": {
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "Divider": {
+      "description": "A separator between sections.",
+      "props": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "Icon": {
+      "description": "A named icon (`name`).",
+      "props": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "Image": {
+      "description": "An image. `url` is the source.",
+      "props": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "List": {
+      "description": "A list of child components (ids in `children`).",
+      "props": {
+        "type": "object",
+        "properties": {
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "Row": {
+      "description": "A horizontal arrangement of child components (ids in `children`).",
+      "props": {
+        "type": "object",
+        "properties": {
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "Text": {
+      "description": "A run of text. `text` is the string; `variant` sets heading/body style.",
+      "props": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "variant": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": true
+      }
+    }
+  },
+  "actions": {
+    "approve": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "target_kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_id",
+          "target_kind"
+        ]
+      }
+    },
+    "clarify": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "agent_run_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "answer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_run_id",
+          "answer"
+        ]
+      }
+    },
+    "clear_handedit": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "page_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "section_anchor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "page_id",
+          "section_anchor"
+        ]
+      }
+    },
+    "compose_dossier": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "card_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "page_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "required": [
+          "title"
+        ]
+      }
+    },
+    "create_hypothesis": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "statement": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "statement"
+        ]
+      }
+    },
+    "create_note": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "edit_note": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "section_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "body_md": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "section_id",
+          "body_md"
+        ]
+      }
+    },
+    "feedback": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "target_kind": {
+            "type": "string"
+          },
+          "signal": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "context": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "target_id",
+          "target_kind",
+          "signal"
+        ]
+      }
+    },
+    "focus_tab": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "tab": {
+            "enum": [
+              "Wiki",
+              "Library",
+              "Notes",
+              "Hypotheses",
+              "Briefs"
+            ]
+          }
+        },
+        "required": [
+          "tab"
+        ]
+      }
+    },
+    "highlight_claim": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "claim_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "claim_id"
+        ]
+      }
+    },
+    "mark_handedit": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "page_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "section_anchor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "page_id",
+          "section_anchor"
+        ]
+      }
+    },
+    "navigate_wiki": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "page_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string"
+          }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "page_id"
+            ]
+          },
+          {
+            "required": [
+              "slug"
+            ]
+          }
+        ]
+      }
+    },
+    "open": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "target_kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_id",
+          "target_kind"
+        ]
+      }
+    },
+    "promote_note": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "note_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "note_id"
+        ]
+      }
+    },
+    "reject": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "target_kind": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_id",
+          "target_kind",
+          "reason"
+        ]
+      }
+    },
+    "rename_note": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "note_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "note_id",
+          "title"
+        ]
+      }
+    },
+    "repair_links": {
+      "params": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "spotlight": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "card_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "card_id"
+        ]
+      }
+    },
+    "submit_form": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "form_id": {
+            "type": "string"
+          },
+          "values": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "form_id",
+          "values"
+        ]
+      }
+    },
+    "unpin": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "card_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "card_id"
+        ]
+      }
+    }
+  }
+}

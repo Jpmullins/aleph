@@ -75,16 +75,16 @@ export function NoteEditorCard({ component, onAction }: RendererProps) {
             }
           }}
           placeholder="Untitled note"
-          className="min-w-0 flex-1 truncate rounded border border-transparent bg-transparent px-1 py-0.5 text-sm font-semibold text-[var(--text-primary,#0f172a)] hover:border-[var(--border-muted,#e2e8f0)] focus:border-[var(--accent,#f97316)] focus:outline-none"
+          className="min-w-0 flex-1 truncate rounded border border-transparent bg-transparent px-1 py-0.5 text-sm font-semibold text-ink hover:border-line focus:border-[var(--accent,#f97316)] focus:outline-none"
           data-testid="note-title"
         />
-        <span className="text-xs text-[var(--text-muted,#94a3b8)]">
+        <span className="text-xs text-ink-muted">
           {saved === "saving" ? "Saving…" : saved === "saved" ? "Saved" : ""}
         </span>
         <button
           type="button"
           onClick={() => setPreview((v) => !v)}
-          className="rounded border border-[var(--border-muted,#e2e8f0)] px-2 py-1 text-xs text-[var(--text-secondary,#475569)]"
+          className="rounded border border-line px-2 py-1 text-xs text-ink-soft"
           data-testid="note-preview-toggle"
         >
           {preview ? "Edit" : "Preview"}
@@ -92,14 +92,14 @@ export function NoteEditorCard({ component, onAction }: RendererProps) {
         <button
           type="button"
           onClick={() => noteId && onAction("promote_note", { note_id: noteId })}
-          className="rounded bg-[var(--accent,#0f172a)] px-2 py-1 text-xs font-medium text-white hover:opacity-90"
+          className="rounded bg-[var(--accent,#0f172a)] px-2 py-1 text-xs font-medium text-ink-inverse hover:opacity-90"
           data-testid="note-promote"
         >
           Promote to wiki
         </button>
       </div>
       {preview ? (
-        <div className="flex-1 overflow-y-auto rounded-md border border-[var(--border-muted,#e2e8f0)] p-3">
+        <div className="flex-1 overflow-y-auto rounded-md border border-line p-3">
           <WikiBodyMarkdown body={body || "_Nothing to preview yet._"} />
         </div>
       ) : (
@@ -107,7 +107,7 @@ export function NoteEditorCard({ component, onAction }: RendererProps) {
           value={body}
           onChange={(e) => onChangeBody(e.target.value)}
           placeholder="Write in markdown. Use [[Page Title]] to link the wiki. Autosaves."
-          className="flex-1 resize-none rounded-md border border-[var(--border-muted,#e2e8f0)] bg-[var(--surface-raised,#fff)] p-3 font-mono text-xs text-[var(--text-primary,#0f172a)] focus:border-[var(--accent,#f97316)] focus:outline-none"
+          className="flex-1 resize-none rounded-md border border-line bg-surface p-3 font-mono text-xs text-ink focus:border-[var(--accent,#f97316)] focus:outline-none"
           data-testid="note-editor"
         />
       )}

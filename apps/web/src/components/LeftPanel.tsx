@@ -51,27 +51,27 @@ export function LeftPanel({
   });
 
   return (
-    <aside className="flex h-full flex-col border-r border-slate-200 bg-white">
-      <div className="border-b border-slate-200 px-4 py-3">
+    <aside className="flex h-full flex-col border-r border-line bg-surface">
+      <div className="border-b border-line px-4 py-3">
         <button
           type="button"
           onClick={onBack}
-          className="text-xs font-medium uppercase tracking-wider text-slate-500 hover:text-slate-900"
+          className="text-xs font-medium uppercase tracking-wider text-ink-muted hover:text-ink"
         >
           ← Projects
         </button>
-        <h2 className="mt-1 truncate text-base font-semibold text-slate-900" title={projectTitle}>
+        <h2 className="mt-1 truncate text-base font-semibold text-ink" title={projectTitle}>
           {projectTitle}
         </h2>
       </div>
 
       <div className="flex items-center justify-between px-4 pt-3 pb-1">
-        <p className="text-xs uppercase tracking-wider text-slate-400">Sessions</p>
+        <p className="text-xs uppercase tracking-wider text-ink-muted">Sessions</p>
         <button
           type="button"
           onClick={() => createSession.mutate()}
           disabled={createSession.isPending}
-          className="text-xs font-medium text-slate-600 hover:text-slate-900 disabled:opacity-50"
+          className="text-xs font-medium text-ink-soft hover:text-ink disabled:opacity-50"
           title="New session"
         >
           + New
@@ -79,10 +79,10 @@ export function LeftPanel({
       </div>
       <ul className="flex-1 overflow-y-auto px-2 pb-3">
         {sessionsQuery.isPending && (
-          <li className="px-2 py-2 text-xs text-slate-400">Loading…</li>
+          <li className="px-2 py-2 text-xs text-ink-muted">Loading…</li>
         )}
         {sessionsQuery.isSuccess && sessionsQuery.data.length === 0 && (
-          <li className="px-2 py-2 text-xs text-slate-400">No sessions. Click + New.</li>
+          <li className="px-2 py-2 text-xs text-ink-muted">No sessions. Click + New.</li>
         )}
         {sessionsQuery.data?.map((s) => (
           <li key={s.id}>
@@ -92,8 +92,8 @@ export function LeftPanel({
               className={
                 "block w-full truncate rounded-md px-2 py-1.5 text-left text-sm " +
                 (s.id === sessionId
-                  ? "bg-slate-900 text-white"
-                  : "text-slate-700 hover:bg-slate-100")
+                  ? "bg-ink text-ink-inverse"
+                  : "text-ink-soft hover:bg-elevated")
               }
               title={s.title}
             >
@@ -103,17 +103,17 @@ export function LeftPanel({
         ))}
       </ul>
 
-      <div className="border-t border-slate-200 px-3 py-2">
+      <div className="border-t border-line px-3 py-2">
         <button
           type="button"
           onClick={() => setShowUpload(true)}
-          className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+          className="w-full rounded-md border border-line-strong px-2 py-1.5 text-xs font-medium text-ink-soft hover:bg-sunken"
         >
           + Upload source
         </button>
       </div>
 
-      <div className="flex justify-between border-t border-slate-200 px-4 py-3 text-slate-500">
+      <div className="flex justify-between border-t border-line px-4 py-3 text-ink-muted">
         <IconButton title="Settings" onClick={() => onOpenDrawer("settings")} label="⚙" />
         <IconButton title="Logs" onClick={() => onOpenDrawer("logs")} label="🗒" />
         <IconButton
@@ -167,7 +167,7 @@ function IconButton({
       type="button"
       title={title}
       onClick={onClick}
-      className="inline-flex items-center justify-center rounded-md px-2 py-1 text-base hover:bg-slate-100 hover:text-slate-900"
+      className="inline-flex items-center justify-center rounded-md px-2 py-1 text-base hover:bg-elevated hover:text-ink"
     >
       {label}
     </button>

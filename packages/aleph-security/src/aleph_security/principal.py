@@ -26,6 +26,18 @@ class Principal:
     # When actor_kind != "user", these identify the operation context.
     agent_run_id: UUID | None = None
     correlation_id: str | None = None
+    #: The project this *credential* is bound to, when it is bound to one.
+    #:
+    #: Agent tokens are minted per project (OWNER-gated) and signed with a
+    #: `project_id` claim. Carrying it here is what makes that binding mean
+    #: something at use time: `project_scope_dep` / `assert_stream_access`
+    #: refuse any other project outright, before membership is even queried.
+    #: Without it a worker's hour-long token authorized every project its
+    #: underlying user belonged to.
+    #:
+    #: `None` for human principals — they are unscoped by credential and
+    #: governed purely by project membership.
+    project_id: UUID | None = None
 
     _role_cache: dict[UUID, str] = field(default_factory=dict, compare=False, repr=False)
 

@@ -22,6 +22,32 @@ class Capability(StrEnum):
     CODE = "code"
 
 
+class GatewayModelOut(BaseModel):
+    """A model the gateway advertises, as offered to the Settings picker.
+
+    Aleph ships no model list; this is read from the gateway's own
+    `/model/info` at runtime. `capabilities` is computed server-side from the
+    same policy that generates defaults, so the UI never has to reimplement
+    (and drift from) the rules about which models can do which job.
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    id: str
+    mode: str | None = None
+    max_input_tokens: int | None = None
+    input_per_token: Decimal | None = None
+    output_per_token: Decimal | None = None
+    supports_vision: bool = False
+    supports_function_calling: bool = False
+    supports_reasoning: bool = False
+    supports_prompt_caching: bool = False
+    #: False when the gateway advertises no price. Such a model is shown but
+    #: never auto-selected — binding it would record calls at a silent $0.
+    is_priced: bool = True
+    capabilities: list[str] = Field(default_factory=list)
+
+
 class ModelBindingIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

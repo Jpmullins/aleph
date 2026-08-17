@@ -6,7 +6,6 @@ model, tokens, cost; verifies ModelCall + CostLedgerEvent + Langfuse trace.
 
 from __future__ import annotations
 
-from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Body
@@ -14,9 +13,8 @@ from pydantic import BaseModel
 
 from aleph_api.deps import LiteLLMDep, PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
-from aleph_core.errors import BudgetExceeded, NotFound
+from aleph_core.errors import NotFound
 from aleph_core.schemas.model_profile import Capability
-from aleph_db.repos import cost as cost_repo
 from aleph_db.repos import model_profile as profile_repo
 from aleph_models.client import ChatMessage
 from aleph_security.roles import ProjectRole, require_at_least
@@ -51,15 +49,6 @@ async def smoke_llm(
     if profile is None:
         msg = f"project {project_id} has no profile"
         raise NotFound(msg)
-    budget = await cost_repo.get_budget(session, project_id)
-    if budget is None:
-        msg = f"project {project_id} has no budget"
-        raise NotFound(msg)
-    hard_cap = budget.cap_usd * (budget.hard_pct / Decimal("100"))
-    if budget.spent_usd >= hard_cap:
-        msg = f"budget hard cap reached: spent ${budget.spent_usd} / cap ${budget.cap_usd}"
-        raise BudgetExceeded(msg)
-
     resp = await litellm.chat(
         principal=principal,
         project_id=project_id,
