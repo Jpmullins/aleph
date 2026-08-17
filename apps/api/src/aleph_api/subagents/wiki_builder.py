@@ -61,7 +61,7 @@ def build_wiki_builder_subagent(*, settings: Any) -> dict[str, Any]:
         )
 
         settings_rt = _runtime.get("settings")
-        project_id = _project_id_from_config(config)
+        project_id = await _project_id_from_config(config)
         if settings_rt is None or project_id is None:
             return "Cannot promote (no project scope)."
         try:

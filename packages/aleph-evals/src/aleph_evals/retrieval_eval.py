@@ -86,11 +86,79 @@ def _zero_vector() -> list[float]:
     return [0.0] * EMBEDDING_DIM
 
 
-async def _embedder(project_id: UUID):
-    """Return (embed_fn, mode). Falls back to lexical-only without a gateway."""
+def _gateway_embed(model: str, texts: list[str]) -> list[list[float]]:
+    """Embed via the configured gateway. Raises on any failure — the caller
+    decides whether to degrade, so a broken embedder can never be mistaken for
+    a legitimately lexical run."""
+    import json
+    import urllib.request
+
+    base = os.environ["LITELLM_BASE_URL"].rstrip("/")
+    req = urllib.request.Request(
+        f"{base}/v1/embeddings",
+        data=json.dumps({"model": model, "input": texts}).encode(),
+        headers={
+            "Authorization": f"Bearer {os.environ['INSIGHTS_LITELLM_API_KEY']}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=600) as resp:
+        body = json.loads(resp.read())
+    vectors = [row["embedding"] for row in sorted(body["data"], key=lambda r: r["index"])]
+    bad = next((len(v) for v in vectors if len(v) != EMBEDDING_DIM), None)
+    if bad is not None:
+        msg = f"embedder {model!r} returned dim {bad}, expected {EMBEDDING_DIM}"
+        raise RuntimeError(msg)
+    return vectors
+
+
+async def _embedding_model(maker: Any) -> str | None:
+    """The model the system would actually use, read from a ModelProfile.
+
+    Read rather than configured, so the eval measures the deployed binding. An
+    eval that embeds with a model the system does not use would report a number
+    nothing else can reproduce.
+    """
+    from sqlalchemy import text as sql_text
+
+    name = os.environ.get("ALEPH_DEFAULT_MODEL_PROFILE", "aleph-dev")
+    async with maker() as session:
+        row = (
+            await session.execute(
+                sql_text(
+                    "select bindings_jsonb->'embedding'->>'model' from model_profiles "
+                    "where name = :n order by is_template desc limit 1"
+                ),
+                {"n": name},
+            )
+        ).first()
+    return str(row[0]) if row and row[0] else None
+
+
+async def _embedder(maker: Any) -> tuple[Any, str]:
+    """Return (embed_fn, mode).
+
+    Degrades to lexical-only rather than failing, but never silently: the mode
+    string carries the reason, and a lexical number is not comparable to a
+    hybrid one.
+    """
     if not os.environ.get("INSIGHTS_LITELLM_API_KEY") or not os.environ.get("LITELLM_BASE_URL"):
         return (lambda _q: _zero_vector()), "lexical (no gateway configured)"
-    return (lambda _q: _zero_vector()), "lexical (gateway present; dense leg not yet wired here)"
+
+    model = await _embedding_model(maker)
+    if not model:
+        return (lambda _q: _zero_vector()), "lexical (no embedding binding in any ModelProfile)"
+
+    try:
+        _gateway_embed(model, ["probe"])
+    except Exception as exc:
+        return (lambda _q: _zero_vector()), f"lexical ({model} unavailable: {exc})"
+
+    def embed(q: str) -> list[float]:
+        return _gateway_embed(model, [q])[0]
+
+    return embed, f"hybrid (dense leg via {model})"
 
 
 async def run(k: int = 8) -> Report:
@@ -124,11 +192,22 @@ async def run(k: int = 8) -> Report:
     try:
         # Seed. One source per document, one chunk per document — the unit under
         # test is retrieval, not chunking.
+        embed, mode = await _embedder(maker)
+
+        # Embed the corpus in one batch. Seeding zero vectors while querying a
+        # real one would leave the dense leg ranking nothing and quietly report
+        # the lexical number as "hybrid".
+        bodies = [f"{doc['title']}. {doc['text']}" for doc in corpus]
+        doc_vectors: list[list[float]] | None = None
+        if mode.startswith("hybrid"):
+            model = await _embedding_model(maker)
+            doc_vectors = _gateway_embed(str(model), bodies)
+
         async with maker() as session:
             for ordinal, doc in enumerate(corpus):
                 source_id = uuid7()
                 doc_to_source[doc["doc_id"]] = source_id
-                body = f"{doc['title']}. {doc['text']}"
+                body = bodies[ordinal]
                 session.add(
                     DocumentChunk(
                         id=uuid7(),
@@ -142,13 +221,13 @@ async def run(k: int = 8) -> Report:
                         char_start=0,
                         char_end=len(body),
                         token_count=len(body.split()),
-                        embedding=_zero_vector(),
+                        embedding=(
+                            doc_vectors[ordinal] if doc_vectors is not None else _zero_vector()
+                        ),
                         embedder_model="eval-fixture",
                     )
                 )
             await session.commit()
-
-        embed, mode = await _embedder(project_id)
 
         hits = 0
         by_phrasing: dict[str, list[int]] = {}

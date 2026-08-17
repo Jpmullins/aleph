@@ -103,6 +103,62 @@ else
   printf '  \033[90m%-8s\033[0m stale-link mutation (needs postgres)\n' "skip"
 fi
 
+# H1's subject is a database row, not a source file, so it needs its own
+# mutation rather than `probe`. Binds a model no gateway serves, asserts the
+# check notices, and restores in a finally so a failure here cannot leave the
+# profile table pointing at a ghost.
+if (echo > /dev/tcp/localhost/5432) >/dev/null 2>&1 \
+   && curl -sf --max-time 5 "${LITELLM_BASE_URL:-http://localhost:8010}/v1/models" >/dev/null 2>&1; then
+  H1_OUT=$(uv run python - <<'PYEOF' 2>/dev/null
+import asyncio, os, subprocess, sys
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
+
+URL = os.environ.get("ALEPH_DATABASE_URL", "")
+GHOST = "self-check-ghost-model"
+
+async def main() -> str:
+    engine = create_async_engine(URL)
+    try:
+        async with engine.begin() as conn:
+            row = (await conn.execute(text(
+                "select id, bindings_jsonb->'synthesis'->>'model' from model_profiles "
+                "where bindings_jsonb ? 'synthesis' limit 1"))).first()
+            if not row:
+                return "SKIP"
+            pid, original = row[0], row[1]
+            await conn.execute(text(
+                "update model_profiles set bindings_jsonb = "
+                "jsonb_set(bindings_jsonb,'{synthesis,model}', to_jsonb(cast(:g as text))) where id = :i"),
+                {"g": GHOST, "i": pid})
+        try:
+            rc = subprocess.run(
+                [sys.executable, "scripts/_acceptance/gateway_serves_bound_models.py"],
+                capture_output=True, timeout=300).returncode
+        finally:
+            async with engine.begin() as conn:
+                await conn.execute(text(
+                    "update model_profiles set bindings_jsonb = "
+                    "jsonb_set(bindings_jsonb,'{synthesis,model}', to_jsonb(cast(:o as text))) where id = :i"),
+                    {"o": original, "i": pid})
+        return "CAUGHT" if rc != 0 else "MISSED"
+    finally:
+        await engine.dispose()
+
+print(asyncio.run(main()))
+PYEOF
+)
+  case "$H1_OUT" in
+    CAUGHT) printf '  \033[32m%-8s\033[0m %s\n' "can fail" "a bound model the gateway does not serve"
+            OK=$((OK+1)) ;;
+    MISSED) printf '  \033[31m%-8s\033[0m %s — check stayed GREEN while broken\n' "CANNOT" "a bound model the gateway does not serve"
+            BAD=$((BAD+1)) ;;
+    *)      printf '  \033[90m%-8s\033[0m gateway-binding mutation (no profile rows)\n' "skip" ;;
+  esac
+else
+  printf '  \033[90m%-8s\033[0m gateway-binding mutation (needs postgres + gateway)\n' "skip"
+fi
+
 echo
 if [ -n "$(git status --porcelain 2>/dev/null)" ] && [ ${#MUTATED[@]} -gt 0 ]; then
   # Restoration happens in the trap; warn only if a mutated file still differs.

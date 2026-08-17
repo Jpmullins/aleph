@@ -10,15 +10,14 @@ that was never true.
 
 Run everything: `./scripts/acceptance.sh`
 
-**Current: 37 pass · 0 fail · 0 red · 3 blocked.** Run `./scripts/acceptance.sh`
-to reproduce, and `--self-check` to verify the checks can fail (7/7 mutations
-caught).
+**Current: 38 pass · 0 fail · 0 red · 3 blocked.** Run `./scripts/acceptance.sh`
+to reproduce, and `--self-check` to verify the checks can fail.
 
 Parts **A** (kernel), **B** (retrieval), **C** (belief engine), **D** (skills and
-self-improvement) and **F** (security) are complete.
+self-improvement), **F** (security) and **H** (model gateway) are complete.
 
-The remaining three are all Part E, and they are **blocked for a stated reason
-rather than unfinished** — see below.
+The remaining three are all Part E. They were blocked on the absence of a live
+gateway; that blocker is now gone — see below for what remains.
 
 | symbol | meaning |
 |---|---|
@@ -59,11 +58,31 @@ The central defect. The wiki bet was never placed because none of this worked.
 | B4 | RRF fusion at k=60 over independent rankers | unit: a doc ranked 1st lexically and 8th densely outranks one ranked 3rd/3rd — property of `1/(60+r)` | ✅ |
 | B5 | Retrieval eval harness actually invokes Aleph | `python -m aleph_evals --dataset retrieval_recall` must call the real retrieval path; check asserts the scorer's `actual` did NOT come from the fixture | ✅ |
 | B6 | Retrieval eval dataset, ≥40 hand-labelled (question → must-retrieve source) pairs | dataset file exists, count ≥40, and recall@8 is reported as a number | ✅ |
+| B10 | The dense leg is real, and its contribution is measured | eval seeds *and* queries with the bound embedder; `mode:` reports `hybrid` vs `lexical` with the reason, never silently | ✅ |
 | B7 | Stale links are not expanded | `test_expansion_ignores_links_from_superseded_revisions` | ✅ |
 | B8 | An empty search reports honestly instead of confabulating | covered by the router short-circuit; audit probe asserts the diagnostic names the cause | ✅ |
 
 **B-complete when:** B1 and B2 are green, and B6 reports a recall number that
 the belief engine has to beat.
+
+**The number, measured on the 45-pair set (12-doc corpus):**
+
+| | lexical only | hybrid (bge-m3) |
+|---|---|---|
+| recall@1 | 0.60 | **0.91** |
+| recall@3 | 0.93 | **0.98** |
+| recall@8 | 0.98 | **1.00** |
+| @1 paraphrase | 0.55 | **0.87** |
+| @1 verbatim | 0.67 | **1.00** |
+
+The dense leg earns its place: it is worth +0.31 recall@1, and almost all of
+that comes from paraphrase — questions whose wording does not overlap the
+source, which is precisely the case lexical search cannot serve. Reproduce with
+`python -m aleph_evals.retrieval_eval`; unset `LITELLM_BASE_URL` for the lexical
+column.
+
+**This is the bar Part E has to beat.** A belief engine that retrieves worse
+than 0.91@1 is not an improvement on the thing it replaces.
 
 ---
 
@@ -114,7 +133,7 @@ The refactor is not done until the replaced thing is gone.
 | E1 | Wiki subsystems removed | `acceptance.sh::wiki_is_gone` — `curator_service`, `index_service`, `alias_service`, `handedit_service`, `citation_verification`, `feedback_service` absent; no importers | ⬜ |
 | E2 | `Capability.PAGE_SELECTION` and the page-selector hop removed | grep + a check that no ModelProfile binding references it | ⬜ |
 | E3 | Dead tables dropped in a migration | `alembic check` clean after dropping `wiki_index`, `wiki_links`, `wiki_sections`, `hand_edit_marks`, `aliases` | ⬜ |
-| E4 | Package count does not grow | `acceptance.sh` asserts ≤20 workspace packages. Currently 20 — `aleph-kernel` and `aleph-belief` were added; the reduction comes with E1 | ✅ |
+| E4 | Package count does not grow | `acceptance.sh` asserts ≤21 workspace packages. Currently 21 — `aleph-kernel`, `aleph-belief` and `aleph-runtime` were added; the reduction comes with E1 | ✅ |
 | E5 | `aleph-belief/patch.py` is wired or deleted | asserts ≥1 importer outside its own tests. Wired by `BeliefService.propose_merges` | ✅ |
 
 **Why E is blocked, and what unblocks it.**
@@ -129,13 +148,18 @@ ingested source into claim drafts.
 and is tested for determinism, idempotence and not destroying human corrections
 (C8). What does not exist is the extractor itself, and its acceptance test is
 *"does it produce good claims"* — which requires a live LLM gateway to answer.
-This environment has none, so writing it would mean shipping an unmeasured
-component into the exact position the wiki occupied.
 
-**E unblocks when:** a gateway is available, an extractor is written against
-`Extractor`, and the belief path beats the wiki path on the retrieval eval
-(`python -m aleph_evals.retrieval_eval`, currently recall@1 0.60 / @3 0.96).
-Until then the wiki stays, degraded but working, and nothing new is built on it.
+**The gateway blocker is now gone.** A local gateway (`deploy/local-gateway/`)
+serves a chat model and an embedder, Part H asserts both are reachable and
+correctly dimensioned, and the retrieval bar is measured at 0.91@1. So the
+remaining work in E is the extractor itself plus the pipeline surgery — not a
+missing precondition.
+
+**E unblocks when:** an extractor is written against `Extractor` and the belief
+path beats **0.91 recall@1 / 0.98@3** on `python -m aleph_evals.retrieval_eval`.
+Until it does, the wiki stays and nothing new is built on it — deleting a
+measured path for an unmeasured one is the mistake this refactor exists to
+correct, and that reasoning does not change now that the gateway exists.
 
 Deleting it first would trade a measured-mediocre path for an unmeasured one,
 which is the mistake this whole refactor exists to correct.
@@ -154,6 +178,25 @@ which is the mistake this whole refactor exists to correct.
 
 **F1 blocks any deployment.** Every HTTP route is correctly gated; the agent
 reaches around all of them.
+
+---
+
+## H — Model gateway
+
+Rule #7 resolves capability → model. Nothing checked that the resolved model is
+one the configured gateway actually serves.
+
+| # | part | check | status |
+|---|---|---|---|
+| H1 | Every model bound in any `ModelProfile` is served, and the embedder emits the column's dimension | `acceptance.sh::H1` — reads every binding from `model_profiles`, diffs against `/v1/models`, then *calls* the embedder and compares its width to `EMBEDDING_DIM` | ✅ |
+
+Both assertions have been observed failing: binding a nonexistent model reports
+it with the capabilities that referenced it, and an embedder whose width differs
+from the column is rejected with "every write fails". The second is the one with
+teeth — it calls the model rather than reading a list.
+
+**H-complete when:** a rebind to a model the gateway does not carry fails at
+boot-adjacent check time rather than at the first ingest.
 
 ---
 

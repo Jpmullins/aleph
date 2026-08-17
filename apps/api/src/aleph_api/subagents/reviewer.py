@@ -55,7 +55,7 @@ def build_reviewer_subagent(*, settings: Any) -> dict[str, Any]:
         )
 
         settings_rt = _runtime.get("settings")
-        project_id = _project_id_from_config(config)
+        project_id = await _project_id_from_config(config)
         if settings_rt is None or project_id is None:
             return "Cannot start a review (no project scope on this run)."
         base = settings_rt.aleph_self_url

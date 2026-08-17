@@ -290,7 +290,7 @@ run_expected_red_shell E5 "aleph-belief patch contract still has no consumer" \
 # replacing the ingest->compile pipeline with belief extraction, whose acceptance
 # test ("does it produce good claims") needs a live gateway. See docs/acceptance.md.
 for p in E1 E2 E3; do
-  skip "$p" "blocked: needs a belief extractor + gateway to beat the wiki on the eval"
+  skip "$p" "blocked: needs a belief extractor beating 0.91 recall@1 (gateway no longer a blocker)"
 done
 
 # ---------------------------------------------------------------------------
@@ -315,6 +315,16 @@ run_shell G1a "the retrieval audit check is a known-answer probe, not a length a
    && echo 'known-answer probe in place'"
 run_shell G2 "CI has a behavioural gate" \
   "grep -q 'python-integration' .github/workflows/ci.yml && echo 'integration job present'"
+
+# ---------------------------------------------------------------------------
+# H — Model gateway
+# ---------------------------------------------------------------------------
+if [ $NEEDS_SERVICES -eq 1 ]; then
+  run_shell H1 "every bound model is served, and the embedder emits the column's dim" \
+    "uv run python scripts/_acceptance/gateway_serves_bound_models.py"
+else
+  skip H1 "needs postgres + a reachable gateway"
+fi
 
 # ---------------------------------------------------------------------------
 # Report

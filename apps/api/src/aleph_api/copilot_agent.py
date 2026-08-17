@@ -17,6 +17,7 @@ by lifespan through `bind_runtime()`.
 
 from __future__ import annotations
 
+import os
 import pathlib
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -26,8 +27,9 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
+from aleph_core.errors import PermissionDenied
 from aleph_core.ids import uuid7
-from aleph_security.request_context import require_project_access
+from aleph_security.request_context import current_principal, require_project_access
 from aleph_security.roles import ProjectRole
 from aleph_wiki.index_service import IndexService
 
@@ -277,20 +279,45 @@ def _project_id_from_thread_id(thread_id: object) -> UUID | None:
     return None
 
 
-def _authorized(project_id: UUID | None) -> UUID | None:
+async def _authorized(project_id: UUID | None) -> UUID | None:
     """Return ``project_id`` only if the request's principal may act on it.
 
     Fails closed: an unbound principal raises rather than being treated as
     permitted, so an agent tool invoked outside an authenticated request cannot
     reach project data.
+
+    The membership lookup happens **here** rather than being assumed. HTTP routes
+    get their role from `project_scope_dep`, a FastAPI dependency keyed on a
+    `project_id` *path param* — which `/copilotkit/agent/assistant` does not
+    have. So on the agent path nothing ever called `cache_role`, `role_in`
+    returned None for everyone, and `require_at_least` denied every tool call:
+    the endpoint was authenticated but unusable. Resolving membership on demand
+    (and caching it on the principal for the rest of the run) makes the agent
+    path authorize on the same fact the HTTP path does, from the same table.
     """
     if project_id is None:
         return None
+
+    principal = current_principal()
+    if principal is not None and principal.role_in(project_id) is None:
+        from aleph_db.repos.project import get_member
+
+        session_maker = _runtime.get("session_maker")
+        if session_maker is None:
+            msg = f"cannot verify membership for project {project_id}: no session maker bound"
+            raise PermissionDenied(msg)
+        async with session_maker() as session:
+            member = await get_member(session, project_id=project_id, user_id=principal.user_id)
+        # Cache the miss as well as the hit: a non-member must not trigger a
+        # fresh query per tool call, and `require_project_access` turns the
+        # cached None into the denial.
+        principal.cache_role(project_id, member.role if member is not None else None)
+
     require_project_access(project_id, at_least=ProjectRole.VIEWER)
     return project_id
 
 
-def _project_id_from_config(config: RunnableConfig | None) -> UUID | None:
+async def _project_id_from_config(config: RunnableConfig | None) -> UUID | None:
     """Resolve AND AUTHORIZE the project scope for this agent run.
 
     `ag-ui-langgraph` only threads `thread_id` into `configurable` (it ignores
@@ -321,9 +348,9 @@ def _project_id_from_config(config: RunnableConfig | None) -> UUID | None:
         or (config.get("metadata") or {}).get("projectId")
     )
     if not raw:
-        return _authorized(_project_id_from_thread_id(configurable.get("thread_id")))
+        return await _authorized(_project_id_from_thread_id(configurable.get("thread_id")))
     try:
-        return _authorized(UUID(str(raw)))
+        return await _authorized(UUID(str(raw)))
     except ValueError:
         return None
 
@@ -339,7 +366,7 @@ async def search_wiki(query: str, config: RunnableConfig, top_k: int = 6) -> str
     from these summaries alone.
     """
     session_maker = _runtime.get("session_maker")
-    project_id = _project_id_from_config(config)
+    project_id = await _project_id_from_config(config)
     if session_maker is None or project_id is None:
         return "Wiki search is unavailable (no project scope on this run)."
     limit = max(1, min(top_k, 20))
@@ -389,7 +416,7 @@ async def wiki_curation_status(config: RunnableConfig) -> str:
     from aleph_wiki.models import WikiLink, WikiPage
 
     session_maker = _runtime.get("session_maker")
-    project_id = _project_id_from_config(config)
+    project_id = await _project_id_from_config(config)
     if session_maker is None or project_id is None:
         return "Wiki curation status is unavailable (no project scope on this run)."
     async with session_maker() as session:  # type: AsyncSession
@@ -469,7 +496,7 @@ async def _read_wiki_impl(query: str, config: RunnableConfig) -> str:
     session_maker = _runtime.get("session_maker")
     litellm = _runtime.get("litellm")
     settings = _runtime.get("settings")
-    project_id = _project_id_from_config(config)
+    project_id = await _project_id_from_config(config)
     if session_maker is None or project_id is None:
         return "Deep wiki reading is unavailable (no project scope on this run)."
     if litellm is None:
@@ -505,7 +532,7 @@ async def _list_hypotheses_impl(config: RunnableConfig) -> str:
     from aleph_hypotheses.hypothesis_service import list_hypotheses
 
     session_maker = _runtime.get("session_maker")
-    project_id = _project_id_from_config(config)
+    project_id = await _project_id_from_config(config)
     if session_maker is None or project_id is None:
         return "Hypotheses are unavailable (no project scope on this run)."
     async with session_maker() as session:  # type: AsyncSession
@@ -529,7 +556,7 @@ async def _create_hypothesis_impl(title: str, statement: str, config: RunnableCo
 
     session_maker = _runtime.get("session_maker")
     settings = _runtime.get("settings")
-    project_id = _project_id_from_config(config)
+    project_id = await _project_id_from_config(config)
     if session_maker is None or project_id is None:
         return "Creating a hypothesis is unavailable (no project scope on this run)."
     try:
@@ -581,7 +608,7 @@ async def _add_hypothesis_evidence_impl(
 
     session_maker = _runtime.get("session_maker")
     settings = _runtime.get("settings")
-    project_id = _project_id_from_config(config)
+    project_id = await _project_id_from_config(config)
     if session_maker is None or project_id is None:
         return "Adding evidence is unavailable (no project scope on this run)."
     try:
@@ -654,7 +681,7 @@ async def _start_research_impl(query: str, config: RunnableConfig, depth: str = 
     import httpx
 
     settings = _runtime.get("settings")
-    project_id = _project_id_from_config(config)
+    project_id = await _project_id_from_config(config)
     if settings is None or project_id is None:
         return "Research is unavailable (no project scope on this run)."
     depth = depth if depth in ("shallow", "deep") else "shallow"
@@ -697,7 +724,7 @@ async def _pin_to_briefs_impl(
     import httpx
 
     settings = _runtime.get("settings")
-    project_id = _project_id_from_config(config)
+    project_id = await _project_id_from_config(config)
     if settings is None or project_id is None:
         return "Cannot pin (no project scope)."
     base = settings.aleph_self_url
@@ -730,7 +757,7 @@ async def _dispatch_card_action_impl(
     import httpx
 
     settings = _runtime.get("settings")
-    project_id = _project_id_from_config(config)
+    project_id = await _project_id_from_config(config)
     if settings is None or project_id is None:
         return {"error": "no project scope on this run"}
     base = settings.aleph_self_url
@@ -840,7 +867,7 @@ async def _render_code_via_runner_impl(
     import httpx
 
     settings = _runtime.get("settings")
-    project_id = _project_id_from_config(config)
+    project_id = await _project_id_from_config(config)
     if settings is None or project_id is None:
         return "Cannot render code (no project scope)."
     base = settings.aleph_self_url
@@ -885,7 +912,7 @@ async def _ingest_source_impl(url: str, config: RunnableConfig, title: str = "")
     import httpx
 
     settings = _runtime.get("settings")
-    project_id = _project_id_from_config(config)
+    project_id = await _project_id_from_config(config)
     if settings is None or project_id is None:
         return "Cannot ingest (no project scope)."
     base = settings.aleph_self_url
@@ -966,7 +993,7 @@ async def _build_artifact_impl(
     orchestrator delegates artifact building rather than self-calling it inline.
     """
     settings = _runtime.get("settings")
-    project_id = _project_id_from_config(config)
+    project_id = await _project_id_from_config(config)
     if settings is None or project_id is None:
         return "Cannot build (no project scope)."
     args = {
@@ -1001,7 +1028,7 @@ async def list_connectors(config: RunnableConfig) -> str:
     import httpx
 
     settings = _runtime.get("settings")
-    project_id = _project_id_from_config(config)
+    project_id = await _project_id_from_config(config)
     if settings is None or project_id is None:
         return "Connectors are unavailable (no project scope on this run)."
     base = settings.aleph_self_url
@@ -1050,7 +1077,7 @@ async def set_connector_enabled(connector_id: str, enabled: bool, config: Runnab
     it). `enabled` is true to turn it on, false to turn it off.
     """
     settings = _runtime.get("settings")
-    project_id = _project_id_from_config(config)
+    project_id = await _project_id_from_config(config)
     if settings is None or project_id is None:
         return "Setting a connector is unavailable (no project scope on this run)."
     try:
@@ -1084,7 +1111,7 @@ async def set_model_profile(profile_name: str, config: RunnableConfig) -> str:
     import httpx
 
     settings = _runtime.get("settings")
-    project_id = _project_id_from_config(config)
+    project_id = await _project_id_from_config(config)
     if settings is None or project_id is None:
         return "Model profile is unavailable (no project scope on this run)."
     base = settings.aleph_self_url
@@ -1227,7 +1254,12 @@ def build_agent_store(
 # Fallback agent model id, used only when no ModelProfile bindings are bound to
 # the runtime (e.g. the named template row is missing). Normally the model is
 # resolved per capability from the default profile's bindings (rule #7).
-_AGENT_MODEL = "claude-sonnet-4-6"
+#
+# Environment-driven because the fallback has to name a model the configured
+# gateway actually serves. A hardcoded default is wrong for any deployment
+# pointed at a gateway that does not carry it, and the failure it produces —
+# a 404 from the fallback path only — is the kind that shows up long after boot.
+_AGENT_MODEL = os.environ.get("ALEPH_FALLBACK_AGENT_MODEL", "claude-sonnet-4-6")
 
 
 def _resolve_agent_model(capability: Any) -> str:
@@ -1257,6 +1289,23 @@ def _resolve_agent_model(capability: Any) -> str:
 _SKILLS_DIR = pathlib.Path(__file__).parent / "skills"
 
 
+def _openai_base_url(base_url: str) -> str:
+    """Normalise the gateway URL for the OpenAI SDK, which wants the `/v1` segment.
+
+    One env var (`LITELLM_BASE_URL`) feeds two clients with opposite conventions:
+    `LiteLLMClient` builds `{base}/v1/chat/completions` itself, so it must be
+    given a bare origin; `ChatOpenAI` (openai-python) appends only
+    `/chat/completions`, so its base must already carry `/v1`. Passing the same
+    raw value to both sent agent traffic to `{base}/chat/completions`, which a
+    strict OpenAI-compatible server answers with 404 — surfacing in the UI as
+    "Run ended without emitting a terminal event", nowhere near the cause.
+
+    Idempotent, so a `LITELLM_BASE_URL` that already ends in `/v1` still works.
+    """
+    trimmed = base_url.rstrip("/")
+    return trimmed if trimmed.endswith("/v1") else f"{trimmed}/v1"
+
+
 def _gateway_chat_model(settings: Settings, *, purpose: str, capability: Any = None) -> ChatOpenAI:
     """Build a gateway-pointed `ChatOpenAI` with cost attribution (rules #2, #5, #7).
 
@@ -1275,7 +1324,7 @@ def _gateway_chat_model(settings: Settings, *, purpose: str, capability: Any = N
     model = _resolve_agent_model(capability or Capability.SYNTHESIS)
     return ChatOpenAI(
         model=model,
-        base_url=settings.litellm_base_url,
+        base_url=_openai_base_url(settings.litellm_base_url),
         api_key=settings.insights_litellm_api_key,
         temperature=0.2,
         timeout=60,
