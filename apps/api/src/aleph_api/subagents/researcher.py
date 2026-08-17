@@ -68,10 +68,10 @@ def build_researcher_subagent(*, settings: Any) -> dict[str, Any]:
         subagent_model,
     )
 
-    def _scope(config: RunnableConfig) -> tuple[str, UUID] | None:
+    async def _scope(config: RunnableConfig) -> tuple[str, UUID] | None:
         """Resolve (self base URL, project id) or None when unscoped."""
         settings_rt = _runtime.get("settings")
-        project_id = _project_id_from_config(config)
+        project_id = await _project_id_from_config(config)
         if settings_rt is None or project_id is None:
             return None
         return str(settings_rt.aleph_self_url), project_id
@@ -82,7 +82,7 @@ def build_researcher_subagent(*, settings: Any) -> dict[str, Any]:
         """Self-call a typed scholar/source route; returns (json, error-string)."""
         import httpx
 
-        scope = _scope(config)
+        scope = await _scope(config)
         if scope is None:
             return None, "Scholar tools are unavailable (no project scope on this run)."
         base, project_id = scope
@@ -155,7 +155,7 @@ def build_researcher_subagent(*, settings: Any) -> dict[str, Any]:
         """
         import httpx
 
-        scope = _scope(config)
+        scope = await _scope(config)
         if scope is None:
             return "Scholar tools are unavailable (no project scope on this run)."
         base, project_id = scope

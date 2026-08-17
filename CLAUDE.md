@@ -1,168 +1,238 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code working in this repository.
 
-## What this is
+**This file describes what is true.** Where something is planned but not built, it says so. Where
+something is built but broken, it says so. The previous version of this file asserted invariants that
+were false in code and CI enforcement that did not exist, and that is the single reason a broken
+retrieval path survived seven work packages. Do not restore that style. If you add a claim here,
+verify it first; if you cannot verify it, mark it `PLANNED` or leave it out.
 
-Aleph is a multi-agent research environment built around three layers:
-1. **RKS** (Raw Knowledge Store) — ingested sources, normalized text, chunks. Upstream of the wiki.
-2. **Compiled Wiki** — the **primary retrieval surface** for both assistant and analyst. Wikilinked, revisioned, multi-agent-maintained, freshness-scored, retraction-aware.
-3. **A2UI workspace** — a 3-panel UI whose right panel is five **data-bound** A2UI surface tabs (Wiki / Library / Notes / Hypotheses / Briefs). The **Library** tab shows ingested **Sources** — raw PDFs/webpages/docs, viewable via the authenticated streaming route — alongside built **Artifacts**.
+---
 
-Research runs as a **native, in-process worker loop** (`aleph-research` → `deep_research_job`: plan → search → ingest → reflect → compose → the existing `SynthesisWorkflow` → a pending proposal in Briefs). Scholarship is verified through `aleph-scholar` (Crossref/OpenAlex/Consensus, tri-state DOI verification, retraction detection). Right-panel surfaces are server-built and pushed as `updateDataModel` deltas over an SSE stream woken by Postgres LISTEN/NOTIFY. Agent-written code executes only in a sandboxed, credential-less, network-partitioned `code_runner`, producing versioned artifacts rendered in `sandbox` iframes.
+## What Aleph is
 
-The canonical record of what shipped is `docs/implementation-log.md` (append-only; entries §WP-1..§WP-6 + earlier increments). The living, verified system is described by the seven top-level docs — see the Docs map below.
+A **general-purpose, self-improving multi-agent harness.**
 
-## Common commands
+The product thesis: an agent that **authors plugins for itself and activates or deactivates them as
+needed**, on a kernel whose composability model makes that safe — with guardrails preventing it from
+removing load-bearing capability. The kernel is the product.
+
+The existing research capability — ingest, scholarship, a belief layer, the research loop — ships as
+the **first plugin suite**, not as the thing itself.
+
+Within that suite, the durable knowledge layer is a **web of belief**: claims are first-class,
+evidence-anchored, and revised as sources are added, contradicted, or retracted. Prose (HTML
+artifacts, reports) is *rendered from* that layer, never the layer itself.
+
+## Where the project is right now
+
+Aleph is **mid-transition on two axes at once.** Be careful: much of the code predates both.
+
+**Axis 1 — the knowledge layer.** Built around an LLM-maintained wiki as the primary retrieval
+surface; being removed. See `docs/decisions.md` D1.
+
+- **Being removed:** wiki page compilation, the curator, the alias service, the LLM page-selector,
+  FTS-over-summaries retrieval.
+- **Being built:** the **Claim Spine** (`docs/belief-engine.md`) — durable claims, verbatim-anchored
+  evidence, typed claim edges, derived confidence.
+
+**Axis 2 — the harness.** Aleph is being rebuilt on an own-implemented kernel modelled on the
+spatiotemporal-composability paper (revertible effects, reactive coeffects, scoped capability access).
+**The kernel language and structure are an open decision** — see `docs/decisions.md` D5. Do not assume
+Python for the kernel; do assume Python for the belief/scholarship plugins, which are bound to
+Postgres and the transactional ledger.
+
+**Unchanged and healthy on both axes:** ingest/RKS, `aleph-scholar`, the action ledger, model routing,
+the sandboxed code runner, the asset store.
+
+Treat wiki code as **legacy under removal**. Do not extend it, do not fix its cosmetics, do not add
+tests to it. Migrate callers off it.
+
+### A standing constraint
+
+**Reference implementations are read, not depended on.** `deepseek-harness`, `cordis`, `prime-agent`
+and `graphify` are MIT and are blueprints to reimplement and improve on. Do not add any of them — or
+any `@deepseek-ai/*` package — as a runtime dependency. Ported code carries a `NOTICE`.
+
+---
+
+## Commands
 
 ```bash
-# First-time setup
-cp deploy/compose/.env.example deploy/compose/.env   # then edit secrets
-./scripts/bootstrap-local.sh                          # boot full stack
+# Setup
+cp deploy/compose/.env.example deploy/compose/.env   # then set INSIGHTS_LITELLM_API_KEY
+./scripts/bootstrap-local.sh                          # boot the stack
+uv sync --all-packages --all-extras                   # Python deps (MUST be --all-packages)
+pnpm -C apps/web install                              # JS deps
 
-# Install deps
-uv sync --all-packages --all-extras                   # Python (MUST be --all-packages: installs every workspace member)
-pnpm -C apps/web install                              # JS (only apps/web is in pnpm workspace)
-
-# Lint / format / typecheck
+# Quality gates (these are exactly what CI runs)
 uv run ruff check .
 uv run ruff format --check .
-uv run pyright
-pnpm -C apps/web typecheck
+uv run pyright                                        # strict, must be 0 errors
 pnpm -C apps/web lint
+pnpm -C apps/web build
 
 # Tests
 uv run pytest -m "not integration" -q                 # unit
-uv run pytest -m integration -q                       # integration (needs compose stack + migrations)
+uv run pytest -m integration -q                       # needs postgres+redis (see CI for env)
 uv run pytest path/to/test_file.py::test_name         # single test
 
-# Evals (gate that CI runs)
-uv run python -m aleph_evals --datasets all --gate strict
-
-# Migrations (Alembic lives under apps/api/alembic)
+# Migrations (Alembic lives in apps/api)
 cd apps/api && uv run alembic upgrade head
 cd apps/api && uv run alembic check                   # CI asserts no model drift
 cd apps/api && uv run alembic revision -m "<slug>" --autogenerate
 
-# Web dev
-pnpm -C apps/web dev                                  # vite dev server on :5173
-pnpm -C apps/web build                                # tsc --noEmit && vite build
-
-# Local services
+# Local stack
 docker compose -f deploy/compose/docker-compose.yml up -d
 docker compose -f deploy/compose/docker-compose.yml logs -f aleph-api
-docker compose -f deploy/compose/docker-compose.yml down
-
-# Gateway sanity check
-./scripts/verify-gateway.sh
+./scripts/verify-gateway.sh                           # LLM gateway sanity check
 ```
 
-Endpoints after bootstrap: web `:5173`, api `:8000`, copilot-runtime `:4000`, Langfuse `:3000`. The object-store console `:9001` is available **only** under the opt-in `s3` profile (`docker compose --profile s3 up -d`) — the default asset backend is the local filesystem.
+Endpoints after bootstrap: web `:5173`, api `:8000`, copilot-runtime `:4000`, Langfuse `:3000`.
+An S3-compatible object store is opt-in (`docker compose --profile s3 up -d`); the default asset
+backend is the local filesystem at `data/assets`.
 
-## Architecture
+---
 
-Monorepo: `uv` workspace (Python 3.13, pyright strict) + `pnpm` workspace (only contains `apps/web`).
+## Layout
+
+`uv` workspace (Python 3.13, pyright strict) + `pnpm` workspace (`apps/web`, `tests/playwright`).
 
 ```
 apps/
-  api/            FastAPI — request/response + SSE; hosts WikiIndex page-selector + AG-UI agent; owns Alembic
-  web/            React 19 + Vite + Tailwind + @a2ui/react + CopilotKit
-  workers/        Arq workers — wiki agent, reviewers, builder, normalization, chunk+embed, curator, re-embed, native research loop, wiki refresh
-  code-runner/    Sandboxed, credential-less, network-partitioned Arq worker that executes agent-written Python
-  copilot-runtime/  Node @copilotkit/runtime v2 bridge (:4000) — the Live chat → AG-UI boundary
+  api/              FastAPI — HTTP + SSE, owns Alembic, hosts the in-process agent
+  web/              React 19 + Vite + Tailwind + @a2ui/react + CopilotKit
+  workers/          arq workers — ingest, research loop, reviewers
+  code-runner/      sandboxed, credential-less, network-partitioned Python executor
+  copilot-runtime/  Node bridge (:4000) — one file, thin AG-UI adapter
 packages/
-  aleph-core              shared primitives, Pydantic schemas, UUIDv7. LEAF — imports nothing else.
-  aleph-db                SQLAlchemy ORM + repositories + Alembic models
-  aleph-security          auth, Principal, JWT, role gates, agent tokens
-  aleph-observability     OTEL + Langfuse + structlog
-  aleph-models            LiteLLMClient, pricing, ModelProfile resolver
-  aleph-scholar           verified scholarship — Crossref/OpenAlex/Consensus, tri-state DOI verification. Pure-HTTP, ZERO LLM calls.
-  aleph-rks               Raw Knowledge Store domain
-  aleph-wiki              wiki compile / index / aliases / hand-edits / curator / freshness / deterministic HTML compiler
-  aleph-assistant         chat orchestration, wiki retrieval router
-  aleph-connectors        typed connector plugins (document / dataset_rows) — registered into and driven by the native research loop
-  aleph-research          native deep-research LangGraph loop (plan→search→ingest→reflect→compose→synthesize)
-  aleph-a2ui              A2UI catalog + Python SDK glue
-  aleph-reviewer          MechanicalReviewer + EditorialReviewer + source-retraction/blast-radius service
-  aleph-hypotheses        analyst-authored hypotheses
-  aleph-datasets          Dataset / DatasetVersion / Observation
-  aleph-artifacts         Builder agent, RenderedAssets, exporters
-  aleph-notes             analyst notebook
-  aleph-evals             eval runner, datasets, scorers, CI gates
+  aleph-core          primitives, Pydantic schemas, UUIDv7. LEAF — imports nothing else.
+  aleph-db            SQLAlchemy ORM + repositories + ledger
+  aleph-security      auth, Principal, JWT, role gates, agent tokens
+  aleph-observability OTEL + Langfuse + structlog
+  aleph-models        LiteLLMClient, pricing, ModelProfile resolver
+  aleph-scholar       Crossref/OpenAlex/Consensus, DOI verification. Pure HTTP, ZERO LLM calls.
+  aleph-rks           Raw Knowledge Store — sources, normalization, chunks, embeddings
+  aleph-belief        web of belief — patch contract, trust lattice  (NEW, incomplete)
+  aleph-research      deep-research loop (plan→search→ingest→reflect→compose)
+  aleph-connectors    typed connector plugins
+  aleph-assistant     chat orchestration + retrieval
+  aleph-reviewer      verification passes
+  aleph-hypotheses    analyst hypotheses + the derived-confidence engine
+  aleph-artifacts     builder agent, rendered assets, exporters
+  aleph-a2ui          A2UI catalog + Python SDK glue
+  aleph-notes         analyst notes
+  aleph-datasets      Dataset / DatasetVersion / Observation
+  aleph-evals         eval runner and scorers  (harness is NOT wired — see Known broken)
+  aleph-wiki          LEGACY, under removal
 ```
 
-**Strict DAG, higher → lower only.** `aleph-core` is the leaf. `aleph-api`/`aleph-workers`/`aleph-code-runner` depend on packages; packages never depend on apps; no cycles. `aleph-scholar` is pure-HTTP and carries no workspace deps. `aleph-research` composes `aleph-connectors` + `aleph-scholar` + `aleph-rks` + `aleph-wiki` + `aleph-models` + LangGraph.
+**Strict DAG, higher → lower.** `aleph-core` is the leaf. Apps depend on packages; packages never
+depend on apps; no cycles. `aleph-scholar` carries no workspace deps.
 
-### The load-bearing rules
+---
 
-Enforced by code review, the committed sweeps, and the eval gates — not aspirational.
+## Rules that are actually enforced
 
-1. **Wiki-first retrieval.** Primary path is `WikiIndex page-selector LLM → load pages + 1-hop wikilinks → answer composer`. Embeddings (`DocumentChunk` over pgvector) are used **only** for intra-source descent, never as first-line RAG. Don't add a "secret RAG" shortcut.
-2. **All LLM traffic routes through the Insights LiteLLM gateway.** Non-agent code imports `LiteLLMClient` from `aleph-models`. Agent-framework code (CopilotKit / LangGraph / Deep Agents) MAY use `langchain_openai.ChatOpenAI` **only** when pointed at the gateway (`base_url=LITELLM_BASE_URL`, `api_key=INSIGHTS_LITELLM_API_KEY`). **No provider SDK is called directly.** `apps/api/src/aleph_api/copilot_cost_callback.py` (`AgentCostCallbackHandler`) attaches to the orchestrator + every subagent model, writing `ModelCall`+`CostLedgerEvent` per call (requires `stream_usage=True`).
-3. **Agent → service is the only path to state.** Agents (Live orchestrator, subagents, the research loop) never write to Postgres or the asset store directly. They call typed `aleph-api` service methods; workers re-enter the API over HTTP (`ALEPH_API_INTERNAL_URL`) with a minted agent token for every mutation.
-4. **Every mutation writes an Action Ledger event in the same transaction.** Hash-chained, append-only, no deletes. Integration tests assert ledger-event-count per mutation.
-5. **Every LLM/tool/embed call writes a `ModelCall` + `CostLedgerEvent`** and is wrapped in an OTEL/Langfuse span. Cost is computed in `aleph_models.pricing` (cache-discount-aware).
-6. **Every row carries `project_id`** + `created_at`, `updated_at`, `created_by`, `access_scope`, optional `trace_id`, `ledger_event_id`. No global resources (only exception: `ModelProfile` templates).
-7. **`ModelProfile` resolves capability → model.** Call sites pass a `Capability` (`synthesis`, `extraction`, `page_selection`, `classification`, `embedding`, `rerank`, `vision`, `code`, `judge`) and the project's profile; `LiteLLMClient` resolves the binding. Two named profiles: `aleph-dev` (Sonnet/Haiku) and `aleph-production` (Opus/Sonnet), selected by `ALEPH_DEFAULT_MODEL_PROFILE`.
-8. **A2UI surfaces are declarative; sandboxed artifacts are the only escape hatch.** *(amended)* Agents request components by name + props via the catalog. **No agent-emitted code executes in the app context.** Agent-written code runs only in the sandboxed, credential-less, network-partitioned `code_runner` worker; its outputs are versioned artifacts; interactive artifacts render only inside iframes with `sandbox` isolation (no same-origin, no network) whose `src` must be the asset streaming route. **No agent-emitted SQL.**
+1. **Pyright strict, 0 errors.** CI fails otherwise.
+2. **Ruff clean**, line-length 100, `target-version = py313`.
+3. **`alembic check` produces no diff.** New schema → new migration; never edit an existing one.
+   Pattern: `apps/api/alembic/versions/YYYYMMDD_HHMM_<slug>_<message>.py`.
+4. **Tests split by marker.** `@pytest.mark.integration` for anything needing postgres/redis.
+5. **All LLM traffic goes through the LiteLLM gateway.** Non-agent code uses `LiteLLMClient` from
+   `aleph-models`. Agent-framework code may use `langchain_openai.ChatOpenAI` **only** pointed at the
+   gateway. No provider SDK is called directly.
+6. **Every row carries `project_id`**, plus `created_at`, `updated_at`, `created_by`, `access_scope`.
+   The only exception is `ModelProfile` templates.
 
-### Living invariants (committed CI sweeps)
+## Rules that are real but only held by review
 
-CI (`.github/workflows/ci.yml`) fails the build on drift in any of:
-- `scripts/check-no-self-fetch.sh` — no `useQuery`/`refetchInterval`/`EventSource`/`fetch(`/`api.*` inside `apps/web/src/a2ui/components` (empty allowlist).
-- `scripts/check-catalog-roster.sh` — every catalog component has a renderer + a producer; `catalog.py` ⟷ `catalog.ts` agree; deleted cards (`MapCard`/`GraphCard`/`NotebookCellCard`) appear nowhere.
-- `scripts/check-route-reachability.sh` — every mounted router is reached by a real web/agent/script/test caller.
-- `scripts/check-docs-drift.sh` — stale deleted-subsystem / object-store references appear only under `docs/archive/` + `docs/implementation-log.md`.
-- `scripts/check-claude-commands.sh` — every command/script/file/compose-service named in this file exists.
+These are genuine design commitments with no automated enforcement. Do not describe them as enforced.
 
-### Process boundaries
+- **Every state mutation writes an `ActionLedgerEvent` in the same transaction.** Hash-chained,
+  append-only. Verified by hand and by targeted integration tests, not by a sweep.
+- **Every LLM/embed call writes a `ModelCall` + `CostLedgerEvent`.** The agent path partially bypasses
+  this — see Known broken.
+- **Agents never write state directly.** They call typed service methods; workers re-enter the API
+  over HTTP with a minted agent token.
+- **No agent-emitted code runs in the app context.** Agent code runs only in `code-runner`; its output
+  is a versioned artifact rendered in a `sandbox` iframe. No agent-emitted SQL.
+- **`ModelProfile` resolves capability → model.** Call sites pass a `Capability` and the project
+  profile; `LiteLLMClient` resolves the binding.
 
-- `aleph-api` — synchronous HTTP + SSE, holds the user-identity boundary, owns Alembic, hosts the page-selector and the in-process AG-UI Deep Agent.
-- `aleph-workers` — long-running agent jobs (LangGraph / Deep Agents), reviewers, normalization, the native research loop (`deep_research_job`), the curator, wiki refresh. Holds short-lived agent tokens. Dual-homes onto the platform network + `code-runner-net` to dispatch code jobs. `POST /synthesize` enqueues `deep_research_job`; its output is consumed by the unchanged `SynthesisWorkflow` → a proposal in Briefs, never published directly.
-- `aleph-code-runner` — a separate compose service executing agent Python in isolation: `cap_drop: [ALL]`, read-only rootfs, no DB/S3/LLM/token env, an `internal: true` network whose only peer is a dedicated `code-runner-redis`. See `docs/security.md`.
-- `aleph-copilot-runtime` — Node `@copilotkit/runtime` v2 service (:4000) bridging the React app to `aleph-api`'s AG-UI Deep Agent endpoint; where A2UI tool injection + the inline catalog live.
+---
 
-There is no separate research-subsystem process.
+## Known broken — do not trust these
 
-### Auth modes
+Verified during the 2026-08 review. Fix or delete; do not build on top of. Entries move to *Fixed*
+below only with a test that would have caught them.
 
-`ALEPH_AUTH_MODE` selects the user-auth path:
-- `local` (compose default) — JWT verification skipped; every non-public request maps to a fixed `dev@aleph.local` principal, JIT-provisioned on first sight. Agent tokens (HS256, internal) still verified. No IdP service runs locally.
-- `oidc` — full JWT/JWKS verification against any OIDC IdP (Cognito, Auth0, Authentik, Keycloak, ALB OIDC). Three env vars: `ALEPH_AUTH_ISSUER`, `ALEPH_AUTH_AUDIENCE`, `ALEPH_AUTH_JWKS_URL`.
+- **Retrieval is body-blind.** `wiki_index.index_tsv` covers `title + summary + aliases` only, queried
+  with `plainto_tsquery` (ANDs every term). `POST /wiki/search` has the same defect.
+  **Now measured:** `tests/e2e/test_retrieval_finds_body_text.py` has two deliberately red tests
+  pinning this. They are the acceptance tests for the retrieval work — do not `xfail` them, and do not
+  delete them to get a green board.
+- **`Citation.source_page_id` is `None` on every production write path.** It has five consumers. This
+  one column silently voids retraction blast-radius, two of four freshness dimensions, the reviewer's
+  source registry, and the citation popover. Integration tests pass because fixtures hand-build the row.
+- **`commit_revision` is not atomic on the path agents use.** It only row-locks when given a
+  `page_id`; the by-title path returns the page unlocked and computes `revision_no` as `max+1`.
+- **The eval scorers have no harness.** They read `expected` and `actual` from the same fixture dict.
+  The datasets and the CI gate are deleted; the metrics are correct and need a harness that actually
+  calls Aleph.
+- **Freshness is the constant 50** on every page, and the Wiki tab sorts by it.
+- **The agent endpoint bypasses auth middleware.** It is on the skip list, performs no verification of
+  its own, and derives project scope from client-supplied state. Every other route is correctly gated.
+  **This is the one to fix before any deployment.**
+- **Cost attribution has a hole.** The `ChatOpenAI` agent path does not always produce `ModelCall` rows.
+- **`audit/` assertions are weak.** The harness is restored and runs against a live stack, but most
+  checks assert shape rather than behaviour. `wiki-first-retrieval.sh` has been rewritten as a real
+  known-answer probe; the rest have not.
 
-The OIDC path is dormant in local mode but kept intact so deploy is a config flip. Frontend mirrors via `VITE_AUTH_MODE`. The SSE×OIDC token-transport gap (EventSource can't attach a bearer header; local mode unaffected) is a documented out-of-scope gap — see `docs/security.md`.
+### Fixed (2026-08-14), with the test that pins each
 
-## Engineering rules
+- **Stale-link expansion** — `retrieval/router.py` expanded links with no `src_revision_id` filter, so
+  it walked every historical revision's links forever.
+  → `test_expansion_ignores_links_from_superseded_revisions`.
+- **Empty-search confabulation** — an FTS miss fell back to the most-recently-indexed pages and handed
+  them to the composer as if they were matches. Now short-circuits with a diagnostic naming the likely
+  cause. This is also what kept the retrieval audit check green.
+- **`style_pass` ran on nothing** — it matched `[N]` while the research composer emits `[cN]`, so every
+  report passed through unchanged. → six `[cN]` tests in `test_scholar_style.py`.
+- **Citation expansion returned arbitrary papers** — backward sliced OpenAlex storage order before
+  resolving; forward sent no `sort`. Both now rank by citation count.
+  → three ordering tests in `test_scholar_citations.py`.
+- **Rejection feedback never carried a row** — schema defaulted the reason to `""`, both handlers wrote
+  feedback only `if reason`, and the UI hardcoded `""`. Reason is now required end to end.
 
-Hard, enforced by CI:
-
-- **No placeholder code in production paths.** CI greps for `TODO|FIXME|NotImplementedError` outside `tests/`.
-- **Ship scope in final production form.** No "stub now, enhance later," no `v1`/`v2` versioning.
-- **All moving deps track upstream latest.** A2UI, CopilotKit, LangGraph, Deep Agents, renderers, the `mcp` client — verify current versions before pinning. Manifests are the source of truth.
-- **`alembic check`** must produce zero diff. New schema → new migration, never edit an existing one. File pattern: `apps/api/alembic/versions/YYYYMMDD_HHMM_<slug>_<message>.py`.
-- **`pytest -m "not integration"`** for unit; **`pytest -m integration`** for tests that need the compose stack. Mark explicitly with `@pytest.mark.integration`.
-- **Pyright is strict.** `typeCheckingMode = "strict"`; 0 errors, and the warning count must not increase.
-- **Ruff config** is in `pyproject.toml`; line-length 100, `target-version = py313`.
-- **Naming.** Distribution: `aleph-xxx`. Python module: `aleph_xxx`. Tables: plural snake_case. Action kinds: `<entity>.<verb>`. OTEL spans: `<subsystem>.<op>`.
+---
 
 ## When adding to the system
 
-- **New service method** that mutates state → also writes the `ActionLedgerEvent` in the same transaction; integration test asserts the ledger row.
-- **New LLM call site** → through `LiteLLMClient.chat()`/`.embed()` with a `Capability` and a `purpose`; produces a `ModelCall` + `CostLedgerEvent`.
-- **New row type** → must have `project_id` + `access_scope`; no globally-scoped tables.
-- **New A2UI component** → schema bump in the catalog + renderer + a producer, all in the same PR (the roster sweep enforces producer+renderer together). Right-panel components render only from bound props — no self-fetch.
-- **New connector** → implement complete (`search`/`fetch`/`normalize`), register in `get_registry()`, declare `output_kind ∈ {document, dataset_rows}`. Credentials come from `ConnectorCredential` via `ConnectorCredentialService` — never from container env vars.
-- **New Python package** → add to `[tool.uv.workspace] members`, `[tool.uv.sources]`, ruff/pyright `src`/`include` lists in root `pyproject.toml`; `uv sync`.
-- **Migrations** → never edit an existing revision; add a new one.
+- **New service method that mutates state** → write the `ActionLedgerEvent` in the same transaction,
+  and add an integration test asserting the ledger row.
+- **New LLM call site** → `LiteLLMClient.chat()`/`.embed()` with a `Capability` and a `purpose`.
+- **New row type** → `project_id` + `access_scope`. No globally-scoped tables.
+- **New connector** → implement `search`/`fetch`/`normalize`, register in `get_registry()`, declare
+  `output_kind`. Credentials come from `ConnectorCredential`, never from container env.
+- **New Python package** → add to `[tool.uv.workspace] members`, `[tool.uv.sources]`, and both the
+  ruff `src` and pyright `include` lists in the root `pyproject.toml`; then `uv sync`.
+- **Ported code** → add a `NOTICE` recording upstream, license, and per-file lineage. See
+  `packages/aleph-belief/NOTICE`.
 
-## Docs map
+**Ship a consumer with every producer.** The dominant defect class in this codebase is a column,
+table, or service that is written correctly and read by nothing. A contract with no caller is not
+progress. If you add a write path, add the read path in the same change or do not add it.
 
-- `docs/architecture.md` — package list + strict DAG, the load-bearing rules (incl. amended rule 8), the committed sweeps as living invariants, process boundaries.
-- `docs/research-loop.md` — the native `deep_research_job` (plan→search→ingest→reflect→compose→synthesize), tool binding/allowlist, `/synthesize`, no-strand failure semantics; `aleph-scholar` (tri-state DOI verification, Consensus over MCP+OAuth, reviewer citation pass).
-- `docs/workspace.md` — data-bound v0_9 surfaces + `updateDataModel` deltas + seq/resume, the reader tier + deterministic HTML compiler, the sandbox `code_runner` + versioned artifacts, agent eyes+hands, the catalog roster.
-- `docs/wiki.md` — wiki-first retrieval, curator, hand-edits/aliases, freshness scoring, refresh job + ApprovalCards, retraction blast-radius, drift.
-- `docs/storage.md` — the `AssetStore` protocol (fs default / s3 opt-in), key layout, the one authenticated streaming route + CSP sandbox.
-- `docs/operations.md` — bootstrap, verify-gateway, the compose stack, the gate suite, migrations.
-- `docs/security.md` — auth modes, agent tokens, ConnectorCredential encryption + Consensus OAuth, code_runner isolation, CSP-sandbox asset serving, ledger hash-chain, the deferred SSE×OIDC gap.
-- `docs/implementation-log.md` — append-only canonical record of what shipped vs. honest gaps.
-- `docs/archive/` — superseded pre-WP specs, plans, assessments, and the per-subsystem docs, preserved verbatim.
+## Naming
+
+Distribution `aleph-xxx` · module `aleph_xxx` · tables plural snake_case · action kinds
+`<entity>.<verb>` · OTEL spans `<subsystem>.<op>`.
+
+## Docs
+
+- `docs/architecture.md` — what exists today, honestly
+- `docs/belief-engine.md` — the Claim Spine design being built
+- `docs/decisions.md` — why the wiki is being removed, and what was borrowed from where
+- `docs/operations.md` — stack, migrations, gates

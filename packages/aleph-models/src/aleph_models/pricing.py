@@ -85,6 +85,21 @@ _DEFAULT_TABLE: dict[str, ModelPricing] = {
         output_per_token=Decimal("0"),
         cache_discount_pct=Decimal("0"),
     ),
+    # Local vLLM on owned hardware. Zero is the honest per-token rate: there is
+    # no marginal charge per token, and inventing a notional one would put
+    # fictional money in the cost ledger. The real cost is electricity and the
+    # GPU, neither of which is per-token. Token *counts* are still recorded, so
+    # usage remains measurable even though its price is zero.
+    "qwen3.8-27b-uncensored": ModelPricing(
+        input_per_token=Decimal("0"),
+        output_per_token=Decimal("0"),
+        cache_discount_pct=Decimal("0"),
+    ),
+    "bge-m3": ModelPricing(
+        input_per_token=Decimal("0"),
+        output_per_token=Decimal("0"),
+        cache_discount_pct=Decimal("0"),
+    ),
 }
 
 

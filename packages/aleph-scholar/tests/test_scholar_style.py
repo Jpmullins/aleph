@@ -109,3 +109,60 @@ def test_content_after_references_section_is_preserved() -> None:
     assert "Extra prose." in out
     assert out.index("# Appendix") > out.index("### Further reading")
     assert style_pass(out) == out
+
+
+# ---------------------------------------------------------------------------
+# [cN] markers — the form the research composer actually emits.
+#
+# style_pass previously matched `[N]` only, so every research report passed
+# through untouched: the renumbering and the reference rebuild both ran over
+# zero markers. These are the tests that would have caught it.
+# ---------------------------------------------------------------------------
+
+C_DOC = """First [c3], second [c1], first again [c3].
+
+## References
+
+[c1] Beta entry.
+[c3] Alpha entry.
+[c7] Never cited.
+"""
+
+
+def test_c_markers_renumber_by_first_appearance() -> None:
+    out = style_pass("First [c3], second [c1], first again [c3].")
+    assert out == "First [c1], second [c2], first again [c1]."
+
+
+def test_c_markers_keep_their_prefix() -> None:
+    """A [cN] document must not be rewritten into [N] form."""
+    out = style_pass(C_DOC)
+    assert "[c1] Alpha entry." in out
+    assert "[c2] Beta entry." in out
+    assert "[1] Alpha entry." not in out
+
+
+def test_c_marker_references_rebuild_and_orphan() -> None:
+    out = style_pass(C_DOC)
+    assert "### Further reading" in out
+    assert "Never cited." in out
+    # The orphan is unnumbered under Further reading, not renumbered into the list.
+    assert "[c3] Never cited." not in out
+
+
+def test_c_markers_idempotent() -> None:
+    once = style_pass(C_DOC)
+    assert style_pass(once) == once
+
+
+def test_c_marker_link_text_is_not_a_citation() -> None:
+    doc = "See [c1](https://example.com/x) and cite [c2]."
+    out = style_pass(doc)
+    assert "[c1](https://example.com/x)" in out
+    assert "cite [c1]." in out
+
+
+def test_mixed_forms_are_distinct_citations() -> None:
+    """`[1]` and `[c1]` are different citations, not aliases for one."""
+    out = style_pass("Alpha [c1], beta [1], gamma [c1].")
+    assert out == "Alpha [c1], beta [2], gamma [c1]."

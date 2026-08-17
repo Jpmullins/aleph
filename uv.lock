@@ -8,6 +8,7 @@ members = [
     "aleph-api",
     "aleph-artifacts",
     "aleph-assistant",
+    "aleph-belief",
     "aleph-code-runner",
     "aleph-connectors",
     "aleph-core",
@@ -15,12 +16,14 @@ members = [
     "aleph-db",
     "aleph-evals",
     "aleph-hypotheses",
+    "aleph-kernel",
     "aleph-models",
     "aleph-notes",
     "aleph-observability",
     "aleph-research",
     "aleph-reviewer",
     "aleph-rks",
+    "aleph-runtime",
     "aleph-scholar",
     "aleph-security",
     "aleph-wiki",
@@ -129,6 +132,7 @@ dependencies = [
     { name = "aleph-research" },
     { name = "aleph-reviewer" },
     { name = "aleph-rks" },
+    { name = "aleph-runtime" },
     { name = "aleph-scholar" },
     { name = "aleph-security" },
     { name = "aleph-wiki" },
@@ -169,6 +173,7 @@ requires-dist = [
     { name = "aleph-research", editable = "packages/aleph-research" },
     { name = "aleph-reviewer", editable = "packages/aleph-reviewer" },
     { name = "aleph-rks", editable = "packages/aleph-rks" },
+    { name = "aleph-runtime", editable = "packages/aleph-runtime" },
     { name = "aleph-scholar", editable = "packages/aleph-scholar" },
     { name = "aleph-security", editable = "packages/aleph-security" },
     { name = "aleph-wiki", editable = "packages/aleph-wiki" },
@@ -258,6 +263,21 @@ requires-dist = [
     { name = "langgraph", specifier = ">=1.2,<2" },
     { name = "pydantic", specifier = "==2.13.4" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = "==2.0.50" },
+]
+
+[[package]]
+name = "aleph-belief"
+version = "0.1.0"
+source = { editable = "packages/aleph-belief" }
+dependencies = [
+    { name = "aleph-core" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aleph-core", editable = "packages/aleph-core" },
+    { name = "pydantic", specifier = "==2.13.4" },
 ]
 
 [[package]]
@@ -409,6 +429,21 @@ requires-dist = [
     { name = "aleph-db", editable = "packages/aleph-db" },
     { name = "pydantic", specifier = "==2.13.4" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = "==2.0.50" },
+]
+
+[[package]]
+name = "aleph-kernel"
+version = "0.1.0"
+source = { editable = "packages/aleph-kernel" }
+dependencies = [
+    { name = "aleph-core" },
+    { name = "aleph-observability" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aleph-core", editable = "packages/aleph-core" },
+    { name = "aleph-observability", editable = "packages/aleph-observability" },
 ]
 
 [[package]]
@@ -610,6 +645,39 @@ requires-dist = [
 ]
 
 [[package]]
+name = "aleph-runtime"
+version = "0.1.0"
+source = { editable = "packages/aleph-runtime" }
+dependencies = [
+    { name = "aleph-core" },
+    { name = "aleph-db" },
+    { name = "aleph-kernel" },
+    { name = "aleph-models" },
+    { name = "aleph-observability" },
+    { name = "aleph-rks" },
+    { name = "aleph-scholar" },
+    { name = "aleph-security" },
+    { name = "httpx" },
+    { name = "redis" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aleph-core", editable = "packages/aleph-core" },
+    { name = "aleph-db", editable = "packages/aleph-db" },
+    { name = "aleph-kernel", editable = "packages/aleph-kernel" },
+    { name = "aleph-models", editable = "packages/aleph-models" },
+    { name = "aleph-observability", editable = "packages/aleph-observability" },
+    { name = "aleph-rks", editable = "packages/aleph-rks" },
+    { name = "aleph-scholar", editable = "packages/aleph-scholar" },
+    { name = "aleph-security", editable = "packages/aleph-security" },
+    { name = "httpx", specifier = "==0.28.1" },
+    { name = "redis", specifier = ">=5,<6" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = "==2.0.50" },
+]
+
+[[package]]
 name = "aleph-scholar"
 version = "0.1.0"
 source = { editable = "packages/aleph-scholar" }
@@ -652,8 +720,10 @@ name = "aleph-wiki"
 version = "0.1.0"
 source = { editable = "packages/aleph-wiki" }
 dependencies = [
+    { name = "aleph-belief" },
     { name = "aleph-core" },
     { name = "aleph-db" },
+    { name = "aleph-hypotheses" },
     { name = "aleph-models" },
     { name = "aleph-observability" },
     { name = "aleph-rks" },
@@ -665,8 +735,10 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aleph-belief", editable = "packages/aleph-belief" },
     { name = "aleph-core", editable = "packages/aleph-core" },
     { name = "aleph-db", editable = "packages/aleph-db" },
+    { name = "aleph-hypotheses", editable = "packages/aleph-hypotheses" },
     { name = "aleph-models", editable = "packages/aleph-models" },
     { name = "aleph-observability", editable = "packages/aleph-observability" },
     { name = "aleph-rks", editable = "packages/aleph-rks" },
@@ -689,6 +761,7 @@ dependencies = [
     { name = "aleph-research" },
     { name = "aleph-reviewer" },
     { name = "aleph-rks" },
+    { name = "aleph-runtime" },
     { name = "aleph-scholar" },
     { name = "aleph-security" },
     { name = "aleph-wiki" },
@@ -712,6 +785,7 @@ requires-dist = [
     { name = "aleph-research", editable = "packages/aleph-research" },
     { name = "aleph-reviewer", editable = "packages/aleph-reviewer" },
     { name = "aleph-rks", editable = "packages/aleph-rks" },
+    { name = "aleph-runtime", editable = "packages/aleph-runtime" },
     { name = "aleph-scholar", editable = "packages/aleph-scholar" },
     { name = "aleph-security", editable = "packages/aleph-security" },
     { name = "aleph-wiki", editable = "packages/aleph-wiki" },

@@ -1,77 +1,61 @@
 # Aleph
 
-Living multi-agent research environment. See [`CLAUDE.md`](CLAUDE.md) and the [`docs/`](docs) doc set (architecture, research-loop, workspace, wiki, storage, operations, security) for how the system works, and [`docs/implementation-log.md`](docs/implementation-log.md) for the append-only record of what shipped.
+A **general-purpose, self-improving multi-agent harness**.
 
-Core loop: create a project → ask the assistant to research a topic (or upload a source) → a native deep-research loop (`aleph-research`: plan → search → ingest → reflect → compose) fans out across the project's allowed connectors + verified scholarship (`aleph-scholar`), and the wiki agent compiles a cited draft page → approve it in Briefs → query it conversationally, run ACH on competing hypotheses, take notes and promote them to the wiki. Wiki pages carry a freshness score and retraction awareness; agent-generated charts render as sandboxed artifacts.
+An agent that authors plugins for itself and activates or deactivates them as needed — on a kernel
+whose composability model makes that safe, with guardrails that stop it removing load-bearing
+capability. Every capability, including the agent loop, is a plugin.
+
+Its first plugin suite is **research**: hand a project sources or a question and it reads real
+literature — verifying DOIs, walking citation graphs forward and backward, checking for retractions —
+and accumulates a durable, cited body of knowledge you can query, correct, and export.
+
+That knowledge layer is a **web of belief**: claims are first-class and evidence-anchored, confidence
+is *derived* from what supports them rather than asserted by a model, and adding a source or learning
+of a retraction propagates through the graph. Reports and HTML artifacts are rendered from that layer;
+they are not the layer.
+
+> **Status:** Aleph is mid-transition on two axes. The LLM-maintained wiki is being replaced by the
+> Claim Spine, and the whole system is being rebuilt on an own-implemented composability kernel.
+> The kernel language and structure are an **open decision**. See
+> [`docs/decisions.md`](docs/decisions.md) for the reasoning, [`docs/belief-engine.md`](docs/belief-engine.md)
+> for the knowledge design. `packages/aleph-wiki` is legacy under removal.
 
 ## Quick start
 
 ```bash
-# one-time
-cp deploy/compose/.env.example deploy/compose/.env
-# edit deploy/compose/.env and set INSIGHTS_LITELLM_API_KEY plus other secrets
-
-# boot the local stack
+cp deploy/compose/.env.example deploy/compose/.env   # set INSIGHTS_LITELLM_API_KEY
 ./scripts/bootstrap-local.sh
 ```
 
-Then:
-- Web UI: http://localhost:5173
-- API: http://localhost:8000
-- CopilotKit runtime (Live chat bridge): http://localhost:4000
-- Langfuse: http://localhost:3000
+- Web UI — http://localhost:5173
+- API — http://localhost:8000
+- Copilot runtime (chat bridge) — http://localhost:4000
+- Langfuse (traces) — http://localhost:3000
 
-The default asset backend is the local filesystem (`data/assets`). An S3-compatible object store is opt-in: `docker compose --profile s3 up -d` adds it, with its console at http://localhost:9001.
-
-## Repo layout
-
-```
-apps/
-  api/             FastAPI app (+ in-process AG-UI Deep Agent)
-  web/             React + Vite app
-  workers/         Arq workers (incl. the native research loop, curator, wiki refresh)
-  code-runner/     Sandboxed, credential-less worker that executes agent-written Python
-  copilot-runtime/ Node @copilotkit/runtime v2 bridge (Live chat → AG-UI)
-packages/
-  aleph-core/         shared domain primitives + Pydantic schemas
-  aleph-db/           SQLAlchemy models + repositories + Alembic
-  aleph-security/     auth, Principal, role gates, agent tokens
-  aleph-observability/  OTEL + Langfuse + structlog
-  aleph-models/       LiteLLM transport + ModelProfile resolver + pricing
-  aleph-scholar/      verified scholarship (Crossref/OpenAlex/Consensus, DOI verification)
-  aleph-rks/          Raw Knowledge Store
-  aleph-wiki/         wiki compile / curator / freshness / HTML compiler
-  aleph-assistant/    chat orchestration + wiki retrieval router
-  aleph-connectors/   typed connector plugins (driven by the research loop)
-  aleph-research/     native deep-research LangGraph loop
-  aleph-a2ui/         A2UI catalog + SDK glue
-  aleph-reviewer/     reviewers + source retraction/blast-radius
-  aleph-hypotheses/   analyst hypotheses
-  aleph-datasets/     datasets + observations
-  aleph-artifacts/    Builder agent + rendered assets + exporters
-  aleph-notes/        analyst notebook
-  aleph-evals/        eval runner + CI gates
-deploy/compose/   docker-compose stack (fs default; --profile s3 for the object store)
-docs/             architecture, research-loop, workspace, wiki, storage, operations, security
-scripts/          bootstrap-local.sh, verify-gateway.sh, the committed CI sweeps
-tests/e2e/        cross-package integration tests
-```
-
-See [`docs/architecture.md`](docs/architecture.md) for the full package list + strict DAG.
+Assets are stored on the local filesystem (`data/assets`) by default. An S3-compatible store is
+opt-in: `docker compose --profile s3 up -d`.
 
 ## Development
 
 ```bash
-uv sync                          # install Python deps
-pnpm install                     # install JS deps
-ruff check .                     # lint
-ruff format --check .            # format check
-pyright                          # typecheck Python
-pnpm -C apps/web typecheck       # typecheck TS
-pytest -m "not integration"      # unit tests
-pytest -m integration            # integration tests (requires compose stack)
+uv sync --all-packages --all-extras
+uv run pytest -m "not integration" -q
+uv run ruff check . && uv run pyright
+pnpm -C apps/web dev
 ```
+
+## Documentation
+
+| doc | what it covers |
+|---|---|
+| [`CLAUDE.md`](CLAUDE.md) | authoritative guide: layout, rules, commands, **and what is currently broken** |
+| [`docs/architecture.md`](docs/architecture.md) | what exists today |
+| [`docs/belief-engine.md`](docs/belief-engine.md) | the Claim Spine being built |
+| [`docs/decisions.md`](docs/decisions.md) | why the wiki is going, and what was borrowed from where |
+| [`docs/operations.md`](docs/operations.md) | stack, migrations, gates |
 
 ## License
 
-See [`LICENSE`](LICENSE).
+See [`LICENSE`](LICENSE). Ported third-party code carries a `NOTICE` in its package —
+see [`packages/aleph-belief/NOTICE`](packages/aleph-belief/NOTICE).

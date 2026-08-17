@@ -41,6 +41,11 @@ KNOWN_EMBEDDING_DIMS: dict[str, int] = {
     "text-embedding-3-small": 1536,
     "text-embedding-3-large": 3072,
     "text-embedding-ada-002": 1536,
+    # Local vLLM embedder. Dense output is 1024, matching EMBEDDING_DIM, so it
+    # is a drop-in for titan-embed-v2 with no re-dimensioning of the column.
+    # (bge-m3 also emits sparse and ColBERT vectors; the OpenAI-compatible
+    # /v1/embeddings route returns the dense one, which is what we store.)
+    "bge-m3": 1024,
 }
 
 

@@ -1,0 +1,58 @@
+# The boot manifest: the ONLY source of core capability, and the only place
+# `protected = true` can be set.
+#
+# There is deliberately no directory-scan fallback. A scan means a file landing
+# on disk becomes a booted capability, which hands anything that can write a
+# file the ability to mount code at the trust level of core.
+#
+# Nothing listed here receives a PluginId, so no argument value an agent can
+# construct names it. Deactivating core capability is unexpressible, not refused.
+
+[[capability]]
+name = "observability"
+factory = "aleph_runtime.capabilities:observability"
+protected = true
+
+[[capability]]
+name = "database"
+factory = "aleph_runtime.capabilities:database"
+protected = true
+
+[[capability]]
+name = "http"
+factory = "aleph_runtime.capabilities:http_clients"
+protected = true
+
+[[capability]]
+name = "redis"
+factory = "aleph_runtime.capabilities:redis_client"
+protected = true
+
+[[capability]]
+name = "auth"
+factory = "aleph_runtime.capabilities:auth_jwks"
+protected = true
+
+[[capability]]
+name = "models"
+factory = "aleph_runtime.capabilities:models"
+protected = true
+
+[[capability]]
+name = "assets"
+factory = "aleph_runtime.capabilities:assets"
+protected = true
+
+# Research capabilities. Not protected: the research suite is a plugin suite,
+# and an operator may legitimately run Aleph without it.
+[[capability]]
+name = "scholar"
+factory = "aleph_runtime.capabilities:scholar"
+
+[[capability]]
+name = "realtime"
+factory = "aleph_runtime.capabilities:realtime"
+
+[[capability]]
+name = "agent_store"
+factory = "aleph_runtime.capabilities:agent_store"

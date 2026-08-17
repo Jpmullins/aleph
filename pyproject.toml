@@ -27,6 +27,9 @@ members = [
     "packages/aleph-hypotheses",
     "packages/aleph-datasets",
     "packages/aleph-artifacts",
+    "packages/aleph-belief",
+    "packages/aleph-kernel",
+    "packages/aleph-runtime",
 ]
 
 [tool.uv.sources]
@@ -48,6 +51,9 @@ aleph-reviewer = { workspace = true }
 aleph-hypotheses = { workspace = true }
 aleph-datasets = { workspace = true }
 aleph-artifacts = { workspace = true }
+aleph-belief = { workspace = true }
+aleph-kernel = { workspace = true }
+aleph-runtime = { workspace = true }
 aleph-api = { workspace = true }
 aleph-workers = { workspace = true }
 aleph-code-runner = { workspace = true }
@@ -94,6 +100,9 @@ src = [
     "packages/aleph-hypotheses/src",
     "packages/aleph-datasets/src",
     "packages/aleph-artifacts/src",
+    "packages/aleph-belief/src",
+    "packages/aleph-kernel/src",
+    "packages/aleph-runtime/src",
 ]
 
 [tool.ruff.lint]
@@ -154,6 +163,9 @@ include = [
     "packages/aleph-hypotheses/src",
     "packages/aleph-datasets/src",
     "packages/aleph-artifacts/src",
+    "packages/aleph-belief/src",
+    "packages/aleph-kernel/src",
+    "packages/aleph-runtime/src",
 ]
 exclude = [
     "**/.venv",

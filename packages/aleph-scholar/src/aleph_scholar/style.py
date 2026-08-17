@@ -18,14 +18,27 @@ from __future__ import annotations
 
 import re
 
-# A citation marker is [digits] NOT followed by "(" (markdown link) and NOT
-# part of a link text like [1](http...). Reference-list definition lines
-# ("[1] Some entry" at line start) are handled separately.
-_MARKER_RE = re.compile(r"\[(\d+)\](?!\()")
+# A citation marker is [digits] or [cdigits], NOT followed by "(" (markdown
+# link) and NOT part of a link text like [1](http...). Reference-list
+# definition lines ("[1] Some entry" at line start) are handled separately.
+#
+# Both forms are accepted because the two producers in this repo disagree:
+# hand-authored and reviewer prose use `[N]`, while the research composer emits
+# `[cN]` (aleph_research.research_workflow builds `c1..cN` and its prompt
+# mandates that form). This module previously matched `[N]` only, so every
+# research report passed through the renumbering and reference-rebuild
+# untouched — the pass ran and did nothing. Whichever form a marker uses is
+# preserved on output; a document is not rewritten into the other convention.
+_MARKER_RE = re.compile(r"\[(c?)(\d+)\](?!\()")
 _REFERENCES_HEADING_RE = re.compile(r"^##\s+references\s*$", re.IGNORECASE)
 _FURTHER_READING_HEADING_RE = re.compile(r"^#{2,4}\s+further\s+reading\s*$", re.IGNORECASE)
-_ENTRY_RE = re.compile(r"^\s*(?:\[(\d+)\]|(\d+)\.)\s+(.*)$")
+_ENTRY_RE = re.compile(r"^\s*(?:\[(c?)(\d+)\]|(\d+)\.)\s+(.*)$")
 _HEADING_RE = re.compile(r"^#{1,6}\s")
+
+
+def _marker_key(prefix: str, number: int | str) -> str:
+    """Identity of a citation. `[1]` and `[c1]` are distinct citations, not aliases."""
+    return f"{prefix}{number}"
 
 
 def _split_references(lines: list[str]) -> tuple[list[str], list[str], int] | None:
@@ -51,14 +64,16 @@ def _split_references(lines: list[str]) -> tuple[list[str], list[str], int] | No
     return None
 
 
-def _parse_entries(section_lines: list[str]) -> tuple[dict[int, str], list[str]]:
-    """Parse `[N] text` / `N. text` entries; keep a Further-reading tail verbatim.
+def _parse_entries(section_lines: list[str]) -> tuple[dict[str, str], list[str]]:
+    """Parse `[N] text` / `[cN] text` / `N. text` entries; keep Further-reading verbatim.
 
+    Keys are marker identities (`"1"`, `"c1"`), matching what `_MARKER_RE`
+    yields, so an entry is looked up by the exact citation that cites it.
     Continuation lines (non-empty, non-entry) append to the current entry.
     """
-    entries: dict[int, str] = {}
+    entries: dict[str, str] = {}
     further: list[str] = []
-    current: int | None = None
+    current: str | None = None
     in_further = False
     for line in section_lines[1:]:  # skip the "## References" heading itself
         if _FURTHER_READING_HEADING_RE.match(line.strip()):
@@ -70,9 +85,10 @@ def _parse_entries(section_lines: list[str]) -> tuple[dict[int, str], list[str]]
             continue
         match = _ENTRY_RE.match(line)
         if match:
-            number = int(match.group(1) or match.group(2))
-            entries[number] = match.group(3).strip()
-            current = number
+            prefix, bracketed, dotted, text = match.groups()
+            key = _marker_key(prefix or "", bracketed or dotted)
+            entries[key] = text.strip()
+            current = key
         elif line.strip() and current is not None:
             entries[current] = f"{entries[current]} {line.strip()}"
         else:
@@ -111,14 +127,16 @@ def style_pass(markdown: str) -> str:
 
     body = "\n".join(body_lines)
 
-    # First-appearance renumbering over the body only.
-    order: dict[int, int] = {}
+    # First-appearance renumbering over the body only. Keyed by marker identity
+    # so `[1]` and `[c1]` renumber independently, and each keeps its own form.
+    order: dict[str, int] = {}
 
     def _renumber(match: re.Match[str]) -> str:
-        old = int(match.group(1))
-        if old not in order:
-            order[old] = len(order) + 1
-        return f"[{order[old]}]"
+        prefix, number = match.group(1), match.group(2)
+        key = _marker_key(prefix, number)
+        if key not in order:
+            order[key] = len(order) + 1
+        return f"[{prefix}{order[key]}]"
 
     body = _MARKER_RE.sub(_renumber, body)
 
@@ -128,11 +146,12 @@ def style_pass(markdown: str) -> str:
     if section_lines:
         entries, further = _parse_entries(section_lines)
         ref_lines: list[str] = ["## References", ""]
-        cited = sorted(order.items(), key=lambda kv: kv[1])  # (old, new) by new number
-        for old, new in cited:
-            if old in entries:
-                ref_lines.append(f"[{new}] {entries[old]}")
-        orphaned = [entries[n] for n in sorted(entries) if n not in order]
+        cited = sorted(order.items(), key=lambda kv: kv[1])  # (key, new) by new number
+        for key, new in cited:
+            if key in entries:
+                prefix = "c" if key.startswith("c") else ""
+                ref_lines.append(f"[{prefix}{new}] {entries[key]}")
+        orphaned = [entries[k] for k in sorted(entries) if k not in order]
         if orphaned or further:
             ref_lines.append("")
             ref_lines.append("### Further reading")

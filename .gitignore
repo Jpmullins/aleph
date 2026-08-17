@@ -69,3 +69,6 @@ tests/playwright/playwright-report/
 /*.png
 /*.jpeg
 /*.jpg
+
+# graphify code-graph artifacts (generated, local)
+.graphify/

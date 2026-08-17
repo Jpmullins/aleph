@@ -1,32 +1,36 @@
-"""FastAPI lifespan: build shared singletons at startup, tear them down at shutdown."""
+"""FastAPI lifespan: boot the kernel, mount the app, unwind on shutdown.
+
+The shared services live in `capabilities.py` as kernel capabilities. Order is
+computed from their declarations rather than written out here, and teardown is
+the exact reverse with every inverse guaranteed to run.
+
+What that replaced: ten singletons constructed in a hand-written sequence, and a
+`finally` block of bare awaits where one raising `aclose()` skipped every close
+after it — while anything built before the `try` leaked entirely if a later
+constructor raised.
+"""
 
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import httpx
-import redis.asyncio as aioredis
-from sqlalchemy.ext.asyncio import AsyncEngine
-
 from aleph_api.a2ui_handlers import build_action_router
-from aleph_api.realtime import ChangeBroker, NotifyListener, asyncpg_dsn
 from aleph_api.settings import Settings, get_settings
-from aleph_db.session import async_engine_for, async_sessionmaker_for
-from aleph_models.client import LiteLLMClient
-from aleph_models.pricing import get_default_pricing
-from aleph_observability import (
-    configure_logging,
-    init_langfuse,
-    init_otel,
-    instrument_httpx,
-    instrument_sqlalchemy,
-    shutdown_langfuse,
-    shutdown_otel,
+from aleph_kernel import Context, EffectScope, Kernel
+from aleph_kernel.manifest import load_manifest, mount_manifest
+from aleph_runtime.capabilities import (
+    BOUND_KEYS,
+    DB_SESSIONS,
+    LITELLM,
+    SETTINGS,
+    bind_to_app_state,
 )
-from aleph_rks.asset_store import AssetStore, create_asset_store
-from aleph_scholar import ScholarService
-from aleph_security.jwt import JWKSCache
+
+#: Ships beside the app, not in the working directory: the set of core
+#: capabilities must not depend on where the process happened to start.
+BOOT_MANIFEST = Path(__file__).resolve().parents[2] / "aleph.toml"
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -37,164 +41,69 @@ if TYPE_CHECKING:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
+    kernel = Kernel()
+    # The manifest is the only source of core capability, and the only place
+    # `protected = true` can be set. Nothing mounted from it receives a
+    # PluginId, so no argument value an agent can construct names it —
+    # deactivating core capability is unexpressible rather than refused.
+    mount_manifest(kernel, load_manifest(BOOT_MANIFEST), settings=settings)
 
-    configure_logging(environment=settings.aleph_env)
-    init_otel(
-        service_name=settings.service_name,
-        service_version=settings.service_version,
-        environment=settings.aleph_env,
-        profile=settings.aleph_default_model_profile,
-        otlp_endpoint=settings.otel_exporter_otlp_endpoint,
+    # Every capability sets up and then proves itself against the live system.
+    # A failed probe unwinds that capability completely and aborts the boot, so
+    # the process does not come up half-working — which is strictly better than
+    # discovering at first request that the asset store cannot serve a read.
+    await kernel.boot()
+
+    # A reader context declaring everything the app shim needs. It is scoped
+    # like any capability, so it cannot reach a service nobody published.
+    reader = Context(
+        owner="aleph-api",
+        requires=BOUND_KEYS,
+        store=kernel.store,
+        scope=EffectScope("aleph-api"),
     )
-    init_langfuse(
-        host=settings.langfuse_host,
-        public_key=settings.langfuse_public_key,
-        secret_key=settings.langfuse_secret_key,
-    )
+    bind_to_app_state(app, reader)
+    app.state.kernel = kernel
+    app.state.action_router = build_action_router()
 
-    engine: AsyncEngine = async_engine_for(settings.database_url)
-    instrument_sqlalchemy(engine)
-    session_maker = async_sessionmaker_for(engine)
+    session_maker = reader.get(DB_SESSIONS)
 
-    # Shared httpx clients — one for the gateway, one general-purpose.
-    instrument_httpx()
-    gateway_http = httpx.AsyncClient()
-    auth_http = httpx.AsyncClient()
-
-    # JWKS cache is only needed in OIDC mode; in local mode the auth
-    # middleware bypasses JWT verification entirely.
-    jwks_cache: JWKSCache | None = None
-    if settings.aleph_auth_mode == "oidc":
-        if not settings.aleph_auth_jwks_url:
-            msg = "ALEPH_AUTH_JWKS_URL is required when ALEPH_AUTH_MODE=oidc"
-            raise RuntimeError(msg)
-        jwks_cache = JWKSCache(
-            jwks_url=settings.aleph_auth_jwks_url,
-            http_client=auth_http,
-        )
-
-    redis_client = aioredis.from_url(settings.redis_url, decode_responses=False)
-
-    pricing = get_default_pricing()
-    litellm = LiteLLMClient(
-        base_url=settings.litellm_base_url,
-        api_key=settings.insights_litellm_api_key,
-        http_client=gateway_http,
-        pricing=pricing,
-        session_maker=session_maker,
-        redis_client=redis_client,
-    )
-
-    # Fail fast on a misconfigured asset backend — no silent None fallback;
-    # every asset byte flows through this store (and, browser-side, through
-    # the authenticated streaming route).
-    asset_store: AssetStore = create_asset_store(
-        backend=settings.aleph_asset_backend,
-        root=settings.aleph_asset_root,
-        endpoint=settings.aleph_s3_endpoint,
-        access_key=settings.aleph_s3_access_key,
-        secret_key=settings.aleph_s3_secret_key,
-        bucket=settings.aleph_s3_bucket,
-        secure=settings.aleph_s3_secure,
-    )
-
-    # WP-2 — verified scholarship. One shared ScholarService so the polite
-    # per-host throttle + retry transport live for the app's lifetime. It is
-    # constructed credential-free: the Consensus credential load/save
-    # callbacks are project-scoped, so the scholar routes bind them
-    # per-request to ConnectorCredentialService (the token-refresh httpx
-    # client is shared here so per-request ConsensusClients don't leak one).
-    # follow_redirects: the live Consensus AS 308-redirects its token endpoint
-    # to a trailing-slash path; 308 preserves method+body.
-    consensus_token_http = httpx.AsyncClient(timeout=15.0, follow_redirects=True)
-    scholar = ScholarService(
-        mailto=settings.aleph_scholar_mailto,
-        redis=redis_client,
-        consensus_monthly_cap=settings.aleph_consensus_monthly_search_cap,
-        consensus_token_http=consensus_token_http,
-    )
-
-    app.state.settings = settings
-    app.state.db_engine = engine
-    app.state.session_maker = session_maker
-    app.state.jwks_cache = jwks_cache
-    app.state.scholar = scholar
-    app.state.consensus_token_http = consensus_token_http
-
-    # Wave 2 — give the in-process assistant Deep Agent (mounted at
-    # /copilotkit/agent/assistant) access to the shared session_maker.
-    from aleph_api.copilot_agent import bind_runtime
-
-    # Rule #7: resolve the agent's model from the default named ModelProfile
-    # (aleph-dev / aleph-production) rather than a hardcoded id, so the
-    # conversational surface uses the configured tier (e.g. Opus in production).
+    # Rule 7: resolve the agent's model from the default named ModelProfile
+    # rather than a hardcoded id, so the conversational surface uses the
+    # configured tier.
     agent_bindings: dict[str, Any] | None = None
     try:
         from aleph_db.repos.model_profile import get_template
 
-        async with session_maker() as _session:
-            _tmpl = await get_template(_session, settings.aleph_default_model_profile)
-            if _tmpl is not None:
-                agent_bindings = dict(_tmpl.bindings_jsonb)
+        async with session_maker() as session:
+            template = await get_template(session, settings.aleph_default_model_profile)
+            if template is not None:
+                agent_bindings = dict(template.bindings_jsonb)
     except Exception:
         agent_bindings = None
+
+    from aleph_api.copilot_agent import bind_runtime
+    from aleph_api.copilotkit_endpoint import setup_copilotkit
 
     bind_runtime(
         session_maker=session_maker,
         settings=settings,
-        litellm=litellm,
+        litellm=reader.get(LITELLM),
         agent_bindings=agent_bindings,
     )
-    app.state.litellm = litellm
-    app.state.redis = redis_client
-    app.state.gateway_http = gateway_http
-    app.state.auth_http = auth_http
-    app.state.asset_store = asset_store
-    app.state.action_router = build_action_router()
-
-    # Real-time push layer: one supervised LISTEN/NOTIFY connection republishes
-    # DB change signals (from the `realtime_notify_triggers` migration) to an
-    # in-process per-project broker that the SSE streams subscribe to. Each
-    # stream keeps a slow poll fallback so a dropped listener self-heals.
-    change_broker = ChangeBroker()
-    notify_listener = NotifyListener(dsn=asyncpg_dsn(settings.database_url), broker=change_broker)
-    app.state.change_broker = change_broker
-    app.state.notify_listener = notify_listener
-
-    # Wave 6 D1 — cross-session memory for the assistant Deep Agent. The
-    # Postgres-backed langgraph store (its own `store`/`store_migrations` tables)
-    # must be constructed inside the running event loop, so it is built here
-    # (not at synchronous app construction). Open the pool, create the tables
-    # once via `setup()`, then mount the agent endpoint with this store. The
-    # CompositeBackend routes `/memories/` to it for persistence across sessions.
-    from aleph_api.copilot_agent import build_agent_store
-    from aleph_api.copilotkit_endpoint import setup_copilotkit
-
-    agent_store_pool, agent_store = build_agent_store(database_url=settings.database_url)
+    # Mounts routes on `app`; not modelled as a capability because adding a
+    # route to a running FastAPI app has no meaningful inverse.
+    setup_copilotkit(app, settings=settings, store=app.state.agent_store)
 
     try:
-        # Inside the try so a failure in open()/setup()/setup_copilotkit cannot
-        # leak the pool's background task + connections — the finally always
-        # runs once we have a pool to close.
-        await agent_store_pool.open()
-        await agent_store.setup()
-        app.state.agent_store_pool = agent_store_pool
-        app.state.agent_store = agent_store
-        setup_copilotkit(app, settings=settings, store=agent_store)
-        await notify_listener.start()
         yield
     finally:
-        await notify_listener.stop()
-        await agent_store_pool.close()
-        await scholar.http.aclose()
-        await consensus_token_http.aclose()
-        await gateway_http.aclose()
-        await auth_http.aclose()
-        await redis_client.aclose()
-        await engine.dispose()
-        shutdown_langfuse()
-        shutdown_otel()
+        # Dependents before providers, every inverse runs, failures aggregate.
+        await kernel.shutdown()
 
 
 def app_settings(app: FastAPI) -> Settings:
     return app.state.settings
+
+
+__all__ = ["SETTINGS", "app_settings", "lifespan"]

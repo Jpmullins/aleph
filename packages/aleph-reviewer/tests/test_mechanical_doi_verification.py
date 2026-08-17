@@ -146,6 +146,10 @@ async def _seed_revision(
                 id=uuid7(),
                 project_id=project_id,
                 claim_id=claim.id,
+                # source_id is the anchor retraction walks; source_page_id was
+                # never populated by any writer, so seeding only it made this
+                # fixture describe a row the pipeline could not produce.
+                source_id=source_id,
                 source_page_id=source_page.id,
                 citation_marker="1",
             )
@@ -249,7 +253,10 @@ async def test_fabricated_and_retracted_dois_yield_exact_findings(session_maker)
             .all()
         )
         assert flagged
-        assert all(c.confidence == "retracted" and c.status == "contested" for c in flagged)
+        # `status` carries the retraction. `confidence` is derived from evidence
+        # and has no "retracted" state, so writing it there would be erased by
+        # the next recompute.
+        assert all(c.status == "retracted" for c in flagged)
 
         # Verdict cached back onto the source row, in the findings transaction.
         cached = source.source_metadata_jsonb["doi_verdict"]

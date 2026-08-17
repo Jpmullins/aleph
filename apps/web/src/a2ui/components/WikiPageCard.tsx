@@ -130,6 +130,8 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
   const meta = p.page_meta ?? {};
   const readOnly = Boolean(p.read_only || p.derived);
   const [view, setView] = useState<"reader" | "document">("reader");
+  const [rejecting, setRejecting] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
 
   // WP-4d: publish the analyst's claim/text selection into shared workspace
   // state so the agent sees it, and read the agent-requested highlight.
@@ -211,31 +213,83 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
       </div>
 
       {canCurate && meta.page_id && status !== "approved" && (
-        <div className="mb-3 flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() =>
-              onAction("approve", { target_id: meta.page_id, target_kind: "wiki_page" })
-            }
-            className="rounded bg-emerald-600 px-3 py-1 text-xs font-medium text-white hover:bg-emerald-700"
-            data-testid="wiki-approve"
-          >
-            Approve
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              onAction("reject", {
-                target_id: meta.page_id,
-                target_kind: "wiki_page",
-                reason: "",
-              })
-            }
-            className="rounded border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
-            data-testid="wiki-reject"
-          >
-            Reject
-          </button>
+        <div className="mb-3">
+          {!rejecting ? (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  onAction("approve", { target_id: meta.page_id, target_kind: "wiki_page" })
+                }
+                className="rounded bg-emerald-600 px-3 py-1 text-xs font-medium text-white hover:bg-emerald-700"
+                data-testid="wiki-approve"
+              >
+                Approve
+              </button>
+              <button
+                type="button"
+                onClick={() => setRejecting(true)}
+                className="rounded border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                data-testid="wiki-reject"
+              >
+                Reject
+              </button>
+            </div>
+          ) : (
+            // The reason is not a formality: the wiki agent reads it back on
+            // the next compile so it does not reproduce the rejected content.
+            // Rejecting with an empty reason discards the only signal the
+            // analyst has, so the confirm button stays disabled until there is
+            // one and the server rejects an empty reason outright.
+            <div className="rounded-md border border-slate-300 bg-slate-50 p-2">
+              <label
+                htmlFor="wiki-reject-reason"
+                className="mb-1 block text-xs font-medium text-slate-700"
+              >
+                Why is this page wrong? The agent reads this before rewriting it.
+              </label>
+              <textarea
+                id="wiki-reject-reason"
+                autoFocus
+                rows={2}
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                placeholder="e.g. conflates two different trials; the 2019 figure is from the retracted paper"
+                className="w-full rounded border border-slate-300 px-2 py-1 text-xs focus:border-slate-500 focus:outline-none"
+                data-testid="wiki-reject-reason"
+              />
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={!rejectReason.trim()}
+                  onClick={() => {
+                    onAction("reject", {
+                      target_id: meta.page_id,
+                      target_kind: "wiki_page",
+                      reason: rejectReason.trim(),
+                    });
+                    setRejecting(false);
+                    setRejectReason("");
+                  }}
+                  className="rounded bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  data-testid="wiki-reject-confirm"
+                >
+                  Reject page
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRejecting(false);
+                    setRejectReason("");
+                  }}
+                  className="rounded border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                  data-testid="wiki-reject-cancel"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

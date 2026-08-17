@@ -15,6 +15,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert
 
 from aleph_core.time import utcnow
+from aleph_core.tsquery import or_tsquery
 from aleph_wiki.models import Alias, WikiIndex, WikiLink, WikiPage, WikiRevision
 
 if TYPE_CHECKING:
@@ -83,14 +84,21 @@ class IndexService:
                 for link in link_rows
             ]
 
-        # Resolve summary: prefer caller-supplied, else fall back to current revision.summary.
-        if summary is None and page.current_revision_id is not None:
+        # Resolve summary and body from the current revision. The body is what
+        # makes the page findable by the words it is written in; without it the
+        # index covers ~2KB of summary and a question phrased in the page's own
+        # vocabulary matches nothing.
+        body_text: str | None = None
+        if page.current_revision_id is not None:
             cur = (
                 await self._session.execute(
                     select(WikiRevision).where(WikiRevision.id == page.current_revision_id)
                 )
             ).scalar_one_or_none()
-            summary = (cur.summary if cur else "") or ""
+            if cur is not None:
+                body_text = cur.body_md
+                if summary is None:
+                    summary = cur.summary or ""
         summary = (summary or "")[:2048]
 
         # Upsert. index_tsv is filled by the trigger.
@@ -101,6 +109,7 @@ class IndexService:
             slug=page.slug,
             aliases_jsonb=alias_rows,
             summary=summary,
+            body_text=body_text,
             wikilinks_out_jsonb=wikilinks,
             page_kind=page.page_kind,
             status=page.status,
@@ -113,6 +122,7 @@ class IndexService:
             "slug": stmt.excluded.slug,
             "aliases_jsonb": stmt.excluded.aliases_jsonb,
             "summary": stmt.excluded.summary,
+            "body_text": stmt.excluded.body_text,
             "wikilinks_out_jsonb": stmt.excluded.wikilinks_out_jsonb,
             "page_kind": stmt.excluded.page_kind,
             "status": stmt.excluded.status,
@@ -173,14 +183,11 @@ class IndexService:
                 WikiIndex.page_kind,
                 WikiIndex.is_stub,
                 WikiIndex.wikilinks_out_jsonb,
-                func.ts_rank(
-                    WikiIndex.index_tsv,
-                    func.plainto_tsquery("english", query),
-                ).label("rank"),
+                func.ts_rank(WikiIndex.index_tsv, or_tsquery(query)).label("rank"),
             )
             .where(
                 WikiIndex.project_id == project_id,
-                WikiIndex.index_tsv.op("@@")(func.plainto_tsquery("english", query)),
+                WikiIndex.index_tsv.op("@@")(or_tsquery(query)),
             )
             .order_by(text("rank DESC"))
             .limit(top_k)

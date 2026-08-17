@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID, uuid4
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from aleph_core.errors import GatewayUnavailable, ValidationFailed
 from aleph_core.schemas.model_profile import Capability
@@ -51,6 +51,23 @@ class ChatMessage(BaseModel):
     content: str
     name: str | None = None
     tool_call_id: str | None = None
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def _null_content_is_empty(cls, v: object) -> object:
+        """A completion with no content is empty, not invalid.
+
+        OpenAI-compatible servers send ``content: null`` for a choice that
+        produced no assistant text — a completion truncated by ``max_tokens``
+        mid-reasoning, or a turn that is purely tool calls. Both are normal, and
+        both would otherwise fail validation on a non-optional ``str`` and take
+        down the whole call rather than the turn.
+
+        Coercing to "" keeps the field non-optional for the many call sites that
+        treat content as text. Truncation stays detectable: it is carried by
+        ``finish_reason == "length"``, which is where that signal belongs.
+        """
+        return "" if v is None else v
 
 
 class ToolSchema(BaseModel):

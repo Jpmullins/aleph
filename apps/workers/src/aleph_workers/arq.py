@@ -2,27 +2,25 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, ClassVar
 
-import httpx
-import redis.asyncio as aioredis
-from arq import create_pool
 from arq.connections import RedisSettings
 
-from aleph_db.session import async_engine_for, async_sessionmaker_for
-from aleph_models.client import LiteLLMClient
-from aleph_models.pricing import get_default_pricing
-from aleph_observability import (
-    configure_logging,
-    init_langfuse,
-    init_otel,
-    instrument_httpx,
-    instrument_sqlalchemy,
-    shutdown_langfuse,
-    shutdown_otel,
+from aleph_kernel import Context, EffectScope, Kernel
+from aleph_kernel.manifest import load_manifest, mount_manifest
+from aleph_runtime.capabilities import (
+    ARQ_POOL,
+    ASSET_STORE,
+    CODE_RUNNER_POOL,
+    DB_ENGINE,
+    DB_SESSIONS,
+    HTTP_GATEWAY,
+    LITELLM,
+    REDIS,
+    SCHOLAR,
+    SETTINGS,
 )
-from aleph_rks.asset_store import create_asset_store
-from aleph_scholar import ScholarService
 from aleph_workers.jobs import (
     bootstrap_project_job,
     builder_job,
@@ -41,80 +39,65 @@ from aleph_workers.jobs import (
 )
 from aleph_workers.settings import get_worker_settings
 
+#: Ships beside the worker, not in the working directory: what a process boots
+#: must not depend on where it was started from.
+BOOT_MANIFEST = Path(__file__).resolve().parents[2] / "aleph.toml"
+
 
 async def _startup(ctx: dict[str, Any]) -> None:
-    s = get_worker_settings()
-    configure_logging(environment=s.aleph_env)
-    init_otel(
-        service_name=s.service_name,
-        service_version=s.service_version,
-        environment=s.aleph_env,
-        profile=s.aleph_default_model_profile,
-        otlp_endpoint=s.otel_exporter_otlp_endpoint,
+    """Boot the worker's capabilities from its manifest.
+
+    Previously this hand-constructed nine singletons and `_shutdown` closed them
+    in a bare await chain — so one raising `aclose()` stranded every close after
+    it, leaking the engine pool and both job buses. The API had the identical
+    bug in its own copy of this code, which is what made it worth moving the
+    factories into `aleph-runtime`: fixed twice, or not at all.
+
+    The worker mounts a different set than the API. It has no HTTP surface and
+    no realtime listener; it has the two job buses, which the API does not.
+    """
+    settings = get_worker_settings()
+    kernel = Kernel()
+    mount_manifest(kernel, load_manifest(BOOT_MANIFEST), settings=settings)
+    await kernel.boot()
+
+    reader = Context(
+        owner="aleph-workers",
+        requires=frozenset(
+            {
+                SETTINGS,
+                DB_ENGINE,
+                DB_SESSIONS,
+                HTTP_GATEWAY,
+                REDIS,
+                LITELLM,
+                ASSET_STORE,
+                SCHOLAR,
+                ARQ_POOL,
+                CODE_RUNNER_POOL,
+            }
+        ),
+        store=kernel.store,
+        scope=EffectScope("aleph-workers"),
     )
-    init_langfuse(
-        host=s.langfuse_host,
-        public_key=s.langfuse_public_key,
-        secret_key=s.langfuse_secret_key,
-    )
-    engine = async_engine_for(s.database_url)
-    instrument_sqlalchemy(engine)
-    maker = async_sessionmaker_for(engine)
-    instrument_httpx()
-    gateway_http = httpx.AsyncClient()
-    redis = aioredis.from_url(s.redis_url, decode_responses=False)
-    # The plain Redis client above is used by LiteLLMClient for idempotency
-    # caching. Job-to-job enqueue (normalize → chunk → wiki) needs an
-    # ArqRedis pool, which only `arq.create_pool` returns.
-    redis_pool = await create_pool(RedisSettings.from_dsn(s.redis_url))
-    # Dedicated pool for dispatching code_runner jobs on the isolated code-job
-    # Redis (the sandbox shares that bus; it must never reach the platform
-    # Redis above, which carries tokens + privileged queues). WP-4c §6.
-    code_runner_pool = await create_pool(RedisSettings.from_dsn(s.code_runner_redis_url))
-    litellm = LiteLLMClient(
-        base_url=s.litellm_base_url,
-        api_key=s.insights_litellm_api_key,
-        http_client=gateway_http,
-        pricing=get_default_pricing(),
-        session_maker=maker,
-        redis_client=redis,
-    )
-    asset_store = create_asset_store(
-        backend=s.aleph_asset_backend,
-        root=s.aleph_asset_root,
-        endpoint=s.aleph_s3_endpoint,
-        access_key=s.aleph_s3_access_key,
-        secret_key=s.aleph_s3_secret_key,
-        bucket=s.aleph_s3_bucket,
-        secure=s.aleph_s3_secure,
-    )
-    # Scholar (WP-2): DOI verification for the MechanicalReviewer. The
-    # settings key is being added by a parallel work package — fall back to
-    # the spec default until it lands.
-    scholar_mailto: str = getattr(s, "aleph_scholar_mailto", "dev@aleph.local")
-    scholar = ScholarService(mailto=scholar_mailto)
-    ctx["settings"] = s
-    ctx["scholar"] = scholar
-    ctx["db_engine"] = engine
-    ctx["session_maker"] = maker
-    ctx["litellm_client"] = litellm
-    ctx["gateway_http"] = gateway_http
-    ctx["redis"] = redis
-    ctx["redis_pool"] = redis_pool
-    ctx["code_runner_pool"] = code_runner_pool
-    ctx["asset_store"] = asset_store
-    ctx["agent_token_secret"] = s.aleph_agent_token_secret
+
+    ctx["kernel"] = kernel
+    ctx["settings"] = settings
+    ctx["scholar"] = reader.get(SCHOLAR)
+    ctx["db_engine"] = reader.get(DB_ENGINE)
+    ctx["session_maker"] = reader.get(DB_SESSIONS)
+    ctx["litellm_client"] = reader.get(LITELLM)
+    ctx["gateway_http"] = reader.get(HTTP_GATEWAY)
+    ctx["redis"] = reader.get(REDIS)
+    ctx["redis_pool"] = reader.get(ARQ_POOL)
+    ctx["code_runner_pool"] = reader.get(CODE_RUNNER_POOL)
+    ctx["asset_store"] = reader.get(ASSET_STORE)
+    ctx["agent_token_secret"] = settings.aleph_agent_token_secret
 
 
 async def _shutdown(ctx: dict[str, Any]) -> None:
-    await ctx["scholar"].http.aclose()
-    await ctx["gateway_http"].aclose()
-    await ctx["redis"].aclose()
-    await ctx["redis_pool"].aclose()
-    await ctx["code_runner_pool"].aclose()
-    await ctx["db_engine"].dispose()
-    shutdown_langfuse()
-    shutdown_otel()
+    """Dependents before providers, every inverse runs, failures aggregate."""
+    await ctx["kernel"].shutdown()
 
 
 def _redis_from_url(url: str) -> RedisSettings:

@@ -1,0 +1,47 @@
+literature-review
+=================
+
+`SKILL.md` in this directory is ported from the **claude-science** distribution's
+`literature-review` skill, used under the Apache License 2.0 as declared in that
+skill's own front matter (`license: Apache-2.0`).
+
+    Copyright the Claude Science authors.
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+        http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+
+Modifications
+-------------
+
+`SKILL.md` — instructions unchanged except for two edits, both recorded here
+because a skill's prose is the part a model acts on:
+
+1. An "Aleph binding" note added after the front matter, recording that the
+   helpers come from `kernel.py` here and take a `ScholarService` as their
+   first argument.
+2. One sentence in "Grounding: retrieve first, then write" referred to
+   `search_skills({prefix:"mcp-"})`, a claude-science host tool Aleph does not
+   have. Replaced with Aleph's equivalent — the project's allowed connectors,
+   bound by the research loop. The skill's probe caught this: it refuses to
+   activate a skill whose instructions name a helper that does not exist,
+   which is otherwise invisible until a model tries to follow them.
+
+`kernel.py` — NOT ported. Rewritten as thin adapters over `aleph-scholar`,
+which already implements DOI verification, Crossref lookup, OpenAlex search,
+bidirectional citation expansion and the LLM-free style pass, with a
+polite-pool throttle and a retry transport. Shipping the upstream
+implementation alongside would have given the skill a second, worse copy of the
+thing that package exists for. The function NAMES are kept so the instructions
+remain accurate.
+
+Note: the upstream `kernel.py` passes `aleph_kernel.ast_gate` unmodified, which
+is independent confirmation that the gate is calibrated to the real
+definition-only discipline rather than to a guess at it.

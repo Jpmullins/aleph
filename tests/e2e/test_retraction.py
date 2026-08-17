@@ -111,7 +111,15 @@ async def test_retract_source_flags_dependent_claims_on_two_pages(
         session.add(bridge)
         await session.flush()
 
-        cite = CitationDraft(chunk_ids=[], source_page_id=bridge.id, citation_marker="[1]")
+        # source_id is what retraction walks. Seeding only source_page_id — the
+        # column no writer populates — is how this test passed while the
+        # feature returned nothing.
+        cite = CitationDraft(
+            chunk_ids=[],
+            source_id=source.id,
+            source_page_id=bridge.id,
+            citation_marker="[1]",
+        )
         a = await svc.commit_revision(
             principal=principal,
             ledger=ledger,
@@ -192,8 +200,9 @@ async def test_retract_source_flags_dependent_claims_on_two_pages(
                 .all()
             )
             assert claims, f"page {page_id} has no claims"
-            assert all(c.confidence == "retracted" for c in claims)
-            assert all(c.status == "contested" for c in claims)
+            # `status` carries the retraction; `confidence` stays derived from
+            # the evidence and has no "retracted" state for a recompute to write.
+            assert all(c.status == "retracted" for c in claims)
 
         retract_events = list(
             (

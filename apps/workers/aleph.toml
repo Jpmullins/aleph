@@ -1,0 +1,49 @@
+# The worker's boot manifest. Shares the capability factories in
+# `aleph-runtime` with the API and differs in what it mounts — the API does not
+# enqueue jobs, and the worker has no HTTP surface or realtime listener.
+
+[[capability]]
+name = "observability"
+factory = "aleph_runtime.capabilities:observability"
+protected = true
+
+[[capability]]
+name = "database"
+factory = "aleph_runtime.capabilities:database"
+protected = true
+
+[[capability]]
+name = "http"
+factory = "aleph_runtime.capabilities:http_clients"
+protected = true
+
+[[capability]]
+name = "redis"
+factory = "aleph_runtime.capabilities:redis_client"
+protected = true
+
+[[capability]]
+name = "models"
+factory = "aleph_runtime.capabilities:models"
+protected = true
+
+[[capability]]
+name = "assets"
+factory = "aleph_runtime.capabilities:assets"
+protected = true
+
+# The job buses. Protected: a worker that cannot enqueue is a worker that
+# silently drops the second half of every pipeline.
+[[capability]]
+name = "arq_pool"
+factory = "aleph_runtime.capabilities:arq_pool"
+protected = true
+
+[[capability]]
+name = "code_runner_pool"
+factory = "aleph_runtime.capabilities:code_runner_pool"
+protected = true
+
+[[capability]]
+name = "scholar"
+factory = "aleph_runtime.capabilities:scholar"

@@ -8,7 +8,7 @@ the manual EDITOR ``POST .../retract`` route, and the WP-2 reviewer
   and writes a ``source.retract`` ledger event;
 - walks the **blast-radius join** (the reviewer's ``_registry_sources``
   inverted) — ``Source → SourcePage → Citation → WikiClaim`` — and for every
-  dependent claim sets ``confidence="retracted"`` / ``status="contested"`` with a
+  dependent claim sets ``status="retracted"`` (confidence stays derived) with a
   per-claim ``wiki_claim.retract_flag`` ledger event;
 - emits a ``retracted_source`` ``ReviewFinding`` (severity critical) under a
   minimal ``kind="retraction"`` ``ReviewRun`` so it lands in Briefs — the same
@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from aleph_core.errors import NotFound
 from aleph_core.ids import uuid7
@@ -42,7 +42,7 @@ from aleph_core.time import utcnow
 from aleph_observability.tracing import current_trace_id
 from aleph_reviewer.review_service import add_finding, finalize_run, start_run
 from aleph_rks.models import Source
-from aleph_wiki.models import Citation, SourcePage, WikiClaim
+from aleph_wiki.models import Citation, WikiClaim
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -62,28 +62,134 @@ class RetractionResult:
     already_retracted: bool = False
 
 
-async def dependent_claims(session: AsyncSession, source_id: UUID) -> list[tuple[UUID, UUID]]:
-    """The queryable blast-radius: ``(page_id, claim_id)`` for every wiki claim
-    that cites ``source_id``.
+@dataclass(frozen=True)
+class RetractionImpact:
+    """What a retraction actually does to the belief graph.
 
-    Join (the reviewer's ``_registry_sources`` inverted):
-    ``Source → SourcePage(source_id) → Citation(source_page_id=SourcePage.id)
-    → WikiClaim(id=Citation.claim_id)``.
+    The distinction is the point. A claim whose only support was the retracted
+    source loses its footing; a claim that also rests on independent evidence
+    does not, and flagging both identically would train a reader to ignore the
+    flag. This is the "declined" branch — the belief survives, annotated that
+    one of its supports was withdrawn.
     """
-    stmt = (
-        select(WikiClaim.page_id, WikiClaim.id)
-        .join(Citation, Citation.claim_id == WikiClaim.id)
-        .join(SourcePage, SourcePage.id == Citation.source_page_id)
-        .where(SourcePage.source_id == source_id)
+
+    directly_cited: set[UUID]
+    derived: set[UUID]
+    unsupported: set[UUID]
+    weakened: set[UUID]
+
+    @property
+    def all_touched(self) -> set[UUID]:
+        return self.directly_cited | self.derived
+
+
+#: How far a retraction propagates along `derived_from`. Bounded because a
+#: cycle or a pathological chain must not turn one retraction into a full-table
+#: walk; the CTE also guards cycles explicitly.
+MAX_DERIVATION_DEPTH = 4
+
+
+async def retraction_impact(session: AsyncSession, source_id: UUID) -> RetractionImpact:
+    """Walk the belief graph from a retracted source.
+
+    Two hops, not one:
+
+    1. Claims citing the source directly (``citations.source_id``).
+    2. Claims transitively ``derived_from`` those, to a bounded depth. A
+       conclusion built on a claim built on a retracted paper is also affected,
+       and a citation lookup cannot see that.
+
+    Then the declined branch: of everything touched, only claims left with NO
+    surviving supporting citation are `unsupported`. The rest are `weakened`.
+
+    Replaces a join through ``Citation.source_page_id``, a column no production
+    write path ever populated — so retraction blast-radius returned zero rows
+    for the lifetime of the feature.
+    """
+    direct_rows = (
+        (
+            await session.execute(
+                select(Citation.claim_id).where(Citation.source_id == source_id).distinct()
+            )
+        )
+        .scalars()
+        .all()
     )
-    out: list[tuple[UUID, UUID]] = []
-    seen: set[tuple[UUID, UUID]] = set()
-    for page_id, claim_id in (await session.execute(stmt)).all():
-        key = (page_id, claim_id)
-        if key not in seen:
-            seen.add(key)
-            out.append(key)
-    return out
+    directly_cited = set(direct_rows)
+
+    derived: set[UUID] = set()
+    if directly_cited:
+        # Recursive walk over derived_from, depth-capped and cycle-guarded by
+        # excluding anything already visited on the path.
+        walk = text(
+            """
+            WITH RECURSIVE downstream(claim_id, depth, path) AS (
+                SELECT e.src_claim_id, 1, ARRAY[e.dst_claim_id, e.src_claim_id]
+                FROM claim_edges e
+                WHERE e.kind = 'derived_from'
+                  AND e.dst_claim_id = ANY(:roots)
+                UNION ALL
+                SELECT e.src_claim_id, d.depth + 1, d.path || e.src_claim_id
+                FROM claim_edges e
+                JOIN downstream d ON e.dst_claim_id = d.claim_id
+                WHERE e.kind = 'derived_from'
+                  AND d.depth < :max_depth
+                  AND NOT (e.src_claim_id = ANY(d.path))
+            )
+            SELECT DISTINCT claim_id FROM downstream
+            """
+        )
+        rows = await session.execute(
+            walk,
+            {"roots": list(directly_cited), "max_depth": MAX_DERIVATION_DEPTH},
+        )
+        derived = {row[0] for row in rows.all()} - directly_cited
+
+    touched = directly_cited | derived
+    if not touched:
+        return RetractionImpact(set(), set(), set(), set())
+
+    # The declined branch: does anything else still support it?
+    surviving = (
+        (
+            await session.execute(
+                select(Citation.claim_id)
+                .where(
+                    Citation.claim_id.in_(touched),
+                    Citation.stance == "supports",
+                    Citation.source_id.is_not(None),
+                    Citation.source_id != source_id,
+                )
+                .distinct()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    still_supported = set(surviving)
+
+    return RetractionImpact(
+        directly_cited=directly_cited,
+        derived=derived,
+        unsupported=touched - still_supported,
+        weakened=touched & still_supported,
+    )
+
+
+async def dependent_claims(session: AsyncSession, source_id: UUID) -> list[tuple[UUID, UUID]]:
+    """``(page_id, claim_id)`` for every claim a retraction touches.
+
+    Kept for existing callers; the structured answer is `retraction_impact`.
+    """
+    impact = await retraction_impact(session, source_id)
+    if not impact.all_touched:
+        return []
+    rows = (
+        await session.execute(
+            select(WikiClaim.page_id, WikiClaim.id).where(WikiClaim.id.in_(impact.all_touched))
+        )
+    ).all()
+    return [(page_id, claim_id) for page_id, claim_id in rows]
 
 
 async def retract_source(
@@ -145,8 +251,15 @@ async def retract_source(
             .all()
         )
         for claim in claims:
-            claim.confidence = "retracted"
-            claim.status = "contested"
+            # `status` carries the retraction; `confidence` does not. Confidence
+            # is DERIVED from the evidence by
+            # `aleph_hypotheses.confidence.next_confidence_from_evidence`, and
+            # "retracted" is not one of its states — writing it here would put a
+            # value in the column that the state machine can never produce, so
+            # the next recompute would silently erase it. A claim whose support
+            # was withdrawn is `retracted` in status; what it is now worth is
+            # whatever its remaining evidence says.
+            claim.status = "retracted"
             page_ids.add(claim.page_id)
             claim_ids.add(claim.id)
             await ledger.append(

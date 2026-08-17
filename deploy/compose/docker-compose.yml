@@ -345,7 +345,45 @@ services:
       postgres:
         condition: service_healthy
 
+  # Local model gateway — opt-in via `docker compose --profile local-llm up -d`.
+  #
+  # Aleph's LiteLLMClient posts chat AND embeddings to one base_url. A bare vLLM
+  # serves chat only, so this fronts both: chat proxied to vLLM, embeddings
+  # served in-process by bge-m3 on CPU (the GPU belongs to the chat model).
+  #
+  # Runs on the vLLM image because it is the only local image with an aarch64
+  # torch build; the app itself adds no dependencies. `network_mode: host` is
+  # required because the upstream vLLM binds 127.0.0.1 on the host, which a
+  # bridged container cannot reach.
+  #
+  # Not started by default: a deployment pointed at a real gateway does not want
+  # it. Set LITELLM_BASE_URL=http://host.docker.internal:8010 to use it.
+  aleph-local-gateway:
+    profiles: ["local-llm"]
+    image: ${ALEPH_LOCAL_GATEWAY_IMAGE:-nvcr.io/nvidia/vllm:26.05-py3}
+    restart: unless-stopped
+    network_mode: host
+    entrypoint: ["python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8010", "--app-dir", "/app"]
+    environment:
+      GATEWAY_UPSTREAM: ${ALEPH_LOCAL_GATEWAY_UPSTREAM:-http://127.0.0.1:8003}
+      GATEWAY_EMBED_MODEL: ${ALEPH_LOCAL_GATEWAY_EMBED_MODEL:-BAAI/bge-m3}
+      HF_HUB_OFFLINE: "1"
+    volumes:
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface:ro
+      - ../local-gateway:/app:ro
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8010/health',timeout=5)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+
   aleph-api:
+    # The LLM gateway runs on the host (local vLLM + local embedder), so
+    # these containers need a route to it. Linux has no implicit
+    # host.docker.internal; host-gateway supplies one.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     build:
       context: ../..
       dockerfile: apps/api/Dockerfile
@@ -375,6 +413,7 @@ services:
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      ALEPH_CORS_ORIGINS: ${ALEPH_CORS_ORIGINS:-http://localhost:5173}
       LITELLM_BASE_URL: ${LITELLM_BASE_URL}
       INSIGHTS_LITELLM_API_KEY: ${INSIGHTS_LITELLM_API_KEY}
       ALEPH_AUTH_MODE: ${ALEPH_AUTH_MODE}
@@ -395,9 +434,14 @@ services:
       aleph-migrate:
         condition: service_completed_successfully
     ports:
-      - "127.0.0.1:8000:8000"
+      - "${ALEPH_BIND_HOST:-127.0.0.1}:8000:8000"
 
   aleph-workers:
+    # The LLM gateway runs on the host (local vLLM + local embedder), so
+    # these containers need a route to it. Linux has no implicit
+    # host.docker.internal; host-gateway supplies one.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     build:
       context: ../..
       dockerfile: apps/workers/Dockerfile
@@ -462,15 +506,15 @@ services:
     mem_limit: 2.5g
     memswap_limit: 2.5g
     environment:
-      VITE_API_BASE_URL: http://localhost:8000
+      VITE_API_BASE_URL: http://${ALEPH_PUBLIC_HOST:-localhost}:8000
       # Browser → Node CopilotRuntime (published on the host at :4000).
-      VITE_COPILOT_RUNTIME_URL: http://localhost:4000/api/copilotkit
+      VITE_COPILOT_RUNTIME_URL: http://${ALEPH_PUBLIC_HOST:-localhost}:4000/api/copilotkit
       VITE_AUTH_MODE: ${VITE_AUTH_MODE:-local}
       VITE_AUTH_ISSUER: ${ALEPH_AUTH_ISSUER:-}
       VITE_AUTH_CLIENT_ID: ${ALEPH_AUTH_CLIENT_ID:-aleph-web}
       VITE_AUTH_AUDIENCE: ${ALEPH_AUTH_AUDIENCE:-aleph}
     ports:
-      - "127.0.0.1:5173:5173"
+      - "${ALEPH_BIND_HOST:-127.0.0.1}:5173:5173"
     depends_on:
       - aleph-api
 
@@ -488,7 +532,7 @@ services:
       COPILOT_BASE_PATH: /api/copilotkit
       ALEPH_AGENT_URL: http://aleph-api:8000/copilotkit/agent/assistant
     ports:
-      - "127.0.0.1:4000:4000"
+      - "${ALEPH_BIND_HOST:-127.0.0.1}:4000:4000"
     depends_on:
       - aleph-api
 

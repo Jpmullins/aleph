@@ -87,10 +87,18 @@ def test_subagent_model_is_cost_tagged(settings: Settings, name: str) -> None:
 
 
 def test_subagent_model_points_at_gateway(settings: Settings) -> None:
-    # Rule #2: agent LLM traffic must route through the Insights gateway.
+    # Rule #2: agent LLM traffic must route through the configured gateway.
+    #
+    # The base must be the gateway *plus* `/v1`: openai-python appends only
+    # `/chat/completions`, whereas `LiteLLMClient` appends `/v1/chat/completions`
+    # to the same setting. Asserting raw equality here is what let the missing
+    # `/v1` ship — every agent turn 404'd against a strict OpenAI-compatible
+    # server while this test stayed green.
     sub = _builders()["retriever"](settings=settings)
     model: ChatOpenAI = sub["model"]
-    assert str(model.openai_api_base) == settings.litellm_base_url
+    base = str(model.openai_api_base)
+    assert base.startswith(settings.litellm_base_url.rstrip("/"))
+    assert base.rstrip("/").endswith("/v1")
 
 
 def test_all_six_subagent_names_are_distinct() -> None:

@@ -6,6 +6,8 @@ Compose-time entrypoint:
 
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -56,9 +58,21 @@ def create_app() -> FastAPI:
 
     # CORS — local dev is permissive; production env should override via the
     # ingress, not here.
+    #
+    # Configurable because the origin is a property of where the browser loaded
+    # the app from, not of the API. Serving the UI on a LAN or tailnet address
+    # while this list said "localhost" blocked every request from the page it
+    # was serving, with a CORS error that names the symptom and not the cause.
+    # Comma-separated; `allow_credentials` forbids "*", so an explicit list is
+    # the only correct answer here.
+    origins = [
+        o.strip()
+        for o in os.environ.get("ALEPH_CORS_ORIGINS", "http://localhost:5173").split(",")
+        if o.strip()
+    ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173"],
+        allow_origins=origins,
         allow_methods=["*"],
         allow_headers=["*"],
         allow_credentials=True,
