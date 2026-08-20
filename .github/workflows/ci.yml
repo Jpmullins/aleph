@@ -57,6 +57,14 @@ jobs:
       - name: LangGraph state-key sweep
         run: ./scripts/check-graph-state-keys.sh
 
+      # Two modules each declared `ALEPH_V09_CATALOG_ID = "aleph://v1"` and each
+      # built its own catalog under that one id, disagreeing about whether the
+      # basic-catalog functions were included. A surface binding `formatDate`
+      # rendered in a pane and threw in chat — same id, two behaviours, no build
+      # error. Asserts one declaration, one constructor, functions still passed.
+      - name: One A2UI catalog, one identity
+        run: ./scripts/check-single-catalog.sh
+
   python-unit:
     name: unit tests
     runs-on: ubuntu-latest

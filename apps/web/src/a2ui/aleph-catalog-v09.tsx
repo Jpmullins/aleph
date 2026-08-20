@@ -62,8 +62,8 @@
  * `z3.array(z3.object({...}))` so it passes through verbatim as a literal.
  */
 import { z as z3 } from "zod3";
-import { createComponentImplementation } from "@a2ui/react/v0_9";
-import { CommonSchemas } from "@a2ui/web_core/v0_9";
+import { basicCatalog, createComponentImplementation } from "@a2ui/react/v0_9";
+import { Catalog, CommonSchemas } from "@a2ui/web_core/v0_9";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { useSurface } from "./surface-context";
@@ -523,9 +523,8 @@ export const GroundingSurfaceImpl = createComponentImplementation(
 );
 
 /**
- * Every Aleph domain impl (13 cards + 5 surfaces). The shared catalog
- * (`A2UISurfaceView.buildAlephCatalog`) merges these with the basic-catalog
- * primitives.
+ * Every Aleph domain impl (13 cards + 5 surfaces). `buildAlephCatalog` below
+ * merges these with the basic-catalog primitives.
  */
 export const ALEPH_CARD_IMPLS = [
   // cards
@@ -553,3 +552,38 @@ export const ALEPH_CARD_IMPLS = [
   BriefsSurfaceImpl,
   GroundingSurfaceImpl,
 ];
+
+/**
+ * The catalog id the backend's `createSurface.catalogId` references.
+ *
+ * ONE declaration, deliberately. This constant and `buildAlephCatalog` used to
+ * exist twice — once in `A2UISurfaceView.tsx` (functions: `[]`) and once in
+ * `SurfaceStreamProvider.tsx` (functions: all 25 basic ones) — under the *same*
+ * id. A surface using `formatDate`, `equals` or `openUrl` therefore rendered in
+ * a pane and threw `Function not found in catalog 'aleph://v1'` in chat, because
+ * `lib/copilot.tsx` built the chat renderer from the function-less copy. Two
+ * catalogs claiming one identity is the same defect class this repo already
+ * burned a work package on with three hand-maintained catalog copies.
+ *
+ * `scripts/check-single-catalog.sh` fails the build if a second declaration or
+ * a second `new Catalog(` reappears anywhere under `apps/web/src`.
+ */
+export const ALEPH_V09_CATALOG_ID = "aleph://v1";
+
+/**
+ * The one catalog: every Aleph domain impl, every basic-catalog primitive, and
+ * every basic-catalog *function* — the last of which is the part that was
+ * missing in chat. Pure config with no per-surface state, so callers are free to
+ * `useMemo` it and hand it to as many throwaway processors as they like.
+ */
+export function buildAlephCatalog() {
+  return new Catalog(
+    ALEPH_V09_CATALOG_ID,
+    [...ALEPH_CARD_IMPLS, ...basicCatalog.components.values()],
+    [...basicCatalog.functions.values()],
+  );
+}
+
+/** The concrete component-api type the shared catalog carries (React impls). */
+export type AlephComponentApi =
+  ReturnType<typeof buildAlephCatalog> extends Catalog<infer T> ? T : never;

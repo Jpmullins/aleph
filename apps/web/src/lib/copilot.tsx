@@ -24,7 +24,7 @@ import {
 } from "@copilotkit/react-core/v2";
 import type { ReactNode } from "react";
 
-import { buildAlephCatalog } from "@/a2ui/A2UISurfaceView";
+import { buildAlephCatalog } from "@/a2ui/aleph-catalog-v09";
 
 const RUNTIME_URL =
   (import.meta.env.VITE_COPILOT_RUNTIME_URL as string | undefined) ??

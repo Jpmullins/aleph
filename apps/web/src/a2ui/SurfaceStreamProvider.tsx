@@ -15,8 +15,7 @@
  * `surfaceId` and `MessageProcessor` already holds a `surfacesMap`. One surface
  * per connection was a UI constraint imposed on a multi-surface protocol.
  */
-import { Catalog, MessageProcessor, type SurfaceModel } from "@a2ui/web_core/v0_9";
-import { basicCatalog } from "@a2ui/react/v0_9";
+import { MessageProcessor, type SurfaceModel } from "@a2ui/web_core/v0_9";
 import {
   createContext,
   useContext,
@@ -27,20 +26,10 @@ import {
   type ReactNode,
 } from "react";
 
-import { ALEPH_CARD_IMPLS } from "./aleph-catalog-v09";
+import { buildAlephCatalog, type AlephComponentApi } from "./aleph-catalog-v09";
 
-export const ALEPH_V09_CATALOG_ID = "aleph://v1";
 
-function buildCatalog() {
-  return new Catalog(
-    ALEPH_V09_CATALOG_ID,
-    [...ALEPH_CARD_IMPLS, ...basicCatalog.components.values()],
-    [...basicCatalog.functions.values()],
-  );
-}
-
-type AnyCatalog = ReturnType<typeof buildCatalog>;
-type AnySurface = AnyCatalog extends Catalog<infer T> ? SurfaceModel<T> : never;
+type AnySurface = SurfaceModel<AlephComponentApi>;
 
 interface StreamCtx {
   /** `surfaceId` → live surface model. */
@@ -70,7 +59,7 @@ export function SurfaceStreamProvider({
   panes: string[];
   children: ReactNode;
 }) {
-  const catalog = useMemo(() => buildCatalog(), []);
+  const catalog = useMemo(() => buildAlephCatalog(), []);
   const [surfaces, setSurfaces] = useState<Map<string, AnySurface>>(new Map());
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);

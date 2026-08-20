@@ -9,14 +9,11 @@
  * the right panel and (later) Live chat consume one code path.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { MessageProcessor, Catalog, SurfaceModel } from "@a2ui/web_core/v0_9";
-import { A2uiSurface, basicCatalog } from "@a2ui/react/v0_9";
+import { MessageProcessor, SurfaceModel } from "@a2ui/web_core/v0_9";
+import { A2uiSurface } from "@a2ui/react/v0_9";
 
-import { ALEPH_CARD_IMPLS } from "./aleph-catalog-v09";
+import { buildAlephCatalog, type AlephComponentApi } from "./aleph-catalog-v09";
 import { SurfaceProvider } from "./surface-context";
-
-/** Catalog id the backend's `createSurface.catalogId` references. */
-export const ALEPH_V09_CATALOG_ID = "aleph://v1";
 
 /**
  * Read the monotonic sequence stamped on every surface SSE message (WP-4). The
@@ -45,25 +42,6 @@ function withConnectionId(streamUrl: string, cid: string): string {
   }
 }
 
-/**
- * One shared catalog: ALL of Aleph's domain impls (13 cards + 5 surfaces, from
- * `ALEPH_CARD_IMPLS`) + every basic-catalog primitive (Column/Row/Text/...) so
- * agents/builders can compose layout around the cards.
- *
- * Built once per mount via `useMemo`. The catalog is pure config (no per-surface
- * state), so it's safe to reuse across the throwaway processors below.
- */
-export function buildAlephCatalog() {
-  return new Catalog(
-    ALEPH_V09_CATALOG_ID,
-    [...ALEPH_CARD_IMPLS, ...basicCatalog.components.values()],
-    [],
-  );
-}
-
-/** The concrete component-api type the shared catalog carries (React impls). */
-type AlephComponentApi =
-  ReturnType<typeof buildAlephCatalog> extends Catalog<infer T> ? T : never;
 type AlephSurface = SurfaceModel<AlephComponentApi>;
 
 interface Props {
