@@ -1,3 +1,9 @@
+# OpenTelemetry collector — only runs under `--profile tracing`.
+#
+# Receives OTLP from the API and the workers and forwards spans to Langfuse's
+# OTLP endpoint. Keeping a collector in the middle (rather than exporting from
+# the app directly) means swapping the tracing backend is a change to this file
+# and nothing else.
 receivers:
   otlp:
     protocols:
@@ -7,42 +13,34 @@ receivers:
         endpoint: 0.0.0.0:4318
 
 processors:
+  # Bound memory before the collector becomes the reason the host falls over.
+  memory_limiter:
+    check_interval: 2s
+    limit_mib: 384
+    spike_limit_mib: 96
   batch:
-    timeout: 1s
-    send_batch_size: 256
-  resource:
-    attributes:
-      - key: deployment.environment
-        value: local
-        action: insert
+    timeout: 5s
+    send_batch_size: 512
 
 exporters:
-  # Langfuse v3 ingests OTEL spans natively at /api/public/otel. This is the
-  # live trace path: app spans → this collector → Langfuse. LANGFUSE_AUTH is
-  # base64(public_key:secret_key), precomputed in .env.
-  # (otelcol warns this alias is deprecated in favor of `otlp_http`, but that
-  # type name isn't wired in the pinned contrib build — `otlphttp` is correct.)
   otlphttp/langfuse:
-    endpoint: ${env:LANGFUSE_HOST}/api/public/otel
+    endpoint: http://langfuse:3000/api/public/otel
     headers:
-      Authorization: "Basic ${env:LANGFUSE_AUTH}"
-    encoding: proto
-  # Mirror to stdout for local debugging.
+      # Langfuse authenticates OTLP with the same project keys the SDK uses.
+      Authorization: "Basic ${env:LANGFUSE_OTEL_BASIC_AUTH}"
+  # Always on: if Langfuse is unreachable, traces are still visible in
+  # `docker compose logs otel-collector` instead of vanishing silently.
   debug:
     verbosity: basic
-    sampling_initial: 5
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
 
 service:
+  extensions: [health_check]
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [batch, resource]
+      processors: [memory_limiter, batch]
       exporters: [otlphttp/langfuse, debug]
-    metrics:
-      receivers: [otlp]
-      processors: [batch, resource]
-      exporters: [debug]
-    logs:
-      receivers: [otlp]
-      processors: [batch, resource]
-      exporters: [debug]

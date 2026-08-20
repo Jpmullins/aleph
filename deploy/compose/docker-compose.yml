@@ -1,557 +1,326 @@
-# Local Aleph stack. All services bind to localhost.
-# Secrets via .env (copy .env.example to .env first).
+# Aleph — local stack.
 #
-# Every service carries mem_limit + an equal memswap_limit (= no swap for the
-# container): a runaway service gets OOM-killed inside its cgroup and
-# restarted by its restart policy, instead of paging the whole host to death
-# (which is what an unthrottled bootstrap research stampede did on
-# 2026-06-11). Caps total ~9.5g on a 16g host, leaving headroom for the OS and
-# host-side Playwright browsers; normal idle usage is far below the caps.
+#   cp deploy/compose/.env.example deploy/compose/.env   # then set your model endpoint
+#   docker compose -f deploy/compose/docker-compose.yml up -d --wait
+#
+# `--wait` is meaningful here: every service declares a readiness healthcheck,
+# so the command returns when the stack can actually serve, not when the
+# processes have started.
+#
+# There is no `version:` key. It has been obsolete since Compose v2 and current
+# Docker warns about it.
+#
+# WHAT THIS DOES NOT DO: serve models. Aleph connects out to whatever
+# OpenAI-compatible endpoint you point it at — see §1 of .env.example. Nothing
+# in this file starts an inference server, and nothing should.
 
-services:
+name: aleph
+
+# --- shared fragments --------------------------------------------------------
+
+# Reaching the operator's model endpoint. `host.docker.internal` resolves on
+# macOS and Windows natively; `host-gateway` is what makes the identical string
+# work on Linux, so one .env line is correct on every machine.
+x-model-access: &model-access
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+x-app-env: &app-env
+  env_file: [.env]
+  environment:
+    DATABASE_URL: postgresql+asyncpg://aleph:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/aleph
+    REDIS_URL: redis://redis:6379/0
+
+x-depends-on-data: &depends-on-data
   postgres:
-    image: pgvector/pgvector:0.8.2-pg18
-    restart: unless-stopped
-    mem_limit: 1.5g
-    memswap_limit: 1.5g
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    ports:
-      - "127.0.0.1:5432:5432"
-    volumes:
-      # PG18+ wants the mount at /var/lib/postgresql (parent of the data
-      # dir) so it can manage major-version-specific subdirectories.
-      - postgres-data:/var/lib/postgresql
-      # First-init bootstrap (fresh volume / `down -v` only): create the aux
-      # langfuse DB before the TCP port / healthcheck open. See
-      # postgres-initdb.sh.
-      - ./postgres-initdb.sh:/docker-entrypoint-initdb.d/00-aleph-aux.sh:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 2s
-      timeout: 3s
-      retries: 30
-
-  # Opt-in: the default asset backend is the local filesystem (fs). Boot the
-  # s3 profile (`docker compose --profile s3 up -d`) only when testing the s3
-  # asset backend: ALEPH_ASSET_BACKEND=s3 + the ALEPH_S3_* keys in .env.
-  minio:
-    profiles: ["s3"]
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
-    restart: unless-stopped
-    mem_limit: 512m
-    memswap_limit: 512m
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
-    ports:
-      - "127.0.0.1:9000:9000"
-      - "127.0.0.1:9001:9001"
-    volumes:
-      - minio-data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-
-  # One-shot: create the bucket Aleph writes rendered assets / uploads to,
-  # then exit. Reuses the minio image (it ships `mc`) so there's no extra
-  # version to track. Idempotent via `mc mb --ignore-existing`.
-  minio-init:
-    profiles: ["s3"]
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
-    restart: "no"
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - >
-        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" &&
-        mc mb --ignore-existing "local/$${ALEPH_S3_BUCKET}"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
-      ALEPH_S3_BUCKET: ${ALEPH_S3_BUCKET:-}
-    depends_on:
-      minio:
-        condition: service_healthy
-
+    condition: service_healthy
   redis:
-    image: redis:8.8-alpine
-    restart: unless-stopped
-    mem_limit: 256m
-    memswap_limit: 256m
-    ports:
-      - "127.0.0.1:6379:6379"
-    volumes:
-      - redis-data:/data
-    # The platform Redis carries agent tokens (as job args), privileged job
-    # queues, idempotency keys, and the LISTEN/NOTIFY-backed streams. It is
-    # NOT on code-runner-net — the sandbox must never reach this bus. Code
-    # jobs use the dedicated `code-runner-redis` below.
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 2s
-      timeout: 2s
-      retries: 30
+    condition: service_healthy
 
-  # WP-4c — a DEDICATED Redis for the code_runner queue, reachable only on the
-  # isolated code-runner-net. It carries exactly one kind of payload:
-  # `run_code_job(code, output_kind, timeout_s)` — no tokens, no privileged
-  # jobs, no cross-project data. A sandbox escape reaching this bus can at
-  # worst disrupt the ephemeral code queue; the platform Redis is unreachable.
-  code-runner-redis:
-    image: redis:8.8-alpine
-    restart: unless-stopped
-    mem_limit: 128m
-    memswap_limit: 128m
-    # No persistence (ephemeral job bus) and no host port — internal only.
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
-    networks:
-      - code-runner-net
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 2s
-      timeout: 2s
-      retries: 30
-
-  # WP-4c — the isolated sandbox that executes agent-written Python. Its ONLY
-  # network is `code-runner-net` (internal: true → no internet/NAT), on which
-  # the ONLY reachable service is the dedicated `code-runner-redis` — NOT the
-  # platform Redis, not Postgres, not aleph-api. It carries no secrets (no
-  # DATABASE_URL / ALEPH_S3_* / LITELLM_* / ALEPH_AGENT_TOKEN_SECRET), mounts no
-  # assets, drops ALL capabilities, runs a read-only rootfs with a small tmpfs
-  # scratch, and runs non-root. A full escape yields only CPU/mem inside these
-  # caps, the agent's own submitted code, and the ephemeral code-job bus.
-  #
-  # NB: the spec/Final-State text said `network_mode: none`; that is infeasible
-  # for an arq-queue worker (it must reach a Redis to pull jobs). The equivalent
-  # posture — no egress, no reachable service but a dedicated code-job Redis —
-  # is achieved with the internal network below. See the §6 amendment + the
-  # impl-log (WP-4c).
-  aleph-code-runner:
-    build:
-      context: ../..
-      dockerfile: apps/code-runner/Dockerfile
-    restart: unless-stopped
-    mem_limit: 1g
-    memswap_limit: 1g
-    pids_limit: 128
-    read_only: true
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    tmpfs:
-      - /scratch:rw,size=256m,nosuid,nodev
-    environment:
-      REDIS_URL: redis://code-runner-redis:6379/0
-    networks:
-      - code-runner-net
-    depends_on:
-      code-runner-redis:
-        condition: service_healthy
-
-  # ── Langfuse v3 stack ──────────────────────────────────────────────────
-  # v3 splits into web + async worker and adds hard deps on ClickHouse (OLAP
-  # trace store), Redis (ingestion queue), and an S3-compatible blob store.
-  # This is what makes traces actually land: v3 ingests OTEL natively, so the
-  # otel-collector below forwards spans to `/api/public/otel`. (v2 had no OTLP
-  # endpoint — every span was dropped.) The transactional Postgres data still
-  # lives in the aux `langfuse` DB created by postgres-initdb.sh; ClickHouse
-  # holds the traces/observations/scores. All Langfuse infra is isolated from
-  # the platform's own Redis/MinIO so observability never shares the privileged
-  # agent-token bus or the (opt-in) asset bucket.
-  clickhouse:
-    image: clickhouse/clickhouse-server:24.12
-    restart: unless-stopped
-    mem_limit: 2g
-    memswap_limit: 2g
-    environment:
-      CLICKHOUSE_DB: default
-      CLICKHOUSE_USER: clickhouse
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
-    ulimits:
-      nofile:
-        soft: 262144
-        hard: 262144
-    volumes:
-      - clickhouse-data:/var/lib/clickhouse
-      - clickhouse-logs:/var/log/clickhouse-server
-    healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-
-  # Dedicated Redis for Langfuse's BullMQ ingestion queue — NOT the platform
-  # `redis` (which carries agent tokens + privileged job queues).
-  langfuse-redis:
-    image: redis:8.8-alpine
-    restart: unless-stopped
-    mem_limit: 256m
-    memswap_limit: 256m
-    command: ["redis-server", "--requirepass", "${LANGFUSE_REDIS_AUTH}", "--maxmemory-policy", "noeviction"]
-    environment:
-      LANGFUSE_REDIS_AUTH: ${LANGFUSE_REDIS_AUTH}
-    volumes:
-      - langfuse-redis-data:/data
-    healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a $${LANGFUSE_REDIS_AUTH} ping | grep -q PONG"]
-      interval: 3s
-      timeout: 3s
-      retries: 20
-
-  # Dedicated blob store for Langfuse event/media uploads. Separate from the
-  # opt-in asset MinIO (WP-1 keeps the asset backend fs-by-default); this one
-  # is always-on because v3 has no fs fallback for event uploads.
-  langfuse-minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
-    restart: unless-stopped
-    mem_limit: 512m
-    memswap_limit: 512m
-    command: server /data --console-address ":9091"
-    environment:
-      MINIO_ROOT_USER: langfuse
-      MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_ROOT_PASSWORD}
-    volumes:
-      - langfuse-minio-data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-
-  langfuse-minio-init:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
-    restart: "no"
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - >
-        mc alias set lf http://langfuse-minio:9000 langfuse "$${LANGFUSE_MINIO_ROOT_PASSWORD}" &&
-        mc mb --ignore-existing lf/langfuse
-    environment:
-      LANGFUSE_MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_ROOT_PASSWORD}
-    depends_on:
-      langfuse-minio:
-        condition: service_healthy
-
-  langfuse-worker:
-    image: langfuse/langfuse-worker:3
-    restart: unless-stopped
-    mem_limit: 1g
-    memswap_limit: 1g
-    environment: &langfuse-env
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/langfuse
-      SALT: ${LANGFUSE_SALT}
-      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY}
-      TELEMETRY_ENABLED: "false"
-      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
-      CLICKHOUSE_URL: http://clickhouse:8123
-      CLICKHOUSE_USER: clickhouse
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
-      CLICKHOUSE_CLUSTER_ENABLED: "false"
-      REDIS_CONNECTION_STRING: redis://default:${LANGFUSE_REDIS_AUTH}@langfuse-redis:6379/0
-      LANGFUSE_S3_EVENT_UPLOAD_ENABLED: "true"
-      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
-      LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1
-      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
-      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: langfuse
-      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_ROOT_PASSWORD}
-      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      clickhouse:
-        condition: service_healthy
-      langfuse-redis:
-        condition: service_healthy
-      langfuse-minio-init:
-        condition: service_completed_successfully
-
-  langfuse:
-    image: langfuse/langfuse:3
-    restart: unless-stopped
-    # v3 web is Next.js — Node auto-tunes its heap cap from the cgroup limit,
-    # so 1g OOM-crash-loops (~505MB heap FATAL). 2g gives it headroom.
-    mem_limit: 2g
-    memswap_limit: 2g
-    environment:
-      <<: *langfuse-env
-      NEXTAUTH_URL: http://localhost:3000
-      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET}
-      LANGFUSE_INIT_ORG_ID: aleph
-      LANGFUSE_INIT_PROJECT_ID: aleph-local
-      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
-      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      clickhouse:
-        condition: service_healthy
-      langfuse-redis:
-        condition: service_healthy
-      langfuse-minio-init:
-        condition: service_completed_successfully
-    healthcheck:
-      # Probe the container's own hostname, NOT localhost: the v3 web
-      # (Next.js standalone) binds to eth0 (its HOSTNAME resolves to the
-      # bridge IP), so loopback/127.0.0.1 probes are refused.
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://$$(hostname):3000/api/public/health || exit 1"]
-      interval: 5s
-      timeout: 4s
-      retries: 30
-    ports:
-      - "127.0.0.1:3000:3000"
-
-  otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.153.0
-    restart: unless-stopped
-    mem_limit: 256m
-    memswap_limit: 256m
-    command: ["--config=/etc/otel/config.yaml"]
-    volumes:
-      - ./otel-collector-config.yaml:/etc/otel/config.yaml:ro
-    environment:
-      LANGFUSE_HOST: http://langfuse:3000
-      # OTel collector forwards traces to Langfuse with Basic auth.
-      # LANGFUSE_AUTH = base64(public_key:secret_key); precomputed in .env.
-      LANGFUSE_AUTH: ${LANGFUSE_AUTH}
-    ports:
-      - "127.0.0.1:4317:4317"   # OTLP gRPC
-      - "127.0.0.1:4318:4318"   # OTLP HTTP
-    depends_on:
-      - langfuse
-
-  # One-shot: apply Alembic migrations to the main `aleph` database, then
-  # exit. aleph-api / aleph-workers gate on this completing so they never
-  # serve against an unmigrated schema — the `relation "users" does not exist`
-  # class of failure after a fresh volume / `down -v`. Idempotent: running
-  # `alembic upgrade head` is a no-op when already at head, so this also picks
-  # up new migrations on every `up`.
-  aleph-migrate:
-    build:
-      context: ../..
-      dockerfile: apps/api/Dockerfile
-    restart: "no"
-    mem_limit: 1g
-    memswap_limit: 1g
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-    command: ["sh", "-c", "cd apps/api && uv run alembic upgrade head"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  # Local model gateway — opt-in via `docker compose --profile local-llm up -d`.
-  #
-  # Aleph's LiteLLMClient posts chat AND embeddings to one base_url. A bare vLLM
-  # serves chat only, so this fronts both: chat proxied to vLLM, embeddings
-  # served in-process by bge-m3 on CPU (the GPU belongs to the chat model).
-  #
-  # Runs on the vLLM image because it is the only local image with an aarch64
-  # torch build; the app itself adds no dependencies. `network_mode: host` is
-  # required because the upstream vLLM binds 127.0.0.1 on the host, which a
-  # bridged container cannot reach.
-  #
-  # Not started by default: a deployment pointed at a real gateway does not want
-  # it. Set LITELLM_BASE_URL=http://host.docker.internal:8010 to use it.
-  aleph-local-gateway:
-    profiles: ["local-llm"]
-    image: ${ALEPH_LOCAL_GATEWAY_IMAGE:-nvcr.io/nvidia/vllm:26.05-py3}
-    restart: unless-stopped
-    network_mode: host
-    entrypoint: ["python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8010", "--app-dir", "/app"]
-    environment:
-      GATEWAY_UPSTREAM: ${ALEPH_LOCAL_GATEWAY_UPSTREAM:-http://127.0.0.1:8003}
-      GATEWAY_EMBED_MODEL: ${ALEPH_LOCAL_GATEWAY_EMBED_MODEL:-BAAI/bge-m3}
-      HF_HUB_OFFLINE: "1"
-    volumes:
-      - ${HOME}/.cache/huggingface:/root/.cache/huggingface:ro
-      - ../local-gateway:/app:ro
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8010/health',timeout=5)\""]
-      interval: 15s
-      timeout: 10s
-      retries: 20
-      start_period: 120s
-
-  aleph-api:
-    # The LLM gateway runs on the host (local vLLM + local embedder), so
-    # these containers need a route to it. Linux has no implicit
-    # host.docker.internal; host-gateway supplies one.
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    build:
-      context: ../..
-      dockerfile: apps/api/Dockerfile
-    restart: unless-stopped
-    # Run as the host's first user so files written to the data/assets bind
-    # mount stay owned by the developer (host-run integration tests write to
-    # the same directory). Override if your uid differs.
-    user: "${ALEPH_UID:-1000}:${ALEPH_GID:-1000}"
-    mem_limit: 1.5g
-    memswap_limit: 1.5g
-    environment:
-      ALEPH_ENV: ${ALEPH_ENV}
-      ALEPH_DEFAULT_MODEL_PROFILE: ${ALEPH_DEFAULT_MODEL_PROFILE}
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      # Asset storage: fs default; bytes on the shared bind mount below (the
-      # workers mount the same host dir, so normalize/chunk jobs read what
-      # the API wrote).
-      ALEPH_ASSET_BACKEND: ${ALEPH_ASSET_BACKEND:-fs}
-      ALEPH_ASSET_ROOT: /data/assets
-      # Only read when ALEPH_ASSET_BACKEND=s3 (see the s3 profile).
-      ALEPH_S3_ENDPOINT: ${ALEPH_S3_ENDPOINT:-}
-      ALEPH_S3_ACCESS_KEY: ${ALEPH_S3_ACCESS_KEY:-}
-      ALEPH_S3_SECRET_KEY: ${ALEPH_S3_SECRET_KEY:-}
-      ALEPH_S3_BUCKET: ${ALEPH_S3_BUCKET:-}
-      REDIS_URL: redis://redis:6379/0
-      LANGFUSE_HOST: http://langfuse:3000
-      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
-      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-      ALEPH_CORS_ORIGINS: ${ALEPH_CORS_ORIGINS:-http://localhost:5173}
-      LITELLM_BASE_URL: ${LITELLM_BASE_URL}
-      INSIGHTS_LITELLM_API_KEY: ${INSIGHTS_LITELLM_API_KEY}
-      ALEPH_AUTH_MODE: ${ALEPH_AUTH_MODE}
-      ALEPH_AUTH_ISSUER: ${ALEPH_AUTH_ISSUER:-}
-      ALEPH_AUTH_AUDIENCE: ${ALEPH_AUTH_AUDIENCE:-aleph}
-      ALEPH_AUTH_JWKS_URL: ${ALEPH_AUTH_JWKS_URL:-}
-      ALEPH_AGENT_TOKEN_SECRET: ${ALEPH_AGENT_TOKEN_SECRET}
-      # Scholar (WP-2)
-      ALEPH_SCHOLAR_MAILTO: ${ALEPH_SCHOLAR_MAILTO:-dev@aleph.local}
-      ALEPH_CONSENSUS_MONTHLY_SEARCH_CAP: ${ALEPH_CONSENSUS_MONTHLY_SEARCH_CAP:-200}
-    volumes:
-      - ../../data/assets:/data/assets
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      aleph-migrate:
-        condition: service_completed_successfully
-    ports:
-      - "${ALEPH_BIND_HOST:-127.0.0.1}:8000:8000"
-
-  aleph-workers:
-    # The LLM gateway runs on the host (local vLLM + local embedder), so
-    # these containers need a route to it. Linux has no implicit
-    # host.docker.internal; host-gateway supplies one.
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    build:
-      context: ../..
-      dockerfile: apps/workers/Dockerfile
-    restart: unless-stopped
-    # Same uid rationale as aleph-api: shared asset bind mount, one owner.
-    user: "${ALEPH_UID:-1000}:${ALEPH_GID:-1000}"
-    mem_limit: 2g
-    memswap_limit: 2g
-    environment:
-      # Lowered from the code default (10) for the 16g local host.
-      ARQ_MAX_JOBS: "4"
-      ALEPH_ENV: ${ALEPH_ENV}
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      REDIS_URL: redis://redis:6379/0
-      # Dispatch/await code_runner jobs on the isolated code-job Redis (the
-      # trusted worker dual-homes onto code-runner-net; the sandbox cannot
-      # reach the platform Redis above).
-      CODE_RUNNER_REDIS_URL: redis://code-runner-redis:6379/0
-      ALEPH_ASSET_BACKEND: ${ALEPH_ASSET_BACKEND:-fs}
-      ALEPH_ASSET_ROOT: /data/assets
-      # Only read when ALEPH_ASSET_BACKEND=s3 (see the s3 profile).
-      ALEPH_S3_ENDPOINT: ${ALEPH_S3_ENDPOINT:-}
-      ALEPH_S3_ACCESS_KEY: ${ALEPH_S3_ACCESS_KEY:-}
-      ALEPH_S3_SECRET_KEY: ${ALEPH_S3_SECRET_KEY:-}
-      ALEPH_S3_BUCKET: ${ALEPH_S3_BUCKET:-}
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-      LANGFUSE_HOST: http://langfuse:3000
-      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
-      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
-      LITELLM_BASE_URL: ${LITELLM_BASE_URL}
-      INSIGHTS_LITELLM_API_KEY: ${INSIGHTS_LITELLM_API_KEY}
-      ALEPH_API_INTERNAL_URL: http://aleph-api:8000
-      ALEPH_AGENT_TOKEN_SECRET: ${ALEPH_AGENT_TOKEN_SECRET}
-      # Scholar (WP-2; workers run the reviewer's doi_verification pass in WP-3)
-      ALEPH_SCHOLAR_MAILTO: ${ALEPH_SCHOLAR_MAILTO:-dev@aleph.local}
-      ALEPH_CONSENSUS_MONTHLY_SEARCH_CAP: ${ALEPH_CONSENSUS_MONTHLY_SEARCH_CAP:-200}
-    volumes:
-      - ../../data/assets:/data/assets
-    # The trusted worker reaches BOTH the platform network and the isolated
-    # code-runner-net (to dispatch/await code jobs on code-runner-redis).
-    networks:
-      - default
-      - code-runner-net
-    depends_on:
-      aleph-api:
-        condition: service_started
-      aleph-migrate:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-      code-runner-redis:
-        condition: service_healthy
-
-  aleph-web:
-    build:
-      context: ../..
-      dockerfile: apps/web/Dockerfile.dev
-    restart: unless-stopped
-    # Vite 8's dep pre-optimizer is memory-heavy; at 1.5g it gets OOM-killed
-    # (SIGKILL) mid-bundle on a cold start and never converges, leaving the dev
-    # server in a restart loop. 2.5g clears the optimize; idle usage stays low.
-    mem_limit: 2.5g
-    memswap_limit: 2.5g
-    environment:
-      VITE_API_BASE_URL: http://${ALEPH_PUBLIC_HOST:-localhost}:8000
-      # Browser → Node CopilotRuntime (published on the host at :4000).
-      VITE_COPILOT_RUNTIME_URL: http://${ALEPH_PUBLIC_HOST:-localhost}:4000/api/copilotkit
-      VITE_AUTH_MODE: ${VITE_AUTH_MODE:-local}
-      VITE_AUTH_ISSUER: ${ALEPH_AUTH_ISSUER:-}
-      VITE_AUTH_CLIENT_ID: ${ALEPH_AUTH_CLIENT_ID:-aleph-web}
-      VITE_AUTH_AUDIENCE: ${ALEPH_AUTH_AUDIENCE:-aleph}
-    ports:
-      - "${ALEPH_BIND_HOST:-127.0.0.1}:5173:5173"
-    depends_on:
-      - aleph-api
-
-  # Wave 2 — Node CopilotKit runtime. Bridges the React app to aleph-api's
-  # AG-UI endpoint; where A2UI tool injection lives.
-  aleph-copilot-runtime:
-    build:
-      context: ../..
-      dockerfile: apps/copilot-runtime/Dockerfile
-    restart: unless-stopped
-    mem_limit: 512m
-    memswap_limit: 512m
-    environment:
-      PORT: "4000"
-      COPILOT_BASE_PATH: /api/copilotkit
-      ALEPH_AGENT_URL: http://aleph-api:8000/copilotkit/agent/assistant
-    ports:
-      - "${ALEPH_BIND_HOST:-127.0.0.1}:4000:4000"
-    depends_on:
-      - aleph-api
+networks:
+  aleph:
+  # Agent-written code runs here. `internal` means no route off the host at
+  # all — the runner can reach the queue and nothing else, including the API,
+  # the model endpoint, and the internet.
+  runner:
+    internal: true
 
 volumes:
   postgres-data:
-  minio-data:
   redis-data:
+  assets:
   clickhouse-data:
-  clickhouse-logs:
-  langfuse-redis-data:
-  langfuse-minio-data:
+  minio-data:
 
-networks:
-  # Default bridge for the app services (implicitly used by everything that
-  # does not declare `networks:`).
-  default:
-  # Isolated network for the code-runner. `internal: true` removes the external
-  # route (no NAT to the internet); only containers attached to it can talk, and
-  # the only other member is Redis. This is how the sandbox reaches its job
-  # queue while having no path to the internet, Postgres, or aleph-api.
-  code-runner-net:
-    internal: true
+services:
+  # --- data ------------------------------------------------------------------
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    networks: [aleph]
+    environment:
+      POSTGRES_USER: aleph
+      POSTGRES_DB: aleph
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports: ["5432:5432"]
+    healthcheck:
+      # -U/-d because the default `pg_isready` probes the `postgres` role,
+      # which does not exist here and would report healthy against a database
+      # the app cannot use.
+      test: ["CMD-SHELL", "pg_isready -U aleph -d aleph"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+      start_interval: 1s
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    # Both networks: the queue is the one thing code-runner is allowed to see.
+    networks: [aleph, runner]
+    volumes:
+      - redis-data:/data
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+      start_interval: 1s
+
+  # --- schema ----------------------------------------------------------------
+
+  # One-shot. Every service that touches the database waits for this to exit 0,
+  # so no app ever runs against a half-migrated schema.
+  migrate:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    networks: [aleph]
+    <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    working_dir: /app/apps/api
+    command: ["/app/.venv/bin/alembic", "upgrade", "head"]
+    restart: "no"
+
+  # --- application -----------------------------------------------------------
+
+  api:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    networks: [aleph]
+    <<: [*app-env, *model-access]
+    depends_on:
+      <<: *depends-on-data
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - assets:/app/data/assets
+    ports: ["8000:8000"]
+    healthcheck:
+      # /readyz, not /healthz: it round-trips the database, the queue and the
+      # asset store. Liveness would report healthy while every request failed.
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/readyz', timeout=4).status==200 else 1)\""]
+      interval: 15s
+      timeout: 8s
+      retries: 10
+      start_period: 45s
+      start_interval: 2s
+    develop:
+      watch:
+        - action: sync+restart
+          path: ../../apps/api/src
+          target: /app/apps/api/src
+        - action: rebuild
+          path: ../../apps/api/pyproject.toml
+
+  workers:
+    build:
+      context: ../..
+      dockerfile: apps/workers/Dockerfile
+    networks: [aleph]
+    <<: [*app-env, *model-access]
+    depends_on:
+      <<: *depends-on-data
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - assets:/app/data/assets
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f aleph_workers.arq > /dev/null"]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 40s
+    develop:
+      watch:
+        - action: sync+restart
+          path: ../../apps/workers/src
+          target: /app/apps/workers/src
+
+  code-runner:
+    build:
+      context: ../..
+      dockerfile: apps/code-runner/Dockerfile
+    # `runner` ONLY. No aleph network, so agent-written code cannot reach the
+    # API, the database, the model endpoint or the internet — only the queue.
+    networks: [runner]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      CODE_RUNNER_REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    # Deliberately NOT given .env: this container must hold no credentials.
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    # mem_limit + memswap_limit set equal is the only way to say "no swap";
+    # `deploy.resources` cannot express it. Removing the swap cap previously let
+    # a runaway render take the host down.
+    mem_limit: 1g
+    memswap_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f aleph_code_runner.arq > /dev/null"]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  copilot-runtime:
+    build:
+      context: ../..
+      dockerfile: apps/copilot-runtime/Dockerfile
+    networks: [aleph]
+    environment:
+      AGENT_URL: http://api:8000/copilotkit/agent/assistant
+      PORT: "4000"
+    depends_on:
+      api:
+        condition: service_healthy
+    ports: ["4000:4000"]
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:4000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 6s
+      retries: 8
+      start_period: 25s
+
+  web:
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile.dev
+    networks: [aleph]
+    environment:
+      VITE_API_URL: ${ALEPH_SELF_URL:-http://localhost:8000}
+      VITE_RUNTIME_URL: http://localhost:4000
+      VITE_AUTH_MODE: ${ALEPH_AUTH_MODE:-local}
+    depends_on:
+      api:
+        condition: service_healthy
+    ports: ["5173:5173"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:5173/ || exit 1"]
+      interval: 15s
+      timeout: 6s
+      retries: 8
+      start_period: 25s
+    develop:
+      watch:
+        - action: sync
+          path: ../../apps/web/src
+          target: /app/apps/web/src
+        - action: rebuild
+          path: ../../apps/web/package.json
+
+  # --- tracing (opt-in: --profile tracing) -----------------------------------
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    profiles: [tracing]
+    networks: [aleph]
+    environment:
+      CLICKHOUSE_USER: langfuse
+      CLICKHOUSE_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      CLICKHOUSE_DB: langfuse
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    ulimits:
+      nofile: {soft: 262144, hard: 262144}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8123/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  langfuse:
+    image: langfuse/langfuse:3
+    profiles: [tracing]
+    networks: [aleph]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://aleph:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/langfuse
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: langfuse
+      CLICKHOUSE_PASSWORD: ${POSTGRES_PASSWORD}
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: ${ALEPH_AGENT_TOKEN_SECRET:?set ALEPH_AGENT_TOKEN_SECRET in .env}
+      SALT: ${ALEPH_AGENT_TOKEN_SECRET}
+      ENCRYPTION_KEY: ${ALEPH_AGENT_TOKEN_SECRET}
+    ports: ["3000:3000"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/public/health || exit 1"]
+      interval: 15s
+      timeout: 6s
+      retries: 12
+      start_period: 60s
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    profiles: [tracing]
+    networks: [aleph]
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel/config.yaml:ro
+    ports: ["4317:4317"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:13133/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+
+  # --- object store (opt-in: --profile s3) -----------------------------------
+
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    profiles: [s3]
+    networks: [aleph]
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${ALEPH_S3_ACCESS_KEY:-aleph}
+      MINIO_ROOT_PASSWORD: ${ALEPH_S3_SECRET_KEY:?set ALEPH_S3_SECRET_KEY in .env}
+    volumes:
+      - minio-data:/data
+    ports: ["9000:9000", "9001:9001"]
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s

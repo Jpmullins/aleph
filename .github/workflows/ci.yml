@@ -98,8 +98,13 @@ jobs:
           --health-cmd "redis-cli ping"
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
-      ALEPH_DATABASE_URL: postgresql+asyncpg://aleph:aleph@localhost:5432/aleph
-      ALEPH_REDIS_URL: redis://localhost:6379/0
+      # DATABASE_URL / REDIS_URL, not ALEPH_-prefixed: `alembic/env.py` reads
+      # `DATABASE_URL` and raises without it, and both settings models declare
+      # these fields unprefixed. The ALEPH_-prefixed spelling meant every step
+      # below failed before a single test was collected — this job had not run
+      # since it was introduced.
+      DATABASE_URL: postgresql+asyncpg://aleph:aleph@localhost:5432/aleph
+      REDIS_URL: redis://localhost:6379/0
       ALEPH_AUTH_MODE: local
     steps:
       - uses: actions/checkout@v5

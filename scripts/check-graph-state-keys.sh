@@ -16,6 +16,9 @@
 # actually registered via `add_node` against the declared channels. Static, so
 # it needs no database, no gateway, and no running graph.
 #
+# The analyzer is `scripts/_lib/graph_state_keys.py`, imported by this sweep and
+# by tests/unit/test_graph_state_keys.py — one implementation, two callers.
+#
 # CI-wired. Fails on: a node returning a key its graph does not declare.
 set -euo pipefail
 
@@ -26,13 +29,13 @@ uv run --quiet python - <<'PY'
 import pathlib
 import sys
 
-sys.path.insert(0, str(pathlib.Path("tests/unit").resolve()))
+sys.path.insert(0, str(pathlib.Path("scripts/_lib").resolve()))
 
-# The analyzer lives beside the behavioural tests that prove it models
-# LangGraph's real semantics (a node write AND an initial-state key are both
-# dropped when undeclared). Importing it keeps one implementation rather than a
-# second copy that can disagree with the tests.
-from test_graph_state_keys import _graph_modules, _violations  # noqa: E402
+# The analyzer lives in scripts/_lib beside this sweep; the behavioural tests
+# that prove it models LangGraph's real semantics import the same module. One
+# implementation, two callers — and the gate no longer depends on the test
+# suite existing, which is what broke it when tests/ was deleted.
+from graph_state_keys import _graph_modules, _violations  # noqa: E402
 
 modules = _graph_modules()
 if not modules:
