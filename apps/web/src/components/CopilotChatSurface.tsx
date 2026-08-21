@@ -26,7 +26,7 @@ import { z } from "zod";
 
 import { SurfaceProvider } from "@/a2ui/surface-context";
 import { api } from "@/lib/api";
-import { SURFACE_TABS, useWorkspaceUI } from "@/lib/workspace-ui";
+import { usePaneKinds, useWorkspaceUI } from "@/lib/workspace-ui";
 
 interface CardActionRow {
   id: string;
@@ -50,6 +50,8 @@ interface CardActionResult {
 }
 
 export function CopilotChatSurface({ projectId, threadId }: Props) {
+  // The agent is told what surfaces exist right now, not a compiled-in list.
+  const paneTitles = usePaneKinds(projectId).launchable.map((k) => k.title);
   const {
     activeSurface,
     setActiveSurface,
@@ -122,10 +124,12 @@ export function CopilotChatSurface({ projectId, threadId }: Props) {
     name: "focus_tab",
     description:
       "Switch the analyst's right-hand panel to one of the surface tabs: " +
-      `${SURFACE_TABS.join(", ")}. Call this when your answer is best explored ` +
+      `${paneTitles.join(", ")}. Call this when your answer is best explored ` +
       "in a specific panel (e.g. open Hypotheses to show the ACH matrix, or " +
       "Library to show ingested sources and built artifacts).",
-    parameters: z.object({ tab: z.enum(SURFACE_TABS) }),
+    // z.string(), not z.enum: the valid set is whatever is loaded, and a
+    // compiled-in enum would refuse a surface a plugin just added.
+    parameters: z.object({ tab: z.string() }),
     handler: async ({ tab }) => {
       await dispatchAction("focus_tab", { tab });
       setActiveSurface(tab);

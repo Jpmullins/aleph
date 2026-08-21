@@ -68,7 +68,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { useSurface } from "./surface-context";
 import { api } from "@/lib/api";
-import { isPaneKind, useWorkspaceUI } from "@/lib/workspace-ui";
+import { useWorkspaceUI } from "@/lib/workspace-ui";
 
 import { ApprovalCard as ApprovalCardView } from "./components/ApprovalCard";
 import { ArtifactCard as ArtifactCardView } from "./components/ArtifactCard";
@@ -143,7 +143,9 @@ function adapt(
         qc.invalidateQueries({ queryKey: ["hypotheses", projectId] });
         // `open` actions resolve to a workspace location — actually go there.
         const nav = out?.result?.navigate;
-        if (nav?.tab && isPaneKind(nav.tab)) {
+        // No client-side validation of the name: the server produced this
+        // navigate target and the server owns the set of surfaces.
+        if (nav?.tab) {
           if (nav.page_id) setOpenPageId(nav.page_id);
           setActiveSurface(nav.tab);
         }

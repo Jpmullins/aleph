@@ -12,17 +12,20 @@
  */
 import { AlephLogo } from "@/components/AlephLogo";
 import { Icons, type IconName } from "@/components/Icons";
-import { PANE_REGISTRY, SURFACE_TABS, useWorkspaceUI } from "@/lib/workspace-ui";
+import { usePaneKinds, useWorkspaceUI } from "@/lib/workspace-ui";
 
 // No icon map here any more: the registry carries each pane's icon, so adding a
 // pane is one entry rather than an entry plus a parallel table to forget.
 
 interface Props {
+  projectId: string;
   onBack: () => void;
   onOpenDrawer: (kind: "settings" | "logs" | "notifications" | "profile") => void;
 }
 
-export function Rail({ onBack, onOpenDrawer }: Props) {
+export function Rail({ projectId, onBack, onOpenDrawer }: Props) {
+  // Whatever is loaded — the rail no longer knows any surface name in advance.
+  const paneKinds = usePaneKinds(projectId);
   // The rail is a *launcher*, not a switcher: clicking opens a pane beside
   // what is already there rather than replacing it. That is the whole
   // difference between tabs and a workspace you can compare things in.
@@ -47,8 +50,10 @@ export function Rail({ onBack, onOpenDrawer }: Props) {
         <AlephLogo size={18} variant="mark" />
       </button>
 
-      {SURFACE_TABS.map((tab) => {
-        const Icon = Icons[(PANE_REGISTRY[tab].icon as IconName)];
+      {paneKinds.launchable.map((kind) => {
+        const tab = kind.title;
+        // An icon a plugin names but we do not ship must not throw.
+        const Icon = Icons[(kind.icon as IconName)] ?? Icons.notes;
         const open = panes.find((p) => p.kind === tab);
         const active = open?.id === focusedPaneId;
         return (

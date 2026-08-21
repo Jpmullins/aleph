@@ -17,15 +17,18 @@
  * Aleph's own.
  */
 import { Icons } from "@/components/Icons";
-import { SURFACE_TABS, useWorkspaceUI } from "@/lib/workspace-ui";
+import { usePaneKinds, useWorkspaceUI } from "@/lib/workspace-ui";
 
 export function ContextBar({
+  projectId,
   projectTitle,
   onUpload,
 }: {
+  projectId: string;
   projectTitle?: string;
   onUpload?: () => void;
 }) {
+  const paneKinds = usePaneKinds(projectId);
   const { activeSurface, setActiveSurface, openPageTitle, setOpenPageId, selection } =
     useWorkspaceUI();
 
@@ -60,8 +63,12 @@ export function ContextBar({
         type="button"
         data-testid="context-active-tab"
         onClick={() => {
-          const i = SURFACE_TABS.indexOf(activeSurface);
-          setActiveSurface(SURFACE_TABS[(i + 1) % SURFACE_TABS.length]);
+          // Cycle the surfaces that actually exist, in the order the server
+          // returned them — not a compiled-in list that may not match.
+          const tabs = paneKinds.launchable.map((k) => k.title);
+          if (tabs.length === 0) return;
+          const i = tabs.indexOf(activeSurface);
+          setActiveSurface(tabs[(i + 1) % tabs.length]);
         }}
         // Distinct from the surface tab of the same visible text. Without this
         // there are two buttons named e.g. "Wiki" that do different things —

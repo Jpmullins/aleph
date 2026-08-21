@@ -12,70 +12,78 @@
  * This is the frontend half of CopilotKit shared state — the agent's own
  * run state (phase, coverage, cited pages) flows the other way over AG-UI.
  */
+import { useQuery } from "@tanstack/react-query";
 import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 
+import { api } from "@/lib/api";
+
 /**
- * The pane registry — one source of truth for what can be opened.
+ * What surfaces exist — served by the API, not compiled in here.
  *
- * This replaces a five-element `SURFACE_TABS` constant that had drifted out of
- * agreement with the server: `routes/surfaces.py` accepted seven pane kinds
- * while the client type admitted five, so `artifacts` and `grounding` could be
- * streamed by the backend and had nowhere on the client to land.
- * `GroundingSurface` was the visible cost — a React impl, a catalog entry, a
- * registered component api, a server builder and a route branch, all complete,
- * and no code path able to open it. The Rail's own docstring says a rail was
- * chosen because "Aleph needs more surfaces than that", and then the ceiling
- * was reintroduced one file over.
+ * This was a hardcoded object listing Wiki, Library, Notes, Hypotheses, Briefs.
+ * Making it a registry instead of a union fixed the TYPE and left the CONTENTS
+ * exactly as wrong: those five are the research plugin suite, and a client that
+ * knows their names cannot render a workbench whose abilities arrive at runtime.
+ * Install something unrelated to papers and it had nowhere to appear; remove the
+ * research suite and the rail still advertised it.
  *
- * A constant cannot survive plugins. When a plugin brings a surface, it appends
- * an entry here at load time; nothing else in the UI needs to change, because
- * everything downstream reads the registry rather than a hardcoded union.
+ * `GET /v1/projects/{id}/panes` is now the source. The client renders whatever
+ * it is handed and knows none of the names in advance — which is why
+ * `SurfaceTab` is a plain string rather than a union. A static union over a set
+ * the server decides is a lie the compiler will happily tell you.
  *
- * `wire` is what the server parses (`_PANE_KINDS`), kept explicit rather than
- * lowercasing the id, so a display rename never silently changes the protocol.
- * `scripts/check-pane-registry.sh` fails the build if the two disagree.
+ * `DEFAULT_PANES` is a first-paint fallback only, so the rail is not empty for
+ * the one frame before the fetch lands. It is deliberately NOT a second source
+ * of truth: nothing validates against it, and a kind the server does not return
+ * simply will not appear.
  */
 export interface PaneKindDef {
-  /** Wire name the server's `_PANE_KINDS` accepts. */
-  readonly wire: string;
-  /** Icon key in `components/Icons`. */
+  readonly id: string;
+  readonly title: string;
   readonly icon: string;
-  /** Does it appear in the rail as something you can open directly? */
   readonly launchable: boolean;
-  /** Params the pane requires; a non-launchable pane is opened *from* one. */
   readonly params: readonly string[];
+  /** Which suite contributed it. */
+  readonly source?: string;
 }
 
-export const PANE_REGISTRY = {
-  Wiki: { wire: "wiki", icon: "wiki", launchable: true, params: [] },
-  Library: { wire: "library", icon: "library", launchable: true, params: [] },
-  Artifacts: { wire: "artifacts", icon: "artifacts", launchable: true, params: [] },
-  Notes: { wire: "notes", icon: "notes", launchable: true, params: [] },
-  Hypotheses: { wire: "hypotheses", icon: "hypotheses", launchable: true, params: [] },
-  Briefs: { wire: "briefs", icon: "briefs", launchable: true, params: [] },
-  // Opened from a claim, never from the rail — it is meaningless without one.
-  Grounding: { wire: "grounding", icon: "grounding", launchable: false, params: ["claim_id"] },
-} as const satisfies Record<string, PaneKindDef>;
+/** A pane kind's wire id. Not a union — the server owns the set. */
+export type SurfaceTab = string;
 
-export type SurfaceTab = keyof typeof PANE_REGISTRY;
+const DEFAULT_PANES: PaneKindDef[] = [
+  { id: "wiki", title: "Wiki", icon: "wiki", launchable: true, params: [] },
+];
 
-/** Every pane kind, launchable or not. Use this to validate an incoming name. */
-export const ALL_PANE_KINDS = Object.keys(PANE_REGISTRY) as SurfaceTab[];
-
-/** What the rail offers: the panes a person can open unprompted. */
-export const SURFACE_TABS = ALL_PANE_KINDS.filter(
-  (k) => PANE_REGISTRY[k].launchable,
-) as [SurfaceTab, ...SurfaceTab[]];
-
-/** Display name -> the name the server understands. */
-export function paneWireName(tab: SurfaceTab): string {
-  return PANE_REGISTRY[tab].wire;
+/**
+ * The surfaces this project can open, from the server.
+ *
+ * Cached for the session: the set changes when a plugin is enabled or disabled,
+ * which is a deliberate act, not something to poll for. When plugin activation
+ * lands it should invalidate this key rather than lowering the interval.
+ */
+export function usePaneKinds(projectId: string | null) {
+  const q = useQuery<{ panes: PaneKindDef[] }>({
+    queryKey: ["panes", projectId],
+    queryFn: () => api.get<{ panes: PaneKindDef[] }>(`/v1/projects/${projectId}/panes`),
+    enabled: Boolean(projectId),
+    staleTime: Infinity,
+  });
+  const panes = q.data?.panes ?? DEFAULT_PANES;
+  return useMemo(
+    () => ({
+      all: panes,
+      /** What the rail offers. */
+      launchable: panes.filter((p) => p.launchable),
+      byId: (id: string) => panes.find((p) => p.id === id),
+      /** Narrows an incoming name against what the SERVER said exists. */
+      isPaneKind: (value: string) => panes.some((p) => p.id === value),
+      loading: q.isPending,
+    }),
+    [panes, q.isPending],
+  );
 }
 
-/** Is this string a pane kind? Narrows, so callers stop casting. */
-export function isPaneKind(value: string): value is SurfaceTab {
-  return Object.hasOwn(PANE_REGISTRY, value);
-}
+
 
 /**
  * The analyst's current text/claim selection in the reader (WP-4d). Published by

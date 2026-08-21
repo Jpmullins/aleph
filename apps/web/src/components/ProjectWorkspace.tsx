@@ -69,9 +69,9 @@ export function ProjectWorkspace({ projectId, onBack }: Props) {
         so it collapses to a strip and gives the space back.
       */}
       <div className="flex h-full">
-        <Rail onBack={onBack} onOpenDrawer={setDrawer} />
+        <Rail projectId={projectId} onBack={onBack} onOpenDrawer={setDrawer} />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <ContextBar projectTitle={project.data?.title} onUpload={() => setShowUpload(true)} />
+          <ContextBar projectId={projectId} projectTitle={project.data?.title} onUpload={() => setShowUpload(true)} />
           {/* Corpus-level progress. Sits under the context bar because it
               answers a question about the whole project ("is my library ready
               to ask questions of?"), not about the focused pane. */}

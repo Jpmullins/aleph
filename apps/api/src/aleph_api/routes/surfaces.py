@@ -32,6 +32,7 @@ from aleph_a2ui.components.surfaces import (
     notes_surface_v09,
     wiki_surface_v09,
 )
+from aleph_a2ui.pane_registry import PANE_REGISTRY
 from aleph_a2ui.surface_streamer import (
     SurfaceStreamBuffer,
     data_model_patches_to_messages,
@@ -47,6 +48,31 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 router = APIRouter(prefix="/v1/projects", tags=["surfaces"])
+
+
+@router.get("/{project_id}/panes")
+async def list_pane_kinds(project_id: UUID) -> dict[str, Any]:
+    """What surfaces this project can open.
+
+    The rail renders from this. It is project-scoped on purpose even though the
+    registry is process-wide today: once a plugin can be enabled per project,
+    "what can this workbench do" stops having one global answer, and a client
+    written against a global endpoint would have to be rewritten.
+    """
+    return {
+        "panes": [
+            {
+                "id": k.id,
+                "title": k.title,
+                "icon": k.icon,
+                "launchable": k.launchable,
+                "params": list(k.params),
+                "source": k.source,
+            }
+            for k in PANE_REGISTRY.all()
+        ]
+    }
+
 
 # Poll-fallback window for the delta stream. The stream wakes on a push signal
 # (any mutation for the project) and recomputes-and-diffs the tab's surface,
@@ -139,11 +165,14 @@ async def _build_tab_messages(
     raise NotFound(msg)
 
 
-#: Surface kinds a pane may name. "grounding" is parameterised by a claim id
-#: rather than reachable from the rail — it is opened *from* a claim.
-_PANE_KINDS = frozenset(
-    {"wiki", "library", "artifacts", "notes", "hypotheses", "briefs", "grounding"}
-)
+#: Surface kinds a pane may name.
+#:
+#: Derived from the registry rather than written out here, so the set the parser
+#: accepts and the set the client is told about cannot drift — they did, and the
+#: result was `artifacts` and `grounding` being streamable with nowhere on the
+#: client to land. A plugin extending the registry widens both at once.
+def _pane_kinds() -> frozenset[str]:
+    return PANE_REGISTRY.ids()
 
 
 def _parse_pane_specs(raw: str) -> list[tuple[str, str, str | None]]:
@@ -162,7 +191,7 @@ def _parse_pane_specs(raw: str) -> list[tuple[str, str, str | None]]:
             continue
         tab, _, params = spec.partition(":")
         tab = tab.lower()
-        if tab not in _PANE_KINDS:
+        if tab not in _pane_kinds():
             continue
         page_id = None
         for kv in params.split("&"):
