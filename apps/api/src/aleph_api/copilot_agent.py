@@ -1,9 +1,9 @@
 """CopilotKit-native assistant **Deep Agent** (Wave 2 / converges with W3).
 
 A `deepagents.create_deep_agent` graph exposed over AG-UI via
-`ag_ui_langgraph.add_langgraph_fastapi_endpoint`. Runs in-process in
-aleph-api and streams tokens, tool calls, and shared state to the
-browser over the Node CopilotRuntime → `/copilotkit`.
+`aleph_api.agui_endpoint`. Runs in-process in aleph-api and streams
+tokens, tool calls, and shared state to the browser over the Node
+CopilotRuntime → `/copilotkit`.
 
 Per CLAUDE.md rule #2 (relaxed Wave 2): `ChatOpenAI` is permitted ONLY
 pointed at the Insights LiteLLM gateway. `CopilotKitMiddleware` enables
@@ -400,12 +400,19 @@ async def search_wiki(query: str, config: RunnableConfig, top_k: int = 6) -> str
             fallback = True
     if not hits:
         return "The wiki has no pages yet for this project."
+    # The page_id is in every line because `open_page` takes one and the agent
+    # had no way to obtain one: this formatter emitted title, kind, score and
+    # summary, so `open_page` had no reachable success path at all and the agent
+    # could only guess an id or give up. A scan that cannot be acted on is a
+    # scan that wastes a turn.
     lines = []
     for h in hits:
         stub = " (stub)" if h.is_stub else ""
         score = "" if fallback else f" · score={h.score:.2f}"
         lines.append(
-            f"- [[{h.title}]]{stub} · {h.page_kind}{score}\n  {h.summary or '(no summary)'}"
+            f"- [[{h.title}]]{stub} · {h.page_kind}{score}\n"
+            f"  page_id={h.page_id} · slug={h.slug}\n"
+            f"  {h.summary or '(no summary)'}"
         )
     header = (
         f'No page directly matched "{query}", but the wiki covers these pages:'
@@ -415,7 +422,8 @@ async def search_wiki(query: str, config: RunnableConfig, top_k: int = 6) -> str
     footer = (
         "\n\n(Scan only — these are titles + summaries. To answer a substantive "
         "question, delegate to the `retriever` subagent for a grounded, cited "
-        "answer rather than replying from these summaries.)"
+        "answer rather than replying from these summaries. To open one in the "
+        "workspace, pass its page_id to `open_page`.)"
     )
     return header + "\n" + "\n".join(lines) + footer
 
@@ -1525,6 +1533,27 @@ def subagent_model(settings: Settings, name: str, *, capability: Any = None) -> 
     )
 
 
+#: The orchestrator's tools, as a module-level list rather than a literal inside
+#: the builder. A test can then enumerate what the agent ACTUALLY carries and
+#: assert a property of every one of them — which is the half that silently
+#: stops being true when somebody adds the twelfth tool.
+#: (The UI-driving `open_page` / `focus_tab` / `highlight_claim` are CopilotKit
+#: frontend tools and live in the browser, not here.)
+_ORCHESTRATOR_TOOLS: tuple[Any, ...] = (
+    search_wiki,
+    wiki_curation_status,
+    wiki_schema,
+    wiki_lint_report,
+    list_connectors,
+    set_connector_enabled,
+    set_model_profile,
+    diagnose_platform,
+    pin_to_brief,
+    compose_dossier,
+    spotlight,
+)
+
+
 def build_assistant_deep_agent(
     *, settings: Settings, store: AsyncPostgresStore, checkpointer: Any = None
 ):
@@ -1557,6 +1586,7 @@ def build_assistant_deep_agent(
     from langgraph.config import get_config
     from langgraph.prebuilt.tool_node import ToolRuntime
 
+    from aleph_api.agent_middleware import AlephAgentMiddleware
     from aleph_api.subagents.analyst import build_analyst_subagent
     from aleph_api.subagents.researcher import build_researcher_subagent
     from aleph_api.subagents.retriever import build_retriever_subagent
@@ -1625,21 +1655,7 @@ def build_assistant_deep_agent(
     # process restarts. Everything else stays ephemeral (StateBackend).
     return create_deep_agent(
         model=model,
-        tools=[
-            search_wiki,
-            wiki_curation_status,
-            wiki_schema,
-            wiki_lint_report,
-            list_connectors,
-            set_connector_enabled,
-            set_model_profile,
-            diagnose_platform,
-            # WP-4d hands: persist/compose verbs (the UI-driving open_page /
-            # focus_tab / highlight_claim are CopilotKit frontend tools).
-            pin_to_brief,
-            compose_dossier,
-            spotlight,
-        ],
+        tools=list(_ORCHESTRATOR_TOOLS),
         system_prompt=SYSTEM_PROMPT,
         subagents=[
             build_retriever_subagent(settings=settings),
@@ -1675,7 +1691,13 @@ def build_assistant_deep_agent(
         permissions=[
             FilesystemPermission(operations=["write"], paths=["/skills/**"], mode="deny"),
         ],
-        middleware=[CopilotKitMiddleware()],
+        # AlephAgentMiddleware first: it wraps every tool call so an exception
+        # becomes a ToolMessage the model can read and route around, instead of
+        # killing the conversation. Before it, any one of 27 tools throwing
+        # ended the turn — and every tool resolved its project scope OUTSIDE
+        # its own try block, so even the guarded ones were guarded against the
+        # wrong thing.
+        middleware=[AlephAgentMiddleware(), CopilotKitMiddleware()],
         backend=_memory_backend,
         store=store,
         checkpointer=checkpointer if checkpointer is not None else MemorySaver(),

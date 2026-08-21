@@ -34,6 +34,7 @@ def build_viz_builder_subagent(*, settings: Any) -> dict[str, Any]:
     circular import (copilot_agent does not import this module at top level; the
     orchestrator builder calls this function at startup).
     """
+    from aleph_api.agent_middleware import AlephAgentMiddleware
     from aleph_api.copilot_agent import (
         _build_artifact_impl,  # pyright: ignore[reportPrivateUsage] — shared build body deliberately reused (DRY); module-private to the api
         _pin_to_briefs_impl,  # pyright: ignore[reportPrivateUsage]
@@ -154,5 +155,10 @@ def build_viz_builder_subagent(*, settings: Any) -> dict[str, Any]:
             "as prose."
         ),
         "tools": [make_chart, render_chart_via_code, build_artifact],
+        # The same tool guard the orchestrator carries. deepagents lets a
+        # subagent spec override the parent's middleware rather than extend it,
+        # so "the orchestrator has it" is not "the subagents have it" —
+        # scripts/check-agent-middleware.sh asserts all six do.
+        "middleware": [AlephAgentMiddleware()],
         "model": subagent_model(settings, "viz_builder", capability=Capability.CODE),
     }

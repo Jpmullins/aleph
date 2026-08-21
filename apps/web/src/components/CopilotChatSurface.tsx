@@ -82,6 +82,12 @@ export function CopilotChatSurface({ projectId, threadId }: Props) {
     },
   });
 
+  // What to tell the agent when a dispatch fails. The agent reads this text, so
+  // it has to name the failure rather than say "an error occurred" — the same
+  // rule the server-side tool guard follows.
+  const describeError = (err: unknown): string =>
+    err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+
   // Dispatch a frontend tool through the ledger-audited action router before
   // applying the local UI change, so every agent-driven workspace move is
   // audited exactly like an analyst's card click.
@@ -131,7 +137,14 @@ export function CopilotChatSurface({ projectId, threadId }: Props) {
     // compiled-in enum would refuse a surface a plugin just added.
     parameters: z.object({ tab: z.string() }),
     handler: async ({ tab }) => {
-      await dispatchAction("focus_tab", { tab });
+      // Guarded, like every server-side tool call: a frontend tool handler that
+      // rejects throws into the AG-UI stream and kills the run. The agent
+      // should be told the panel did not open and carry on talking.
+      try {
+        await dispatchAction("focus_tab", { tab });
+      } catch (err) {
+        return `Could not open the ${tab} panel: ${describeError(err)}`;
+      }
       setActiveSurface(tab);
       return `Opened the ${tab} panel for the analyst.`;
     },
@@ -153,7 +166,12 @@ export function CopilotChatSurface({ projectId, threadId }: Props) {
       const params: Record<string, unknown> = {};
       if (page_id) params.page_id = page_id;
       if (slug) params.slug = slug;
-      const res = await dispatchAction("navigate_wiki", params);
+      let res: CardActionResult;
+      try {
+        res = await dispatchAction("navigate_wiki", params);
+      } catch (err) {
+        return `Could not open that page: ${describeError(err)}`;
+      }
       const nav = res.result?.navigate as { page_id?: string } | undefined;
       const resolvedId = nav?.page_id ?? page_id ?? null;
       setActiveSurface("Wiki");
@@ -172,7 +190,11 @@ export function CopilotChatSurface({ projectId, threadId }: Props) {
       "analyst's eye lands on it. Pass the claim's UUID as `claim_id`.",
     parameters: z.object({ claim_id: z.string() }),
     handler: async ({ claim_id }) => {
-      await dispatchAction("highlight_claim", { claim_id });
+      try {
+        await dispatchAction("highlight_claim", { claim_id });
+      } catch (err) {
+        return `Could not highlight claim ${claim_id}: ${describeError(err)}`;
+      }
       setActiveSurface("Wiki");
       setHighlightedClaimId(claim_id);
       return `Highlighted claim ${claim_id} in the reader.`;

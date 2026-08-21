@@ -27,6 +27,7 @@ def build_analyst_subagent(*, settings: Any) -> dict[str, Any]:
     circular import (copilot_agent does not import this module at top level; the
     orchestrator builder calls this function at startup).
     """
+    from aleph_api.agent_middleware import AlephAgentMiddleware
     from aleph_api.copilot_agent import (
         _add_hypothesis_evidence_impl,  # pyright: ignore[reportPrivateUsage] — shared body deliberately reused (DRY); module-private to the api
         _create_hypothesis_impl,  # pyright: ignore[reportPrivateUsage] — shared body deliberately reused (DRY); module-private to the api
@@ -90,5 +91,10 @@ def build_analyst_subagent(*, settings: Any) -> dict[str, Any]:
             "results, not raw dumps."
         ),
         "tools": [list_hypotheses, create_hypothesis, add_hypothesis_evidence],
+        # The same tool guard the orchestrator carries. deepagents lets a
+        # subagent spec override the parent's middleware rather than extend it,
+        # so "the orchestrator has it" is not "the subagents have it" —
+        # scripts/check-agent-middleware.sh asserts all six do.
+        "middleware": [AlephAgentMiddleware()],
         "model": subagent_model(settings, "analyst"),
     }

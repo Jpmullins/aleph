@@ -112,10 +112,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return _problem(401, "auth_failed", exc.message, request)
 
         request.state.principal = principal
-        # Also bind it task-locally: the AG-UI agent endpoint is owned by
-        # `add_langgraph_fastapi_endpoint`, so its tools have no request to read
-        # a principal from. Reset in `finally` so a pooled worker task cannot
-        # inherit the previous request's identity.
+        # Also bind it task-locally: the AG-UI agent endpoint hands a
+        # `RunnableConfig` to tools rather than a request, so a tool has no
+        # request to read a principal from. Reset in `finally` so a pooled
+        # worker task cannot inherit the previous request's identity.
         principal_token = bind_principal(principal)
         bind_request_context(
             request_id=getattr(request.state, "request_id", ""),

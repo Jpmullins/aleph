@@ -139,6 +139,13 @@ probe "check-agent-fs-permissions notices an allow ahead of the deny" \
   's/        permissions=\[\n            FilesystemPermission/        permissions=[\n            FilesystemPermission(operations=["write"], paths=["\/skills\/**"], mode="allow"),\n            FilesystemPermission/' \
   "./scripts/check-agent-fs-permissions.sh"
 
+# The subagent half is the one that goes wrong silently: a spec declaring its
+# own middleware OVERRIDES the parent's guard rather than adding to it.
+probe "check-agent-middleware notices one unguarded subagent" \
+  apps/api/src/aleph_api/subagents/analyst.py \
+  's/\n\s+"middleware": \[AlephAgentMiddleware\(\)\],//' \
+  "./scripts/check-agent-middleware.sh"
+
 # check-pane-registry's subject is the CLIENT growing a second copy of the
 # server's pane list, so the mutation belongs in the client.
 probe "check-pane-registry notices a hardcoded pane list in the client" \

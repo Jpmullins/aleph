@@ -109,6 +109,14 @@ jobs:
       - name: The agent cannot rewrite its own skills
         run: ./scripts/check-agent-fs-permissions.sh
 
+      # Any one of 27 tools raising used to end the conversation: LangChain's
+      # ToolNode re-raises anything that is not a schema-validation error. The
+      # guard's whole value is coverage, and deepagents lets a subagent spec
+      # REPLACE the parent's middleware rather than extend it — so "the
+      # orchestrator has it" is not "the subagents have it".
+      - name: Every agent and subagent survives a raising tool
+        run: ./scripts/check-agent-middleware.sh
+
   python-unit:
     name: unit tests
     runs-on: ubuntu-latest

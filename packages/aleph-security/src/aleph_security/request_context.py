@@ -1,9 +1,8 @@
 """The authenticated principal, carried across a framework boundary.
 
 Routes receive their principal by dependency injection. The AG-UI agent endpoint
-cannot: `add_langgraph_fastapi_endpoint` owns the request, builds its own
-`RunnableConfig`, and hands that to tools — so there is no parameter to thread a
-principal through.
+cannot: it builds its own `RunnableConfig` and hands that to tools — so there is
+no parameter to thread a principal through.
 
 The consequence was a complete authorization bypass. `/copilotkit` sat on the
 auth middleware's self-auth prefix list on the promise that "the route handler is

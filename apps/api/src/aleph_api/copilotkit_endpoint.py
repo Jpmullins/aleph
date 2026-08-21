@@ -1,10 +1,16 @@
 """Mount the assistant Deep Agent as an AG-UI endpoint (Wave 2, v2 path).
 
-Uses `ag_ui_langgraph.add_langgraph_fastapi_endpoint` (NOT the broken v1
-`CopilotKitRemoteEndpoint`, which crashes on `dict_repr` against current
-ag-ui-langgraph). The Node `aleph-copilot-runtime` service points a
-`LangGraphHttpAgent` at this endpoint and is where A2UI tool injection
-happens; the React app talks to the Node runtime.
+Mounted through `aleph_api.agui_endpoint`, not
+`ag_ui_langgraph.add_langgraph_fastapi_endpoint`. The upstream helper has no
+error handling at all, so an agent that broke mid-answer produced a stream that
+just stopped: the browser showed a half-written message and invented its own
+error, and the actual cause existed only in this container's stderr. Aleph owns
+the envelope; ag-ui-langgraph still owns the event translation. (Not the broken
+v1 `CopilotKitRemoteEndpoint` either, which crashes on `dict_repr`.)
+
+The Node `aleph-copilot-runtime` service points a `LangGraphHttpAgent` at this
+endpoint and is where A2UI tool injection happens; the React app talks to the
+Node runtime.
 
 Endpoint: POST /copilotkit/agent/assistant  (AG-UI RunAgentInput → SSE).
 Auth: `/copilotkit` is in the middleware self-auth prefix list (local
@@ -42,13 +48,13 @@ def setup_copilotkit(
     Postgres saver in production; without it every restart drops the agent's
     history and plan.
     """
-    from ag_ui_langgraph import add_langgraph_fastapi_endpoint
     from copilotkit import LangGraphAGUIAgent
 
+    from aleph_api.agui_endpoint import add_aleph_agui_endpoint
     from aleph_api.copilot_agent import build_assistant_deep_agent
 
     graph = build_assistant_deep_agent(settings=settings, store=store, checkpointer=checkpointer)
-    add_langgraph_fastapi_endpoint(
+    add_aleph_agui_endpoint(
         app,
         LangGraphAGUIAgent(
             name="assistant",
