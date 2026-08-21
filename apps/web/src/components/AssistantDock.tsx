@@ -66,7 +66,7 @@ export function AssistantDock({ projectId, threadId, sessionId, onSelectSession 
         <select
           aria-label="Session"
           data-testid="dock-session-select"
-          className="max-w-[7rem] truncate rounded-md border border-line bg-sunken px-1.5 py-0.5 text-xs text-ink-soft"
+          className="max-w-[7rem] truncate  border border-line bg-sunken px-1.5 py-0.5 text-xs text-ink-soft"
           value={sessionId ?? ""}
           onChange={(e) => onSelectSession(e.target.value)}
         >
@@ -84,7 +84,7 @@ export function AssistantDock({ projectId, threadId, sessionId, onSelectSession 
           aria-label="New session"
           title="New session"
           data-testid="dock-new-session"
-          className="grid h-7 w-7 place-items-center rounded-md text-ink-muted hover:bg-sunken hover:text-ink disabled:opacity-50"
+          className="grid h-7 w-7 place-items-center  text-ink-muted hover:bg-sunken hover:text-ink disabled:opacity-50"
         >
           <Icons.plus size={15} />
         </button>

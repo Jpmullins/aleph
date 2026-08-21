@@ -1,9 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from"@tanstack/react-query";
+import { useState } from"react";
 
-import { AlephLogo } from "@/components/AlephLogo";
-import { ThemeToggle } from "@/components/ThemeToggle";
-import { ApiError, api, type ProjectOut } from "@/lib/api";
+import { AlephLogo } from"@/components/AlephLogo";
+import { ThemeToggle } from"@/components/ThemeToggle";
+import { ApiError, api, type ProjectOut } from"@/lib/api";
 
 interface Props {
   onOpen: (projectId: string) => void;
@@ -19,23 +19,33 @@ export function ProjectList({ onOpen }: Props) {
   const projectsQuery = useQuery<ProjectOut[]>({
     queryKey: ["projects", showDeleted],
     queryFn: () =>
-      api.get<ProjectOut[]>(`/v1/projects${showDeleted ? "?include_deleted=true" : ""}`),
+      api.get<ProjectOut[]>(`/v1/projects${showDeleted ?"?include_deleted=true" :""}`),
   });
 
   return (
     <div className="mx-auto max-w-4xl px-6 py-10">
-      <header className="mb-10 flex items-center justify-between border-b border-line pb-6">
-        <AlephLogo size={44} tagline="Multi-agent research environment" />
+      <header className="mb-10 flex items-end justify-between border-b border-line pb-6">
+        <div className="flex items-center gap-4">
+          <AlephLogo size={44} variant="emblem" className="text-accent" />
+          <div className="flex flex-col gap-0.5">
+            <span className="font-prose text-3xl font-light leading-none tracking-tight text-ink">
+              Aleph
+            </span>
+            <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-muted">
+              a workbench that grows
+            </span>
+          </div>
+        </div>
         <ThemeToggle />
       </header>
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-ink">
+          <h1 className="font-prose text-2xl font-normal tracking-tight text-ink">
             Projects
           </h1>
-          <p className="mt-1 text-sm text-ink-muted">
-            Each project is a self-contained research workspace — sources, a
-            compiled wiki, and an assistant that can research and grow it.
+          <p className="mt-1 max-w-[60ch] text-sm text-ink-soft">
+            Each project is its own body of evidence — sources, the claims drawn
+            from them, and an agent that can extend both.
           </p>
         </div>
         <label className="mr-3 flex cursor-pointer items-center gap-1.5 text-xs text-ink-muted">
@@ -50,24 +60,25 @@ export function ProjectList({ onOpen }: Props) {
         <button
           type="button"
           onClick={() => setShowCreate(true)}
-          className="shrink-0 rounded-md px-4 py-2 text-sm font-medium text-ink-inverse shadow hover:opacity-90"
-          style={{ background: "var(--accent, #f97316)" }}
+          className="shrink-0 bg-accent px-4 py-2 font-mono text-xs uppercase tracking-[0.1em] text-accent-fg hover:bg-accent-hover"
         >
           + New project
         </button>
       </div>
       {projectsQuery.isPending && <p className="text-ink-muted">Loading projects…</p>}
       {projectsQuery.isError && (
-        <p className="text-red-700">
+        <p className="text-bad">
           Failed to load projects: {(projectsQuery.error as ApiError).message}
         </p>
       )}
       {projectsQuery.isSuccess && projectsQuery.data.length === 0 && (
-        <div className="rounded-lg border border-dashed border-line-strong p-12 text-center">
-          <p className="text-ink-muted">No projects yet. Create one to get started.</p>
+        <div className="border border-dashed border-line-strong p-14 text-center">
+          <p className="text-sm text-ink-muted">
+            Nothing here yet. A project is where sources, claims and the agent meet.
+          </p>
         </div>
       )}
-      <ul className="space-y-2">
+      <ul className="flex flex-col gap-px bg-line">
         {projectsQuery.data?.map((p) => (
           <ProjectRow key={p.id} project={p} onOpen={onOpen} />
         ))}
@@ -96,7 +107,7 @@ function ProjectRow({
   const [expanded, setExpanded] = useState(false);
   const archive = useMutation({
     mutationFn: async () =>
-      api.patch<ProjectOut>(`/v1/projects/${project.id}`, { status: "deleted" }),
+      api.patch<ProjectOut>(`/v1/projects/${project.id}`, { status:"deleted" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["projects"] }),
   });
 
@@ -104,12 +115,12 @@ function ProjectRow({
   // safely 409: there is a visible way back.
   const restore = useMutation({
     mutationFn: async () =>
-      api.patch<ProjectOut>(`/v1/projects/${project.id}`, { status: "active" }),
+      api.patch<ProjectOut>(`/v1/projects/${project.id}`, { status:"active" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["projects"] }),
   });
 
   return (
-    <li className="overflow-hidden rounded-md border border-line bg-surface shadow-sm hover:border-line-strong">
+    <li className="bg-surface transition-colors hover:bg-sunken">
       <div className="flex items-stretch">
         <button
           type="button"
@@ -117,31 +128,41 @@ function ProjectRow({
           className="flex-1 px-4 py-3 text-left"
           data-testid={`project-open-${project.id}`}
         >
-          <div className="font-medium text-ink">{project.title}</div>
-          <div className="mt-1 text-xs text-ink-muted">
-            {project.status} · created {new Date(project.created_at).toLocaleDateString()}
+          <div className="flex items-center gap-2.5">
+            <span
+              aria-hidden
+              className="h-3.5 w-[3px] shrink-0"
+              style={{
+                background:
+                  project.status ==="deleted" ?"var(--state-bad)" :"var(--accent)",
+              }}
+            />
+            <span className="text-[15px] text-ink">{project.title}</span>
+          </div>
+          <div className="mt-1 pl-[22px] font-mono text-[10.5px] text-ink-muted">
+            {project.status} · {new Date(project.created_at).toLocaleDateString()}
           </div>
         </button>
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
-          className="border-l border-line px-3 text-xs font-medium text-ink-muted hover:bg-sunken hover:text-ink"
+          className="border-l border-line px-3 font-mono text-[10.5px] uppercase tracking-[0.08em] text-ink-muted hover:text-ink"
           data-testid={`project-info-${project.id}`}
           title="Project info"
           aria-expanded={expanded}
         >
-          {expanded ? "▴ Info" : "▾ Info"}
+          {expanded ?"Info −" :"Info +"}
         </button>
-        {project.status === "deleted" ? (
+        {project.status ==="deleted" ? (
           <button
             type="button"
             onClick={() => restore.mutate()}
             disabled={restore.isPending}
-            className="border-l border-line px-4 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+            className="border-l border-line px-4 font-mono text-[10.5px] uppercase tracking-[0.08em] text-good disabled:opacity-50"
             data-testid={`project-restore-${project.id}`}
             title="Restore this project"
           >
-            {restore.isPending ? "…" : "Restore"}
+            {restore.isPending ?"…" :"Restore"}
           </button>
         ) : (
           <button
@@ -149,19 +170,19 @@ function ProjectRow({
             onClick={() => {
               if (
                 window.confirm(
-                  `Delete project "${project.title}"? Its sources and wiki are kept, ` +
-                    `and you can restore it from "Show deleted".`,
+                  `Delete project"${project.title}"? Its sources and wiki are kept, ` +
+                    `and you can restore it from"Show deleted".`,
                 )
               ) {
                 archive.mutate();
               }
             }}
             disabled={archive.isPending}
-            className="border-l border-line px-4 text-xs font-medium text-ink-muted hover:bg-red-50 hover:text-red-700 disabled:opacity-50"
+            className="border-l border-line px-4 text-xs font-medium text-ink-muted hover:bg-red-50 hover:text-bad disabled:opacity-50"
             data-testid={`project-delete-${project.id}`}
             title="Delete project"
           >
-            {archive.isPending ? "…" : "Delete"}
+            {archive.isPending ?"…" :"Delete"}
           </button>
         )}
       </div>
@@ -169,7 +190,7 @@ function ProjectRow({
         <div className="space-y-1.5 border-t border-line bg-sunken px-4 py-3 text-xs text-ink-soft">
           <p className="whitespace-pre-wrap break-words">
             <span className="font-medium text-ink-muted">Description: </span>
-            {project.description || "—"}
+            {project.description ||"—"}
           </p>
           <p>
             <span className="font-medium text-ink-muted">Created: </span>
@@ -191,7 +212,7 @@ function ProjectCreateModal({ onClose, onCreated }: CreateProps) {
   const qc = useQueryClient();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [profile, setProfile] = useState<"aleph-dev" | "aleph-production">("aleph-dev");
+  const [profile, setProfile] = useState<"aleph-dev" |"aleph-production">("aleph-dev");
   const create = useMutation({
     mutationFn: async () =>
       api.post<ProjectOut>("/v1/projects", {
@@ -206,7 +227,7 @@ function ProjectCreateModal({ onClose, onCreated }: CreateProps) {
   });
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-ink/40 px-4">
-      <div className="w-full max-w-md rounded-lg bg-surface p-6 shadow-xl">
+      <div className="w-full max-w-md bg-surface p-6 shadow-xl">
         <h2 className="mb-4 text-xl font-semibold">New project</h2>
         <form
           onSubmit={(e) => {
@@ -221,7 +242,7 @@ function ProjectCreateModal({ onClose, onCreated }: CreateProps) {
               required
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm"
+              className="mt-1 w-full border border-line-strong px-3 py-2 text-sm"
             />
           </label>
           <label className="block">
@@ -230,7 +251,7 @@ function ProjectCreateModal({ onClose, onCreated }: CreateProps) {
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={3}
-              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm"
+              className="mt-1 w-full border border-line-strong px-3 py-2 text-sm"
             />
           </label>
           <label className="block">
@@ -238,29 +259,29 @@ function ProjectCreateModal({ onClose, onCreated }: CreateProps) {
             <select
               value={profile}
               onChange={(e) => setProfile(e.target.value as typeof profile)}
-              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm"
+              className="mt-1 w-full border border-line-strong px-3 py-2 text-sm"
             >
               <option value="aleph-dev">aleph-dev (cheap)</option>
               <option value="aleph-production">aleph-production (premium)</option>
             </select>
           </label>
           {create.isError && (
-            <p className="text-sm text-red-600">{(create.error as ApiError).message}</p>
+            <p className="text-sm text-bad">{(create.error as ApiError).message}</p>
           )}
           <div className="flex justify-end gap-3 pt-2">
             <button
               type="button"
               onClick={onClose}
-              className="rounded-md border border-line-strong px-4 py-2 text-sm hover:border-line-strong"
+              className="border border-line-strong px-4 py-2 text-sm hover:border-line-strong"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={create.isPending || !title}
-              className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-ink-inverse hover:bg-ink-soft disabled:opacity-50"
+              className="bg-ink px-4 py-2 text-sm font-medium text-ink-inverse hover:bg-ink-soft disabled:opacity-50"
             >
-              {create.isPending ? "Creating…" : "Create"}
+              {create.isPending ?"Creating…" :"Create"}
             </button>
           </div>
         </form>

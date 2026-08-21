@@ -38,7 +38,7 @@ export function Rail({ onBack, onOpenDrawer }: Props) {
         onClick={onBack}
         aria-label="Back to projects"
         title="Projects"
-        className="mb-2 grid h-9 w-9 place-items-center rounded-lg border border-line-strong font-mono text-[15px] font-bold text-accent hover:bg-sunken"
+        className="mb-2 grid h-9 w-9 place-items-center  border border-line-strong font-mono text-[15px] font-bold text-accent hover:bg-sunken"
       >
         ℵ
       </button>
@@ -58,7 +58,7 @@ export function Rail({ onBack, onOpenDrawer }: Props) {
             data-active={active}
             data-open={!!open}
             className={
-              "group relative grid h-10 w-10 place-items-center rounded-lg " +
+              "group relative grid h-10 w-10 place-items-center  " +
               (active
                 ? "bg-accent-muted text-accent"
                 : "text-ink-muted hover:bg-sunken hover:text-ink")
@@ -69,13 +69,13 @@ export function Rail({ onBack, onOpenDrawer }: Props) {
             {active && (
               <span
                 aria-hidden
-                className="absolute -left-2.5 top-2.5 bottom-2.5 w-[3px] rounded-full bg-accent"
+                className="absolute -left-2.5 top-2.5 bottom-2.5 w-[3px]  bg-accent"
               />
             )}
             <Icon />
             <span
               aria-hidden
-              className="pointer-events-none absolute left-12 z-50 whitespace-nowrap rounded-md border border-line bg-elevated px-2 py-1 text-xs text-ink opacity-0 shadow-lg transition-opacity group-hover:opacity-100"
+              className="pointer-events-none absolute left-12 z-50 whitespace-nowrap  border border-line bg-elevated px-2 py-1 text-xs text-ink opacity-0 shadow-lg transition-opacity group-hover:opacity-100"
             >
               {tab}
             </span>
@@ -102,7 +102,7 @@ export function Rail({ onBack, onOpenDrawer }: Props) {
             aria-label={label}
             title={label}
             data-testid={`rail-${kind}`}
-            className="grid h-9 w-9 place-items-center rounded-lg text-ink-muted hover:bg-sunken hover:text-ink"
+            className="grid h-9 w-9 place-items-center  text-ink-muted hover:bg-sunken hover:text-ink"
           >
             <Icon size={17} />
           </button>

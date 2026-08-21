@@ -135,8 +135,10 @@ export function WikiSurface({ component, onAction }: RendererProps) {
         <button
           type="button"
           onClick={() => setDraftsOnly((v) => !v)}
-          className={`flex items-center justify-between gap-2 border-b border-amber-200 px-3 py-1.5 text-left text-xs ${
-            draftsOnly ? "bg-amber-100 text-amber-900" : "bg-amber-50 text-amber-800 hover:bg-amber-100"
+          className={`flex items-center justify-between gap-2 border-b border-line px-3 py-1.5 text-left text-xs ${
+            draftsOnly
+              ? "bg-[var(--badge-warning-bg)] text-[var(--badge-warning-fg)]"
+              : "bg-[var(--badge-warning-bg)] text-[var(--badge-warning-fg)] opacity-80 hover:opacity-100"
           }`}
           data-testid="wiki-needs-attention"
         >

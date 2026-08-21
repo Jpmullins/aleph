@@ -54,12 +54,12 @@ export function PipelineStrip({ projectId }: { projectId: string }) {
               <span
                 aria-hidden
                 className={
-                  "inline-block h-1.5 w-1.5 rounded-full " +
+                  "inline-block h-1.5 w-1.5  " +
                   (stage.count === 0
                     ? "bg-line-strong"
                     : done
-                      ? "bg-emerald-500"
-                      : "bg-amber-500")
+                      ? "bg-sunken"
+                      : "bg-sunken")
                 }
               />
               <span className="text-ink-muted">{stage.label}</span>

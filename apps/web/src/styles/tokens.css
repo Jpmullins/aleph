@@ -1,155 +1,181 @@
-/* Design tokens — borrowed from open-analyst's pattern.
+/* Aleph design tokens — the instrument palette.
  *
- * Two themes (`:root` = light, `[data-theme="dark"]` = dark) expressed as
- * CSS custom properties. Components read these via the `var(--name)` form,
- * usually composed inside Tailwind's `bg-[var(--surface-bg)]` etc.
+ * Cool near-black ground, bone as the only accent, and colour reserved for
+ * STATE. That last rule is the point: emphasis is carried by brightness, so
+ * green and red mean "holding" and "contested" and nothing else in the
+ * interface is ever coloured. A palette where everything is tinted has no way
+ * left to say something is wrong.
+ *
+ * Light is a genuine counterpart, not an inversion — its accent is a dark umber
+ * rather than a flipped bone, because "brighter than its surroundings" and
+ * "darker than its surroundings" are the same idea on opposite grounds.
+ * Inverting is what makes most light modes feel like an afterthought.
+ *
+ * Three states, not two: an explicit choice stamps `data-theme`, and the
+ * default "system" setting stamps nothing, so `prefers-color-scheme` has to
+ * carry the same values. Every token below is defined in all three blocks;
+ * `apps/web/index.html` deliberately paints no colour of its own, because a
+ * utility class on <body> wins on specificity and silently re-pins the ground
+ * to one theme.
+ *
+ * No curves anywhere: `--radius` is 0 and stays 0. It agrees with the mark and
+ * with the grid.
  */
 
 :root {
   /* surfaces */
-  --surface-bg:          #ffffff;
-  --surface-raised:      #ffffff;
-  --surface-sunken:      #f8fafc;
-  --surface-elevated:    #ffffff;
-  --surface-overlay:     rgba(15, 23, 42, 0.40);
+  --surface-bg:          #FBFAF8;
+  --surface-raised:      #FFFFFF;
+  --surface-sunken:      #F3F2EF;
+  --surface-elevated:    #FFFFFF;
+  --surface-overlay:     rgba(20, 23, 26, 0.45);
 
-  /* borders */
-  --border-muted:        #e2e8f0;
-  --border-strong:       #cbd5e1;
+  /* borders — hairlines only */
+  --border-muted:        #E2E0DB;
+  --border-strong:       #C9C6BF;
 
   /* text */
-  --text-primary:        #0f172a;
-  --text-secondary:      #475569;
-  --text-muted:          #94a3b8;
-  --text-inverse:        #ffffff;
+  --text-primary:        #14171A;
+  --text-secondary:      #565C61;
+  --text-muted:          #868C91;
+  --text-inverse:        #FBFAF8;
 
-  /* accent (orange) */
-  --accent:              #f97316;
-  --accent-fg:           #ffffff;
-  --accent-muted:        rgba(249, 115, 22, 0.10);
-  --accent-hover:        #ea580c;
+  /* the one signal */
+  --accent:              #3A342B;
+  --accent-fg:           #FBFAF8;
+  --accent-muted:        rgba(58, 52, 43, 0.08);
+  --accent-hover:        #241F19;
 
-  /* status / badges */
-  --badge-idle-bg:       #f1f5f9;
-  --badge-idle-fg:       #475569;
-  --badge-running-bg:    #dbeafe;
-  --badge-running-fg:    #1e3a8a;
-  --badge-completed-bg:  #d1fae5;
-  --badge-completed-fg:  #065f46;
-  --badge-failed-bg:     #fee2e2;
-  --badge-failed-fg:     #991b1b;
-  --badge-warning-bg:    #fef3c7;
-  --badge-warning-fg:    #854d0e;
+  /* state — the ONLY place hue is allowed to mean something */
+  --badge-idle-bg:       #F3F2EF;
+  --badge-idle-fg:       #565C61;
+  --badge-running-bg:    #EDEAE2;
+  --badge-running-fg:    #3A342B;
+  --badge-completed-bg:  #E4EDE7;
+  --badge-completed-fg:  #2E6B4A;
+  --badge-failed-bg:     #F6E7E3;
+  --badge-failed-fg:     #93412F;
+  /* `--badge-warning-*` existed only as a HARDCODED FALLBACK inside the Pill
+   * component (`var(--badge-warning-bg, #fef3c7)`), so every "draft"/"stub"
+   * badge painted itself bright cream on the dark ground — a token nobody had
+   * ever defined, quietly winning. Defining it is the fix; the components were
+   * already asking correctly. */
+  --badge-warning-bg:    #F0EADC;
+  --badge-warning-fg:    #6B5A2E;
 
-  /* shadows */
-  --shadow-sm:           0 1px 2px rgba(15, 23, 42, 0.04);
-  --shadow-md:           0 4px 12px rgba(15, 23, 42, 0.08);
-  --shadow-lg:           0 16px 32px rgba(15, 23, 42, 0.12);
+  /* structural */
+  --radius:              0px;
+  --grid-dot:            #EDEBE6;
+  --state-good:          #2E6B4A;
+  --state-bad:           #93412F;
+
+  --shadow-sm:           0 1px 2px rgba(20, 23, 26, 0.05);
+  --shadow-md:           0 2px 8px rgba(20, 23, 26, 0.07);
+  --shadow-lg:           0 8px 28px rgba(20, 23, 26, 0.12);
+
+  /* type — three roles, mono-forward */
+  --font-ui:    "Public Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono:  "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-prose: "Newsreader", Georgia, "Times New Roman", serif;
 }
 
 [data-theme="dark"] {
-  --surface-bg:          #0f0f10;
-  --surface-raised:      #1a1a1c;
-  --surface-sunken:      #08080a;
-  --surface-elevated:    #1f1f22;
-  --surface-overlay:     rgba(0, 0, 0, 0.60);
+  --surface-bg:          #0C0E10;
+  --surface-raised:      #14171A;
+  --surface-sunken:      #1B1F23;
+  --surface-elevated:    #1B1F23;
+  --surface-overlay:     rgba(0, 0, 0, 0.62);
 
-  --border-muted:        #2a2a2e;
-  --border-strong:       #3a3a40;
+  --border-muted:        #24282C;
+  --border-strong:       #333940;
 
-  --text-primary:        #ececec;
-  --text-secondary:      #a0a0a0;
-  --text-muted:          #6b6b6b;
-  --text-inverse:        #0f0f10;
+  --text-primary:        #E8EAEC;
+  --text-secondary:      #A0A8AE;
+  --text-muted:          #6B747B;
+  --text-inverse:        #0C0E10;
 
-  --accent:              #f97316;
-  --accent-fg:           #0f0f10;
-  --accent-muted:        rgba(249, 115, 22, 0.16);
-  --accent-hover:        #fb923c;
+  --accent:              #D9D4C8;
+  --accent-fg:           #0C0E10;
+  --accent-muted:        rgba(217, 212, 200, 0.10);
+  --accent-hover:        #EFEBE0;
 
-  --badge-idle-bg:       rgba(148, 163, 184, 0.12);
-  --badge-idle-fg:       #cbd5e1;
-  --badge-running-bg:    rgba(59, 130, 246, 0.16);
-  --badge-running-fg:    #93c5fd;
-  --badge-completed-bg:  rgba(16, 185, 129, 0.16);
-  --badge-completed-fg:  #6ee7b7;
-  --badge-failed-bg:     rgba(239, 68, 68, 0.16);
-  --badge-failed-fg:     #fca5a5;
-  --badge-warning-bg:    rgba(245, 158, 11, 0.16);
-  --badge-warning-fg:    #fcd34d;
+  --badge-idle-bg:       #1B1F23;
+  --badge-idle-fg:       #A0A8AE;
+  --badge-running-bg:    #2A2721;
+  --badge-running-fg:    #D9D4C8;
+  --badge-completed-bg:  #16261F;
+  --badge-completed-fg:  #7FA98F;
+  --badge-failed-bg:     #2A1917;
+  --badge-failed-fg:     #C08478;
+  --badge-warning-bg:    #2A2721;
+  --badge-warning-fg:    #C9BE9E;
 
-  --shadow-sm:           0 1px 2px rgba(0, 0, 0, 0.40);
-  --shadow-md:           0 4px 12px rgba(0, 0, 0, 0.40);
-  --shadow-lg:           0 16px 32px rgba(0, 0, 0, 0.40);
+  --grid-dot:            #191D21;
+  --state-good:          #7FA98F;
+  --state-bad:           #C08478;
+
+  --shadow-sm:           0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md:           0 2px 8px rgba(0, 0, 0, 0.5);
+  --shadow-lg:           0 8px 28px rgba(0, 0, 0, 0.6);
 }
 
+/* Same values for the un-stamped "system" state — the default most people are
+ * in. These two blocks drifting apart is a real bug this file has already had:
+ * the accent and every shadow were defined only in the toggle's block, so a
+ * viewer who never touched it got a dark page with the light accent. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    /* These four were absent, so a viewer who never touches the toggle got a
-       dark page with the LIGHT accent and light-tuned shadows. The toggle's
-       own block had them; this one did not. */
-    --accent:#f97316;
-    --shadow-sm:0 1px 2px rgba(0, 0, 0, 0.40);
-    --shadow-md:0 4px 12px rgba(0, 0, 0, 0.40);
-    --shadow-lg:0 16px 32px rgba(0, 0, 0, 0.40);
+    --surface-bg:          #0C0E10;
+    --surface-raised:      #14171A;
+    --surface-sunken:      #1B1F23;
+    --surface-elevated:    #1B1F23;
+    --surface-overlay:     rgba(0, 0, 0, 0.62);
 
-    --surface-bg:          #0f0f10;
-    --surface-raised:      #1a1a1c;
-    --surface-sunken:      #08080a;
-    --surface-elevated:    #1f1f22;
-    --surface-overlay:     rgba(0, 0, 0, 0.60);
+    --border-muted:        #24282C;
+    --border-strong:       #333940;
 
-    --border-muted:        #2a2a2e;
-    --border-strong:       #3a3a40;
+    --text-primary:        #E8EAEC;
+    --text-secondary:      #A0A8AE;
+    --text-muted:          #6B747B;
+    --text-inverse:        #0C0E10;
 
-    --text-primary:        #ececec;
-    --text-secondary:      #a0a0a0;
-    --text-muted:          #6b6b6b;
-    --text-inverse:        #0f0f10;
+    --accent:              #D9D4C8;
+    --accent-fg:           #0C0E10;
+    --accent-muted:        rgba(217, 212, 200, 0.10);
+    --accent-hover:        #EFEBE0;
 
-    --accent-fg:           #0f0f10;
-    --accent-muted:        rgba(249, 115, 22, 0.16);
-    --accent-hover:        #fb923c;
+    --badge-idle-bg:       #1B1F23;
+    --badge-idle-fg:       #A0A8AE;
+    --badge-running-bg:    #2A2721;
+    --badge-running-fg:    #D9D4C8;
+    --badge-completed-bg:  #16261F;
+    --badge-completed-fg:  #7FA98F;
+    --badge-failed-bg:     #2A1917;
+    --badge-failed-fg:     #C08478;
+    --badge-warning-bg:    #2A2721;
+    --badge-warning-fg:    #C9BE9E;
 
-    --badge-idle-bg:       rgba(148, 163, 184, 0.12);
-    --badge-idle-fg:       #cbd5e1;
-    --badge-running-bg:    rgba(59, 130, 246, 0.16);
-    --badge-running-fg:    #93c5fd;
-    --badge-completed-bg:  rgba(16, 185, 129, 0.16);
-    --badge-completed-fg:  #6ee7b7;
-    --badge-failed-bg:     rgba(239, 68, 68, 0.16);
-    --badge-failed-fg:     #fca5a5;
-    --badge-warning-bg:    rgba(245, 158, 11, 0.16);
-    --badge-warning-fg:    #fcd34d;
+    --grid-dot:            #191D21;
+    --state-good:          #7FA98F;
+    --state-bad:           #C08478;
+
+    --shadow-sm:           0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md:           0 2px 8px rgba(0, 0, 0, 0.5);
+    --shadow-lg:           0 8px 28px rgba(0, 0, 0, 0.6);
   }
 }
 
-/* Dark mode needs no shim.
- *
- * There used to be ~26 `!important` rules here remapping `.bg-white`,
- * `.text-slate-*` and friends under `[data-theme="dark"]`. That existed because
- * Tailwind's theme was not a token source — there was no `bg-surface` to write
- * instead — so every component hardcoded a light-mode palette class and dark
- * mode had to override it after the fact, at higher specificity, forever.
- *
- * `@theme inline` in styles.css now maps semantic utilities onto these custom
- * properties, so `bg-surface` / `text-ink` / `border-line` follow the active
- * theme by themselves and there is nothing left to override. Only the two
- * unavoidable native-control rules remain.
- */
-[data-theme="dark"] {
-  color-scheme: dark;
-}
-
-/* Native form controls do not inherit from the token set. */
-[data-theme="dark"] input,
-[data-theme="dark"] textarea,
-[data-theme="dark"] select {
-  background-color: var(--surface-bg);
+/* Form controls inherit the ground rather than the UA's white. */
+input,
+textarea,
+select {
+  background: var(--surface-raised);
   color: var(--text-primary);
   border-color: var(--border-muted);
+  border-radius: var(--radius);
 }
-[data-theme="dark"] input::placeholder,
-[data-theme="dark"] textarea::placeholder {
+
+input::placeholder,
+textarea::placeholder {
   color: var(--text-muted);
 }

@@ -8,7 +8,7 @@ import { PipelineStrip } from "@/components/PipelineStrip";
 import { Drawer } from "@/components/Drawers";
 import type { DrawerKind } from "@/components/LeftPanel";
 import { Rail } from "@/components/Rail";
-import { ReadingRegion } from "@/components/ReadingRegion";
+import { Board } from "@/components/Board";
 import { SourceUploadModal } from "@/components/SourceUploadModal";
 import { LiveSignalsProvider } from "@/hooks/live-signals";
 import { api, type ProjectOut } from "@/lib/api";
@@ -84,7 +84,7 @@ export function ProjectWorkspace({ projectId, onBack }: Props) {
             >
               <Panel defaultSize={72} minSize={40} className="min-w-0">
                 <main className="flex h-full min-w-0 flex-col bg-canvas">
-                  <ReadingRegion projectId={projectId} />
+                  <Board projectId={projectId} />
                 </main>
               </Panel>
               <PanelResizeHandle className="w-1 cursor-col-resize bg-[var(--border-muted)] transition-colors hover:bg-accent" />
