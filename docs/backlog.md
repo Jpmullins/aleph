@@ -117,41 +117,31 @@ CopilotKit names four bands. Aleph now uses three.
 | MCP Apps | **NOT BUILT** — discussed, never started |
 | Open-ended (`generateSandboxedUi`) | **DONE** — with a design skill and two read-only sandbox functions |
 
-### C1. CopilotKit Enterprise Intelligence — **EVALUATED, mostly already built**
+### C1. CopilotKit Enterprise Intelligence — **PARTLY MISJUDGED; still decline**
 
-Asked about three times and never actually looked at. Researched via the
-CopilotKit docs MCP. Here is the real answer.
+**Correction.** My first assessment said it offered threads, inspection and
+multi-tenancy, all of which Aleph has. That was incomplete — I searched the docs
+and missed the product page. It also has a **self-improvement** pillar:
+in-context learning from human feedback with no fine-tuning; captured in-app
+interactions (clicks, edits, navigation) and approval/edit signals; learning
+containers scoped per user, group or organisation; **automatic skill
+development** — *"Users show the agent a task once. It learns the skill"* — plus
+export as fine-tuning datasets, full auditability, and self-hosting.
 
-**What it is:** a separate backend service beside the runtime, licensed and
-commercial. It provides:
+That is the thing worth wanting, and it was right to keep asking about it.
 
-| Capability | Aleph's equivalent today |
-|---|---|
-| Durable, resumable threads (Postgres + Redis, single-writer locks, WebSocket sync) | LangGraph checkpoints in Postgres — **exists**, but resume is unreliable (see below) |
-| Event timelines / thread history | The action ledger — hash-chained, append-only — **exists and is stronger** |
-| Agent trace inspection | OTEL + Langfuse, behind `--profile tracing` — **exists** |
-| Multi-tenancy (org / project / user) | `project_id` + `access_scope` on every row — **exists** |
-| Inspector & Admin Console (hosted web UI) | **Nothing.** This is the real gap. |
-| API key management, project selection | Not applicable — Aleph is single-tenant per deployment |
+**The verdict does not change, for a different reason than before.** The
+deployment constraint still holds — cloud-hosted sends every interaction to
+CopilotKit, self-hosting is a Helm chart into Kubernetes, and Aleph deploys with
+docker compose. But the stronger argument is that **Deep Agents provides these
+primitives natively, and Aleph already runs it** (`deepagents 0.6.6`). See H
+below: agent-authored skills, durable skill storage, and iterate-until-good
+grading are all available in the library Aleph is already built on, with no
+license, no Kubernetes, and no data leaving the deployment.
 
-**The deployment problem.** Two options, and both conflict with how Aleph is
-built. Cloud-hosted sends every thread to CopilotKit's infrastructure, which is
-the opposite of a stack that runs its own gateway specifically so nothing leaves.
-Self-hosted installs the `copilot-intelligence` Helm chart **into Kubernetes**,
-with CopilotKit engineering involved in the deployment. Aleph deploys with
-`docker compose`, which was an explicit requirement.
-
-**Recommendation: do not adopt it.** Aleph has already built the self-hosted
-equivalent of four of its five capabilities, and its ledger is a stronger
-version of the event history. Taking it on would mean either giving up data
-residency or adopting Kubernetes, to gain things that already exist.
-
-**But take the one idea that is missing — the Inspector.** A surface that shows
-the AG-UI event stream, the tool calls, and where a run failed. Aleph has none,
-which is why the `RUN_ERROR` in E1 is still untraced and why diagnosing the chat
-path means reading container logs. This is buildable directly on Aleph's own
-data: the ledger already records every action, and the agent-events SSE stream
-already exists. Filed as **C3**.
+Aleph also already holds the substrate the learning would run on: the action
+ledger records every state mutation, and hand-edit and rejection feedback are
+already captured as first-class rows.
 
 ### C2. MCP Apps — **NOT BUILT**
 
@@ -319,44 +309,167 @@ leave the wrong structure wearing the right paint.
 
 ---
 
+## H. Deep Agents capabilities Aleph is not using — **the self-improvement path**
+
+Aleph runs `deepagents 0.6.6`. The newer releases carry most of what the plugin
+and self-improvement thesis needs, and almost none of it is wired.
+
+### What Aleph already has
+
+Skills **are** wired: `create_deep_agent(..., skills=["/skills"])` with a
+`FilesystemBackend` over `apps/api/src/aleph_api/skills/`, carrying four bundled
+skills — `research`, `ach`, `wiki-style`, `report-authoring`. They follow the
+[Agent Skills specification](https://agentskills.io/specification): `SKILL.md`
+with `name`/`description` frontmatter, progressive disclosure in three levels
+(metadata at startup, instructions on activation, resources on demand).
+
+### H1. The agent cannot write a skill — **NOT BUILT**
+
+This is the self-improvement mechanism, and the docs state it plainly: *"You can
+also ask your agent to write a skill for a task you worked on with the agent."*
+
+Aleph's skills backend is a **read-only host filesystem**. The agent can read
+skills and can never author one, so nothing it learns in a session survives it.
+`StoreBackend` gives durable cross-thread storage, which is what an authored
+skill needs to persist.
+
+The guardrail question — "what stops it removing load-bearing capability" — is
+A2, and it is the same question.
+
+### H2. `aleph_kernel.skills` is dead code — **BROKEN**
+
+There are **two** skills implementations. The one that runs is deepagents'
+`SkillsMiddleware`. The other is `packages/aleph-kernel/src/aleph_kernel/skills.py`:
+`SKILL.md` plus `kernel.py`, AST-gated before execution, exec'd into a fresh
+namespace so a skill cannot shadow a module, loadable as a kernel capability
+with a lifecycle.
+
+It has **no callers outside its own tests**. Verified.
+
+That is the exact defect class CLAUDE.md names as dominant — written correctly,
+read by nothing. It also matters more than most, because its AST gate is the
+admission control an *agent-authored* skill would need (H1), and the capability
+lifecycle is what activate/deactivate (A1) would be built on. Either wire it to
+the agent path or delete it; leaving it is a third state that reads as
+"we have this covered" and does not.
+
+### H3. `RubricMiddleware` — iterate until it is actually done — **NOT BUILT**
+
+LLM-as-a-judge at runtime: declare what "done" looks like, and the agent
+self-evaluates and revises until the rubric passes or an iteration cap is hit.
+Requires `deepagents>=0.6.5`; Aleph has 0.6.6, so this is available today.
+
+Aleph's `aleph-reviewer` runs verification passes, but they are a separate stage
+that reports findings, not a loop the agent closes itself. The wiki lint has
+exactly the shape a rubric wants — 16 named criteria with fixes.
+
+### H4. `HarnessProfile` — per-model harness tuning — **NOT BUILT**
+
+Package prompt tweaks, tool-description overrides, excluded tools and middleware,
+and subagent edits per provider or per model, loadable from YAML. Deep Agents
+ships built-in profiles for OpenAI and Anthropic.
+
+This matters specifically because of B2. Aleph is meant to run against any
+OpenAI-compatible endpoint — litellm, ollama, vllm, bedrock — and it currently
+sends **one prompt and one tool set to every model**. A 7B local model and Opus
+do not want the same harness. Profiles are the built-in answer, and they pair
+with the endpoint work rather than following it.
+
+### H5. Interpreters and dynamic subagents — **NOT BUILT**
+
+Interpreters give the agent an in-memory workspace where it writes code that
+loops, branches, retries and batches — with intermediate results staying out of
+model context. Dynamic subagents dispatch subagents *from that code*.
+
+Directly relevant to **E5, the gateway rate limiting**. Today the model decides
+how many subagent calls to issue, one turn at a time; the docs note this is
+unreliable at scale and tends to sample rather than cover. Moving fan-out into
+interpreter code makes it deterministic and bounded, which is both the fix for
+unpredictable request volume and better coverage.
+
+Requires `langchain-quickjs>=0.2.0`. Beta.
+
+### H6. Async subagents — **NOT BUILT**
+
+Background subagents that return a job id immediately, so the supervisor keeps
+talking to the user while work proceeds — with check, mid-flight update, and
+cancel. Aleph's research loop is exactly this shape and currently blocks.
+
+Preview feature; speaks the Agent Protocol, so a self-hosted server works.
+
+### H7. `stream.subagents` — **NOT BUILT, and it is what C3 needs**
+
+Deep Agents projects one stream handle per delegated `task` call, each exposing
+`.messages`, `.tool_calls`, `.values`, `.subagents` and `.output`, labelled by
+subagent name.
+
+That is the Inspector's data model, already available in the library. C3 does
+not need to be built from raw AG-UI events.
+
+### H8. OpenWiki and the Open Knowledge Format — **worth checking against**
+
+LangChain ships OpenWiki, a CLI that maintains a Markdown wiki as durable agent
+context, built on Deep Agents. It emits **OKF v0.1** — Markdown bundles with
+front matter, indexes and linked concepts.
+
+Aleph's wiki schema (`docs/wiki-schema.md`) was modelled on the hermes-agent
+`llm-wiki` skill and converges on the same shape. If OKF is becoming a real
+interchange format, aligning the frontmatter is cheap now and expensive later.
+Needs a read of the OKF spec against `aleph_wiki.frontmatter` before deciding —
+not a commitment yet.
+
+---
+
 ## Suggested order
 
-Each step is the forcing function for the next.
+Revised after reading the current Deep Agents docs. The headline change: **the
+self-improvement thesis is far closer than section A implies.** Aleph already
+runs `deepagents 0.6.6` with skills wired; what is missing is a writable skills
+backend and a guardrail, not a system from scratch.
 
-1. **B2 — set the model endpoint from the UI.** Blocks using Aleph against any
-   other provider, which is a stated hard requirement. Self-contained: a
-   per-project endpoint and credential, a probe before saving, and discovery
-   re-runs against whatever it is pointed at.
+1. **B2 + H4 — the model endpoint, and per-model harness profiles.** One piece
+   of work. Being able to point Aleph at any OpenAI-compatible endpoint is only
+   half useful while every model gets the same prompt and tool set; `HarnessProfile`
+   is the built-in answer and lands with the same change.
 
-2. **C3 — the Inspector pane.** Built before E1, not after: tracing the agent
-   `RUN_ERROR` by reading container logs is what makes agent bugs expensive, and
-   the Inspector is the tool that makes every later item on this list cheaper to
-   debug. Runs on data Aleph already has.
+2. **H1 + H2 + A2 — the agent can write a skill.** This is the self-improvement
+   mechanism, and it is three items only because the pieces are currently
+   scattered: a `StoreBackend` so an authored skill survives the session,
+   `aleph_kernel.skills`' AST gate as admission control on what the agent wrote,
+   and the blast-radius check that stops it removing load-bearing capability.
+   H2 is dead code today; this is what makes it live, and the alternative is
+   deleting it.
 
-3. **E1 — trace the `RUN_ERROR`** with the Inspector in hand. The chat path is
-   the product surface.
+3. **H7 + C3 — the Inspector.** `stream.subagents` is the data model, already in
+   the library. Build it before chasing E1: tracing agent failures through
+   container logs is what makes every agent bug expensive.
 
-4. **B1 + A4 + G's four REBUILD components.** These are one piece of work, not
-   three. `Drawers.tsx` is the settings drawer B1 replaces with panes; it is also
-   the most drifted component in the tree (24 hardcoded colours, zero tokens);
-   and it is where A4's per-plugin settings cards have to land. Rebuilding it as
-   panes settles all three.
+4. **E1 — trace the `RUN_ERROR`** with the Inspector in hand.
 
-5. **G's remaining revisions.** 12 components need revision and 16 need
-   touch-ups. Mechanical once the four rebuilds have set the pattern, and worth
-   a sweep that fails on `rounded-*`, `shadow-*` and raw palette classes so the
-   drift cannot return.
+5. **B1 + A4 + G's four rebuilds.** One piece of work. `Drawers.tsx` is
+   simultaneously the settings drawer B1 replaces, the most drifted file in the
+   tree, and where A4's per-plugin cards have to land.
 
-6. **A3 — catalog composition.** The other half of a plugin's UI, and it
-   requires changing the single-catalog sweep's invariant.
+6. **H5 — interpreters and dynamic subagents.** Also the likely fix for E5:
+   model-driven fan-out is what makes request volume unpredictable, and moving
+   it into interpreter code makes it bounded and deterministic.
 
-7. **A1 — the plugin system proper.** Largest. Items 4–6 are the concrete
-   forcing functions for its shape, which is why it comes after them rather
-   than before.
+7. **H3 — `RubricMiddleware`.** The wiki lint's 16 named criteria are already
+   rubric-shaped, so there is a concrete first rubric to write.
 
-8. **A2 — the agent authoring plugins**, once A1 exists.
+8. **G's remaining revisions**, with a sweep that fails on `rounded-*`,
+   `shadow-*` and raw palette classes so the drift cannot return.
 
-9. **E2–E4**, then **D1–D2**.
+9. **A3 — catalog composition**, then **A1 — the plugin system**. A1 last on
+   purpose: items 2, 5 and 6 are the concrete forcing functions for its shape,
+   and a plugin system designed before them would be designed against guesses.
 
-**Not doing:** C1 (Enterprise Intelligence) — evaluated and declined, see above.
+10. **H6** (async subagents, for the research loop), **H8** (read the OKF spec
+    against `aleph_wiki.frontmatter`), then **E2–E4** and **D1–D2**.
+
+**Not doing:** C1 — Enterprise Intelligence. Its self-improvement pillar is real
+and I was wrong to omit it, but Deep Agents provides the same primitives inside
+a library Aleph already depends on, with no license, no Kubernetes, and nothing
+leaving the deployment.
+
 **Parked:** D3 and D4 until OIDC deployment is taken up as a whole.
