@@ -34,6 +34,7 @@ __all__ = [
     "MIN_OUTBOUND_LINKS",
     "PAGE_SPLIT_LINES",
     "PAGE_STATUSES",
+    "RESERVED_TAGS",
     "REVIEW_QUEUE",
     "STUB_PROMOTION_MENTIONS",
     "STUB_STATUS",
@@ -151,6 +152,16 @@ EXEMPT_TYPES: frozenset[str] = frozenset({"raw-source"})
 
 CONFIDENCE_LEVELS: tuple[str, ...] = ("high", "medium", "low")
 
+#: Tags that describe a page's STRUCTURE rather than its subject, and so are
+#: valid in every wiki regardless of domain.
+#:
+#: Without this, generated hubs violate the schema the moment a project derives
+#: its own taxonomy — a domain taxonomy for storage systems has no reason to
+#: propose `hub`, but every hub carries it. The lint found exactly that on the
+#: first derived schema: ten hubs, ten `'hub' is not in the taxonomy` findings,
+#: for a tag the system writes itself.
+RESERVED_TAGS: frozenset[str] = frozenset({"hub", "index"})
+
 _SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
@@ -174,7 +185,8 @@ class WikiSchema:
 
     @property
     def tag_set(self) -> frozenset[str]:
-        return frozenset(self.tags)
+        """Every tag a page may carry: the domain taxonomy plus the reserved ones."""
+        return frozenset(self.tags) | RESERVED_TAGS
 
     def category(self, category_id: str) -> Category | None:
         return next((c for c in self.categories if c.id == category_id), None)

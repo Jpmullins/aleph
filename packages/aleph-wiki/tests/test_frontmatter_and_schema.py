@@ -233,3 +233,51 @@ class TestSchemaSerialisation:
 
     def test_hub_slug_is_derived_not_stored(self) -> None:
         assert Category("architectures", "Architectures").hub_slug == "architectures-hub"
+
+
+class TestReservedTags:
+    """Structural tags must survive a domain taxonomy that never mentions them.
+
+    The first derived schema — a storage-systems taxonomy — had no `hub` tag,
+    because no domain vocabulary has a reason to propose one. Every generated
+    hub carries it, so the lint reported ten violations for a tag the system
+    writes itself.
+    """
+
+    def test_hub_is_valid_even_in_a_taxonomy_that_omits_it(self) -> None:
+        schema = WikiSchema(
+            domain="storage systems",
+            categories=(Category("logging-recovery", "Logging and Recovery"),),
+            tags=("latency", "throughput"),
+        )
+        assert (
+            schema.validate_page(
+                title="Logging and Recovery Hub",
+                page_type="hub",
+                category="logging-recovery",
+                tags=["hub"],
+                related=[],
+                confidence="high",
+                outbound_links=5,
+            )
+            == []
+        )
+
+    def test_a_domain_tag_still_has_to_be_declared(self) -> None:
+        """Reserving structural tags must not become a hole for any tag."""
+        schema = WikiSchema(
+            domain="storage systems",
+            categories=(Category("logging-recovery", "Logging and Recovery"),),
+            tags=("latency",),
+        )
+        violations = schema.validate_page(
+            title="A Page",
+            page_type="concept",
+            category="logging-recovery",
+            tags=["hub", "undeclared"],
+            related=[],
+            confidence="high",
+            outbound_links=5,
+        )
+        assert [v.field for v in violations] == ["tags"]
+        assert "undeclared" in violations[0].message

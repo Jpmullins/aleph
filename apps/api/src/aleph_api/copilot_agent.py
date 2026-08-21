@@ -32,6 +32,8 @@ from aleph_core.ids import uuid7
 from aleph_security.request_context import current_principal, require_project_access
 from aleph_security.roles import ProjectRole
 from aleph_wiki.index_service import IndexService
+from aleph_wiki.lint import lint_wiki
+from aleph_wiki.schema_service import SchemaService
 
 if TYPE_CHECKING:
     from langgraph.store.postgres import AsyncPostgresStore
@@ -118,10 +120,27 @@ one read-only dossier card, and `spotlight` sorts a Briefs card to the top. Use 
 these to land the analyst on exactly what you're talking about rather than only \
 describing it.
 
+The wiki is governed by a schema, and you must orient on it before you write. \
+`wiki_schema` gives the domain, the category list, the controlled tag taxonomy \
+and the page thresholds; a page carrying a tag or category not in that schema \
+is rejected at commit time, so read it first rather than inventing vocabulary. \
+If the schema is still the shipped default and the corpus is plainly about \
+something else, say so and offer to derive one from the pages that exist.
+
+Four page statuses, and two of them are queues for a PERSON — they are not the \
+same queue. `stub` is a red link nobody wrote and nobody proposed; it is not \
+work. `planned` is a title that earned a page by being cited enough — a queue \
+for WRITING, allowed to be long. `draft` has content and is a queue for REVIEW. \
+`approved` is settled. Never describe stubs or planned pages as drafts or as \
+awaiting approval, and never count them into a review backlog.
+
 When the analyst asks how the wiki is doing, what needs review, or which links \
-are broken, call `wiki_curation_status` for a quick read of draft pages awaiting \
-review and unresolved wikilinks, then point them to the Wiki tab (where they can \
-approve drafts and repair links). You can also list connectors and enable/disable \
+are broken, call `wiki_curation_status` for counts, and `wiki_lint_report` when \
+they want to know what is actually WRONG — broken links, orphans, uncategorised \
+pages, near-duplicates that should be merged, pages nobody has judged. Lint \
+findings are ordered worst-first; lead with what breaks navigation, not with \
+style. Then point them to the Wiki tab (where they can approve drafts and \
+repair links). You can also list connectors and enable/disable \
 them, and report or change the project's model profile, when the analyst asks \
 about data sources or model settings — these are light config tools you hold \
 directly. Enabling/disabling a \
@@ -495,6 +514,122 @@ async def wiki_curation_status(config: RunnableConfig) -> str:
     if draft_titles:
         parts.append("Drafts awaiting review:\n" + "\n".join(f"- [[{t}]]" for t in draft_titles))
     return "\n".join(parts)
+
+
+@tool
+async def wiki_schema(config: RunnableConfig) -> str:
+    """Report the wiki's governance schema: domain, categories, tag taxonomy, thresholds.
+
+    Read this BEFORE writing or filing any wiki page. It is the controlled
+    vocabulary the write path validates against — a page carrying a tag or a
+    category that is not listed here is rejected at commit time, not fixed
+    later. It also states the page thresholds: how many links a page needs, how
+    long before it should be split, and how many citations an unwritten title
+    needs before it earns a page.
+
+    Call this when the analyst asks what the wiki covers, what the categories or
+    tags are, how pages are organised, or before proposing any change to how
+    pages are filed.
+    """
+    session_maker = _runtime.get("session_maker")
+    project_id = await _project_id_from_config(config)
+    if session_maker is None or project_id is None:
+        return "The wiki schema is unavailable (no project scope on this run)."
+    async with session_maker() as session:  # type: AsyncSession
+        svc = SchemaService(session)
+        schema = await svc.get(project_id)
+        customised = await svc.is_customised(project_id)
+
+    lines = [
+        f"Wiki domain: {schema.domain}",
+        "",
+        (
+            "This schema was derived for this project."
+            if customised
+            else "This project is still on the SHIPPED DEFAULT schema, which describes "
+            "AI/ML research. If the corpus is about something else, the categories "
+            "below are the wrong ones — say so, and offer to derive a schema from "
+            "the pages that actually exist."
+        ),
+        "",
+        "Categories (file every page under exactly one, by id):",
+    ]
+    lines += [
+        f"  - {c.id}: {c.title}" + (f" — {c.blurb}" if c.blurb else "") for c in schema.categories
+    ]
+    lines += [
+        "",
+        f"Page types: {', '.join(schema.page_types)}",
+        "",
+        "Tag taxonomy — use ONLY these, 2-5 per page. A tag not on this list is "
+        "rejected at write time; to use a new one, add it to the schema first:",
+        "  " + ", ".join(schema.tags),
+        "",
+        "Thresholds:",
+        f"  - every page needs at least {schema.min_outbound_links} outbound [[wikilinks]]",
+        f"  - split a page past {schema.page_split_lines} lines",
+        f"  - an unwritten title earns a page at {schema.stub_promotion_mentions} "
+        "citing pages; promotion moves it to the WRITING queue (planned), never "
+        "to the review queue (draft)",
+    ]
+    return "\n".join(lines)
+
+
+@tool
+async def wiki_lint_report(
+    severity: str = "",
+    limit: int = 30,
+    config: RunnableConfig | None = None,
+) -> str:
+    """Run the wiki health check and report what is wrong, worst first.
+
+    Checks broken wikilinks, orphan pages, uncategorised pages, schema
+    violations, frontmatter that disagrees with the stored fields, contested
+    pages, unjudged confidence, staleness, tags outside the taxonomy, duplicate
+    slugs, near-duplicate pages that should be merged, and unwritten titles that
+    have earned a page.
+
+    Call this when the analyst asks to lint, audit or health-check the wiki, asks
+    what is broken or missing, or asks what to work on next.
+
+    Args:
+        severity: optional filter — "broken", "structure", "quality", "style",
+            or a comma-separated set. Omit for everything.
+        limit: how many findings to include. Default 30.
+    """
+    session_maker = _runtime.get("session_maker")
+    project_id = await _project_id_from_config(config)
+    if session_maker is None or project_id is None:
+        return "The wiki lint is unavailable (no project scope on this run)."
+    async with session_maker() as session:  # type: AsyncSession
+        schema = await SchemaService(session).get(project_id)
+        report = await lint_wiki(session, project_id=project_id, schema=schema)
+
+    if severity:
+        wanted = {s.strip() for s in severity.split(",") if s.strip()}
+        kept = [f for f in report.sorted_findings() if f.severity in wanted]
+        if not kept:
+            return f"Wiki lint — {report.pages_scanned} pages checked: no {severity} findings."
+        head = (
+            f"Wiki lint — {report.pages_scanned} pages checked "
+            f"({report.stubs_skipped} stubs skipped): {len(kept)} {severity} findings."
+        )
+        body = "\n".join(
+            f"  - [{f.check}] {f.message}"
+            + (f" ({f.page_title})" if f.page_title else "")
+            + (f" — {f.fix}" if f.fix else "")
+            for f in kept[: max(1, limit)]
+        )
+        return f"{head}\n{body}"
+
+    summary = report.summary()
+    # `summary()` caps at 60 lines; honour a smaller ask so a request for the
+    # top few does not return three screens.
+    if limit < 60:
+        head, _, rest = summary.partition("\n")
+        kept_lines = [ln for ln in rest.splitlines() if ln.strip()][: max(1, limit) + 6]
+        return head + "\n" + "\n".join(kept_lines)
+    return summary
 
 
 async def _read_wiki_impl(query: str, config: RunnableConfig) -> str:
@@ -1494,6 +1629,8 @@ def build_assistant_deep_agent(
         tools=[
             search_wiki,
             wiki_curation_status,
+            wiki_schema,
+            wiki_lint_report,
             list_connectors,
             set_connector_enabled,
             set_model_profile,
