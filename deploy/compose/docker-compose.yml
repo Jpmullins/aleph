@@ -126,9 +126,14 @@ services:
   # One-shot. Every service that touches the database waits for this to exit 0,
   # so no app ever runs against a half-migrated schema.
   migrate:
+    # Same image as `api`, and the shared `image:` tag is what guarantees that.
+    # Without it compose derives `aleph-migrate` and `aleph-api` from the one
+    # Dockerfile, so `docker compose build api` leaves this one stale and the
+    # one-shot runs an older set of migrations than the code expects.
     build:
       context: ../..
       dockerfile: apps/api/Dockerfile
+    image: aleph-api:local
     networks: [aleph]
     <<: *app-env
     depends_on:
@@ -144,6 +149,7 @@ services:
     build:
       context: ../..
       dockerfile: apps/api/Dockerfile
+    image: aleph-api:local
     networks: [aleph]
     <<: [*app-env, *model-access]
     depends_on:
@@ -274,10 +280,25 @@ services:
       VITE_API_BASE_URL: ${ALEPH_SELF_URL:-http://localhost:8000}
       VITE_COPILOT_RUNTIME_URL: http://localhost:${RUNTIME_PORT:-4000}/api/copilotkit
       VITE_AUTH_MODE: ${ALEPH_AUTH_MODE:-local}
+      # Switches Vite's watcher to polling. Bind-mounted files do not emit
+      # filesystem events across the macOS VM boundary, so without this an edit
+      # never recompiles and the browser is served the boot-time module forever.
+      ALEPH_IN_CONTAINER: "1"
     depends_on:
       api:
         condition: service_healthy
     ports: ["${WEB_PORT:-5173}:5173"]
+    # Bind-mounted, not synced. `develop.watch` below only copies files while
+    # `docker compose watch` is running in the foreground; under a plain
+    # `up -d` — which is how the stack is normally started — an edit never
+    # reaches the container and Vite serves the image's copy forever. That
+    # failure is silent: HMR reports connected, the page reloads, and nothing
+    # about it changes. Mounting `src` makes edits live under either command.
+    # Only `src` and `index.html` are mounted so the image's node_modules,
+    # which are installed for the container's platform, stay intact.
+    volumes:
+      - ../../apps/web/src:/app/apps/web/src
+      - ../../apps/web/index.html:/app/apps/web/index.html
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:5173/ || exit 1"]
       interval: 15s

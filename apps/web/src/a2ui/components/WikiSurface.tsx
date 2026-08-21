@@ -42,10 +42,18 @@ interface OpenPage {
   html_url?: string | null;
 }
 
+// Mirrors WikiService.STUB_PROMOTION_MENTIONS. Only used in explanatory copy —
+// the rule itself is enforced server-side.
+const STUB_PROMOTION_MENTIONS = 2;
+
 const STATUS_TONE: Record<string, "emerald" | "amber" | "slate"> = {
   approved: "emerald",
   draft: "amber",
   archived: "slate",
+  // A stub is a red link: a title something pointed at that nobody has written
+  // yet. It is not a proposal and carries no claim, so it gets the quietest
+  // tone we have — noticing it should take deliberate attention.
+  stub: "slate",
 };
 
 function StatusBadge({ status }: { status: string }) {
@@ -75,8 +83,14 @@ export function WikiSurface({ component, onAction }: RendererProps) {
     return list.filter((p) => p.title.toLowerCase().includes(needle));
   }, [pages, filter, draftsOnly]);
 
-  const topicPages = filtered.filter((p) => p.page_kind !== "source");
-  const sourcePages = filtered.filter((p) => p.page_kind === "source");
+  // Split on `is_stub`, not on status. `is_stub` is the durable fact — this
+  // page has no content — while status is a workflow state that can be moved
+  // independently: the corpus holds one stub somebody approved, which is still
+  // an empty page and still belongs down here rather than among real ones.
+  const written = filtered.filter((p) => !p.is_stub);
+  const topicPages = written.filter((p) => p.page_kind !== "source");
+  const sourcePages = written.filter((p) => p.page_kind === "source");
+  const stubPages = filtered.filter((p) => p.is_stub);
 
   if (open) {
     return (
@@ -155,6 +169,33 @@ export function WikiSurface({ component, onAction }: RendererProps) {
         )}
         {sourcePages.length > 0 && (
           <PageGroup label="Source pages" pages={sourcePages} onSelect={openPage} />
+        )}
+        {stubPages.length > 0 && (
+          <details className="group">
+            <summary className="mb-1.5 cursor-pointer list-none text-xs font-semibold uppercase tracking-wider text-ink-muted hover:text-ink">
+              <span className="inline-block w-3 transition-transform group-open:rotate-90">›</span>
+              Unwritten ({stubPages.length})
+            </summary>
+            <p className="mb-2 pl-3 text-[11px] leading-relaxed text-ink-muted">
+              Titles other pages link to that nobody has written yet. They become
+              drafts on their own once {STUB_PROMOTION_MENTIONS} separate pages
+              cite them.
+            </p>
+            <ul className="space-y-1 pl-3">
+              {stubPages.map((p) => (
+                <li key={p.id}>
+                  <button
+                    type="button"
+                    onClick={() => openPage(p.id)}
+                    className="block w-full truncate border-l border-line px-2 py-1 text-left text-xs text-ink-muted hover:border-line-strong hover:text-ink"
+                    data-testid={`wiki-stub-${p.id}`}
+                  >
+                    {p.title}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </details>
         )}
       </div>
     </div>

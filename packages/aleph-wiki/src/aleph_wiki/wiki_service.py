@@ -491,9 +491,7 @@ class WikiService:
         """
         page = (
             await self._session.execute(
-                select(WikiPage).where(
-                    WikiPage.id == page_id, WikiPage.project_id == project_id
-                )
+                select(WikiPage).where(WikiPage.id == page_id, WikiPage.project_id == project_id)
             )
         ).scalar_one_or_none()
         if page is None or not page.is_stub:
