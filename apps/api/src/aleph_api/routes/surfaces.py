@@ -623,7 +623,31 @@ async def _wiki_messages(
                 # HtmlDocCard's sandboxed iframe src; the card never fetches.
                 "html_url": f"/v1/projects/{project_id}/wiki/pages/{pid}/html",
             }
-    return wiki_surface_v09(pages=pages, open_page=open_page, surface_id=surface_id)
+    # The schema's categories, so the browser can group and title its sections
+    # without a second round-trip, and the lint's severity counts so the header
+    # can state the corpus's health. Counts only — the findings are a separate
+    # read, since 300 of them in every surface push would make this payload
+    # mostly a list nobody asked for.
+    from aleph_wiki.lint import lint_wiki
+    from aleph_wiki.schema_service import SchemaService
+
+    schema = await SchemaService(session).get(project_id)
+    report = await lint_wiki(session, project_id=project_id, schema=schema)
+    categories = [{"id": c.id, "title": c.title, "blurb": c.blurb} for c in schema.categories]
+    health = {
+        "pages_scanned": report.pages_scanned,
+        "stubs_skipped": report.stubs_skipped,
+        "total": len(report.findings),
+        "by_severity": report.by_severity,
+        "by_check": report.by_check,
+    }
+    return wiki_surface_v09(
+        pages=pages,
+        open_page=open_page,
+        categories=categories,
+        health=health,
+        surface_id=surface_id,
+    )
 
 
 async def _retracted_page_ids(session: Any, project_id: UUID, page_ids: list[UUID]) -> set[UUID]:

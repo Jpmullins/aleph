@@ -456,6 +456,14 @@ export const WikiSurfaceApi = {
   schema: z3.object({
     pages: CommonSchemas.DynamicValue.optional(),
     open: CommonSchemas.DynamicValue.optional(),
+    // The binder resolves ONLY the props declared here — an undeclared one is
+    // dropped silently, so the view sees `undefined` while the server is
+    // sending the data. A producer without its matching declaration is the
+    // write-path-with-no-read-path failure in miniature: the surface payload
+    // carried `categories` and `health` correctly and the wiki rendered as if
+    // the project had no categories at all.
+    categories: CommonSchemas.DynamicValue.optional(),
+    health: CommonSchemas.DynamicValue.optional(),
   }),
 };
 export const WikiSurfaceImpl = createComponentImplementation(

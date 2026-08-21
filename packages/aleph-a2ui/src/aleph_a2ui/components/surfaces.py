@@ -79,28 +79,48 @@ def wiki_surface_v09(
     *,
     pages: list[dict[str, Any]],
     open_page: dict[str, Any] | None = None,
+    categories: list[dict[str, Any]] | None = None,
+    health: dict[str, Any] | None = None,
     surface_id: str = "wiki",
     catalog_id: str = ALEPH_V09_CATALOG_ID,
 ) -> list[dict[str, Any]]:
-    """Data-bound Wiki tab. Data model: ``{pages: [...], open: {...} | null}``.
+    """Data-bound Wiki tab.
+
+    Data model: ``{pages, open, categories, health}``.
 
     `pages` is the page-browser list; `open` is the currently-open page's reader
     payload (revision body, claims, citations, wikilinks) or ``None`` when
-    browsing the index. Opening a page is an `open` A2UI action → the panel
-    re-streams with `?page_id=`, populating `open` (the rich reader card is
-    WP-4b; for now the body renders through a bound markdown primitive).
+    browsing the index.
+
+    `categories` is the project's schema categories — id, title, blurb — so the
+    browser can group by category and name each group properly. It is sent with
+    the surface rather than fetched by the view because a pane owns no transport
+    of its own; a component that had to fetch its own category titles would be
+    the self-fetching surface the pane model exists to remove.
+
+    `health` is the lint's severity counts, not its findings: a one-line state
+    of the corpus for the browser header. The findings themselves are a separate
+    read — putting 300 of them in every surface push would make the wiki tab's
+    payload dominated by a list nobody asked for.
     """
     component = {
         "id": "root",
         "component": "WikiSurface",
         "pages": {"path": "/pages"},
         "open": {"path": "/open"},
+        "categories": {"path": "/categories"},
+        "health": {"path": "/health"},
     }
     return full_surface(
         surface_id=surface_id,
         catalog_id=catalog_id,
         components=[component],
-        data_model={"pages": pages, "open": open_page},
+        data_model={
+            "pages": pages,
+            "open": open_page,
+            "categories": categories or [],
+            "health": health or {},
+        },
     )
 
 

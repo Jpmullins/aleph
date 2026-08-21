@@ -137,7 +137,38 @@ def test_wiki_surface_v09_binds_pages_and_open() -> None:
     )
     assert comp["pages"] == {"path": "/pages"}
     assert comp["open"] == {"path": "/open"}
-    assert model == {"pages": [{"id": "p1", "title": "T"}], "open": None}
+    assert model == {
+        "pages": [{"id": "p1", "title": "T"}],
+        "open": None,
+        # Present and empty rather than absent. The client binder resolves only
+        # the paths it is given, and a path missing from the data model resolves
+        # to something that is not a list — which is how the wiki rendered with
+        # no categories at all while the server was sending ten.
+        "categories": [],
+        "health": {},
+    }
+
+
+def test_wiki_surface_v09_binds_categories_and_health() -> None:
+    """Every prop the producer sends needs a binding, or it never arrives.
+
+    The binder resolves ONLY declared bindings. A prop added to the data model
+    without a matching `{"path": ...}` on the component is dropped silently —
+    the payload is correct, the view sees `undefined`, and nothing reports an
+    error. That is the write-path-with-no-read-path failure this codebase keeps
+    producing, so it is pinned here on both halves.
+    """
+    cats = [{"id": "logging-recovery", "title": "Logging and Recovery", "blurb": "WAL"}]
+    health = {"pages_scanned": 25, "by_severity": {"broken": 280}}
+    comp, model = _assert_bound_surface(
+        wiki_surface_v09(pages=[], open_page=None, categories=cats, health=health),
+        surface_id="wiki",
+        component="WikiSurface",
+    )
+    assert comp["categories"] == {"path": "/categories"}
+    assert comp["health"] == {"path": "/health"}
+    assert model["categories"] == cats
+    assert model["health"] == health
 
 
 def test_artifacts_surface_v09_binds_sources_and_artifacts() -> None:

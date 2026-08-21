@@ -96,14 +96,34 @@ def observability(settings: Settings) -> CapabilitySpec:
 
         yield _otel_down
 
-        init_langfuse(
-            host=settings.langfuse_host,
-            public_key=settings.langfuse_public_key,
-            secret_key=settings.langfuse_secret_key,
+        # Same opt-in rule as the OTLP exporter above: Langfuse lives behind
+        # `--profile tracing`, and initialising a client against a host that is
+        # not running makes every process retry a DNS name that does not
+        # resolve, forever. Keys are what gate it — a deployment that wants
+        # tracing has them, and one that does not has nothing to send.
+        # `CHANGE-ME` counts as unset. `.env.example` ships placeholder keys and
+        # the bootstrap copies it verbatim, so a truthiness check alone would
+        # call every default install "configured" and then spend its life
+        # retrying a host that is not running.
+        def _configured(value: str) -> bool:
+            v = value.strip()
+            return bool(v) and "CHANGE-ME" not in v
+
+        langfuse_enabled = (
+            _configured(settings.langfuse_host)
+            and _configured(settings.langfuse_public_key)
+            and _configured(settings.langfuse_secret_key)
         )
+        if langfuse_enabled:
+            init_langfuse(
+                host=settings.langfuse_host,
+                public_key=settings.langfuse_public_key,
+                secret_key=settings.langfuse_secret_key,
+            )
 
         async def _langfuse_down() -> None:
-            shutdown_langfuse()
+            if langfuse_enabled:
+                shutdown_langfuse()
 
         yield _langfuse_down
 

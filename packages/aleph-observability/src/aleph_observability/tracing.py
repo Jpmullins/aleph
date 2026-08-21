@@ -51,8 +51,21 @@ def init_otel(
         }
     )
     provider = TracerProvider(resource=resource)
-    exporter = OTLPSpanExporter(endpoint=otlp_endpoint, insecure=True)
-    provider.add_span_processor(BatchSpanProcessor(exporter))
+    # An empty endpoint means "do not export". Tracing is opt-in — the
+    # collector and Langfuse sit behind the `tracing` compose profile — but the
+    # exporter was configured unconditionally, so on the default stack every
+    # process retried a connection to a host that does not exist, forever.
+    #
+    # That is not merely noisy: it buried real errors. Diagnosing an agent
+    # failure meant reading past hundreds of "Failed to export traces to
+    # otel-collector:4317" lines to find the one line that mattered, and a log
+    # nobody can read is a log nobody reads.
+    #
+    # The provider is still installed, so spans are created and context
+    # propagates in-process; only the network exporter is skipped.
+    if otlp_endpoint.strip():
+        exporter = OTLPSpanExporter(endpoint=otlp_endpoint, insecure=True)
+        provider.add_span_processor(BatchSpanProcessor(exporter))
     trace.set_tracer_provider(provider)
     _provider = provider
 
