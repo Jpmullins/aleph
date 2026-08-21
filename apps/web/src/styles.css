@@ -34,6 +34,14 @@
 }
 
 @layer base {
+  /* The page ground follows the theme. This lives here rather than as classes
+     on <body> because a utility class wins on specificity and would silently
+     re-pin the ground to one theme — which is exactly the bug this replaces. */
+  body {
+    background: var(--surface-bg);
+    color: var(--text-primary);
+  }
+
   html,
   body,
   #root {

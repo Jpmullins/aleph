@@ -23,7 +23,13 @@
       })();
     </script>
   </head>
-  <body class="bg-slate-50 text-slate-900">
+  <!-- No colour classes here. `bg-slate-50 text-slate-900` painted the page
+       ground with literal light-mode values that never read a token, so the
+       theme toggle flipped every variable underneath a body that ignored
+       them: --surface-bg went #ffffff -> #0f0f10 while the visible
+       background stayed near-white. body is styled from tokens in
+       src/styles.css instead. -->
+  <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
