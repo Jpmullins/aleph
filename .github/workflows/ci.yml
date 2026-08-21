@@ -100,6 +100,15 @@ jobs:
       - name: Every ✅ acceptance row names a test that exists
         run: ./scripts/check-acceptance-claims.sh
 
+      # The assistant could rewrite its own standing orders on the live
+      # container, silently, using its ordinary file-writing tools — and text in
+      # an ingested web page could in principle tell it to. This checks the
+      # EFFECTIVE permission decision, not the presence of a keyword argument:
+      # matching is first-match-wins, so an allow ahead of the deny reopens
+      # everything while `grep -c permissions=` stays happily at 1.
+      - name: The agent cannot rewrite its own skills
+        run: ./scripts/check-agent-fs-permissions.sh
+
   python-unit:
     name: unit tests
     runs-on: ubuntu-latest

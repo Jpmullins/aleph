@@ -131,6 +131,14 @@ probe "check-acceptance-claims notices a cited test that does not exist" \
   's/packages\/aleph-core\/tests\/test_rrf.py/packages\/aleph-core\/tests\/test_no_such_thing.py/' \
   "./scripts/check-acceptance-claims.sh"
 
+# The mutation that matters here is not "delete the rule" — it is "add an allow
+# ahead of the deny", which is what WS-H1 will legitimately want to do and is
+# the way this gate silently reopens.
+probe "check-agent-fs-permissions notices an allow ahead of the deny" \
+  apps/api/src/aleph_api/copilot_agent.py \
+  's/        permissions=\[\n            FilesystemPermission/        permissions=[\n            FilesystemPermission(operations=["write"], paths=["\/skills\/**"], mode="allow"),\n            FilesystemPermission/' \
+  "./scripts/check-agent-fs-permissions.sh"
+
 # check-pane-registry's subject is the CLIENT growing a second copy of the
 # server's pane list, so the mutation belongs in the client.
 probe "check-pane-registry notices a hardcoded pane list in the client" \

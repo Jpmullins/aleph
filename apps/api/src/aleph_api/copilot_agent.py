@@ -1545,7 +1545,7 @@ def build_assistant_deep_agent(
     persistence) while all other agent files stay ephemeral per-thread.
     """
     from copilotkit import CopilotKitMiddleware
-    from deepagents import create_deep_agent
+    from deepagents import FilesystemPermission, create_deep_agent
     from deepagents.backends import (
         BackendProtocol,
         CompositeBackend,
@@ -1654,6 +1654,27 @@ def build_assistant_deep_agent(
         # procedure on demand. `/skills` is the in-backend source the
         # CompositeBackend routes to the FilesystemBackend above.
         skills=["/skills"],
+        # The agent may READ its standing orders and may not rewrite them.
+        #
+        # `FilesystemBackend` implements `write` and `edit`, `create_deep_agent`
+        # was called with no `permissions=`, and deepagents allows any operation
+        # no rule matches (`_check_fs_permission` returns "allow" by default). So
+        # the assistant could silently rewrite the four bundled SKILL.md files on
+        # the live API container, and text in an ingested web page could in
+        # principle instruct it to — an edit that then persists for the life of
+        # the container and affects everyone using it.
+        #
+        # One rule closes it: matching is first-match-wins, and both `write_file`
+        # and `edit_file` map to the single `"write"` operation
+        # (`_DEFAULT_FS_TOOL_OPS`). Subagents inherit the parent's rules unless
+        # their own spec overrides, so this covers all six in one line.
+        #
+        # This is a blanket deny, not the governed path. `WS-H1` opens
+        # `/skills/authored/**` for writing, ledgered — and the ORDER will matter
+        # then, because an allow rule ahead of this deny would reopen everything.
+        permissions=[
+            FilesystemPermission(operations=["write"], paths=["/skills/**"], mode="deny"),
+        ],
         middleware=[CopilotKitMiddleware()],
         backend=_memory_backend,
         store=store,
