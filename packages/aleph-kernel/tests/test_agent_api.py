@@ -11,7 +11,7 @@ id an agent can construct, so removing it is unexpressible rather than refused.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -199,3 +199,145 @@ async def test_inspect_does_not_change_anything() -> None:
     api.inspect()
     api.inspect()
     assert k.active() == before
+
+
+# ---------------------------------------------------------------------------
+# The two bugs that break the FIRST agent-authored plugin.
+#
+# Neither was covered by any of the 142 tests that came before, and they are
+# not edge cases: they are literally the first two things that happen when an
+# agent starts writing plugins for itself. The first attempt is wrong, and the
+# second attempt is version two of the same name.
+# ---------------------------------------------------------------------------
+
+
+async def test_a_failed_install_leaves_no_ghost() -> None:
+    """A refused install must leave the graph exactly as it found it.
+
+    `boot` and `activate` both re-derive the topological order over the WHOLE
+    registered set. A refused spec left behind therefore breaks every later
+    install too, for the life of the process — the agent's first mistake would
+    be permanent and would present as an unrelated failure.
+    """
+    kernel = Kernel()
+    api = AgentPluginAPI(kernel)
+
+    refused = await api.install(working("needs-a-ghost", requires=("nobody-provides-this",)))
+    assert refused.installed is False
+
+    # An unrelated, valid plugin must still install.
+    good = await api.install(working("unrelated"))
+    assert good.installed is True, f"the ghost poisoned the graph: {good.detail}"
+
+    # And the whole graph must still boot.
+    await kernel.boot()
+
+
+async def test_a_failed_install_does_not_break_boot() -> None:
+    """The same property from the other end: `boot` must not raise afterwards."""
+    kernel = Kernel()
+    api = AgentPluginAPI(kernel)
+    await api.install(working("dangling", requires=("nothing-provides-this",)))
+    await kernel.boot()
+    assert kernel.active() == frozenset()
+
+
+async def test_an_agent_can_ship_a_second_version() -> None:
+    """Install, disable, install the same name again.
+
+    Before `unregister`, the second install returned "'mine' is already
+    registered" — so an agent could improve a plugin exactly zero times without
+    a process restart.
+    """
+    kernel = Kernel()
+    api = AgentPluginAPI(kernel)
+
+    first = await api.install(working("mine", provides=("mine:v1",)))
+    assert first.installed is True
+    assert first.plugin_id is not None
+
+    stopped = await api.disable(PluginId(UUID(first.plugin_id)), unregister=True)
+    assert stopped.installed is False
+
+    second = await api.install(working("mine", provides=("mine:v2",)))
+    assert second.installed is True, second.detail
+    assert kernel.is_provided("mine:v2")
+
+
+async def test_disable_returns_the_id_it_was_given() -> None:
+    """Disabling must not cost the agent the handle to its own plugin.
+
+    `_teardown` leaves `plugin_id` intact and `replace` works fine on a disabled
+    plugin, so the handle existed all along — the agent was simply never given
+    it back, and `replace` was unreachable after a disable.
+    """
+    kernel = Kernel()
+    api = AgentPluginAPI(kernel)
+    installed = await api.install(working("iterating", provides=("iterating:v1",)))
+    assert installed.plugin_id is not None
+    pid = PluginId(UUID(installed.plugin_id))
+
+    outcome = await api.disable(pid)
+    assert outcome.plugin_id == str(pid), "the handle was thrown away"
+
+    # And the handle still works.
+    new_id = await kernel.replace(pid, working("iterating", provides=("iterating:v2",)))
+    assert new_id != pid
+    assert kernel.is_provided("iterating:v2")
+
+
+async def test_disable_without_unregister_keeps_the_registration() -> None:
+    """ "Stopped" and "gone" are different states, and the agent chooses."""
+    from uuid import UUID
+
+    kernel = Kernel()
+    api = AgentPluginAPI(kernel)
+    installed = await api.install(working("paused"))
+    pid = PluginId(UUID(str(installed.plugin_id)))
+
+    await api.disable(pid)
+    assert "paused" in kernel._mounted
+
+    await api.disable(pid, unregister=True)
+    assert "paused" not in kernel._mounted
+
+
+async def test_unregister_refuses_a_protected_capability() -> None:
+    """`unregister` is addressed by NAME, which sidesteps the id guardrail.
+
+    The whole point of `PluginId` is that core capability has none, so removal
+    is unexpressible rather than refused. A name-addressed method has no such
+    property, so the `protected` check inside it is the only defence — and it
+    must be the first statement in the method.
+    """
+    from aleph_kernel.errors import ProtectedCapability
+
+    kernel = Kernel()
+    spec = working("the-ledger")
+    kernel.register_core(CapabilitySpec(**{**spec.__dict__, "protected": True}))
+
+    with pytest.raises(ProtectedCapability):
+        kernel.unregister("the-ledger")
+    assert "the-ledger" in kernel._mounted, "it was dropped before the check ran"
+
+
+async def test_unregister_refuses_an_active_capability() -> None:
+    """An active capability holds live effects and may have dependents.
+
+    Dropping the registration would leave its effects unwound and anything that
+    requires it holding a binding nothing provides. It has to go through
+    `deactivate`, which computes the blast radius first.
+    """
+    kernel = Kernel()
+    kernel.register_dynamic(working("live", provides=("live:key",)))
+    await kernel.boot()
+
+    with pytest.raises(ValueError, match="active"):
+        kernel.unregister("live")
+    assert kernel.is_provided("live:key")
+
+
+async def test_unregister_of_an_unknown_name_is_a_keyerror() -> None:
+    kernel = Kernel()
+    with pytest.raises(KeyError):
+        kernel.unregister("never-existed")

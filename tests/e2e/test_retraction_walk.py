@@ -23,6 +23,10 @@ the four properties that make it mean anything:
    ledger written on a separate autocommit connection.
 4. **Scope.** Retracting one project's source leaves a parallel project alone.
 
+Plus idempotency, because the mechanical reviewer re-checks DOIs on a schedule
+and a second pass over an already-retracted source must not file a second
+critical finding against the same person's queue.
+
 **What this file does NOT prove.** `retraction_impact` contains a recursive CTE
 over `claim_edges.kind = 'derived_from'` — the second hop, a claim built on a
 claim built on the retracted paper. Nothing in the tree writes such an edge:
@@ -39,6 +43,7 @@ guarded was precisely a join that returned nothing against real rows.
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import AsyncIterator, Callable
 
@@ -100,8 +105,6 @@ _TEARDOWN_SQL = (
 
 @pytest.fixture(scope="session")
 def database_url() -> str:
-    import os
-
     return os.environ.get("DATABASE_URL", DEFAULT_URL)
 
 
@@ -442,8 +445,7 @@ async def test_the_declined_branch_is_computed_and_then_discarded_by_the_write_p
 
     When that is fixed, this test SHOULD go red, and the assertion below becomes
     `contested` (or whatever status the fix chooses). Do not delete this test to
-    make the fix green — change it, and move the entry out of CLAUDE.md's
-    "Known broken" with this file named as the pin.
+    make the fix green — change it, so the repaired behaviour keeps a pin.
     """
     project_id = project_ids[0]
     async with maker() as s:

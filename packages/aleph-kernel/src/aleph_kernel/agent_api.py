@@ -24,10 +24,11 @@ refusal it cannot predict is indistinguishable from a broken tool.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from aleph_kernel.errors import DependentsWouldBreak, ProbeFailed
+from aleph_kernel.errors import DependentsWouldBreak, ProbeFailed, ProtectedCapability
 from aleph_kernel.kernel import State
 
 if TYPE_CHECKING:
@@ -115,18 +116,35 @@ class AgentPluginAPI:
         try:
             await self._kernel.activate(spec.name)
         except ProbeFailed as exc:
+            # Unregister, or the refused spec stays in the graph forever. Every
+            # later `activate` re-derives the topological order over the whole
+            # registered set, so one ghost makes every subsequent install fail
+            # too — the agent's first wrong attempt would poison the process.
+            self._unregister_quietly(spec.name)
             return InstallOutcome(
                 installed=False,
                 plugin_id=None,
                 detail=f"refused: {exc.detail}",
             )
         except Exception as exc:  # setup raised; the kernel already unwound it
+            self._unregister_quietly(spec.name)
             return InstallOutcome(
                 installed=False, plugin_id=None, detail=f"refused: setup failed — {exc!r}"
             )
         return InstallOutcome(
             installed=True, plugin_id=str(plugin_id), detail=f"{spec.name} active and probed"
         )
+
+    def _unregister_quietly(self, name: str) -> None:
+        """Best-effort removal of a registration that never came up.
+
+        Deliberately swallows: this runs on a path that is already returning a
+        refusal, and a second exception here would replace the diagnosis the
+        agent needs with one about cleanup. A capability that somehow came up
+        anyway is refused by `unregister` itself and stays — which is correct.
+        """
+        with contextlib.suppress(KeyError, ValueError, ProtectedCapability):
+            self._kernel.unregister(name)
 
     async def enable(self, name: str) -> InstallOutcome:
         """Bring a registered capability up, its providers first."""
@@ -164,12 +182,27 @@ class AgentPluginAPI:
             report[name] = "ok" if result.passed else f"retired: {result.detail}"
         return report
 
-    async def disable(self, plugin_id: PluginId, *, force: bool = False) -> InstallOutcome:
+    async def disable(
+        self, plugin_id: PluginId, *, force: bool = False, unregister: bool = False
+    ) -> InstallOutcome:
         """Take down an agent-installed capability.
 
         Refused when anything else depends on it. ``force`` accepts breaking
         other agent-installed plugins; it can never reach protected capability,
         because protected capability has no id to pass here in the first place.
+
+        ``unregister`` picks between the two things "disable" can reasonably
+        mean. Default False is **stopped but still installed**: the spec stays in
+        the graph and `replace` still works on the handle, which is what an agent
+        iterating on its own plugin wants. True is **gone**: the registration is
+        dropped, and installing the same name again is a fresh install rather
+        than `"'mine' is already registered"`.
+
+        The returned ``plugin_id`` is the one that was handed in. It used to be
+        None on success, so an agent that disabled its own plugin lost the only
+        handle it had for it — `_teardown` leaves `plugin_id` intact and
+        `replace` works fine on a disabled plugin, so the handle existed and the
+        agent was simply never given it back.
         """
         try:
             radius = await self._kernel.deactivate(plugin_id, force=force)
@@ -186,12 +219,17 @@ class AgentPluginAPI:
                     "manifest and have no id — they cannot be disabled."
                 ),
             )
-        return InstallOutcome(
-            installed=False,
-            plugin_id=None,
-            detail=(
-                f"disabled; also stopped {', '.join(sorted(radius.collateral))}"
-                if radius.collateral
-                else "disabled; nothing else affected"
-            ),
+
+        detail = (
+            f"disabled; also stopped {', '.join(sorted(radius.collateral))}"
+            if radius.collateral
+            else "disabled; nothing else affected"
         )
+        if unregister:
+            # Dependents came down with it, so they are droppable too — leaving
+            # them registered would keep the same ghost this flag exists to
+            # avoid, one level out.
+            for name in [*sorted(radius.collateral), self._kernel._name_for(plugin_id)]:
+                self._unregister_quietly(name)
+            return InstallOutcome(installed=False, plugin_id=None, detail=f"{detail}; unregistered")
+        return InstallOutcome(installed=False, plugin_id=str(plugin_id), detail=detail)

@@ -112,6 +112,42 @@ class Kernel:
             raise ValueError(msg)
         self._mounted[spec.name] = _Mounted(spec=spec)
 
+    def unregister(self, name: str) -> None:
+        """Drop a registration entirely. The inverse of :meth:`_register`.
+
+        Without this, a plugin that fails to install is left REGISTERED with no
+        way to remove it — and because `boot` and `activate` both re-derive the
+        topological order over the WHOLE registered set, one bad leftover makes
+        every subsequent install fail too, for the life of the process. That is
+        not an edge case: the first two things that happen when an agent writes
+        a plugin are that the first attempt is wrong and the second attempt is
+        version two of the same name.
+
+        Refuses a protected capability, and refuses an ACTIVE one — an active
+        capability must be torn down through `deactivate`, which computes the
+        blast radius first. Dropping it here would leave its effects unwound and
+        its dependents holding a binding nothing provides.
+
+        NOTE: this method is addressed by NAME, not by `PluginId`. The kernel's
+        primary guardrail is that core capability has no addressable id, so a
+        name-addressed method sidesteps it by construction. The `protected`
+        check below is therefore the only defence, which is why it is the first
+        statement in the method and why it ships with its own test.
+        """
+        mounted = self._mounted.get(name)
+        if mounted is None:
+            msg = f"{name!r} is not registered"
+            raise KeyError(msg)
+        if mounted.spec.protected:
+            raise ProtectedCapability(name)
+        if mounted.state is State.ACTIVE:
+            msg = (
+                f"{name!r} is active; deactivate it first so its effects unwind "
+                f"and its dependents are checked"
+            )
+            raise ValueError(msg)
+        del self._mounted[name]
+
     def _specs(self) -> dict[str, CapabilitySpec]:
         return {name: m.spec for name, m in self._mounted.items()}
 

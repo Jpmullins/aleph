@@ -17,6 +17,7 @@ Two things the kernel provides that the reference implementation does not:
   write paths shipped with no read path.
 """
 
+from aleph_kernel.agent_api import AgentPluginAPI, CapabilityView, InstallOutcome
 from aleph_kernel.context import Context, Store
 from aleph_kernel.effects import EffectScope, Inverse
 from aleph_kernel.errors import (
@@ -35,13 +36,16 @@ from aleph_kernel.spec import CapabilitySpec, Probe, ProbeResult, Setup, ok, pro
 from aleph_kernel.support import BlastRadius, dependent_closure, support_set, topological_order
 
 __all__ = [
+    "AgentPluginAPI",
     "BlastRadius",
     "CapabilitySpec",
+    "CapabilityView",
     "Context",
     "CyclicDependency",
     "DependentsWouldBreak",
     "EffectScope",
     "InactiveAccess",
+    "InstallOutcome",
     "Inverse",
     "Kernel",
     "KernelError",

@@ -1,12 +1,14 @@
 """The Claim Spine's write path, against a real Postgres.
 
-`aleph_wiki.belief_service.BeliefService` has **never run in production.** The
-deployed database holds 796 `wiki_claims` rows with zero verbatim quotes and
-zero `claim_edges`, because every one of them was written by the older
-`commit_revision` path, which inserts a fresh claim row per compile. So nothing
-here is a regression test in the usual sense: it is the first evidence that the
+`aleph_wiki.belief_service.BeliefService` has **never run.** It has no caller
+anywhere in `apps/` or `packages/` — this file is currently its only one — and
+the deployed database shows it: ~800 `wiki_claims` rows and **zero**
+`claim_edges`, because every claim there was written by the older
+`commit_revision` path, which inserts a fresh row per compile. So nothing here
+is a regression test in the usual sense. It is the first evidence that the
 service does what its docstrings say, executed against the schema as migrated
-rather than against a mock session.
+rather than against a mock session, and it is the only thing standing between
+these guarantees and the next refactor.
 
 The four defects this file exists to keep dead, each of which the previous claim
 layer had:
@@ -46,8 +48,9 @@ layer had:
   rows. Re-deriving one span twice reports 1 twice while the table holds one
   row. Both tests that touch it assert the table, and say so.
 * No LLM extractor is exercised anywhere. `Extractor` is injected, and the
-  fixture below is a dict lookup. That is the point of the injection seam, but
-  it means nothing here says a real extractor produces groundable quotes.
+  fixture below is a substring scan over the source. That is the point of the
+  injection seam, but it means nothing here says a *real* extractor produces
+  quotes that ground — only that the machinery around one behaves.
 * Confidence thresholds themselves belong to `aleph_hypotheses.confidence` and
   are unit-tested there. What is pinned here is that the *stored column* tracks
   them.
