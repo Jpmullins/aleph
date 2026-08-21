@@ -31,6 +31,10 @@ x-app-env: &app-env
     DATABASE_URL: postgresql+asyncpg://aleph:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/aleph
     REDIS_URL: redis://redis:6379/0
     CODE_RUNNER_REDIS_URL: redis://runner-redis:6379/0
+    # The browser's origin, which is WEB_PORT — not the API's own port. Change
+    # WEB_PORT without this and every request from the page the API is serving
+    # is blocked, with a CORS error naming the symptom rather than the cause.
+    ALEPH_CORS_ORIGINS: http://localhost:${WEB_PORT:-5173},http://127.0.0.1:${WEB_PORT:-5173}
 
 x-depends-on-data: &depends-on-data
   postgres:
@@ -262,11 +266,13 @@ services:
       dockerfile: apps/web/Dockerfile.dev
     networks: [aleph]
     environment:
-      VITE_API_URL: ${ALEPH_SELF_URL:-http://localhost:8000}
-      # Vite must accept the container hostname the browser is NOT using and
-      # the host port it IS; without this a non-default WEB_PORT 403s.
-      VITE_ALLOWED_HOSTS: localhost,127.0.0.1
-      VITE_RUNTIME_URL: http://localhost:${RUNTIME_PORT:-4000}
+      # These names are read by the app; check `grep -rhoE "VITE_[A-Z_]+"
+      # apps/web/src` before adding one. VITE_API_URL and VITE_RUNTIME_URL are
+      # NOT read by anything — setting those silently leaves the app on its
+      # compiled-in defaults, which is how the browser ended up calling :4000
+      # while the runtime was published on :4100.
+      VITE_API_BASE_URL: ${ALEPH_SELF_URL:-http://localhost:8000}
+      VITE_COPILOT_RUNTIME_URL: http://localhost:${RUNTIME_PORT:-4000}/api/copilotkit
       VITE_AUTH_MODE: ${ALEPH_AUTH_MODE:-local}
     depends_on:
       api:

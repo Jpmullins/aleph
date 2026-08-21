@@ -36,6 +36,10 @@ ALEPH_KEY_IGNORE: dict[str, str] = {
     # Frontend-only: the web OIDC client id. Consumed by the SPA (mirrored via
     # VITE_AUTH_MODE); no aleph-api / aleph-workers field reads it.
     "ALEPH_AUTH_CLIENT_ID": "frontend-only web OIDC client id, no backend field",
+    # Read directly by `create_app` via os.environ to build the CORS allow-list,
+    # deliberately not a Settings field: it is a property of where the browser
+    # loaded the page from, not of the API, and compose derives it from WEB_PORT.
+    "ALEPH_CORS_ORIGINS": "read by create_app for the CORS allow-list, no settings field",
 }
 
 
