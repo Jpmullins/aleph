@@ -7,8 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Newsreader:opsz,wght@6..72,400;6..72,500&family=Public+Sans:wght@400;500;600&display=swap">
-  <!-- Standalone copy of the published artifact. Source of record: docs/plan.md
-       Self-contained apart from Google Fonts; open it directly in a browser. -->
+  <!-- Standalone copy of the published artifact. Source of record: docs/plan.md -->
   <style>
   /* Aleph's instrument palette. Light is the base; dark is a genuine
      counterpart — the accent goes umber-on-bone rather than being inverted,
@@ -334,12 +333,12 @@
   <header>
     <p class="eyebrow">Aleph · 24 agents · verified against the running stack · 21 Aug 2026</p>
     <h1>The plan, and the instrument that was lying about it</h1>
-    <p class="standfirst">Fifty-seven workstreams, 340 criteria that can fail. Six adversarial reviewers read the six plans and none of them approved.</p>
+    <p class="standfirst">Fifty-eight workstreams, 343 criteria that can fail. Six adversarial reviewers read the six plans and none of them approved.</p>
   </header>
 
   <div class="tally">
-    <div><span class="n">57</span><span class="k">Workstreams</span></div>
-    <div><span class="n">340</span><span class="k">Criteria</span></div>
+    <div><span class="n">58</span><span class="k">Workstreams</span></div>
+    <div><span class="n">343</span><span class="k">Criteria</span></div>
     <div><span class="n">74</span><span class="k">Rejected as unmeasurable</span></div>
     <div><span class="n">68</span><span class="k">False claims caught</span></div>
     <div><span class="n">63</span><span class="k">Horizon opportunities</span></div>
@@ -423,7 +422,7 @@ $ echo $?
 
   <section>
     <h2>The work <span class="tag">Part 3</span></h2>
-    <p class="lede">Fifty-seven workstreams. Each carries what it is in plain language, why Aleph needs it, how, criteria that can fail, a review step and an iteration step — full detail in <code>docs/plan.md</code>.</p>
+    <p class="lede">Fifty-eight workstreams. Each carries what it is in plain language, why Aleph needs it, how, criteria that can fail, a review step and an iteration step — full detail in <code>docs/plan.md</code>.</p>
     <p class="lede">Ids are prefixed <code>WS-</code> deliberately: bare ids like <code>A2</code>, <code>D1</code> and <code>E1</code> already mean three different things across the acceptance doc, the backlog and this plan, and one review step already pointed an executor at the right file and the wrong row.</p>
 
     <div class="tablewrap">
@@ -592,13 +591,62 @@ $ echo $?
       <li><strong><code>access_scope</code> is deleted, not implemented.</strong> Route-side role checks at ~20 sites are the real control; a second unread authorization concept in every table is worse than none.</li>
       <li><strong><code>audit/</code> is deleted.</strong> Three overlapping registries of intent already disagree in both directions. One gate.</li>
       <li><strong><code>aleph-datasets</code> is deleted.</strong> Its only importers are the migration runner and a consistency test.</li>
-      <li><strong>No async subagents, no MCP client, no Enterprise Intelligence this cycle.</strong></li>
+      <li><strong>No Enterprise Intelligence.</strong> Evaluated and declined — Deep Agents gives the same primitives with no licence, no Kubernetes, and nothing leaving the deployment.</li>
       <li><strong>No multi-tenancy, collaboration, presence or mobile layout.</strong> One user, three projects.</li>
       <li><strong>No new workspace package.</strong> The count holds at ≤21 and should ratchet down.</li>
     </ul>
   </section>
 
-  <footer>docs/plan.md · 57 workstreams · 340 criteria · built by 24 agents, every number verified against the tree</footer>
+  <section>
+    <h2>Two corrections, and the coverage check</h2>
+
+    <div class="callout">
+      <p class="hd">This section previously said “no async subagents, no MCP client this cycle”. That was wrong, and it contradicted the plan’s own body.</p>
+      <p><code>WS-H6</code> — async subagents — <strong>is a scheduled workstream</strong>: 6 criteria, 6–8 days, behind <code>WS-C3a</code>/<code>WS-C3b</code>. The line came from lifting the completeness critic’s not-doing list wholesale. The critic was reasoning from the <em>backlog’s</em> suggested order, where H6 sits tenth — not from the cluster plans that had already scheduled it. Corrected in place and dated rather than quietly edited, because the contradiction is more instructive than a clean line.</p>
+    </div>
+
+    <p class="lede"><strong>Backlog coverage, checked item by item: 28 of 30 items have a workstream.</strong> A naive id match undercounts, because several are owned under a differently-named one.</p>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Backlog item</th><th>Owned by</th></tr></thead>
+        <tbody>
+          <tr><td>B2 · model endpoint</td><td class="sub"><code>WS-MEP-4</code>, <code>WS-MEP-5</code></td></tr>
+          <tr><td>E4 · unpriced calls</td><td class="sub"><code>WS-MEP-1</code></td></tr>
+          <tr><td>E5 · rate limiting</td><td class="sub"><code>WS-MEP-2</code></td></tr>
+          <tr><td>H4 · <code>HarnessProfile</code></td><td class="sub"><code>WS-MEP-7</code></td></tr>
+          <tr><td>H2 · dead kernel skills</td><td class="sub"><code>WS-A1b</code></td></tr>
+          <tr><td>H7 · <code>stream.subagents</code></td><td class="sub">decided inside <code>WS-C3a</code></td></tr>
+          <tr><td>E6 · Lit dev warning</td><td class="sub"><code>WS-UI-2</code> — the console-clean browser smoke</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <p class="hd">WS-C3a corrects the backlog on H7.</p>
+      <p>The backlog says the Inspector “can be rebuilt on data Aleph already has”. <strong>It cannot.</strong> <code>grep -rn 'AgentRun(' apps packages</code> finds 17 producers and <strong>none in <code>copilot_agent.py</code> or <code>subagents/</code></strong>, and every <code>AgentEvent</code> writer is called only from worker jobs. Nothing about a chat turn is recorded at all. C3a creates that record first, then settles H7 on evidence instead of assumption.</p>
+    </div>
+
+    <div class="row">
+      <div class="id">C2</div>
+      <div>
+        <div class="head"><h3>MCP — deferred, not declined</h3><span class="pill part">Half-day spike, before WS-A1b</span></div>
+        <p class="field"><span class="txt">The horizon scan raises an argument this plan has to answer rather than skip: <strong>a general MCP client may be a cheaper plugin system than the bespoke one <code>WS-A1b</code> describes.</strong> Deciding that <em>after</em> building A1b is deciding it too late. The middleware is already in <code>node_modules</code> — it is config, not code.</span></p>
+        <p class="field gap"><span class="txt">Its criteria are shaped so the deliverable is a <em>written decision</em>, including one that fails if the spike quietly becomes a week of work.</span></p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="id">H6</div>
+      <div>
+        <div class="head"><h3>Async subagents — scheduled, deliberately late</h3><span class="pill none">Behind C3a/C3b</span></div>
+        <p class="field"><span class="txt">The horizon scan marked it <code>hold</code> because <strong>there is no measured problem yet</strong>. The research loop blocking is a real shape, but nobody has measured how long an analyst actually waits. <code>WS-C3a</code> produces that number, which makes H6 arguable rather than assumed.</span></p>
+        <p class="field gap"><span class="txt">If the number says analysts wait thirty seconds, H6 is worth 6–8 days. If it says four, it is not — and the honest outcome is to drop it and record that here.</span></p>
+      </div>
+    </div>
+  </section>
+
+  <footer>docs/plan.md · 58 workstreams · 343 criteria · built by 24 agents, every number verified against the tree</footer>
 
 </div>
 </body>
