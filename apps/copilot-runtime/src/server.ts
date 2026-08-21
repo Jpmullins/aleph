@@ -59,6 +59,19 @@ const runtime = new CopilotRuntime({
     schema: ALEPH_A2UI_CATALOG,
     defaultCatalogId: "aleph://v1",
   },
+  // The Open-Ended band. The agent gets a `generateSandboxedUi` tool and its
+  // markup streams into a sealed iframe — opaque origin, no storage, no
+  // same-origin fetch — so it can build a view nobody pre-designed.
+  //
+  // This is the escape hatch the catalog cannot provide. The catalog covers
+  // what we anticipated; a researcher asking for a comparison nobody has drawn
+  // before needs the agent to be able to draw it. CDN libraries load inside the
+  // sandbox, so a real D3 or Chart.js visualisation is available without Aleph
+  // shipping a chart type for every question.
+  //
+  // The frontend grants specific host functions on top of this — see
+  // `apps/web/src/lib/copilot.tsx`. Generated code can call ONLY those.
+  openGenerativeUI: true,
 });
 
 const listener = createCopilotNodeListener({
