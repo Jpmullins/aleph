@@ -4,6 +4,7 @@ import { WikiBodyMarkdown } from "@/components/WikiBodyMarkdown";
 import { useWorkspaceUI } from "@/lib/workspace-ui";
 import { HtmlDocCard } from "./HtmlDocCard";
 import { CardShell, FeedbackButton, Pill, type RendererProps } from "./_shared";
+import { stripFrontmatter } from "@/lib/frontmatter";
 
 /**
  * WP-4b — the rich wiki reader, a first-class catalog card.
@@ -123,7 +124,11 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
     derived?: boolean;
     read_only?: boolean;
   };
-  const bodyMd = p.body_md ?? "";
+  // Frontmatter is metadata, and this page already shows it as badges and
+  // headings. Rendering it as prose puts the storage format on the reading
+  // surface — generated hubs opened with a literal
+  // "---title: … type: hub tags: [hub] ---" line above the heading.
+  const bodyMd = stripFrontmatter(p.body_md ?? "");
   const claims = p.claims ?? [];
   const citations = p.citations ?? [];
   const wikilinks = p.wikilinks_out ?? [];
@@ -159,12 +164,27 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
 
   const brokenLinks = wikilinks.filter((l) => l.dst_page_id === null).length;
 
-  const navigateByTitle = (title: string) => {
-    const dst = linkMap.get(title);
+  // A `[[target|display]]` link has two names, and which one the stored
+  // `WikiLink` row carries depends on which writer produced it: link rows
+  // derived from body text record the target, while a producer that builds
+  // drafts from its own data may record the display title. Trying both is what
+  // makes a chip navigate either way — matching only one silently produced
+  // links that looked clickable and did nothing.
+  const lookup = (target: string, label?: string): string | null | undefined =>
+    linkMap.has(target)
+      ? linkMap.get(target)
+      : label !== undefined && linkMap.has(label)
+        ? linkMap.get(label)
+        : undefined;
+
+  const navigateByTitle = (target: string, label?: string) => {
+    const dst = lookup(target, label);
     if (dst) onAction("navigate_wiki", { page_id: dst });
   };
-  const resolveLink = (title: string): boolean | null =>
-    linkMap.has(title) ? linkMap.get(title) !== null : null;
+  const resolveLink = (target: string, label?: string): boolean | null => {
+    const hit = lookup(target, label);
+    return hit === undefined ? null : hit !== null;
+  };
   const openPageId = (id: string) => onAction("navigate_wiki", { page_id: id });
 
   const status = meta.status ?? "";

@@ -925,8 +925,14 @@ async def sync_wiki_hubs(
             body_md=plan.body_md,
             summary=plan.category.blurb,
             claims=[],
+            # `dst_title` must be the text the BODY actually contains. The hub
+            # renders `[[slug|Title]]` (Obsidian's shortest-path form, which
+            # survives a page being retitled), so recording the title here would
+            # give every hub a set of link rows that match nothing in its own
+            # prose — the reader resolves a chip by looking its text up in these
+            # rows, so every link on every hub would render as broken.
             wikilinks=[
-                WikiLinkDraft(dst_title=e.title, dst_page_id=None)
+                WikiLinkDraft(dst_title=e.slug, dst_page_id=None)
                 for e in plan.entries
                 if not e.is_stub
             ],

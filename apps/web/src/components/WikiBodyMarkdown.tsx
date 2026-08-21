@@ -4,14 +4,14 @@ import { WikilinkChip } from "@/components/WikilinkChip";
 
 interface Props {
   body: string;
-  onNavigate?: (target: string) => void;
+  onNavigate?: (target: string, label?: string) => void;
   /**
    * Resolution state for an inline `[[wikilink]]` by its title:
    * `true` = resolves to a page, `false` = broken/unresolved, `null`/undefined
    * = unknown (render as a normal clickable chip). Lets the body renderer mark
    * broken links distinctly without re-fetching.
    */
-  resolveLink?: (title: string) => boolean | null;
+  resolveLink?: (target: string, label?: string) => boolean | null;
   /**
    * Optional custom renderer for a `[cN]` citation marker. When provided (the
    * WP-4b reader tier), it renders the interactive citation badge/popover;
@@ -77,8 +77,8 @@ function ExternalLink({ href, label, k }: { href: string; label: string; k: stri
 
 function renderInline(
   text: string,
-  onNavigate?: (target: string) => void,
-  resolveLink?: (title: string) => boolean | null,
+  onNavigate?: (target: string, label?: string) => void,
+  resolveLink?: (target: string, label?: string) => boolean | null,
   renderCitation?: (marker: string) => JSX.Element | null,
 ): Array<string | JSX.Element> {
   const out: Array<string | JSX.Element> = [];
@@ -90,13 +90,22 @@ function renderInline(
     const start = m.index;
     if (start > cursor) out.push(text.slice(cursor, start));
     if (m[1] !== undefined) {
-      const title = m[1];
-      const resolved = resolveLink ? resolveLink(title) : null;
+      // Obsidian's `[[target|display]]`. The pipe form is what the generated
+      // hubs emit (`[[logging-recovery-hub|Logging and Recovery Hub]]`), and
+      // without splitting it the whole string — pipe included — is looked up as
+      // a title, matches nothing, and every link on every hub renders as broken
+      // raw text. Anchors (`[[target#section]]`) address the same page.
+      const raw = m[1];
+      const pipe = raw.indexOf("|");
+      const target = (pipe === -1 ? raw : raw.slice(0, pipe)).split("#")[0].trim();
+      const label = pipe === -1 ? target : raw.slice(pipe + 1).trim() || target;
+      const resolved = resolveLink ? resolveLink(target, label) : null;
       out.push(
         <WikilinkChip
           key={`w-${k}`}
-          text={title}
-          onNavigate={onNavigate}
+          text={label}
+          target={target}
+          onNavigate={(t) => onNavigate?.(t, label)}
           broken={resolved === false}
         />,
       );
@@ -128,8 +137,8 @@ function renderInline(
 function renderBlock(
   block: Block,
   i: number,
-  onNavigate?: (target: string) => void,
-  resolveLink?: (title: string) => boolean | null,
+  onNavigate?: (target: string, label?: string) => void,
+  resolveLink?: (target: string, label?: string) => boolean | null,
   renderCitation?: (marker: string) => JSX.Element | null,
 ) {
   if (block.kind === "heading") {

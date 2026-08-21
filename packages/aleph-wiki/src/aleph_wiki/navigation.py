@@ -285,6 +285,12 @@ async def sync_hubs(
     for plan in plans:
         slug = plan.category.hub_slug
         current = existing.get(slug)
+        # NOTE: `commit_revision` also dedupes on body hash, so a hub whose text
+        # is unchanged cannot be rewritten from here at all — there is no
+        # "force" that would work, and adding one would be a flag that quietly
+        # does nothing. A change to how a hub's derived `WikiLink` rows are
+        # built therefore does not reach existing hubs; the reader resolves a
+        # link by target OR by label so both conventions navigate.
         if current is not None and (current[1] or "") == plan.body_md:
             unchanged += 1
             continue
