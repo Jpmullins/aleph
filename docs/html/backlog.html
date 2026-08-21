@@ -1,0 +1,727 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Aleph Backlog</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Newsreader:opsz,wght@6..72,400;6..72,500&family=Public+Sans:wght@400;500;600&display=swap">
+  <!-- Standalone copy of the published artifact. Source of record: docs/backlog.md
+       Self-contained apart from Google Fonts; open it directly in a browser. -->
+  <style>
+  /* Aleph's instrument palette. Light is the base; dark is a genuine
+     counterpart — the accent goes umber-on-bone rather than being inverted,
+     because "darker than its ground" and "brighter than its ground" are the
+     same idea from opposite sides. Hue means STATE and nothing else. */
+  :root {
+    --bg:          #FBFAF8;
+    --raised:      #FFFFFF;
+    --sunken:      #F3F2EF;
+    --rule:        #E2E0DB;
+    --rule-strong: #C9C6BF;
+    --ink:         #14171A;
+    --ink-2:       #565C61;
+    --ink-3:       #868C91;
+    --accent:      #3A342B;
+    --accent-fg:   #FBFAF8;
+
+    --good-bg:  #E4EDE7;  --good-fg:  #2E6B4A;
+    --bad-bg:   #F6E7E3;  --bad-fg:   #93412F;
+    --part-bg:  #EDEAE2;  --part-fg:  #3A342B;
+    --none-bg:  #F3F2EF;  --none-fg:  #565C61;
+
+    --ui:    "Public Sans", ui-sans-serif, system-ui, sans-serif;
+    --mono:  "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --prose: "Newsreader", Georgia, "Times New Roman", serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:          #0C0E10;
+      --raised:      #14171A;
+      --sunken:      #1B1F23;
+      --rule:        #24282C;
+      --rule-strong: #333940;
+      --ink:         #E8EAEC;
+      --ink-2:       #A0A8AE;
+      --ink-3:       #6B747B;
+      --accent:      #D9D4C8;
+      --accent-fg:   #0C0E10;
+
+      --good-bg:  #17251C;  --good-fg:  #7FBF9A;
+      --bad-bg:   #2A1815;  --bad-fg:   #D08E7C;
+      --part-bg:  #23211C;  --part-fg:  #D9D4C8;
+      --none-bg:  #1B1F23;  --none-fg:  #A0A8AE;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg:          #0C0E10;
+    --raised:      #14171A;
+    --sunken:      #1B1F23;
+    --rule:        #24282C;
+    --rule-strong: #333940;
+    --ink:         #E8EAEC;
+    --ink-2:       #A0A8AE;
+    --ink-3:       #6B747B;
+    --accent:      #D9D4C8;
+    --accent-fg:   #0C0E10;
+
+    --good-bg:  #17251C;  --good-fg:  #7FBF9A;
+    --bad-bg:   #2A1815;  --bad-fg:   #D08E7C;
+    --part-bg:  #23211C;  --part-fg:  #D9D4C8;
+    --none-bg:  #1B1F23;  --none-fg:  #A0A8AE;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--ui);
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 60rem;
+    margin: 0 auto;
+    padding: 3rem 1.5rem 6rem;
+  }
+
+  /* ---- masthead ---- */
+  header { border-bottom: 1px solid var(--rule-strong); padding-bottom: 1.75rem; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0 0 0.75rem;
+  }
+
+  h1 {
+    font-family: var(--prose);
+    font-weight: 400;
+    font-size: clamp(2rem, 5vw, 2.9rem);
+    line-height: 1.1;
+    letter-spacing: -0.01em;
+    margin: 0 0 0.85rem;
+    text-wrap: balance;
+  }
+
+  .standfirst {
+    font-family: var(--prose);
+    font-size: 1.075rem;
+    color: var(--ink-2);
+    max-width: 46ch;
+    margin: 0;
+  }
+
+  /* ---- tally ---- */
+  .tally {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    margin: 2.5rem 0 3rem;
+  }
+  .tally div { background: var(--bg); padding: 0.9rem 1rem; }
+  .tally .n {
+    font-family: var(--mono);
+    font-size: 1.6rem;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    display: block;
+    line-height: 1.1;
+  }
+  .tally .k {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+
+  /* ---- sections ---- */
+  section { margin-top: 3.25rem; }
+
+  h2 {
+    font-family: var(--ui);
+    font-size: 0.95rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    margin: 0;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--rule-strong);
+    display: flex;
+    align-items: baseline;
+    gap: 0.7rem;
+  }
+  h2 .tag {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-3);
+    letter-spacing: 0.1em;
+  }
+
+  .lede {
+    font-family: var(--prose);
+    color: var(--ink-2);
+    margin: 1rem 0 0;
+    max-width: 62ch;
+  }
+
+  /* ---- ledger rows ---- */
+  .row {
+    display: grid;
+    grid-template-columns: 3.25rem 1fr;
+    gap: 0 1rem;
+    padding: 1.25rem 0;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .id {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-3);
+    padding-top: 0.15rem;
+  }
+
+  .head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.6rem;
+    margin-bottom: 0.4rem;
+  }
+  .head h3 {
+    font-family: var(--ui);
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0;
+  }
+
+  .pill {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0.15rem 0.45rem;
+    white-space: nowrap;
+  }
+  .pill.none { background: var(--none-bg); color: var(--none-fg); }
+  .pill.part { background: var(--part-bg); color: var(--part-fg); }
+  .pill.bad  { background: var(--bad-bg);  color: var(--bad-fg); }
+  .pill.good { background: var(--good-bg); color: var(--good-fg); }
+
+  .field { margin: 0.35rem 0 0; max-width: 68ch; }
+  .field .lbl {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin-right: 0.45rem;
+  }
+  .field span.txt { color: var(--ink-2); }
+  .field.gap span.txt { color: var(--ink); }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    background: var(--sunken);
+    padding: 0.08em 0.32em;
+  }
+
+  /* ---- spectrum table ---- */
+  .tablewrap { overflow-x: auto; margin-top: 1.25rem; }
+  table { border-collapse: collapse; width: 100%; min-width: 30rem; }
+  th, td {
+    text-align: left;
+    padding: 0.6rem 0.9rem 0.6rem 0;
+    border-bottom: 1px solid var(--rule);
+    font-size: 0.925rem;
+  }
+  th {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 500;
+  }
+
+  /* ---- order ---- */
+  ol.order { list-style: none; counter-reset: step; padding: 0; margin: 1.25rem 0 0; }
+  ol.order li {
+    counter-increment: step;
+    display: grid;
+    grid-template-columns: 2.25rem 1fr;
+    gap: 0 1rem;
+    padding: 0.7rem 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  ol.order li::before {
+    content: counter(step);
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--accent);
+    font-weight: 500;
+    padding-top: 0.12rem;
+  }
+  ol.order .why { color: var(--ink-2); display: block; font-size: 0.925rem; }
+  ol.order .ref { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+
+  ul.plain { margin: 1rem 0 0; padding-left: 1.05rem; }
+  ul.plain li { margin-bottom: 0.55rem; color: var(--ink-2); max-width: 66ch; }
+  ul.plain li strong { color: var(--ink); font-weight: 600; }
+
+  footer {
+    margin-top: 4rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--rule-strong);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    color: var(--ink-3);
+  }
+
+  a { color: var(--accent); text-underline-offset: 2px; }
+  a:focus-visible, li:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+  td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 0.85rem; padding-right: 1.1rem; }
+  td code { background: none; padding: 0; color: var(--ink); }
+  .chip {
+    font-family: var(--mono); font-size: 10px; font-weight: 500;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 0.12rem 0.4rem; white-space: nowrap; display: inline-block;
+  }
+  .chip.async  { background: var(--part-bg); color: var(--part-fg); }
+  .chip.sync   { background: var(--none-bg); color: var(--none-fg); }
+  .chip.beta   { background: var(--bad-bg);  color: var(--bad-fg); }
+  .chip.stable { background: var(--good-bg); color: var(--good-fg); }
+  table.adopt td { vertical-align: top; padding-right: 1.1rem; font-size: 0.875rem; }
+  table.adopt td.w { min-width: 13rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">Aleph · verified against the tree · 21 Aug 2026</p>
+    <h1>What we said, and what is actually built</h1>
+    <p class="standfirst">Every item below was checked against the code, not remembered. Where something does not exist, it says so plainly.</p>
+  </header>
+
+  <div class="tally">
+    <div><span class="n">7</span><span class="k">Not built</span></div>
+    <div><span class="n">6</span><span class="k">Broken</span></div>
+    <div><span class="n">2</span><span class="k">Fixed today</span></div>
+    <div><span class="n">8</span><span class="k">Shipped</span></div>
+    <div><span class="n">180</span><span class="k">UI spec violations</span></div>
+    <div><span class="n">8</span><span class="k">Deep Agents unused</span></div>
+  </div>
+
+  <section>
+    <h2>The product thesis — plugins <span class="tag">A</span></h2>
+    <p class="lede">This is the largest gap. CLAUDE.md opens with <em>“an agent that authors plugins for itself and activates or deactivates them as needed… The kernel is the product.”</em> Almost none of it exists.</p>
+
+    <div class="row">
+      <div class="id">A1</div>
+      <div>
+        <div class="head"><h3>Plugin system</h3><span class="pill none">Not built</span></div>
+        <p class="field"><span class="lbl">Asked</span><span class="txt">“Everything is a plugin”, from deepseek-harness and cordis — compiling and communicating efficiently enough to feel like one system.</span></p>
+        <p class="field"><span class="lbl">Exists</span><span class="txt"><code>aleph-kernel</code> has effects, capabilities, a boot manifest, an AST gate, skills, a spawn ledger. Ten capabilities mount at boot.</span></p>
+        <p class="field gap"><span class="lbl">Missing</span><span class="txt">No <code>Plugin</code> type, registry, activate/deactivate, lifecycle, dependency resolution or isolation boundary. A plugin today is a workspace package wired in by hand. Nothing can be added or removed at runtime.</span></p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="id">A2</div>
+      <div>
+        <div class="head"><h3>The agent authors its own plugins</h3><span class="pill none">Not built</span></div>
+        <p class="field"><span class="lbl">Asked</span><span class="txt">The agent writes plugins for itself, with guardrails preventing it from removing load-bearing capability.</span></p>
+        <p class="field gap"><span class="lbl">Missing</span><span class="txt">Entirely — no authoring path, no guardrail, no blast-radius check against removal. The kernel already computes blast radius for effects, which is the primitive this builds on.</span></p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="id">A3</div>
+      <div>
+        <div class="head"><h3>Per-plugin A2UI catalogs</h3><span class="pill none">Not built</span></div>
+        <p class="field"><span class="lbl">Asked</span><span class="txt">“Every plugin can come with its own catalog for A2UI and publish it.”</span></p>
+        <p class="field"><span class="lbl">Exists</span><span class="txt">Exactly one catalog — and a CI sweep that <em>enforces</em> there is only one.</span></p>
+        <p class="field gap"><span class="lbl">Missing</span><span class="txt">Catalog composition. The sweep’s invariant has to change from “one catalog” to “one per plugin, merged without id collisions”, and the generator has to merge rather than copy.</span></p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="id">A4</div>
+      <div>
+        <div class="head"><h3>Per-plugin settings cards</h3><span class="pill none">Not built</span></div>
+        <p class="field"><span class="lbl">Asked</span><span class="txt">“Every plugin can have a fully scoped settings card”, with three tiers by trust level.</span></p>
+        <p class="field"><span class="lbl">Exists</span><span class="txt">One hand-written <code>SettingsBody</code> covering model profile and connectors.</span></p>
+        <p class="field gap"><span class="lbl">Missing</span><span class="txt">A settings contract a plugin declares, a renderer that composes declared cards, and the trust tiering.</span></p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Settings and configuration <span class="tag">B</span></h2>
+
+    <div class="row">
+      <div class="id">B1</div>
+      <div>
+        <div class="head"><h3>Settings is a drawer, not part of the workbench</h3><span class="pill none">Not built</span></div>
+        <p class="field"><span class="lbl">Exists</span><span class="txt"><code>Drawers.tsx</code> renders settings in a slide-over. The pane registry serves seven panes and settings is not one of them.</span></p>
+        <p class="field gap"><span class="lbl">Missing</span><span class="txt">Settings as a pane, so it obeys the same model as everything else — and so per-plugin cards have somewhere to land.</span></p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="id">B2</div>
+      <div>
+        <div class="head"><h3>The model endpoint cannot be set</h3><span class="pill none">Not built</span></div>
+        <p class="field"><span class="lbl">Asked</span><span class="txt">Repeatedly: Aleph serves no models, it connects out to any OpenAI-compatible endpoint — litellm, ollama, vllm, bedrock — and the endpoint must be settable, not baked in.</span></p>
+        <p class="field"><span class="lbl">Exists</span><span class="txt"><code>litellm_base_url</code> read once from env. Discovery reads whatever that gateway serves; the picker lists those models.</span></p>
+        <p class="field gap"><span class="lbl">Missing</span><span class="txt">Any way to change it without editing <code>.env</code> and restarting. No route, no UI field, no per-project override, no credential store, no “test this endpoint” probe before saving. This is what blocks using Aleph against anything but the currently configured gateway.</span></p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="id">B3</div>
+      <div>
+        <div class="head"><h3>Saving a model binding returned 500</h3><span class="pill good">Fixed</span></div>
+        <p class="field"><span class="txt"><code>updated_at</code> has a server-side <code>onupdate</code>, so the flush leaves it expired; reading it lazy-loads and raises <code>MissingGreenlet</code>. Two of the three write paths already called <code>session.refresh</code> — one even documents why. The PATCH handler was missed.</span></p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="id">B4</div>
+      <div>
+        <div class="head"><h3>Every server error surfaced as a CORS failure</h3><span class="pill good">Fixed</span></div>
+        <p class="field"><span class="txt"><code>add_middleware</code> prepends, so CORS added first became <em>innermost</em> — inside the error and auth middleware. Any response those produced reached the browser with no <code>Access-Control-Allow-Origin</code>, so the console blamed CORS and the real status was never seen. The 500 above arrived as “blocked by CORS policy”.</span></p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Generative UI spectrum <span class="tag">C</span></h2>
+    <p class="lede">CopilotKit names four bands. Aleph uses three.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Band</th><th>Status</th><th>Note</th></tr></thead>
+        <tbody>
+          <tr><td>Controlled</td><td><span class="pill good">Done</span></td><td>React components the agent fills</td></tr>
+          <tr><td>Declarative</td><td><span class="pill good">Done</span></td><td>The A2UI catalog</td></tr>
+          <tr><td>MCP Apps</td><td><span class="pill none">Not built</span></td><td>Discussed, never started — close to what A3 needs</td></tr>
+          <tr><td>Open-ended</td><td><span class="pill good">Done</span></td><td>Design skill + two read-only sandbox functions</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="row">
+      <div class="id">C1</div>
+      <div>
+        <div class="head"><h3>CopilotKit Enterprise Intelligence</h3><span class="pill part">Misjudged — still decline</span></div>
+        <p class="field gap"><span class="lbl">Correction</span><span class="txt">My first read covered threads, inspection and multi-tenancy and concluded Aleph had equivalents. It missed the <strong>self-improvement</strong> pillar entirely — in-context learning from human feedback with no fine-tuning, captured clicks and edits and approval signals, learning containers per user or org, and <em>“users show the agent a task once, it learns the skill”</em>. That is the thing worth wanting, and it was right to keep asking.</span></p>
+        <p class="field"><span class="lbl">Blocker</span><span class="txt">Cloud-hosted sends every interaction to CopilotKit. Self-hosting is a Helm chart <em>into Kubernetes</em>. Aleph deploys with <code>docker compose</code>, which was explicit.</span></p>
+        <p class="field gap"><span class="lbl">Verdict</span><span class="txt">Still decline, for a better reason: <strong>Deep Agents provides these primitives natively and Aleph already runs it</strong> (0.6.6, skills wired). See H — agent-authored skills, durable skill storage, and iterate-until-good grading, with no license, no Kubernetes, and nothing leaving the deployment.</span></p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="id">C2</div>
+      <div>
+        <div class="head"><h3>MCP Apps</h3><span class="pill none">Not built</span></div>
+        <p class="field"><span class="txt">The third band. Would let an MCP server ship its own UI — close to what A3 needs for plugins.</span></p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="id">C3</div>
+      <div>
+        <div class="head"><h3>An agent Inspector pane</h3><span class="pill none">Not built</span></div>
+        <p class="field"><span class="txt">The one genuinely valuable idea from Enterprise Intelligence, rebuilt on data Aleph already has: the AG-UI event stream, tool calls with arguments and results, run status, and the failure point when a run errors. A pane, not a hosted console — and the reason E1 is still untraced is that nothing like it exists.</span></p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Known broken, carried in CLAUDE.md <span class="tag">D</span></h2>
+    <p class="lede">These predate this session and are still true.</p>
+    <ul class="plain">
+      <li><strong>D1 · <code>commit_revision</code> is not atomic on the path agents use.</strong> It row-locks only when given a <code>page_id</code>; the by-title path computes <code>revision_no</code> as <code>max+1</code> on an unlocked page.</li>
+      <li><strong>D2 · Cost attribution has a hole.</strong> A <code>ChatOpenAI</code> response without usage is silently uncosted.</li>
+      <li><strong>D3 · The runtime bridge drops the caller’s credential.</strong> <code>oidc</code> mode cannot authenticate the chat path. <code>local</code> — the only deployed mode — is unaffected.</li>
+      <li><strong>D4 · SSE cannot carry a bearer token.</strong> <code>EventSource</code> sets no header. Parked until OIDC deployment is taken up as a whole.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Observed in the running stack <span class="tag">E</span></h2>
+    <p class="lede">From a live browser console and the API logs. Not yet diagnosed unless noted.</p>
+    <ul class="plain">
+      <li><strong>E1 · The agent run fails, then the runtime keeps streaming.</strong> <code>Cannot send event type 'TOOL_CALL_START': the run has already errored</code>. That is the symptom; the primary <code>RUN_ERROR</code> is untraced.</li>
+      <li><strong>E2 · <code>POST /scholar/search</code> returns 503</strong> repeatedly.</li>
+      <li><strong>E3 · Compiled page HTML is broken in the reader.</strong> The sandboxed iframe blocks scripts and the page preloads a font that 404s and is CORS-blocked from the <code>null</code> origin, so it renders unstyled.</li>
+      <li><strong>E4 · Agent model calls cannot be priced.</strong> <code>claude-sonnet-4-6</code> records <code>pricing_source=unknown</code> — correct behaviour, never a silent $0, but agent spend is unpriced in practice.</li>
+      <li><strong>E5 · Gateway rate limiting.</strong> Not yet characterised; the subagent fan-out is the likely cause.</li>
+      <li><strong>E6 · Lit dev-mode warning</strong> from a CopilotKit dependency. Cosmetic.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Done, for an honest baseline <span class="tag">F</span></h2>
+    <p class="lede">So the list above reads as what remains, not as everything.</p>
+    <ul class="plain">
+      <li>Kernel boot for API and workers — ten capabilities, each with a live read-path probe</li>
+      <li>Corpus-wide hybrid retrieval, measured: recall@1 0.91 hybrid against 0.60 lexical</li>
+      <li>Claim Spine write path; claim → chunk → char-span grounding</li>
+      <li>Gateway-driven model discovery, autoconfigure by requirements, pricing provenance</li>
+      <li>The board workspace, server-driven pane registry, one multiplexed SSE connection</li>
+      <li>Open Generative UI with an Aleph design skill and read-only sandbox functions</li>
+      <li>The wiki restructure — schema governance, 16 lint checks, derived hubs and index, schema derived from the corpus</li>
+      <li>Five CI sweeps, including surface-binding and pane-registry agreement</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>The UI has not been rebuilt to the spec <span class="tag">G</span></h2>
+    <p class="lede">The redesign applies to the whole interface, not the shell. The spec is the instrument aesthetic in <code>tokens.css</code>: square corners, hairline borders, no shadows, and <strong>colour reserved for state</strong>. Measured across all 43 components.</p>
+
+    <div class="tally" style="margin:1.5rem 0 0">
+      <div><span class="n">4</span><span class="k">Rebuild</span></div>
+      <div><span class="n">12</span><span class="k">Revise</span></div>
+      <div><span class="n">16</span><span class="k">Touch-up</span></div>
+      <div><span class="n">11</span><span class="k">Clean</span></div>
+    </div>
+
+    <p class="lede">The clean ones are, without exception, the components written during the redesign. Everything inherited from the previous UI still carries <code>rounded-lg</code>, <code>shadow-sm</code> and a Tailwind palette the token system was written to replace. <code>Drawers.tsx</code> alone has 24 hardcoded colours and zero token references.</p>
+    <p class="lede">A hardcoded <code>text-slate-500</code> is not cosmetic: it does not respond to the theme at all, so it renders identically on both grounds. That is why parts of the interface look right in one theme and wrong in the other.</p>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Component</th><th class="num">Round</th><th class="num">Shadow</th><th class="num">Palette</th><th>Verdict</th></tr></thead>
+        <tbody>
+          <tr><td><code>Drawers</code></td><td class="num">12</td><td class="num">1</td><td class="num">24</td><td><span class="pill bad">Rebuild</span></td></tr>
+          <tr><td><code>WikiPageCard</code></td><td class="num">3</td><td class="num">1</td><td class="num">20</td><td><span class="pill bad">Rebuild</span></td></tr>
+          <tr><td><code>GroundingSurface</code></td><td class="num">3</td><td class="num"></td><td class="num">16</td><td><span class="pill bad">Rebuild</span></td></tr>
+          <tr><td><code>ActivityCard</code></td><td class="num">3</td><td class="num"></td><td class="num">13</td><td><span class="pill bad">Rebuild</span></td></tr>
+          <tr><td><code>HypothesesSurface</code></td><td class="num">7</td><td class="num">1</td><td class="num"></td><td><span class="pill part">Revise</span></td></tr>
+          <tr><td><code>HypothesisMatrix</code></td><td class="num">1</td><td class="num"></td><td class="num">6</td><td><span class="pill part">Revise</span></td></tr>
+          <tr><td><code>ApprovalCard</code></td><td class="num">2</td><td class="num"></td><td class="num">4</td><td><span class="pill part">Revise</span></td></tr>
+          <tr><td><code>_shared</code></td><td class="num">2</td><td class="num">2</td><td class="num">2</td><td><span class="pill part">Revise</span></td></tr>
+          <tr><td><code>SourceUploadModal</code></td><td class="num">4</td><td class="num">1</td><td class="num">1</td><td><span class="pill part">Revise</span></td></tr>
+          <tr><td><code>DiffCard</code></td><td class="num">1</td><td class="num"></td><td class="num">4</td><td><span class="pill part">Revise</span></td></tr>
+          <tr><td><code>FindingCard</code></td><td class="num"></td><td class="num"></td><td class="num">4</td><td><span class="pill part">Revise</span></td></tr>
+          <tr><td><code>HtmlDocCard</code></td><td class="num">1</td><td class="num"></td><td class="num">3</td><td><span class="pill part">Revise</span></td></tr>
+          <tr><td><code>WikiBodyMarkdown</code></td><td class="num"></td><td class="num"></td><td class="num">4</td><td><span class="pill part">Revise</span></td></tr>
+          <tr><td><code>BriefsSurface</code></td><td class="num">1</td><td class="num"></td><td class="num">2</td><td><span class="pill part">Revise</span></td></tr>
+          <tr><td><code>LeftPanel</code></td><td class="num">3</td><td class="num"></td><td class="num"></td><td><span class="pill part">Revise</span></td></tr>
+          <tr><td><code>WikilinkChip</code></td><td class="num"></td><td class="num"></td><td class="num">3</td><td><span class="pill part">Revise</span></td></tr>
+          <tr><td><code>ArtifactsSurface</code></td><td class="num">2</td><td class="num"></td><td class="num"></td><td><span class="pill none">Touch-up</span></td></tr>
+          <tr><td><code>ClaimCard</code></td><td class="num"></td><td class="num"></td><td class="num">2</td><td><span class="pill none">Touch-up</span></td></tr>
+          <tr><td><code>FormCard</code></td><td class="num">1</td><td class="num"></td><td class="num">1</td><td><span class="pill none">Touch-up</span></td></tr>
+          <tr><td><code>HtmlFrameCard</code></td><td class="num">1</td><td class="num"></td><td class="num">1</td><td><span class="pill none">Touch-up</span></td></tr>
+          <tr><td><code>ImageCard</code></td><td class="num">1</td><td class="num"></td><td class="num">1</td><td><span class="pill none">Touch-up</span></td></tr>
+          <tr><td><code>NoteEditorCard</code></td><td class="num">2</td><td class="num"></td><td class="num"></td><td><span class="pill none">Touch-up</span></td></tr>
+          <tr><td><code>WikiSurface</code></td><td class="num">2</td><td class="num"></td><td class="num"></td><td><span class="pill none">Touch-up</span></td></tr>
+          <tr><td><code>PipelineStrip</code></td><td class="num"></td><td class="num"></td><td class="num">2</td><td><span class="pill none">Touch-up</span></td></tr>
+          <tr><td><code>ProjectList</code></td><td class="num"></td><td class="num">1</td><td class="num">1</td><td><span class="pill none">Touch-up</span></td></tr>
+          <tr><td><code>ChartCard</code></td><td class="num"></td><td class="num"></td><td class="num">1</td><td><span class="pill none">Touch-up</span></td></tr>
+          <tr><td><code>NotesSurface</code></td><td class="num">1</td><td class="num"></td><td class="num"></td><td><span class="pill none">Touch-up</span></td></tr>
+          <tr><td><code>SourceCard</code></td><td class="num">1</td><td class="num"></td><td class="num"></td><td><span class="pill none">Touch-up</span></td></tr>
+          <tr><td><code>A2UIRightPanel</code></td><td class="num"></td><td class="num"></td><td class="num">1</td><td><span class="pill none">Touch-up</span></td></tr>
+          <tr><td><code>Block</code></td><td class="num"></td><td class="num">1</td><td class="num"></td><td><span class="pill none">Touch-up</span></td></tr>
+          <tr><td><code>Rail</code></td><td class="num"></td><td class="num">1</td><td class="num"></td><td><span class="pill none">Touch-up</span></td></tr>
+          <tr><td><code>ThemeToggle</code></td><td class="num">1</td><td class="num"></td><td class="num"></td><td><span class="pill none">Touch-up</span></td></tr>
+          <tr><td><code>ArtifactCard</code></td><td class="num"></td><td class="num"></td><td class="num"></td><td><span class="pill good">Clean</span></td></tr>
+          <tr><td><code>HypothesisCard</code></td><td class="num"></td><td class="num"></td><td class="num"></td><td><span class="pill good">Clean</span></td></tr>
+          <tr><td><code>TableCard</code></td><td class="num"></td><td class="num"></td><td class="num"></td><td><span class="pill good">Clean</span></td></tr>
+          <tr><td><code>AlephLogo</code></td><td class="num"></td><td class="num"></td><td class="num"></td><td><span class="pill good">Clean</span></td></tr>
+          <tr><td><code>AssistantDock</code></td><td class="num"></td><td class="num"></td><td class="num"></td><td><span class="pill good">Clean</span></td></tr>
+          <tr><td><code>Board</code></td><td class="num"></td><td class="num"></td><td class="num"></td><td><span class="pill good">Clean</span></td></tr>
+          <tr><td><code>ContextBar</code></td><td class="num"></td><td class="num"></td><td class="num"></td><td><span class="pill good">Clean</span></td></tr>
+          <tr><td><code>CopilotChatSurface</code></td><td class="num"></td><td class="num"></td><td class="num"></td><td><span class="pill good">Clean</span></td></tr>
+          <tr><td><code>Icons</code></td><td class="num"></td><td class="num"></td><td class="num"></td><td><span class="pill good">Clean</span></td></tr>
+          <tr><td><code>ProjectWorkspace</code></td><td class="num"></td><td class="num"></td><td class="num"></td><td><span class="pill good">Clean</span></td></tr>
+          <tr><td><code>ReadingRegion</code></td><td class="num"></td><td class="num"></td><td class="num"></td><td><span class="pill good">Clean</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="lede" style="margin-top:1.5rem"><strong>A rebuild is not a restyle.</strong> Each of the four predates the pane model and holds structure that no longer fits — <code>Drawers.tsx</code> is the settings drawer B1 replaces with panes, and <code>WikiPageCard</code> still carries its own layout chrome instead of being a renderer inside a pane. Revising their colours would leave the wrong structure wearing the right paint.</p>
+  </section>
+
+  <section>
+    <h2>Deep Agents capabilities Aleph is not using <span class="tag">H</span></h2>
+    <p class="lede">Aleph runs <code>deepagents 0.6.6</code>. The newer releases carry most of what the self-improvement thesis needs, and almost none of it is wired. Skills <em>are</em> live — four bundled <code>SKILL.md</code> skills following the Agent Skills spec. What follows is what is not.</p>
+
+    <h3 style="font-family:var(--ui);font-size:0.95rem;font-weight:600;margin:2.5rem 0 0;">Adoption table</h3>
+    <p class="lede">Aleph’s agent runs in-process inside FastAPI, so <strong>the sync/async column is not a preference</strong> — anything on the request path must be async or it blocks the event loop. Beta and preview are marked so the risk is explicit, not so the item is skipped.</p>
+
+    <div class="tablewrap">
+      <table class="adopt">
+        <thead><tr><th></th><th>Capability</th><th>Path</th><th>Install</th><th>Maturity</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="num">H1</td>
+            <td class="w"><strong>Agent-authored skills</strong><br><span style="color:var(--ink-3)"><code>StoreBackend</code></span></td>
+            <td><span class="chip async">Async</span><br><span style="color:var(--ink-2);font-size:0.85rem"><code>abefore_agent</code>, <code>ainvoke</code> — skill writes go through the store on the agent’s own path</span></td>
+            <td><span style="color:var(--ink-2)">None — core <code>deepagents</code></span></td>
+            <td><span class="chip stable">Stable</span></td>
+          </tr>
+          <tr>
+            <td class="num">H2</td>
+            <td class="w"><strong>Wire <code>aleph_kernel.skills</code></strong><br><span style="color:var(--ink-3)">AST gate + lifecycle</span></td>
+            <td><span class="chip sync">Sync</span> <span class="chip async">Async</span><br><span style="color:var(--ink-2);font-size:0.85rem">Sync to gate and <code>exec</code> into a fresh namespace at boot; async to mount as a kernel capability</span></td>
+            <td><span style="color:var(--ink-2)">None — already in the tree</span></td>
+            <td><span class="chip stable">Ours</span></td>
+          </tr>
+          <tr>
+            <td class="num">H3</td>
+            <td class="w"><strong><code>RubricMiddleware</code></strong><br><span style="color:var(--ink-3)">iterate until done</span></td>
+            <td><span class="chip async">Async</span><br><span style="color:var(--ink-2);font-size:0.85rem">Runs inside the agent loop; the grader is a subagent</span></td>
+            <td><span style="color:var(--ink-2)">None — needs ≥0.6.5, <strong>we have 0.6.6</strong></span></td>
+            <td><span class="chip beta">Beta</span></td>
+          </tr>
+          <tr>
+            <td class="num">H4</td>
+            <td class="w"><strong><code>HarnessProfile</code></strong><br><span style="color:var(--ink-3)">per-model tuning</span></td>
+            <td><span class="chip sync">Sync</span><br><span style="color:var(--ink-2);font-size:0.85rem"><code>register_harness_profile</code> at startup, before the graph is built</span></td>
+            <td><span style="color:var(--ink-2)">None — core <code>deepagents</code></span></td>
+            <td><span class="chip stable">Stable</span></td>
+          </tr>
+          <tr>
+            <td class="num">H5</td>
+            <td class="w"><strong>Interpreters + dynamic subagents</strong></td>
+            <td><span class="chip async">Async</span><br><span style="color:var(--ink-2);font-size:0.85rem">Executes inside the agent loop</span></td>
+            <td><code>pip install -U "deepagents[quickjs]"</code><br><span style="color:var(--ink-2);font-size:0.85rem"><code>langchain-quickjs≥0.2.0</code>, Python ≥3.11 — Aleph is 3.13. <strong>The only new runtime dependency on this list.</strong></span></td>
+            <td><span class="chip beta">Beta</span></td>
+          </tr>
+          <tr>
+            <td class="num">H6</td>
+            <td class="w"><strong>Async subagents</strong></td>
+            <td><span class="chip async">Async by definition</span><br><span style="color:var(--ink-2);font-size:0.85rem">Returns a job id; supervisor keeps talking. Check, update mid-flight, cancel</span></td>
+            <td><span style="color:var(--ink-2)">None — <code>deepagents≥0.5.0</code>, speaks Agent Protocol. <strong>ASGI transport</strong> when the spec omits <code>url</code>: in-process calls, no HTTP, no extra auth — needs both graphs in one <code>langgraph.json</code></span></td>
+            <td><span class="chip beta">Preview</span></td>
+          </tr>
+          <tr>
+            <td class="num">H7</td>
+            <td class="w"><strong><code>stream.subagents</code></strong><br><span style="color:var(--ink-3)">the Inspector’s data</span></td>
+            <td><span class="chip async">Async</span><br><span style="color:var(--ink-2);font-size:0.85rem"><code>await agent.astream_events(input, version="v3")</code> with <code>asyncio.gather</code> to consume coordinator and subagents concurrently</span></td>
+            <td><span style="color:var(--ink-2)">None — core <code>deepagents</code></span></td>
+            <td><span class="chip stable">Stable</span></td>
+          </tr>
+          <tr>
+            <td class="num">H8</td>
+            <td class="w"><strong>OpenWiki / OKF v0.1</strong></td>
+            <td><span class="chip sync">Sync</span><br><span style="color:var(--ink-2);font-size:0.85rem">Offline — a format comparison, not a runtime dependency</span></td>
+            <td><code>npm install -g openwiki</code><br><span style="color:var(--ink-2);font-size:0.85rem">Node CLI — or read the OKF spec only</span></td>
+            <td><span class="chip stable">Stable</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="lede"><strong>H6’s ASGI transport is the detail that makes async subagents viable here.</strong> With <code>url</code> omitted the SDK routes through in-process function calls instead of HTTP — no network hop, no extra auth — which fits Aleph’s in-process agent exactly. Local runs need the worker pool raised: a supervisor with three concurrent subagents needs four slots, and under-provisioning silently <em>queues</em> launches rather than failing.</p>
+
+    <div class="row">
+      <div class="id">H1</div>
+      <div>
+        <div class="head"><h3>The agent cannot write a skill</h3><span class="pill none">Not built</span></div>
+        <p class="field"><span class="txt">This <em>is</em> the self-improvement mechanism — the docs say it plainly: “ask your agent to write a skill for a task you worked on”. Aleph’s skills backend is a <strong>read-only filesystem</strong>, so the agent reads skills and can never author one. Nothing it learns survives the session. <code>StoreBackend</code> is the durable answer.</span></p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="id">H2</div>
+      <div>
+        <div class="head"><h3><code>aleph_kernel.skills</code> is dead code</h3><span class="pill bad">Broken</span></div>
+        <p class="field"><span class="txt">Two skills implementations exist. The one that runs is deepagents’. The other — AST-gated before execution, exec’d into a fresh namespace, loadable as a capability with a lifecycle — has <strong>no callers outside its own tests</strong>. Verified.</span></p>
+        <p class="field gap"><span class="txt">The dominant defect class in this codebase, and it matters more than most: its AST gate is exactly the admission control an agent-authored skill needs, and its lifecycle is what activate/deactivate would build on. Wire it or delete it — leaving it reads as “covered” and is not.</span></p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="id">H3</div>
+      <div>
+        <div class="head"><h3><code>RubricMiddleware</code></h3><span class="pill none">Not built</span></div>
+        <p class="field"><span class="txt">Declare what “done” looks like; the agent self-evaluates and revises until it passes or hits a cap. Needs ≥0.6.5 — available today. The wiki lint’s 16 named criteria are already rubric-shaped.</span></p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="id">H4</div>
+      <div>
+        <div class="head"><h3><code>HarnessProfile</code> — per-model tuning</h3><span class="pill none">Not built</span></div>
+        <p class="field"><span class="txt">Prompt tweaks, tool-description overrides, excluded tools and middleware, per provider or model, from YAML. Aleph is meant to run against any endpoint and sends <strong>one prompt and one tool set to every model</strong>. A 7B local model and Opus do not want the same harness. Pairs with B2 rather than following it.</span></p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="id">H5</div>
+      <div>
+        <div class="head"><h3>Interpreters and dynamic subagents</h3><span class="pill none">Not built</span></div>
+        <p class="field"><span class="txt">Fan-out from code — loops, retries, parallel batches — with intermediate results kept out of model context. Likely the fix for <strong>E5</strong>: today the model decides how many subagent calls to issue one turn at a time, which is what makes request volume unpredictable.</span></p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="id">H6</div>
+      <div>
+        <div class="head"><h3>Async subagents</h3><span class="pill none">Not built</span></div>
+        <p class="field"><span class="txt">Background tasks returning a job id immediately, with check, mid-flight update and cancel. Aleph’s research loop is exactly this shape and blocks today.</span></p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="id">H7</div>
+      <div>
+        <div class="head"><h3><code>stream.subagents</code></h3><span class="pill none">Not built — and it is what C3 needs</span></div>
+        <p class="field"><span class="txt">One stream handle per delegated task, each with <code>.messages</code>, <code>.tool_calls</code>, <code>.values</code> and <code>.output</code>, labelled by subagent name. That is the Inspector’s data model, already in the library — C3 does not need building from raw AG-UI events.</span></p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="id">H8</div>
+      <div>
+        <div class="head"><h3>OpenWiki and the Open Knowledge Format</h3><span class="pill part">Check</span></div>
+        <p class="field"><span class="txt">LangChain ships OpenWiki — a CLI maintaining a Markdown wiki as durable agent context, built on Deep Agents — emitting <strong>OKF v0.1</strong>: front matter, indexes, linked concepts. Aleph’s wiki schema converged on the same shape independently. If OKF becomes a real interchange format, aligning now is cheap and later is not.</span></p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Suggested order</h2>
+    <p class="lede">A real sequence — each step is the forcing function for the next.</p>
+    <ol class="order">
+      <li><div><strong>The model endpoint, and per-model harness profiles</strong> <span class="ref">B2 + H4</span><span class="why">One piece of work. Pointing Aleph at any endpoint is half useful while every model gets the same prompt and tool set.</span></div></li>
+      <li><div><strong>The agent can write a skill</strong> <span class="ref">H1 + H2 + A2</span><span class="why">The self-improvement mechanism. A writable store so an authored skill survives the session, the kernel’s AST gate as admission control, and the blast-radius check that stops it removing load-bearing capability. Not a system from scratch.</span></div></li>
+      <li><div><strong>The Inspector</strong> <span class="ref">H7 + C3</span><span class="why"><code>stream.subagents</code> is the data model, already in the library. Build it before chasing E1.</span></div></li>
+      <li><div><strong>Trace the <code>RUN_ERROR</code></strong> <span class="ref">E1</span><span class="why">With the Inspector in hand.</span></div></li>
+      <li><div><strong>Settings as panes, per-plugin cards, and the four UI rebuilds</strong> <span class="ref">B1 + A4 + G</span><span class="why"><code>Drawers.tsx</code> is all three problems in one file.</span></div></li>
+      <li><div><strong>Interpreters and dynamic subagents</strong> <span class="ref">H5</span><span class="why">Also the likely fix for E5 — model-driven fan-out is what makes request volume unpredictable.</span></div></li>
+      <li><div><strong>Rubric grading</strong> <span class="ref">H3</span><span class="why">The wiki lint already gives a concrete first rubric to write.</span></div></li>
+      <li><div><strong>The remaining UI revisions</strong> <span class="ref">G</span><span class="why">Plus a sweep so the drift cannot return.</span></div></li>
+      <li><div><strong>Catalog composition, then the plugin system</strong> <span class="ref">A3 → A1</span><span class="why">A1 last on purpose: items 2, 5 and 6 are the forcing functions for its shape. Designed first, it would be designed against guesses.</span></div></li>
+      <li><div><strong>Async subagents, the OKF read, then the rest</strong> <span class="ref">H6, H8, E2–E4, D1–D2</span><span class="why">Not doing C1 — Deep Agents gives the same primitives with no license and no Kubernetes. D3/D4 parked until OIDC.</span></div></li>
+    </ol>
+  </section>
+
+  <footer>docs/backlog.md · every claim verified against the tree</footer>
+
+</div>
+</body>
+</html>

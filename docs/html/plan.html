@@ -1,0 +1,605 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Aleph Plan</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Newsreader:opsz,wght@6..72,400;6..72,500&family=Public+Sans:wght@400;500;600&display=swap">
+  <!-- Standalone copy of the published artifact. Source of record: docs/plan.md
+       Self-contained apart from Google Fonts; open it directly in a browser. -->
+  <style>
+  /* Aleph's instrument palette. Light is the base; dark is a genuine
+     counterpart — the accent goes umber-on-bone rather than being inverted,
+     because "darker than its ground" and "brighter than its ground" are the
+     same idea from opposite sides. Hue means STATE and nothing else. */
+  :root {
+    --bg:          #FBFAF8;
+    --raised:      #FFFFFF;
+    --sunken:      #F3F2EF;
+    --rule:        #E2E0DB;
+    --rule-strong: #C9C6BF;
+    --ink:         #14171A;
+    --ink-2:       #565C61;
+    --ink-3:       #868C91;
+    --accent:      #3A342B;
+    --accent-fg:   #FBFAF8;
+
+    --good-bg:  #E4EDE7;  --good-fg:  #2E6B4A;
+    --bad-bg:   #F6E7E3;  --bad-fg:   #93412F;
+    --part-bg:  #EDEAE2;  --part-fg:  #3A342B;
+    --none-bg:  #F3F2EF;  --none-fg:  #565C61;
+
+    --ui:    "Public Sans", ui-sans-serif, system-ui, sans-serif;
+    --mono:  "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --prose: "Newsreader", Georgia, "Times New Roman", serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:          #0C0E10;
+      --raised:      #14171A;
+      --sunken:      #1B1F23;
+      --rule:        #24282C;
+      --rule-strong: #333940;
+      --ink:         #E8EAEC;
+      --ink-2:       #A0A8AE;
+      --ink-3:       #6B747B;
+      --accent:      #D9D4C8;
+      --accent-fg:   #0C0E10;
+
+      --good-bg:  #17251C;  --good-fg:  #7FBF9A;
+      --bad-bg:   #2A1815;  --bad-fg:   #D08E7C;
+      --part-bg:  #23211C;  --part-fg:  #D9D4C8;
+      --none-bg:  #1B1F23;  --none-fg:  #A0A8AE;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg:          #0C0E10;
+    --raised:      #14171A;
+    --sunken:      #1B1F23;
+    --rule:        #24282C;
+    --rule-strong: #333940;
+    --ink:         #E8EAEC;
+    --ink-2:       #A0A8AE;
+    --ink-3:       #6B747B;
+    --accent:      #D9D4C8;
+    --accent-fg:   #0C0E10;
+
+    --good-bg:  #17251C;  --good-fg:  #7FBF9A;
+    --bad-bg:   #2A1815;  --bad-fg:   #D08E7C;
+    --part-bg:  #23211C;  --part-fg:  #D9D4C8;
+    --none-bg:  #1B1F23;  --none-fg:  #A0A8AE;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--ui);
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 60rem;
+    margin: 0 auto;
+    padding: 3rem 1.5rem 6rem;
+  }
+
+  /* ---- masthead ---- */
+  header { border-bottom: 1px solid var(--rule-strong); padding-bottom: 1.75rem; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0 0 0.75rem;
+  }
+
+  h1 {
+    font-family: var(--prose);
+    font-weight: 400;
+    font-size: clamp(2rem, 5vw, 2.9rem);
+    line-height: 1.1;
+    letter-spacing: -0.01em;
+    margin: 0 0 0.85rem;
+    text-wrap: balance;
+  }
+
+  .standfirst {
+    font-family: var(--prose);
+    font-size: 1.075rem;
+    color: var(--ink-2);
+    max-width: 46ch;
+    margin: 0;
+  }
+
+  /* ---- tally ---- */
+  .tally {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    margin: 2.5rem 0 3rem;
+  }
+  .tally div { background: var(--bg); padding: 0.9rem 1rem; }
+  .tally .n {
+    font-family: var(--mono);
+    font-size: 1.6rem;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    display: block;
+    line-height: 1.1;
+  }
+  .tally .k {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+
+  /* ---- sections ---- */
+  section { margin-top: 3.25rem; }
+
+  h2 {
+    font-family: var(--ui);
+    font-size: 0.95rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    margin: 0;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--rule-strong);
+    display: flex;
+    align-items: baseline;
+    gap: 0.7rem;
+  }
+  h2 .tag {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-3);
+    letter-spacing: 0.1em;
+  }
+
+  .lede {
+    font-family: var(--prose);
+    color: var(--ink-2);
+    margin: 1rem 0 0;
+    max-width: 62ch;
+  }
+
+  /* ---- ledger rows ---- */
+  .row {
+    display: grid;
+    grid-template-columns: 3.25rem 1fr;
+    gap: 0 1rem;
+    padding: 1.25rem 0;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .id {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-3);
+    padding-top: 0.15rem;
+  }
+
+  .head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.6rem;
+    margin-bottom: 0.4rem;
+  }
+  .head h3 {
+    font-family: var(--ui);
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0;
+  }
+
+  .pill {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0.15rem 0.45rem;
+    white-space: nowrap;
+  }
+  .pill.none { background: var(--none-bg); color: var(--none-fg); }
+  .pill.part { background: var(--part-bg); color: var(--part-fg); }
+  .pill.bad  { background: var(--bad-bg);  color: var(--bad-fg); }
+  .pill.good { background: var(--good-bg); color: var(--good-fg); }
+
+  .field { margin: 0.35rem 0 0; max-width: 68ch; }
+  .field .lbl {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin-right: 0.45rem;
+  }
+  .field span.txt { color: var(--ink-2); }
+  .field.gap span.txt { color: var(--ink); }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    background: var(--sunken);
+    padding: 0.08em 0.32em;
+  }
+
+  /* ---- spectrum table ---- */
+  .tablewrap { overflow-x: auto; margin-top: 1.25rem; }
+  table { border-collapse: collapse; width: 100%; min-width: 30rem; }
+  th, td {
+    text-align: left;
+    padding: 0.6rem 0.9rem 0.6rem 0;
+    border-bottom: 1px solid var(--rule);
+    font-size: 0.925rem;
+  }
+  th {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 500;
+  }
+
+  /* ---- order ---- */
+  ol.order { list-style: none; counter-reset: step; padding: 0; margin: 1.25rem 0 0; }
+  ol.order li {
+    counter-increment: step;
+    display: grid;
+    grid-template-columns: 2.25rem 1fr;
+    gap: 0 1rem;
+    padding: 0.7rem 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  ol.order li::before {
+    content: counter(step);
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--accent);
+    font-weight: 500;
+    padding-top: 0.12rem;
+  }
+  ol.order .why { color: var(--ink-2); display: block; font-size: 0.925rem; }
+  ol.order .ref { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+
+  ul.plain { margin: 1rem 0 0; padding-left: 1.05rem; }
+  ul.plain li { margin-bottom: 0.55rem; color: var(--ink-2); max-width: 66ch; }
+  ul.plain li strong { color: var(--ink); font-weight: 600; }
+
+  footer {
+    margin-top: 4rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--rule-strong);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    color: var(--ink-3);
+  }
+
+  a { color: var(--accent); text-underline-offset: 2px; }
+  a:focus-visible, li:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+  td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 0.85rem; padding-right: 1.1rem; }
+  td code { background: none; padding: 0; color: var(--ink); }
+  .chip {
+    font-family: var(--mono); font-size: 10px; font-weight: 500;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 0.12rem 0.4rem; white-space: nowrap; display: inline-block;
+  }
+  .chip.async  { background: var(--part-bg); color: var(--part-fg); }
+  .chip.sync   { background: var(--none-bg); color: var(--none-fg); }
+  .chip.beta   { background: var(--bad-bg);  color: var(--bad-fg); }
+  .chip.stable { background: var(--good-bg); color: var(--good-fg); }
+  table.adopt td { vertical-align: top; padding-right: 1.1rem; font-size: 0.875rem; }
+  table.adopt td.w { min-width: 13rem; }
+
+  .kicker { font-family: var(--mono); font-size: 10px; letter-spacing:0.12em; text-transform:uppercase; color: var(--ink-3); }
+  .callout { border-left: 2px solid var(--bad-fg); background: var(--sunken); padding: 0.9rem 1.1rem; margin: 1.5rem 0; }
+  .callout p { margin: 0.3rem 0; }
+  .callout .hd { font-family: var(--ui); font-weight: 600; color: var(--ink); }
+  pre { font-family: var(--mono); font-size: 12px; background: var(--sunken); padding: 0.9rem 1.1rem; overflow-x: auto; margin: 1.1rem 0; line-height:1.5; }
+  td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 0.82rem; padding-right: 1rem; white-space: nowrap; }
+  .sub { color: var(--ink-2); font-size: 0.82rem; }
+  tr.grp td { font-family: var(--mono); font-size: 10px; letter-spacing:0.11em; text-transform: uppercase; color: var(--ink-3);
+              background: var(--sunken); padding: 0.55rem 0.9rem 0.55rem 0.7rem; border-bottom: 1px solid var(--rule-strong); }
+  table.ws td { vertical-align: top; padding: 0.6rem 0.9rem 0.6rem 0; }
+  .big { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 1.05rem; font-weight: 500; }
+  .was { color: var(--bad-fg); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">Aleph · 24 agents · verified against the running stack · 21 Aug 2026</p>
+    <h1>The plan, and the instrument that was lying about it</h1>
+    <p class="standfirst">Fifty-seven workstreams, 340 criteria that can fail. Six adversarial reviewers read the six plans and none of them approved.</p>
+  </header>
+
+  <div class="tally">
+    <div><span class="n">57</span><span class="k">Workstreams</span></div>
+    <div><span class="n">340</span><span class="k">Criteria</span></div>
+    <div><span class="n">74</span><span class="k">Rejected as unmeasurable</span></div>
+    <div><span class="n">68</span><span class="k">False claims caught</span></div>
+    <div><span class="n">63</span><span class="k">Horizon opportunities</span></div>
+  </div>
+
+  <section>
+    <h2>Stop. The instrument is lying. <span class="tag">Part 0</span></h2>
+    <p class="lede"><code>scripts/acceptance.sh</code> is the artifact that answers “is Aleph finished”. Before any of the work below begins, one week making it honest — this is the single biggest risk in the plan.</p>
+
+    <pre>$ ./scripts/acceptance.sh --quick
+pass=23  fail=0  red=0  skip=18 (not built)
+INCOMPLETE — 18 part(s) not built. Nothing regressed.
+$ echo $?
+0</pre>
+
+    <p class="lede">It runs 23 of 41 rows, <strong>exits 0 on eighteen skips</strong>, and is <strong>never invoked by CI</strong> — <code>grep -c acceptance.sh .github/workflows/ci.yml</code> returns <code>0</code>.</p>
+
+    <div class="callout">
+      <p class="hd">It certifies things that are false.</p>
+      <p>Acceptance <strong>Part D — the entire product thesis</strong> — is six ✅ rows resolved against <code>packages/aleph-kernel/tests/</code>, a module with no callers outside its own tests. D6 asserts a ported skill “loads and works”; that skill lives at repo-root <code>skills/literature-review/</code> while the agent’s skills root is <code>apps/api/src/aleph_api/skills/</code>. <strong>The running agent cannot see the skill its green check certifies.</strong></p>
+    </div>
+
+    <p class="lede">So the failure mode is not “a cluster runs late”. It is: five clusters land plausible work over three months, each green against its own criteria, and the first honest end-to-end measurement happens at the end — against an instrument that was already lying before anyone started.</p>
+
+    <h3 style="font-family:var(--ui);font-size:0.95rem;font-weight:600;margin:2rem 0 0;">Week 0, in order</h3>
+    <ol class="order">
+      <li><div><strong>Create <code>docs/decisions.md</code></strong><span class="why">It does not exist and is cited nine times. <code>CLAUDE.md:59</code> says the kernel language is <em>still an open decision</em> — and all 57 workstreams assume Python. That is being closed by momentum. Write it down or reopen it honestly.</span></div></li>
+      <li><div><strong>Re-derive the acceptance status column from checks that can fail</strong><span class="why">And repair the twenty dangling <code>tests/e2e/</code> references inside the script — that directory does not exist.</span></div></li>
+      <li><div><strong>Add a self-check probe for every subject</strong><span class="why">So <code>--self-check</code> proves each non-skipped check can go red.</span></div></li>
+      <li><div><strong>Wire it into CI</strong><span class="why">Against the postgres+redis services <code>python-integration</code> already declares, with a <code>--max-skip</code> budget that can only ratchet down.</span></div></li>
+      <li><div><strong>Write <code>scripts/status.sh</code></strong><span class="why">The eight numbers below, printed by one command.</span></div></li>
+      <li><div><strong>Declare an integration cadence</strong><span class="why">Shared trunk, weekly merge, no more than one week of divergence on the eleven contested files.</span></div></li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>The eight numbers that mean done <span class="tag">Part 1</span></h2>
+    <p class="lede">Success is abstract by nature, so it needs proxies that are not. Aleph is finished when all eight hold at once on the deployed instance, each a single command. Six are printable by one script — that script is the notion of done.</p>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th class="num"></th><th>The number</th><th>Today</th></tr></thead>
+        <tbody>
+          <tr><td class="num">1</td><td><code>acceptance.sh</code> exits 0 with <code>fail=0</code>, <code>skip ≤ 2</code>, and <code>--self-check</code> proves every check can fail</td><td class="sub was">23 pass, <strong>18 skip</strong>, exit 0, no CI</td></tr>
+          <tr><td class="num">2</td><td>Retrieval nDCG@10 ≥ 0.80 and recall@1 ≥ 0.91 on ≥150 questions, through the production path, with <code>document_chunks &gt; 0</code></td><td class="sub was">45 pairs, seeded rows, <strong>0 production chunks</strong></td></tr>
+          <tr><td class="num">3</td><td>Citation precision ≥ 0.90 by entailment over ≥30 reports, and no citation missing a quote or char span</td><td class="sub was"><strong>786 of 786 fail</strong></td></tr>
+          <tr><td class="num">4</td><td>The agent authors a skill in thread A; thread B sees it after an API restart</td><td class="sub was">impossible — the backend is read-only</td></tr>
+          <tr><td class="num">5</td><td>Zero unpriced or unattributed model calls</td><td class="sub was"><strong>80</strong> (67 unpriced, 13 more null run id)</td></tr>
+          <tr><td class="num">6</td><td>Zero agent runs stuck in <code>running</code> over an hour</td><td class="sub was"><strong>45</strong></td></tr>
+          <tr><td class="num">7</td><td>p95 first-token latency on <code>POST /copilotkit</code> under a stated ceiling</td><td class="sub was"><strong>no number exists</strong></td></tr>
+          <tr><td class="num">8</td><td>Zero dead code by construction, and <code>git ls-files apps/web/src</code> has gone <em>down</em></td><td class="sub was">60 files, several unreachable</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="lede"><strong>Number 7 deserves emphasis.</strong> This plan puts a per-request graph factory, an LLM reranker, a QuickJS interpreter, a rubric grader loop and two new middlewares onto a request path that runs <em>in-process inside FastAPI</em> — and not one workstream currently states a millisecond number. Pick the ceiling before adding the load, or five of those decisions are assumed rather than argued.</p>
+  </section>
+
+  <section>
+    <h2>What is actually broken right now <span class="tag">Part 2</span></h2>
+    <p class="lede">Verified live, not remembered. These reorder everything.</p>
+
+    <div class="callout">
+      <p class="hd">Retrieval is dead on the deployed instance.</p>
+      <p><span class="big">0</span> chunks · <span class="big">75</span> sources · <span class="big">843</span> wiki pages</p>
+      <p>Model profiles bind the embedder to <code>titan-embed-v2</code>; the gateway serves <code>titan-embed-text-v2</code>. Wrong by one word. And because chunks are written only <em>after</em> the embed returns, one bad model name also killed the lexical leg — which needs no model at all. So the hybrid retrieval CLAUDE.md calls “built and measured” at recall@1 0.91 has been running against an empty table. 45 index runs sit in <code>running</code> with no error recorded.</p>
+    </div>
+
+    <div class="callout">
+      <p class="hd">The belief layer has never run.</p>
+      <p>786 citations — <span class="big">0</span> with a verbatim quote, <span class="big">0</span> with chunk ids. 786 claims, <span class="big">0</span> edges. <code>BeliefService</code> has no callers.</p>
+      <p>CLAUDE.md states that claim→chunk grounding is “populated on the real write path instead of only in fixtures”. On live data that is <strong>0 of 786</strong>.</p>
+    </div>
+
+    <p class="lede"><strong><code>access_scope</code> is a write-only column, schema-wide.</strong> 70 assignment sites, <strong>zero</strong> query filters. Every migration adds it. CLAUDE.md lists it as a review-held rule; it is in fact the largest single instance of the defect class CLAUDE.md itself calls dominant — and it is nobody’s. Enforce it or delete it.</p>
+
+    <p class="lede"><strong>The frontend has no test runner</strong> — no Vitest, no Playwright — and three clusters wrote criteria against one. <code>pnpm-workspace.yaml</code> declares a member directory that does not exist.</p>
+
+    <p class="lede"><strong>And the UI has no error containment or keyboard access.</strong> Across 60 files: 49 aria attributes, <strong>1</strong> <code>onKeyDown</code>, <strong>0</strong> <code>.focus()</code> calls, <strong>0</strong> error boundaries. One thrown render error blanks the workspace. The Board is a spatial canvas with no keyboard access whatsoever.</p>
+  </section>
+
+  <section>
+    <h2>The work <span class="tag">Part 3</span></h2>
+    <p class="lede">Fifty-seven workstreams. Each carries what it is in plain language, why Aleph needs it, how, criteria that can fail, a review step and an iteration step — full detail in <code>docs/plan.md</code>.</p>
+    <p class="lede">Ids are prefixed <code>WS-</code> deliberately: bare ids like <code>A2</code>, <code>D1</code> and <code>E1</code> already mean three different things across the acceptance doc, the backlog and this plan, and one review step already pointed an executor at the right file and the wrong row.</p>
+
+    <div class="tablewrap">
+      <table class="ws">
+        <thead><tr><th class="num">Id</th><th>Workstream</th><th class="num">Crit</th><th>Effort</th><th>Depends</th></tr></thead>
+        <tbody>
+          <tr class="grp"><td colspan="5">Research &amp; retrieval — 12 workstreams, 72 criteria</td></tr>
+          <tr><td class="num">WS-RS1</td><td><strong>Unbreak retrieval on the deployed stack, and make it impossible for sear…</strong><br><span class="sub">On the machine that is actually running right now, the search that powers every other feature returns nothing at all. 75 documents were fetched, 45 we…</span></td><td class="num">6</td><td class="sub">4-5 days. The reorder plus the nullable-embedd…</td><td class="sub">—</td></tr>
+          <tr><td class="num">WS-D1</td><td><strong>Make wiki commit atomic on the path agents actually use</strong><br><span class="sub">Saving a page picks its version number by asking the database &#x27;what is the highest version so far?&#x27; and adding one. When two things save the same page…</span></td><td class="num">5</td><td class="sub">2-3 days. The fix itself is ~30 lines and half…</td><td class="sub">—</td></tr>
+          <tr><td class="num">WS-E2</td><td><strong>Scholar search stops returning 503, and stops serialising behind a one-r…</strong><br><span class="sub">Literature search fails with &#x27;service unavailable&#x27; in the API log. Three unrelated causes all wear that one error code. First, any error response from…</span></td><td class="num">5</td><td class="sub">3-4 days. Status mapping and its tests ~1 day;…</td><td class="sub">—</td></tr>
+          <tr><td class="num">WS-RS4</td><td><strong>Make the retrieval number a gate that can actually fail</strong><br><span class="sub">Aleph&#x27;s headline research claim is a measured number: 0.91 out of 1.0 for &#x27;the right document came back first&#x27;. The number is real — I reproduced it.…</span></td><td class="num">6</td><td class="sub">~1 week. Rewriting four end-to-end files again…</td><td class="sub">RS1</td></tr>
+          <tr><td class="num">WS-RS5</td><td><strong>An evaluation set that can tell good from great</strong><br><span class="sub">The measuring stick is too short to measure anything interesting. The test corpus is twelve documents, the longest under sixty words, with forty-five…</span></td><td class="num">6</td><td class="sub">1.5-2 weeks, and most of it is data work rathe…</td><td class="sub">RS4</td></tr>
+          <tr><td class="num">WS-RS6</td><td><strong>Retrieval quality: reranking, context-aware chunk embeddings, and vector…</strong><br><span class="sub">Three concrete upgrades to how search finds things. First, reranking: today Aleph takes the top results from two different rankings and interleaves th…</span></td><td class="num">7</td><td class="sub">~2 weeks. Rerank interface plus two backends p…</td><td class="sub">RS1, RS5</td></tr>
+          <tr><td class="num">WS-RS7</td><td><strong>The deep-research loop must read the sources it fetched</strong><br><span class="sub">This is the most serious defect in the cluster. Aleph&#x27;s flagship research feature searches for papers, downloads them, ingests them — and then writes…</span></td><td class="num">6</td><td class="sub">~2 weeks. Rewriting _node_compose around an ev…</td><td class="sub">RS1, E2</td></tr>
+          <tr><td class="num">WS-RS8</td><td><strong>Evidence-anchored claim extraction: give the belief layer its first call…</strong><br><span class="sub">Aleph&#x27;s durable knowledge is meant to be claims — individual statements, each pinned to the exact sentence in a source that supports it, with a confid…</span></td><td class="num">7</td><td class="sub">~3 weeks, and it is the largest item in the cl…</td><td class="sub">RS1, D1</td></tr>
+          <tr><td class="num">WS-RS9</td><td><strong>One confidence vocabulary, and a retraction that actually propagates</strong><br><span class="sub">How confident the system is in a claim is written down in three different vocabularies that do not agree with each other. The engine that computes con…</span></td><td class="num">6</td><td class="sub">~1 week. Enum unification and the sweep: 2-3 d…</td><td class="sub">RS7, RS8</td></tr>
+          <tr><td class="num">WS-RS10</td><td><strong>Claim-level retrieval, and making the wiki-deletion gate a runnable deci…</strong><br><span class="sub">The plan of record says the legacy wiki gets deleted once the claim layer retrieves better than the current search does. But the command named as the…</span></td><td class="num">6</td><td class="sub">~1.5 weeks. search_claims plus the graph hop:…</td><td class="sub">RS5, RS8</td></tr>
+          <tr><td class="num">WS-RS11</td><td><strong>PDF ingest that preserves structure</strong><br><span class="sub">Most of what a research tool ingests is PDFs, and Aleph reads them as though they were plain text files. It gets a flat wall of words with no headings…</span></td><td class="num">6</td><td class="sub">~2 weeks, and this is the item most likely to…</td><td class="sub">RS1, RS5</td></tr>
+          <tr><td class="num">WS-H8</td><td><strong>Make the wiki exportable, then align it with the Open Knowledge Format</strong><br><span class="sub">Three places in the code state that an Aleph project opens as an Obsidian vault. There is no export path of any kind — nothing anywhere writes the wik…</span></td><td class="num">6</td><td class="sub">~1.5 weeks. Exporter, route and zip packaging:…</td><td class="sub">—</td></tr>
+          <tr class="grp"><td colspan="5">Kernel, plugins, self-improvement — 9 workstreams, 54 criteria</td></tr>
+          <tr><td class="num">WS-K0</td><td><strong>Make the acceptance gate tell the truth, and run it in CI</strong><br><span class="sub">Aleph has a script, `scripts/acceptance.sh`, that CLAUDE.md calls &quot;the gate to trust&quot; — it runs one named check per feature and prints pass/fail/skip.…</span></td><td class="num">5</td><td class="sub">2 days. The CI job is an hour; correcting the…</td><td class="sub">—</td></tr>
+          <tr><td class="num">WS-K1</td><td><strong>Close the unsupervised skill-write path before opening a governed one</strong><br><span class="sub">The assistant reads four short instruction documents that tell it how to do its job — how to run research, how to write a report, how to use the ACH a…</span></td><td class="num">5</td><td class="sub">1 day. The permission plumbing is about ten li…</td><td class="sub">—</td></tr>
+          <tr><td class="num">WS-A1a</td><td><strong>Fix the two kernel bugs that break the first agent-authored plugin</strong><br><span class="sub">The kernel — Aleph&#x27;s own machinery for adding and removing abilities while the system runs — already works, and it already refuses to remove something…</span></td><td class="num">6</td><td class="sub">2 days. The kernel is small, has no I/O and is…</td><td class="sub">—</td></tr>
+          <tr><td class="num">WS-A1b</td><td><strong>A plugin becomes a durable record with a real loader — and `aleph_kernel…</strong><br><span class="sub">Today a plugin exists only as a live Python object inside one running process. Restart the API and it is gone; the background worker never had it. The…</span></td><td class="num">7</td><td class="sub">2 weeks, and it should be planned as a fortnig…</td><td class="sub">A1a</td></tr>
+          <tr><td class="num">WS-A2</td><td><strong>The agent can actually reach the kernel — the guardrail gets its first c…</strong><br><span class="sub">The guardrail everyone describes as the product — the agent may add abilities but cannot remove the ones the system is standing on — is fully built an…</span></td><td class="num">7</td><td class="sub">1 week. Tools and routes are two days; the hon…</td><td class="sub">A1b</td></tr>
+          <tr><td class="num">WS-H1</td><td><strong>Agent-authored skills that survive the session</strong><br><span class="sub">A &quot;skill&quot; here is a short instruction document, optionally with helper code, that teaches the assistant how to do one kind of job. Four ship with Alep…</span></td><td class="num">6</td><td class="sub">4 days. The backend routing is half a day. The…</td><td class="sub">K1, A1b</td></tr>
+          <tr><td class="num">WS-A3a</td><td><strong>Tell the agent what it can actually draw — and give the settings-card ge…</strong><br><span class="sub">The list of screen pieces the assistant is allowed to ask for, and the list the browser can actually draw, are two different lists and nobody noticed.…</span></td><td class="num">6</td><td class="sub">4 days. Generating from the render catalog is…</td><td class="sub">—</td></tr>
+          <tr><td class="num">WS-A3b</td><td><strong>One catalog per plugin, merged without collisions</strong><br><span class="sub">If two plugins both define something called &quot;Chart&quot;, one silently replaces the other and nothing anywhere reports it — the underlying code is a plain…</span></td><td class="num">6</td><td class="sub">1.5 weeks. Python-side catalog assembly and th…</td><td class="sub">A1b, A3a</td></tr>
+          <tr><td class="num">WS-H3</td><td><strong>The agent grades its own work before handing it over</strong><br><span class="sub">Today the assistant decides for itself when an answer is finished. `RubricMiddleware` lets you write down what &quot;finished&quot; means as a list of named cri…</span></td><td class="num">6</td><td class="sub">4 days. The middleware itself is an afternoon.…</td><td class="sub">A1b</td></tr>
+          <tr class="grp"><td colspan="5">Agent path &amp; inspector — 8 workstreams, 44 criteria</td></tr>
+          <tr><td class="num">WS-E1a</td><td><strong>Aleph owns the agent&#x27;s stream endpoint, so a failed run says so</strong><br><span class="sub">Today, when the assistant breaks mid-answer, the connection just goes quiet. No error is sent to the browser. The chat shows a half-written message an…</span></td><td class="num">5</td><td class="sub">1.5 days. The code being replaced is 40 lines…</td><td class="sub">—</td></tr>
+          <tr><td class="num">WS-E1b</td><td><strong>A tool failure becomes a message the agent can read, not a dead conversa…</strong><br><span class="sub">The assistant has 27 tools. If any one of them throws — a permission check, a database hiccup, a missing dictionary key, a 404 from a page that does n…</span></td><td class="num">5</td><td class="sub">4 days. One day for the middleware and its uni…</td><td class="sub">E1a</td></tr>
+          <tr><td class="num">WS-E1c</td><td><strong>The agent stops starving and timing out on itself: connection pool, requ…</strong><br><span class="sub">Three settings currently make the assistant fragile under any load at all. First, the database connection pool the agent uses holds exactly one connec…</span></td><td class="num">5</td><td class="sub">2 days. The pool and timeout changes are hours…</td><td class="sub">E1b</td></tr>
+          <tr><td class="num">WS-C3a</td><td><strong>Every chat turn becomes a recorded run, with subagent identity — and H7…</strong><br><span class="sub">Right now nothing about a conversation with the assistant is written down. There is no record that a turn happened, which tools it called, how long th…</span></td><td class="num">6</td><td class="sub">5 days. Two days for the run lifecycle and its…</td><td class="sub">E1a, E1b</td></tr>
+          <tr><td class="num">WS-D2</td><td><strong>Cost attribution closes: no uncosted call, no NULL run id, no frozen mod…</strong><br><span class="sub">Aleph is supposed to record what every model call cost and who it was for. On the assistant&#x27;s path it frequently does not. Four separate holes: a resp…</span></td><td class="num">6</td><td class="sub">3 days. One day to move costing onto the hook…</td><td class="sub">C3a</td></tr>
+          <tr><td class="num">WS-C3b</td><td><strong>The Inspector pane — see what the agent did, and where it broke</strong><br><span class="sub">A new pane on the workspace board, alongside Wiki and Library, that shows what the assistant actually did: the runs it has performed on this project,…</span></td><td class="num">6</td><td class="sub">8-10 days, and this is the one to be honest ab…</td><td class="sub">C3a</td></tr>
+          <tr><td class="num">WS-H5</td><td><strong>Bounded fan-out: give the agent a scratchpad it can loop in, instead of…</strong><br><span class="sub">Today, when the assistant needs to do the same thing to twenty items, the model decides one turn at a time how many helpers to launch — and it is bad…</span></td><td class="num">5</td><td class="sub">4 days if the dependency bump is clean: one da…</td><td class="sub">E1b, E1c</td></tr>
+          <tr><td class="num">WS-H6</td><td><strong>Background delegation that works here: long jobs return a ticket, the as…</strong><br><span class="sub">When the analyst asks for something slow — a deep research pass, a full review sweep — the assistant currently stands still until it finishes, because…</span></td><td class="num">6</td><td class="sub">6-8 days. Two days for the three tools and the…</td><td class="sub">C3a, C3b</td></tr>
+          <tr class="grp"><td colspan="5">Model endpoint &amp; profiles — 7 workstreams, 42 criteria</td></tr>
+          <tr><td class="num">WS-MEP-1</td><td><strong>Agent spend gets a real price tag</strong><br><span class="sub">Aleph writes a row for every model call recording tokens used and money spent. Two different code paths make model calls: the transport path (LiteLLMC…</span></td><td class="num">6</td><td class="sub">About a week. Items 1, 4 and 5 are roughly a d…</td><td class="sub">—</td></tr>
+          <tr><td class="num">WS-MEP-2</td><td><strong>One metered door to the gateway</strong><br><span class="sub">&#x27;Weirdly rate limited&#x27; means Aleph sends the model server more requests than it will accept. Nothing in Aleph counts how many requests are in flight —…</span></td><td class="num">6</td><td class="sub">A week and a half. The limiter capability plus…</td><td class="sub">—</td></tr>
+          <tr><td class="num">WS-MEP-3</td><td><strong>A second endpoint that exists only for tests, and docs that stop describ…</strong><br><span class="sub">The point of the next two workstreams is &#x27;point Aleph at a different model server and it works&#x27;. You cannot demonstrate that with one server. There is…</span></td><td class="num">5</td><td class="sub">Three to four days, and the cheapest thing in…</td><td class="sub">—</td></tr>
+          <tr><td class="num">WS-MEP-4</td><td><strong>Gateway endpoints become data: a table, a secret store, a resolver, and…</strong><br><span class="sub">Today the address of the model server and its key are read from environment variables once when the process starts (apps/api/src/aleph_api/settings.py…</span></td><td class="num">7</td><td class="sub">Two and a half to three weeks, and the largest…</td><td class="sub">MEP-1, MEP-2, MEP-3</td></tr>
+          <tr><td class="num">WS-MEP-5</td><td><strong>The endpoint in the UI: add it, test it, switch to it, never see the key…</strong><br><span class="sub">The settings panel today offers exactly three model controls: pick a named profile, pick a model per job, and &#x27;Configure from gateway&#x27; (apps/web/src/c…</span></td><td class="num">6</td><td class="sub">Four to five days. Form, list and probe wiring…</td><td class="sub">MEP-4</td></tr>
+          <tr><td class="num">WS-MEP-6</td><td><strong>Unfreeze the agent: it uses the project&#x27;s models, not the ones it was bo…</strong><br><span class="sub">When Aleph starts, it reads ONE globally-named model profile from the database, builds the chat assistant and its six helper agents around those exact…</span></td><td class="num">6</td><td class="sub">A week to a week and a half. Factory and cache…</td><td class="sub">MEP-4</td></tr>
+          <tr><td class="num">WS-MEP-7</td><td><strong>HarnessProfile: a different prompt and tool set for a different model</strong><br><span class="sub">Aleph sends the same 6.5k-character instruction block and the same 11 orchestrator tools to every model, whether that is a frontier model or a 7B mode…</span></td><td class="num">6</td><td class="sub">A week, split unevenly. The profile= context-w…</td><td class="sub">MEP-6</td></tr>
+          <tr class="grp"><td colspan="5">UI/UX — 9 workstreams, 56 criteria</td></tr>
+          <tr><td class="num">WS-UI-1</td><td><strong>Web quality gates that can fail, and the dead code they let you delete</strong><br><span class="sub">Nothing in the automated build can currently notice a React file that nothing imports, a CSS rule nothing uses, or a hardcoded colour. The `web` job i…</span></td><td class="num">6</td><td class="sub">3-4 days. The deletions are an afternoon. The…</td><td class="sub">—</td></tr>
+          <tr><td class="num">WS-UI-2</td><td><strong>A UI test harness, and a browser smoke that keeps the console clean</strong><br><span class="sub">There is currently no way to test any part of the interface. `git ls-files tests` returns exactly 7 Python files; there is no Vitest, no Playwright, n…</span></td><td class="num">6</td><td class="sub">1 week, with one honest unknown: whether @a2ui…</td><td class="sub">UI-1</td></tr>
+          <tr><td class="num">WS-B1a</td><td><strong>Panes a plugin can actually add</strong><br><span class="sub">The workspace is a canvas of panes — Wiki, Library, Notes and so on. The server decides what panes exist and the client just draws whatever it is give…</span></td><td class="num">6</td><td class="sub">1 week. Server side (registry builders, fault…</td><td class="sub">UI-2</td></tr>
+          <tr><td class="num">WS-A4</td><td><strong>The plugin settings contract, wired end to end</strong><br><span class="sub">A plugin should be able to say &#x27;here is my configuration, as a schema&#x27; and get a working settings screen without shipping any browser code. That gener…</span></td><td class="num">7</td><td class="sub">2 weeks. The generator being done removes the…</td><td class="sub">B1a</td></tr>
+          <tr><td class="num">WS-B1</td><td><strong>Settings becomes panes, and the drawer dies</strong><br><span class="sub">Settings today is a slide-over panel that covers the workspace: apps/web/src/components/Drawers.tsx, 742 lines, the largest and most drifted file in t…</span></td><td class="num">6</td><td class="sub">2 weeks. Porting the four sections is a week —…</td><td class="sub">A4</td></tr>
+          <tr><td class="num">WS-UI-3</td><td><strong>The A2UI prop contract, in both directions, across all producers</strong><br><span class="sub">The interface&#x27;s data flows through a declarative catalog: the server sends component names and props, and the browser resolves them against a schema.…</span></td><td class="num">6</td><td class="sub">1.5 weeks. The sweep rewrite is 3 days — parsi…</td><td class="sub">UI-2</td></tr>
+          <tr><td class="num">WS-UI-4</td><td><strong>Every control does something</strong><br><span class="sub">A number of things in the interface render, look interactive, and do nothing when used. Every block on the canvas has three footer buttons — Keep, Aga…</span></td><td class="num">7</td><td class="sub">1 week. The grounding path is 2 days (server b…</td><td class="sub">B1a, UI-3</td></tr>
+          <tr><td class="num">WS-G</td><td><strong>Design-token conformance: 187 to zero, ratcheted</strong><br><span class="sub">The interface has a specification recorded in code — apps/web/src/styles/tokens.css: square corners (--radius: 0px at :67), hairline borders, no shado…</span></td><td class="num">6</td><td class="sub">2 weeks, and it is the least intellectually de…</td><td class="sub">B1, UI-4</td></tr>
+          <tr><td class="num">WS-E3</td><td><strong>Typography and the compiled document: offline and themed</strong><br><span class="sub">Two rendering problems that only show up outside the happy path. First, the app&#x27;s fonts load from Google&#x27;s CDN at apps/web/index.html:7-11, so in a de…</span></td><td class="num">6</td><td class="sub">3-4 days. Vendoring the fonts is a day. Themin…</td><td class="sub">G</td></tr>
+          <tr class="grp"><td colspan="5">Production readiness — 12 workstreams, 72 criteria</td></tr>
+          <tr><td class="num">WS-P1</td><td><strong>A test harness that speaks HTTP to a real database — and the four defect…</strong><br><span class="sub">Almost every test in Aleph is a pure-logic test: call a Python function with fake inputs, check the answer. That is why 779 tests finish in six second…</span></td><td class="num">6</td><td class="sub">One week. Two days for the fixtures — the haza…</td><td class="sub">—</td></tr>
+          <tr><td class="num">WS-P2</td><td><strong>A 500 you can find in the logs — request correlation on the error path</strong><br><span class="sub">When the API throws an unhandled exception, the log line it writes contains four keys — environment, event, level, timestamp — and nothing that identi…</span></td><td class="num">5</td><td class="sub">One day. The change is under 30 lines; most of…</td><td class="sub">—</td></tr>
+          <tr><td class="num">WS-P3</td><td><strong>A stack that survives a reboot, an unreachable gateway, and a large uplo…</strong><br><span class="sub">Five things, all in the deploy layer, all currently untrue. (a) No compose service declares a restart policy — `grep -n &#x27;restart:&#x27; deploy/compose/dock…</span></td><td class="num">7</td><td class="sub">Four days. Restart policies, mem_limits and US…</td><td class="sub">—</td></tr>
+          <tr><td class="num">WS-P4</td><td><strong>The web app can be tested at all — a unit runner, and the browser suite…</strong><br><span class="sub">apps/web has no way to run a test. Its package.json scripts are dev, build, preview, typecheck, lint; its devDependencies contain no vitest, jest or p…</span></td><td class="num">6</td><td class="sub">Three to four days. Vitest setup half a day; r…</td><td class="sub">P3</td></tr>
+          <tr><td class="num">WS-P5</td><td><strong>Make the acceptance gate honest, and put it in CI</strong><br><span class="sub">CLAUDE.md names scripts/acceptance.sh as &quot;the gate to trust&quot; — the thing that counts skips separately and can prove its own checks fail. Right now it…</span></td><td class="num">6</td><td class="sub">Two days. The preflight and MISSING status is…</td><td class="sub">P1</td></tr>
+          <tr><td class="num">WS-P6</td><td><strong>Sweeps that cannot silently pass — plus the one invariant with no sweep…</strong><br><span class="sub">Aleph has five CI sweeps that check invariants no type system can: that the generated A2UI catalogs match their source, that no LangGraph node writes…</span></td><td class="num">6</td><td class="sub">Two days. The surface_bindings fail-open fix i…</td><td class="sub">P5</td></tr>
+          <tr><td class="num">WS-P7</td><td><strong>One secret doing three jobs — separate the keys, version them, and test…</strong><br><span class="sub">ALEPH_AGENT_TOKEN_SECRET is used for three unrelated things. (1) It signs the short-lived HS256 agent tokens workers use to call back into the API (pa…</span></td><td class="num">6</td><td class="sub">Three days. The split and the deduplication ar…</td><td class="sub">P1, P3</td></tr>
+          <tr><td class="num">WS-P8</td><td><strong>Backup, restore, and a migration rollback that has actually been run</strong><br><span class="sub">There is no backup or restore story for Aleph anywhere in the repo. Searching deploy/, scripts/ and docs/operations.md for backup, pg_dump, restore, p…</span></td><td class="num">6</td><td class="sub">Three days. The dump and restore scripts are a…</td><td class="sub">P3</td></tr>
+          <tr><td class="num">WS-P9</td><td><strong>Numbers, not just traces — metrics, and a trace id you can follow from b…</strong><br><span class="sub">Aleph has tracing and no metrics. Tracing is installed and correctly opt-in: packages/aleph-observability/src/aleph_observability/tracing.py:56-68 ski…</span></td><td class="num">6</td><td class="sub">Three days. The meter plumbing plus the /metri…</td><td class="sub">P2</td></tr>
+          <tr><td class="num">WS-D3</td><td><strong>The chat bridge forwards the caller&#x27;s credential — and port 4000 stops b…</strong><br><span class="sub">Backlog D3 says the Node bridge between the browser and the agent does not forward the user&#x27;s credential, so `oidc` mode cannot authenticate the chat…</span></td><td class="num">6</td><td class="sub">One to one and a half days. The prop plus its…</td><td class="sub">P4</td></tr>
+          <tr><td class="num">WS-D4</td><td><strong>SSE that can carry a credential — the four streams and the iframe asset…</strong><br><span class="sub">Backlog D4 says EventSource cannot set an Authorization header, so in oidc mode every server-sent-event stream and the iframe-consumed asset route hav…</span></td><td class="num">6</td><td class="sub">One week. Two days on the decision and a proto…</td><td class="sub">D3</td></tr>
+          <tr><td class="num">WS-P12</td><td><strong>Supply chain: dependency scanning, pinned bases, and a security job that…</strong><br><span class="sub">The .github directory contains exactly one file, workflows/ci.yml. There is no dependabot.yml, no CodeQL workflow, and ci.yml has zero hits for audit,…</span></td><td class="num">6</td><td class="sub">One day for dependabot.yml, the security job a…</td><td class="sub">P3</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>What the reviewers rejected <span class="tag">Part 4</span></h2>
+    <p class="lede">All six returned <strong>needs-work</strong>. None approved. They found <strong>74 criteria</strong> that could not fail or could not be run, <strong>68 false claims</strong> about the codebase, 77 missing pieces of work and 43 sequencing problems. Three worth reading, because each is a way a plan can look rigorous and measure nothing:</p>
+
+    <div class="row">
+      <div class="id">1</div>
+      <div>
+        <div class="head"><h3>A criterion that passes today</h3><span class="pill bad">Cannot fail</span></div>
+        <p class="field"><span class="txt">“Writing over a bundled skill is refused” was marked <em>fails today</em>. The reviewer reproduced it: deepagents’ <code>write</code> already has a file-exists guard, so the check would go green on day one without the fix. It <em>is</em> reproducible through <code>edit</code> — which rewrote a skill’s instruction from “Always cite sources” to “Never cite sources”. Split into two criteria against the two real vectors.</span></p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="id">2</div>
+      <div>
+        <div class="head"><h3>A gate on a role that does not exist</h3><span class="pill bad">Decorative</span></div>
+        <p class="field"><span class="txt">“Authoring a plugin requires more than project scope” — there is no operator role. <code>ProjectRole</code> is OWNER/EDITOR/VIEWER and every candidate is a <em>project</em> role, so a user who owns their own project clears the gate and gets code execution inside the shared API process. The replacement tests both halves, including an instance-level authority a project owner cannot satisfy.</span></p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="id">3</div>
+      <div>
+        <div class="head"><h3>A pane that goes green without painting</h3><span class="pill bad">Producer, no consumer</span></div>
+        <p class="field"><span class="txt">“The plugins pane is reachable” passes the instant the registry gains an entry — while <code>_build_tab_messages</code> is a hardcoded if-chain ending in <code>raise NotFound</code>, so the pane renders nothing. Exactly the producer-with-no-consumer defect CLAUDE.md names as dominant. Replaced with a test that opens the stream and asserts components arrive.</span></p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Horizon <span class="tag">Part 5</span></h2>
+    <p class="lede">Five independent scans, deliberately different lenses, each required to name the number that would move. <strong>63 opportunities: 45 adopt, 10 trial, 3 assess, 5 hold.</strong> The ones that change this plan:</p>
+
+    <ul class="plain">
+      <li><strong>Prompt caching is silently a no-op</strong> on the agent path — ~10k tokens of identical prefix re-sent every turn. Two to three days, and the likely cause of the gateway rate limiting.</li>
+      <li><strong>The <code>SpawnLedger</code> is written and enforces nothing.</strong> Depth, fan-out and budget brakes exist in the kernel and no code path consults them.</li>
+      <li><strong>The agent compacts against a guessed context window</strong> rather than the one the gateway reports.</li>
+      <li><strong>The Grounding surface is complete on five layers and unreachable</strong> — one handler branch away from working.</li>
+      <li><strong>716 lines of dead frontend</strong> to delete, plus a sweep so it cannot come back.</li>
+      <li><strong>Rebind the embedder to <code>cohere-embed-v4</code></strong> at 1024 Matryoshka dimensions — one day, and it is on the critical path.</li>
+    </ul>
+
+    <div class="callout">
+      <p class="hd">Two findings argue this plan is wrong. Both deserve a decision before work starts.</p>
+      <p><strong>Do not build the plugin system.</strong> The boot manifest may already <em>be</em> one, and the honest move is to prove that with a failing test rather than write a second abstraction beside it. A genuine fork in the road — decide it in <code>docs/decisions.md</code>, do not discover it two weeks in.</p>
+      <p><strong>Agent-authored code must run in <code>code-runner</code></strong> — cap-dropped, read-only rootfs, network-partitioned — and never through <code>exec()</code> in the FastAPI process, which is what the kernel’s current skill loader does. This one is not optional. It is a security boundary and the plan adopts it.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>How this runs <span class="tag">Part 6</span></h2>
+    <p class="lede">Six clusters, and the bulk of the work lands in <strong>eleven files</strong>. Every one is edited by more than one cluster, and no cluster’s dependencies cross a cluster boundary — so all of it is invisible to both sides.</p>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>File</th><th class="num">Lines</th><th>Clusters</th></tr></thead>
+        <tbody>
+          <tr><td><code>copilot_agent.py</code></td><td class="num">1,662</td><td class="sub"><strong>4</strong></td></tr>
+          <tr><td><code>routes/surfaces.py</code></td><td class="num">1,028</td><td class="sub">3</td></tr>
+          <tr><td><code>capabilities.py</code></td><td class="num">729</td><td class="sub">3</td></tr>
+          <tr><td><code>catalog.json</code></td><td class="num">2,093</td><td class="sub">2, plus two generated copies and a sweep that fails on drift</td></tr>
+          <tr><td><code>Drawers.tsx</code></td><td class="num">742</td><td class="sub">2 — one <em>deletes</em> it while the other still references it</td></tr>
+          <tr><td><code>scripts/acceptance.sh</code></td><td class="num">365</td><td class="sub">2, both claiming it, neither owning its twenty dangling references</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="lede"><strong>The rule:</strong> shared trunk, weekly merge, no cluster carrying more than one week of divergence on any of these. Without it the plan’s real output is six branches that individually pass and collectively do not merge.</p>
+
+    <h3 style="font-family:var(--ui);font-size:0.95rem;font-weight:600;margin:2rem 0 0;">Sequence</h3>
+    <ol class="order">
+      <li><div><strong>Week 0 — make the gate honest</strong><span class="why">Part 0, in full, before anything else.</span></div></li>
+      <li><div><strong>Unbreak retrieval</strong> <span class="ref">WS-RS1</span><span class="why">Days, and it unblocks four clusters’ ability to measure anything. Rebind, add a boot probe that fails loudly, sweep the 45 stuck runs, and decide in writing what happens to 786 ungrounded claims — re-extract or delete.</span></div></li>
+      <li><div><strong>Close the unsupervised skill-write path, fix the two kernel bugs</strong> <span class="ref">WS-K1, WS-A1a</span><span class="why">Days each, and they gate the self-improvement work.</span></div></li>
+      <li><div><strong>Prompt caching, context window, spill and loop guards</strong><span class="why">The cheapest items on the horizon list and the likely cause of the rate limiting.</span></div></li>
+      <li><div><strong>The endpoint and per-model profiles</strong> <span class="ref">WS-MEP-*</span><span class="why">The stated hard requirement.</span></div></li>
+      <li><div><strong>The trajectory record, then the Inspector</strong> <span class="ref">WS-C3a → WS-C3b</span><span class="why">Built on what Aleph already persists and currently discards.</span></div></li>
+      <li><div><strong>UI harness, dead-code deletion, then settings as panes</strong> <span class="ref">WS-UI-1 → UI-2 → B1a → A4 → B1</span></div></li>
+      <li><div><strong>Retrieval quality and the real eval</strong> <span class="ref">WS-RS4 → RS5 → RS6</span></div></li>
+    </ol>
+
+    <p class="lede" style="margin-top:1.75rem"><strong>Review and iteration are steps, not attitudes.</strong> Review prefers <em>mutation testing</em> — break the thing, confirm the check goes red, restore. A check never observed failing proves nothing, which is exactly how Part D came to certify a module the product does not load. Iterate names what a second pass improves, so the gap between “shipped” and “good” is scheduled rather than hoped for. And the horizon scan re-runs at each of the eight numbers, because the state of the art moves faster than this plan will be executed.</p>
+  </section>
+
+  <section>
+    <h2>Explicitly not doing <span class="tag">Part 7</span></h2>
+    <p class="lede">Each belongs in <code>docs/decisions.md</code> as a dated entry, so it stops being re-litigated every planning round.</p>
+    <ul class="plain">
+      <li><strong>The kernel stays in Python.</strong> Close D5 — 57 workstreams already assume it.</li>
+      <li><strong>The wiki is not deleted this cycle.</strong> One workstream produces the deciding measurement; nothing schedules the deletion.</li>
+      <li><strong>OIDC is not shipped.</strong> Everything is measured in <code>local</code> mode.</li>
+      <li><strong><code>access_scope</code> is deleted, not implemented.</strong> Route-side role checks at ~20 sites are the real control; a second unread authorization concept in every table is worse than none.</li>
+      <li><strong><code>audit/</code> is deleted.</strong> Three overlapping registries of intent already disagree in both directions. One gate.</li>
+      <li><strong><code>aleph-datasets</code> is deleted.</strong> Its only importers are the migration runner and a consistency test.</li>
+      <li><strong>No async subagents, no MCP client, no Enterprise Intelligence this cycle.</strong></li>
+      <li><strong>No multi-tenancy, collaboration, presence or mobile layout.</strong> One user, three projects.</li>
+      <li><strong>No new workspace package.</strong> The count holds at ≤21 and should ratchet down.</li>
+    </ul>
+  </section>
+
+  <footer>docs/plan.md · 57 workstreams · 340 criteria · built by 24 agents, every number verified against the tree</footer>
+
+</div>
+</body>
+</html>
