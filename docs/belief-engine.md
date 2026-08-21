@@ -1,7 +1,7 @@
 # The Claim Spine
 
 The knowledge layer, and the first substantial plugin in Aleph's research suite. It replaces the
-compiled wiki (see [`decisions.md`](decisions.md) D1).
+compiled wiki. **Note:** D1 has since been superseded — the wiki is not being replaced. The Claim Spine is the wiki's evidence layer, not its successor (see [`decisions.md`](decisions.md) D1, 2026-08-21).
 
 **Status: designed, partially built.** `packages/aleph-belief` currently holds the patch contract and
 trust lattice and nothing consumes them yet — which is precisely the defect class this codebase is

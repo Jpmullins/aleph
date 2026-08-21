@@ -149,20 +149,24 @@ and is tested for determinism, idempotence and not destroying human corrections
 (C8). What does not exist is the extractor itself, and its acceptance test is
 *"does it produce good claims"* — which requires a live LLM gateway to answer.
 
-**The gateway blocker is now gone.** A local gateway (`deploy/local-gateway/`)
-serves a chat model and an embedder, Part H asserts both are reachable and
-correctly dimensioned, and the retrieval bar is measured at 0.91@1. So the
-remaining work in E is the extractor itself plus the pipeline surgery — not a
-missing precondition.
+**⚠ Part E is WITHDRAWN as written.** It asked when the wiki could be deleted.
+`decisions.md` D1 (2026-08-21) reverses that decision: the wiki and the RAG over
+the raw collection are two knowledge plugins and both stay. There is no deletion
+to unblock, so there is no condition to state.
 
-**E unblocks when:** an extractor is written against `Extractor` and the belief
-path beats **0.91 recall@1 / 0.98@3** on `python -m aleph_evals.retrieval_eval`.
-Until it does, the wiki stays and nothing new is built on it — deleting a
-measured path for an unmeasured one is the mistake this refactor exists to
-correct, and that reasoning does not change now that the gateway exists.
+What survives from E, restated honestly:
 
-Deleting it first would trade a measured-mediocre path for an unmeasured one,
-which is the mistake this whole refactor exists to correct.
+- The **extractor** — turning an ingested source into claim drafts — still does
+  not exist, and it is why the Claim Spine has never run (786 claims, 0 edges,
+  0 verbatim quotes, no callers). It is now scoped as the wiki's evidence layer
+  rather than as its replacement. `plan.md` `WS-RS8`.
+- The comparison *claim-level vs chunk-level retrieval on the same eval* is
+  still worth measuring, because it says whether claims add retrieval value on
+  top of chunks. It is a measurement, not a gate on a deletion. `plan.md`
+  `WS-RS10`.
+- The **local gateway** referenced here (`deploy/local-gateway/`) no longer
+  exists — that directory was deleted. Aleph connects to whatever
+  OpenAI-compatible endpoint is configured.
 
 **E-complete when:** nothing imports the wiki, and the line count is down, not up.
 

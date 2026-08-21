@@ -29,22 +29,30 @@ artifacts, reports) is *rendered from* that layer, never the layer itself.
 
 Aleph is **mid-transition on two axes at once.** Be careful: much of the code predates both.
 
-**Axis 1 — the knowledge layer.** Built around an LLM-maintained wiki as the primary retrieval
-surface; being removed. See `docs/decisions.md` D1.
+**Axis 1 — the knowledge layer. TWO knowledge plugins, and both stay.** See `docs/decisions.md` D1,
+which supersedes the old decision that the wiki was being deleted.
 
-- **Being removed:** wiki page compilation, the curator, the alias service, the LLM page-selector.
-- **Built and measured:** corpus-wide hybrid retrieval — `aleph_rks.retrieval.search_corpus` fuses a
-  dense (pgvector cosine) and a lexical (`ts_rank`) ranking with RRF at k=60. Reproduce the number
-  with `uv run python -m aleph_evals.retrieval_eval` over the 45-pair set in
-  `packages/aleph-evals/datasets/retrieval/`: recall@1 is 0.91 hybrid vs 0.60 lexical-only. That is
-  the bar the belief engine has to beat (`docs/acceptance.md` §B).
-- **Being built:** the **Claim Spine** (`docs/belief-engine.md`) — durable claims, verbatim-anchored
-  evidence, typed claim edges, derived confidence. The write path is
-  `aleph_wiki.belief_service.BeliefService`; the patch contract, trust lattice and deterministic
-  reconciler are in `packages/aleph-belief`.
-- **Why the wiki is still here:** deleting it means replacing the ingest→compile pipeline with claim
-  extraction, and that extractor does not exist yet. `docs/acceptance.md` §E states the condition that
-  unblocks the deletion. Until then the wiki stays.
+- **The wiki** — what the project *concluded*. Synthesised pages, claims, citations, category hubs,
+  a governed tag vocabulary. Curated and cross-linked; a thing a person reads. It now has a real
+  schema (`docs/wiki-schema.md`) with validation on the write path, sixteen lint checks, derived
+  hubs and an index, and classification. **It is not legacy and it is not being removed.**
+- **RAG over the raw collection** — what the project *collected*. Every ingested source, chunked and
+  indexed, searched directly so an answer can be grounded in the actual passage rather than in
+  somebody's summary of it. `aleph_rks.retrieval.search_corpus` fuses a dense (pgvector cosine) and
+  a lexical (`ts_rank`) ranking with RRF at k=60; the 45-pair eval reports recall@1 0.91 hybrid vs
+  0.60 lexical-only.
+- **⚠ The RAG is currently dead in production.** `document_chunks` has **0 rows** against 75 ingested
+  sources: the profile binds the embedder to `titan-embed-v2` and the gateway serves
+  `titan-embed-text-v2`. Chunks are written only *after* the embed returns, so one wrong name also
+  killed the lexical leg, which needs no model. The measured 0.91 is against seeded fixtures, not
+  against anything a user can search. Fix first — `docs/plan.md` `WS-RS1`.
+- **The Claim Spine** (`docs/belief-engine.md`) is the evidence layer *underneath* the wiki, not a
+  replacement for it: durable claims with verbatim quotes anchored to exact character offsets, so a
+  page's assertions are traceable to a sentence. It has never run — 786 claims, 0 edges, 0 verbatim
+  quotes, and `BeliefService` has no callers. See `WS-RS8`.
+- **They are different plugins and both are fully accessible.** *"What do we think about X, and on
+  what evidence?"* is the wiki. *"What did source 47 actually say?"* is the RAG. Framing them as
+  competitors is what produced the removal decision, and it was a false choice.
 - **The wiki now has a schema** (`docs/wiki-schema.md`). Ported from the hermes-agent `llm-wiki`
   skill — the harness that built `~/wiki/ai-research` — and stored as data, not as a document, so
   `WikiSchema.validate_page` runs on the write path. Per-project domain, category list, controlled
@@ -56,8 +64,7 @@ surface; being removed. See `docs/decisions.md` D1.
 
 **Axis 2 — the harness.** Aleph is being rebuilt on an own-implemented kernel modelled on the
 spatiotemporal-composability paper (revertible effects, reactive coeffects, scoped capability access).
-**The kernel language and structure are an open decision** — see `docs/decisions.md` D5. Do not assume
-Python for the kernel; do assume Python for the belief/scholarship plugins, which are bound to
+**The kernel is Python** — see `docs/decisions.md` D5, closed 2026-08-21. Also assume Python for the belief/scholarship plugins, which are bound to
 Postgres and the transactional ledger.
 
 Today both processes boot on it: `apps/api/src/aleph_api/lifespan.py` and
@@ -68,8 +75,11 @@ root, with a live read-path probe per capability and LIFO unwind on shutdown.
 **Unchanged and healthy on both axes:** ingest/RKS, `aleph-scholar`, the action ledger, model routing,
 the sandboxed code runner, the asset store.
 
-Treat wiki code as **legacy under removal**. Do not extend it, do not fix its cosmetics, do not add
-tests to it. Migrate callers off it.
+The wiki is **actively developed**, not legacy. The rule that used to sit here — *"treat wiki code as
+legacy under removal; do not extend it, do not fix its cosmetics, do not add tests to it"* — is
+deleted. It was made when the Claim Spine was expected to replace the wiki as the retrieval surface.
+That replacement never ran, the wiki became the working knowledge layer, and the rule was violated
+comprehensively and correctly. `docs/decisions.md` D1 records why.
 
 ### Recently landed, and worth knowing before you touch these areas
 
@@ -190,7 +200,7 @@ packages/
   aleph-notes         analyst notes
   aleph-datasets      Dataset / DatasetVersion / Observation
   aleph-evals         eval runner, scorers, and the retrieval eval that calls the real path
-  aleph-wiki          LEGACY, under removal — also currently hosts the Claim Spine write path
+  aleph-wiki          the wiki knowledge plugin — pages, schema, lint, hubs; hosts the Claim Spine write path
 ```
 
 21 workspace packages. `docs/acceptance.md` E4 asserts the count does not grow; the reduction comes
@@ -383,7 +393,7 @@ Distribution `aleph-xxx` · module `aleph_xxx` · tables plural snake_case · ac
 - `docs/acceptance.md` — the refactor decomposed into parts, each with a check that can fail
 - `docs/belief-engine.md` — the Claim Spine design being built
 - `docs/wiki-schema.md` — the wiki's governance: schema, statuses, thresholds, lint, links
-- `docs/decisions.md` — why the wiki is being removed, and what was borrowed from where
+- `docs/decisions.md` — the dated decisions, including why the wiki removal was reversed
 - `docs/operations.md` — stack, migrations, gates, running against local models
 - `docs/update/` — pre-refactor audit reports (dated 2026-07-26, written against `bcc478a`). Useful as
   history; **superseded** wherever they disagree with the five documents above.

@@ -19,45 +19,39 @@ docker compose -f deploy/compose/docker-compose.yml --profile s3 up -d   # opt-i
 ./scripts/verify-gateway.sh                                              # LLM gateway reachability
 ```
 
-## Running against local models
+## Running against any OpenAI-compatible endpoint
 
-`LiteLLMClient` posts chat **and** embeddings to a single `LITELLM_BASE_URL`. A
-bare vLLM serves chat only, so pointing Aleph straight at one breaks ingest at
-the embed step — and a source that never chunks is invisible to *both* legs of
-retrieval, not just the dense one. `deploy/local-gateway/` closes that gap: one
-OpenAI-compatible surface, chat proxied to vLLM, embeddings served in-process by
-bge-m3 on CPU.
+Aleph serves no models. It connects out to whatever OpenAI-compatible endpoint is
+configured — LiteLLM, Ollama, vLLM, Bedrock behind a proxy — and discovers what
+that endpoint serves at runtime. It ships no model list and no price list.
+
+```
+# deploy/compose/.env
+LITELLM_BASE_URL=https://your-gateway.example.com
+LITELLM_API_KEY=...
+```
+
+Two things to know before pointing it somewhere new.
+
+**`LiteLLMClient` posts chat *and* embeddings to the same base URL.** A bare vLLM
+serves chat only, so an endpoint without an embeddings route breaks ingest at the
+embed step. That failure is worse than it sounds: chunks are written only *after*
+the embed call returns, so a missing embedder also kills the lexical leg of
+retrieval, which needs no model at all. The source ingests, produces no chunks,
+and becomes invisible to both legs. Put something in front that serves both.
+
+**The bound model name must match what the endpoint actually serves.** This is
+not hypothetical — production currently has `document_chunks` at 0 rows against
+75 sources because the profile binds `titan-embed-v2` while the gateway serves
+`titan-embed-text-v2`. Check with:
 
 ```bash
-docker compose -f deploy/compose/docker-compose.yml --profile local-llm up -d aleph-local-gateway
+curl -s localhost:8000/v1/gateway/models | python3 -m json.tool
 ```
 
-Then in `deploy/compose/.env`:
+> The old `deploy/local-gateway/` directory referenced by earlier versions of
+> this document was deleted. There is no bundled gateway.
 
-```
-LITELLM_BASE_URL=http://host.docker.internal:8010   # containers; use localhost:8010 from the host
-INSIGHTS_LITELLM_API_KEY=local-no-auth              # required non-empty; the gateway does not check it
-ALEPH_FALLBACK_AGENT_MODEL=qwen3.8-27b-uncensored
-```
-
-Point the upstream elsewhere with `ALEPH_LOCAL_GATEWAY_UPSTREAM`. The embedder
-is pulled from the local HuggingFace cache (`HF_HUB_OFFLINE=1`), so fetch it once
-before first start.
-
-Three things must line up, and `acceptance.sh::H1` checks all three:
-
-1. **Every `ModelProfile` binding names a model the gateway serves.** Rebind with
-   SQL against `model_profiles.bindings_jsonb`; templates included, or new
-   projects inherit the old models.
-2. **The embedder's width equals `EMBEDDING_DIM`** (1024). bge-m3 matches, so no
-   migration is needed; a different embedder means re-dimensioning the column and
-   re-embedding.
-3. **The model is priced.** `aleph_models.pricing` must know it or the `models`
-   probe fails boot. Local models are priced at zero — the honest per-token rate
-   for owned hardware. Token *counts* are still ledgered.
-
-`network_mode: host` is required because vLLM binds `127.0.0.1`; containers reach
-the gateway via the `host.docker.internal` mapping on `aleph-api`/`aleph-workers`.
 
 ## Migrations
 

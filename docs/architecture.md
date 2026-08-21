@@ -52,25 +52,33 @@ embedding call is routed through the LiteLLM gateway by `aleph-models` and shoul
 
 ## The knowledge layer, currently
 
-Two representations coexist during the transition:
+**Two knowledge plugins, and both stay** (`decisions.md` D1, which supersedes the old decision that
+the wiki was being removed):
 
-- **RKS** (`aleph-rks`) — sources, normalized text, chunks, embeddings. Healthy. This is the ground
-  truth the knowledge layer is derived from, and it is what makes a rebuild possible.
-- **Wiki** (`aleph-wiki`) — LLM-compiled markdown pages. **Legacy under removal.** Its index now
-  covers page bodies (see Retrieval), so it is no longer broken — it is superseded. Nothing new is
-  built on it.
+- **RKS** (`aleph-rks`) — sources, normalized text, chunks, embeddings, and corpus-wide retrieval
+  over them. This is the **RAG plugin**: what the project *collected*, searched directly, so an
+  answer is grounded in the actual passage. It is also the ground truth everything else derives from.
+  ⚠ Currently dead in production — `document_chunks` has 0 rows because the bound embedding model
+  name does not match what the gateway serves. See `plan.md` `WS-RS1`.
+- **Wiki** (`aleph-wiki`) — synthesised pages, claims, citations, hubs, and a governed schema
+  (`wiki-schema.md`). This is the **wiki plugin**: what the project *concluded*, curated and
+  cross-linked. Actively developed.
 
-The replacement inverts the ownership: claims become durable and independently revisable, and prose
-becomes a render. `packages/aleph-belief` holds the patch contract, the trust lattice and the
-deterministic reconciler; `aleph_wiki.belief_service` is the Claim Spine's write path, sitting in the
-legacy package because the claim tables do (`WikiClaim`, `Citation`, `ClaimEdge` in
-`aleph_wiki.models`). What is still missing is the extractor that turns an ingested source into claim
-drafts — that, not appetite, is what blocks deleting the wiki (`acceptance.md` §E).
+They answer different questions and are not competitors. *"What do we think about X, and on what
+evidence?"* is the wiki; *"what did source 47 actually say?"* is the RAG. Framing them as rivals is
+what produced the removal decision, and it was a false choice.
+
+The **Claim Spine** sits underneath the wiki as its evidence layer, not as a replacement:
+`packages/aleph-belief` holds the patch contract, the trust lattice and the deterministic reconciler;
+`aleph_wiki.belief_service` is the write path, in that package because the claim tables are
+(`WikiClaim`, `Citation`, `ClaimEdge` in `aleph_wiki.models`). Still missing is the extractor that
+turns an ingested source into claim drafts — which is why it has never run: 786 claims, 0 edges,
+0 verbatim quotes, no callers.
 
 ## Retrieval
 
-The wiki-first path — FTS over `wiki_index` → an LLM page-selector → one hop of wikilink expansion →
-a composer call — is being removed. Its three known defects were fixed rather than inherited:
+The old wiki-first path — FTS over `wiki_index` → an LLM page-selector → one hop of wikilink
+expansion → a composer call — was retired in favour of corpus-wide retrieval. Its three known defects were fixed rather than inherited:
 `wiki_index` now carries `body_text` with weighted `ts_rank` (title A, summary+aliases B, body C), the
 query gate ORs terms instead of ANDing them, and link expansion filters on `src_revision_id` so it no
 longer walks every historical revision. The page-selector hop and `Capability.PAGE_SELECTION` go with
@@ -92,7 +100,7 @@ and almost all of that margin is on paraphrased questions. Reproduce with
 Call sites pass a `Capability` (`synthesis`, `extraction`, `classification`, `embedding`, `rerank`,
 `vision`, `code`, `judge`) plus the project's `ModelProfile`; `LiteLLMClient` resolves the binding.
 Two named profiles — `aleph-dev` and `aleph-production` — are presets selected by
-`ALEPH_DEFAULT_MODEL_PROFILE`. `Capability.PAGE_SELECTION` is being removed with the page-selector.
+`ALEPH_DEFAULT_MODEL_PROFILE`. `Capability.PAGE_SELECTION` was retired with the page-selector.
 
 **Aleph ships no model list and no price list.** The gateway decides what models exist:
 
