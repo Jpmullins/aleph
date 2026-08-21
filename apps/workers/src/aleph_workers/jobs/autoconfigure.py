@@ -84,6 +84,23 @@ async def autoconfigure_profile_job(ctx: dict[str, Any], project_id_str: str) ->
             )
             await session.commit()
 
+        # Binding an embedder is the moment a `lexical_only` corpus becomes
+        # repairable, so the repair is chained here rather than left for someone
+        # to remember. Both passes are idempotent, so a project with nothing to
+        # repair pays two cheap queries.
+        if outcome.embed_changed and outcome.bound.get("embedding"):
+            pool = ctx.get("redis_pool")
+            if pool is not None:
+                try:
+                    await pool.enqueue_job("backfill_index_job", project_id_str)
+                    await pool.enqueue_job("reembed_job", project_id_str)
+                except Exception:
+                    # Eventual, not required: an operator can still call
+                    # POST /v1/projects/{id}/index/backfill.
+                    _log.warning(
+                        "worker.autoconfigure.repair_enqueue_failed", project_id=project_id_str
+                    )
+
     _log.info(
         "worker.autoconfigure.done",
         project_id=project_id_str,

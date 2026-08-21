@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from aleph_db.models.agent import AgentRun
 from aleph_db.models.model_profile import ModelProfile
 from aleph_rks.embedding import KNOWN_EMBEDDING_DIMS
-from aleph_rks.models import EMBEDDING_DIM, DocumentChunk, NormalizedDocument, RetrievalIndexRecord
+from aleph_rks.models import DocumentChunk, NormalizedDocument, RetrievalIndexRecord
 from aleph_rks.retrieval import search_corpus
 from aleph_security.agent_token import mint_agent_token
 from aleph_workers.jobs.chunk_embed import chunk_embed_job
@@ -193,7 +193,7 @@ async def test_dead_embedder_still_writes_chunks(
             s,
             project_id=committed_project,
             query_text=MARKER,
-            query_embedding=[0.0] * EMBEDDING_DIM,
+            query_embedding=None,  # the degraded mode: lexical leg only
             top_k=5,
         )
     assert hits, "no lexical hit — keyword search went down with the embedder"

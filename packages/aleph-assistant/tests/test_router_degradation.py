@@ -114,7 +114,9 @@ async def test_lexical_search_still_runs_when_the_embedder_is_dead(
     )
 
     assert patched_search["query_text"] == "quokka photosynthesis anomaly"
-    assert patched_search["query_embedding"] == [0.0] * EMBEDDING_DIM
+    assert patched_search["query_embedding"] is None, (
+        "a zero vector is not a degraded dense leg, it is a meaningless one"
+    )
 
 
 async def test_a_healthy_embedder_reports_no_degradation(

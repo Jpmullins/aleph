@@ -24,7 +24,7 @@ from sqlalchemy import select
 from aleph_core.schemas.model_profile import Capability
 from aleph_models.client import ChatMessage
 from aleph_observability.tracing import start_span
-from aleph_rks.models import EMBEDDING_DIM, Source
+from aleph_rks.models import Source
 from aleph_rks.retrieval import descend_into_source, search_corpus
 from aleph_wiki.index_service import IndexService, PageSelectionResult
 from aleph_wiki.models import WikiPage, WikiRevision
@@ -403,11 +403,10 @@ class WikiFirstRetrievalRouter:
             )
 
         if query_vector is None:
+            # `search_corpus` reads None as "lexical leg only". Handing it a
+            # zero vector instead would look equivalent and quietly fuse an
+            # arbitrary dense ranking into the result.
             self._degraded = "embedder_unavailable"
-            # A zero vector orders nothing usefully, and `_hybrid_search` skips
-            # chunks with no embedding anyway — so the dense leg contributes
-            # nothing and the lexical leg carries the search.
-            query_vector = [0.0] * EMBEDDING_DIM
 
         async with self._maker() as session:
             hits = await search_corpus(

@@ -64,7 +64,7 @@ async def _hybrid_search(
     *,
     project_id: UUID,
     query_text: str,
-    query_embedding: list[float],
+    query_embedding: list[float] | None,
     top_k: int,
     source_id: UUID | None,
     per_source_cap: int | None,
@@ -75,6 +75,13 @@ async def _hybrid_search(
     project. Both legs over-fetch relative to ``top_k`` so fusion has something
     to disagree about — a fused list built from two 8-item rankings is mostly
     just the first ranking.
+
+    ``query_embedding=None`` means **run the lexical leg only**, which is what a
+    caller whose embedder is unavailable should ask for. Passing a zero vector
+    instead looks equivalent and is not: cosine distance to the zero vector is
+    degenerate, so the dense leg returns an arbitrary page of rows and RRF fuses
+    that noise as though it were a ranking. An absent leg is honest; a
+    meaningless one is worse than none.
     """
     scope = [DocumentChunk.project_id == project_id]
     if source_id is not None:
@@ -82,6 +89,7 @@ async def _hybrid_search(
 
     fetch = max(top_k * 4, 40)
 
+    dense_rows: list[Any] = []
     # `embedding IS NOT NULL` is load-bearing, not defensive. A chunk is written
     # before it is embedded, so an un-embedded chunk is a normal row — and
     # ordering by `cosine_distance` over a NULL vector is undefined in
@@ -89,19 +97,20 @@ async def _hybrid_search(
     # the dense leg return an arbitrary page of rows, which RRF then fuses as
     # though it were a ranking. An empty dense leg is the honest answer;
     # `search_corpus` still answers from the lexical leg, which needs no model.
-    dense_stmt = (
-        select(
-            DocumentChunk.id,
-            DocumentChunk.ordinal,
-            DocumentChunk.text,
-            DocumentChunk.section_path,
-            DocumentChunk.source_id,
+    if query_embedding is not None:
+        dense_stmt = (
+            select(
+                DocumentChunk.id,
+                DocumentChunk.ordinal,
+                DocumentChunk.text,
+                DocumentChunk.section_path,
+                DocumentChunk.source_id,
+            )
+            .where(*scope, DocumentChunk.embedding.isnot(None))
+            .order_by(DocumentChunk.embedding.cosine_distance(query_embedding))  # type: ignore[attr-defined]
+            .limit(fetch)
         )
-        .where(*scope, DocumentChunk.embedding.isnot(None))
-        .order_by(DocumentChunk.embedding.cosine_distance(query_embedding))  # type: ignore[attr-defined]
-        .limit(fetch)
-    )
-    dense_rows = list((await session.execute(dense_stmt)).all())
+        dense_rows = list((await session.execute(dense_stmt)).all())
 
     # OR the terms. Every Postgres parser conjoins unquoted words, so a whole
     # question would otherwise have to match every content word to return
@@ -154,11 +163,15 @@ async def search_corpus(
     *,
     project_id: UUID,
     query_text: str,
-    query_embedding: list[float],
+    query_embedding: list[float] | None,
     top_k: int = 8,
     per_source_cap: int | None = DEFAULT_PER_SOURCE_CAP,
 ) -> list[ChunkHit]:
-    """Search every source in a project. This is first-line retrieval."""
+    """Search every source in a project. This is first-line retrieval.
+
+    ``query_embedding=None`` searches lexically only — the honest degraded mode
+    when no embedder is available.
+    """
     return await _hybrid_search(
         session,
         project_id=project_id,
@@ -176,7 +189,7 @@ async def descend_into_source(
     project_id: UUID,
     source_id: UUID,
     query_text: str,
-    query_embedding: list[float],
+    query_embedding: list[float] | None,
     top_k: int = 8,
 ) -> list[ChunkHit]:
     """The same search, pinned to one source. No per-source cap: there is one."""

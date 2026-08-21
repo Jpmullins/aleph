@@ -58,7 +58,8 @@ async def backfill_unindexed_for_project(
 ) -> tuple[int, int]:
     """Index every normalized document in the project that has no chunks.
 
-    Returns ``(documents_indexed, chunks_written)``. Running it a second time
+    Returns ``(documents_indexed, chunks_written)``; a document that cannot be
+    indexed at all is counted in neither and logged by name. Running it a second time
     with nothing new to do returns ``(0, 0)`` — the selection is "has no chunk
     rows", so a document that came out ``lexical_only`` (chunks written, dense
     leg missing) is *done* as far as this pass is concerned and is not
@@ -70,17 +71,31 @@ async def backfill_unindexed_for_project(
 
     documents = 0
     chunks = 0
+    failed = 0
     for normalized_id in pending:
-        outcome = await index_normalized_document(
-            maker=maker,
-            normalized_id=normalized_id,
-            asset_store=asset_store,
-            litellm=litellm,
-            principal=principal,
-            profile_bindings=profile_bindings,
-            agent_run_id=None,
-            purpose=purpose,
-        )
+        # One unindexable document must not take the batch with it. A single PDF
+        # carrying a NUL byte aborted a 34-document repair pass at whatever
+        # position it happened to occupy, and the documents behind it looked
+        # exactly like documents that had never been asked for.
+        try:
+            outcome = await index_normalized_document(
+                maker=maker,
+                normalized_id=normalized_id,
+                asset_store=asset_store,
+                litellm=litellm,
+                principal=principal,
+                profile_bindings=profile_bindings,
+                agent_run_id=None,
+                purpose=purpose,
+            )
+        except Exception as exc:
+            failed += 1
+            _log.warning(
+                "rks.backfill.document_failed",
+                normalized_document_id=str(normalized_id),
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            continue
         documents += 1
         chunks += outcome.chunk_count
         if not outcome.ok:
@@ -90,11 +105,12 @@ async def backfill_unindexed_for_project(
                 state=outcome.state,
                 reason=outcome.reason,
             )
-    if documents:
+    if documents or failed:
         _log.info(
             "rks.backfill.done",
             project_id=str(project_id),
             documents=documents,
             chunks=chunks,
+            failed=failed,
         )
     return documents, chunks

@@ -24,6 +24,7 @@ from aleph_runtime.capabilities import (
 )
 from aleph_workers.jobs import (
     autoconfigure_profile_job,
+    backfill_index_job,
     bootstrap_project_job,
     builder_job,
     chunk_embed_job,
@@ -129,6 +130,7 @@ class WorkerSettings:
     functions: ClassVar = [
         smoke_llm_job,
         autoconfigure_profile_job,
+        backfill_index_job,
         normalize_job,
         chunk_embed_job,
         wiki_ingest_job,

@@ -27,7 +27,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-__all__ = ["GroundedSpan", "defang", "ground", "normalize_for_match"]
+__all__ = ["GroundedSpan", "defang", "ground", "normalize_for_match", "strip_nul"]
 
 # Every non-ASCII character in this module is written as a \uXXXX escape.
 # A module about invisible characters must not contain invisible characters:
@@ -68,6 +68,26 @@ _INVISIBLE = re.compile(
 #: renderers — so text after one can be invisible in a UI that shows the rest.
 _LINE_SEPARATORS = re.compile("[\u2028\u2029]")
 
+#: NUL. Postgres `text` cannot hold it *at all* — the insert fails with
+#: "invalid byte sequence for encoding UTF8: 0x00" — so a single NUL anywhere in
+#: a PDF makes that document permanently unindexable, and (before the repair
+#: pass learned to skip a bad document) took every document behind it in the
+#: batch with it. It is replaced rather than deleted so character offsets into
+#: the document are unchanged: U+FFFD is one character, exactly like the NUL it
+#: stands in for, and grounding spans are measured in characters.
+_NUL = "\x00"
+_NUL_REPLACEMENT = "\ufffd"
+
+
+def strip_nul(text: str) -> str:
+    """Replace NUL with U+FFFD, preserving character offsets exactly.
+
+    Separate from :func:`defang` because it is applied in two different places:
+    at the ingest boundary with everything else, and again at index time for
+    documents normalised before this existed.
+    """
+    return text.replace(_NUL, _NUL_REPLACEMENT)
+
 
 def defang(text: str) -> str:
     """Strip invisible and directional characters from untrusted text.
@@ -75,14 +95,16 @@ def defang(text: str) -> str:
     Applied at the ingest boundary. These characters let a document hide
     instructions from a human reading it while a model reads them fine — the
     text a reviewer approves and the text the model consumes must be the same
-    text. Also normalises the two Unicode line separators to newlines.
+    text. Also normalises the two Unicode line separators to newlines, and
+    replaces NUL, which no Postgres text column can store.
 
     Deliberately not a prompt-injection filter. It removes a class of
     *invisibility*, which is checkable, rather than trying to detect intent,
     which is not.
     """
     text = _INVISIBLE.sub("", text)
-    return _LINE_SEPARATORS.sub("\n", text)
+    text = _LINE_SEPARATORS.sub("\n", text)
+    return strip_nul(text)
 
 
 def normalize_for_match(text: str) -> tuple[str, list[int]]:

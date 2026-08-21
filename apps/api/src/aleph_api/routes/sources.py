@@ -15,6 +15,8 @@ from urllib.parse import urlparse
 from uuid import UUID
 
 import httpx
+from arq import create_pool
+from arq.connections import RedisSettings
 from fastapi import APIRouter, Body, File, Form, Request, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 from sqlalchemy import func, select, update
@@ -26,6 +28,7 @@ from aleph_core.ids import uuid7
 from aleph_db.models.agent import AgentRun
 from aleph_observability.tracing import current_trace_id
 from aleph_reviewer.retraction import retract_source
+from aleph_rks.backfill import unindexed_document_ids
 from aleph_rks.models import Connector, NormalizedDocument, Source
 from aleph_rks.source_service import register_uploaded_source
 from aleph_security.agent_token import mint_agent_token
@@ -481,6 +484,46 @@ class PipelineOut(BaseModel):
     stages: list[PipelineStageOut]
     failed: int
     total: int
+
+
+class IndexBackfillOut(BaseModel):
+    """What the repair pass was asked to do."""
+
+    unindexed_documents: int
+    enqueued: bool
+
+
+@router.post("/{project_id}/index/backfill", response_model=IndexBackfillOut)
+async def backfill_index(
+    project_id: ProjectScopeDep,
+    session: SessionDep,
+    principal: PrincipalDep,
+    request: Request,
+) -> IndexBackfillOut:
+    """Re-index every normalized document in this project that has no chunks.
+
+    The repair for the failure that emptied retrieval: a bad embedder binding
+    made the index job die before it wrote any chunks, and there was no way to
+    ask for those documents to be indexed again short of re-ingesting the
+    sources. Reports the number it found *before* enqueueing, so the caller can
+    see whether there was anything to repair rather than only that a job was
+    dispatched.
+
+    Safe to call repeatedly: the pass selects documents with no chunk rows, so
+    a second call over a repaired project finds none.
+    """
+    require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
+    pending = await unindexed_document_ids(session, project_id=project_id)
+    if not pending:
+        return IndexBackfillOut(unindexed_documents=0, enqueued=False)
+
+    settings = request.app.state.settings
+    pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+    try:
+        await pool.enqueue_job("backfill_index_job", str(project_id))
+    finally:
+        await pool.aclose()
+    return IndexBackfillOut(unindexed_documents=len(pending), enqueued=True)
 
 
 @router.get("/{project_id}/pipeline", response_model=PipelineOut)

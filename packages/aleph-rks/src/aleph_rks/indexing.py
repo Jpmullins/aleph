@@ -32,6 +32,7 @@ import structlog
 from sqlalchemy import delete, select, update
 
 from aleph_core.errors import ValidationFailed
+from aleph_core.grounding import strip_nul
 from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
 from aleph_models.profile import resolve_binding
@@ -195,7 +196,13 @@ async def index_normalized_document(
         source_id = normalized.source_id
         markdown_uri = normalized.markdown_uri
 
-    markdown = asset_store.get(markdown_uri).decode("utf-8")
+    # `strip_nul`, not `defang`: this runs over markdown that is already stored,
+    # and the whole point of a grounding span is that `markdown[start:end]`
+    # slices the stored document. Removing characters here would shift every
+    # offset after the first one. U+FFFD is one character standing in for one
+    # character, so the offsets survive. Documents normalised after the ingest
+    # boundary learned about NUL never reach this with one.
+    markdown = strip_nul(asset_store.get(markdown_uri).decode("utf-8"))
 
     # ---- pass 1: chunks, committed on their own -----------------------------
     async with maker() as session:
