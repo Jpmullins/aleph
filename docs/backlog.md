@@ -323,6 +323,40 @@ skills — `research`, `ach`, `wiki-style`, `report-authoring`. They follow the
 with `name`/`description` frontmatter, progressive disclosure in three levels
 (metadata at startup, instructions on activation, resources on demand).
 
+### Adoption table
+
+Every Deep Agents capability, what it costs to install, and whether it runs on
+the sync or async path. **Aleph's agent runs in-process inside FastAPI, so the
+async column is not a preference — anything on the request path must be async or
+it blocks the event loop.**
+
+Beta and preview are noted so the risk is explicit, not so the item is skipped.
+Take the best available and move when the API does.
+
+| # | Capability | Sync / async | Install | Maturity |
+|---|---|---|---|---|
+| H1 | Agent-authored skills (`StoreBackend`) | **async** — `abefore_agent`, `ainvoke`; skill writes go through the store on the agent's own path | none — core `deepagents` | stable |
+| H2 | Wire `aleph_kernel.skills` (AST gate + lifecycle) | **sync** to load and gate (AST parse, `exec` into a fresh namespace) at boot; **async** to mount as a kernel capability | none — already in the tree | ours |
+| H3 | `RubricMiddleware` | **async** — runs inside the agent loop; the grader is a subagent | none — needs `deepagents>=0.6.5`, we have **0.6.6** | **beta** |
+| H4 | `HarnessProfile` | **sync** — `register_harness_profile` at startup, before the graph is built | none — core `deepagents` | stable |
+| H5 | Interpreters + dynamic subagents | **async** — executes inside the agent loop | `pip install -U "deepagents[quickjs]"` → `langchain-quickjs>=0.2.0`, Python ≥3.11 (Aleph is 3.13) | **beta** |
+| H6 | Async subagents | **async by definition** — returns a job id, supervisor keeps talking; check / update / cancel | none — `deepagents>=0.5.0`; speaks Agent Protocol. **ASGI transport** when the spec omits `url`: in-process calls, no HTTP, no extra auth — needs both graphs in one `langgraph.json` | **preview** |
+| H7 | `stream.subagents` (Inspector data) | **async** — `await agent.astream_events(input, version="v3")` with `asyncio.gather` to consume coordinator and subagents concurrently | none — core `deepagents` | stable |
+| H8 | OpenWiki / OKF v0.1 | **sync** — offline; a format comparison, not a runtime dependency | `npm install -g openwiki` (Node CLI) — or read the OKF spec only | stable |
+
+**Two notes that change the work.**
+
+`langchain-quickjs` (H5) is the only new runtime dependency in the list.
+Everything else is already installed.
+
+H6's **ASGI transport** is the detail that makes async subagents viable here.
+When a subagent spec omits `url`, the SDK routes through in-process function
+calls instead of HTTP — no network hop, no extra auth — which fits Aleph's
+in-process agent exactly. It requires both graphs registered in the same
+`langgraph.json`. Local runs also need the worker pool raised: a supervisor with
+three concurrent subagents needs four slots, and under-provisioning silently
+queues launches rather than failing.
+
 ### H1. The agent cannot write a skill — **NOT BUILT**
 
 This is the self-improvement mechanism, and the docs state it plainly: *"You can
