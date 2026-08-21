@@ -153,7 +153,7 @@ whatsoever. "Every part needs to function as expected" does not survive that.
 ---
 ## Part 3 — The work, by cluster
 
-**57 workstreams · 340 criteria that can fail.** Each carries what it is in plain
+**58 workstreams · 343 criteria that can fail.** Each carries what it is in plain
 language, why Aleph needs it, how, criteria, a review step and an iteration step.
 
 Ids are prefixed `WS-` deliberately: the completeness critic found that bare ids like
@@ -2502,10 +2502,100 @@ re-litigated every planning round.
 - **`aleph-datasets` is deleted.** Its only importers are `alembic/env.py` and a
   consistency test. A package that exists to be imported by the migration runner
   is the package-scale version of the same defect.
-- **No async subagents, no MCP client, no Enterprise Intelligence this cycle.**
+- **No Enterprise Intelligence (C1).** Evaluated and declined — Deep Agents gives
+  the same primitives with no licence, no Kubernetes, and nothing leaving the
+  deployment.
+
+  **Correction (21 Aug):** an earlier draft of this section also listed *"no
+  async subagents, no MCP client"*. That was wrong on both counts and it
+  contradicted the plan's own body. `WS-H6` (async subagents) is a scheduled
+  workstream — 6 criteria, 6–8 days, behind `WS-C3a`/`WS-C3b`. The line came
+  from lifting the completeness critic's list wholesale; the critic was
+  reasoning from the *backlog's* suggested order, where H6 sat tenth, not from
+  the cluster plans that had already scheduled it. Both are now stated properly
+  below.
 - **No multi-tenancy, no collaboration, no presence, no mobile layout.** One
   user, three projects.
 - **No new workspace package.** The count holds at ≤21 and should ratchet down.
+
+### Backlog coverage
+
+Checked item by item against the 57 workstreams. **28 of the 30 backlog items
+have a workstream**; several are covered under a differently-named one, which is
+why a naive id match undercounts:
+
+| Backlog | Owned by |
+|---|---|
+| B2 model endpoint | `WS-MEP-4`, `WS-MEP-5` |
+| E4 unpriced calls | `WS-MEP-1` |
+| E5 rate limiting | `WS-MEP-2` |
+| H4 `HarnessProfile` | `WS-MEP-7` |
+| H2 dead kernel skills | `WS-A1b` |
+| H7 `stream.subagents` | decided inside `WS-C3a` |
+| E6 Lit dev warning | `WS-UI-2` (console-clean browser smoke) |
+
+`WS-C3a` is worth reading on H7, because it corrects the backlog. The backlog
+says the Inspector "can be rebuilt on data Aleph already has". It cannot —
+`grep -rn 'AgentRun(' apps packages` finds 17 producers and **none in
+`copilot_agent.py` or `subagents/`**, and the only `AgentEvent` writers are
+called exclusively from worker jobs. So nothing about a chat turn is recorded at
+all. `WS-C3a` creates that record first, and decides H7 on the evidence rather
+than on the assumption.
+
+**Two items are not scheduled, and only one of them is a deliberate decline:**
+
+- **C1 Enterprise Intelligence — declined**, for the reasons above.
+- **C2 MCP Apps — deferred, not declined.** See `WS-C2` below.
+
+#### WS-C2 · MCP: a half-day spike, and a decision that changes WS-A1b
+
+**What it is.** Two different things share the name. **MCP Apps** lets an MCP
+server ship its own interactive UI — the agent calls a tool that carries a UI
+resource, and the runtime renders it in a sandboxed iframe with zero frontend
+code. A **general MCP client** would let Aleph mount any MCP server's tools as a
+tool source.
+
+**Why it is here and not in the "not doing" list.** The horizon scan marked both
+`TRIAL`, and the second one carries an argument this plan has to answer rather
+than skip: **a general MCP client may be a cheaper plugin system than the
+bespoke one `WS-A1b` describes.** Deciding that after building A1b is deciding
+it too late. The middleware is already in `node_modules`
+(`grep -rn 'mcpApps\|mcpServers' apps/copilot-runtime/src` → 0, so it is
+config, not code).
+
+**Approach.** Timebox to half a day, before `WS-A1b` starts. Stand up one public
+reference MCP server, set the config key, and answer two questions in
+`docs/decisions.md`: does an MCP App render in a Block, and would mounting MCP
+tool sources satisfy what A1's plugin registry is actually for?
+
+**Criteria:**
+- A sandboxed iframe from a third-party MCP server renders in the workspace
+  <br>`a Playwright spec against a local reference MCP App server: 0 → 1 passing`
+- The decision is written down before A1b starts
+  <br>`grep -c 'MCP' docs/decisions.md` returns ≥ 1, dated before the first WS-A1b commit
+- The spike does not become the work
+  <br>`git log --oneline --since=<spike date> -- apps/copilot-runtime/ | wc -l` ≤ 3 unless the decision was "adopt"
+
+**Review.** The output is a decision, not a feature. If the spike ships code
+without a written decision, it failed.
+**Iterate.** If adopted, MCP Apps becomes the third trust tier in `WS-A4`'s
+settings contract — a plugin whose UI Aleph never wrote and does not vouch for.
+**Effort.** Half a day for the spike. · **Depends on:** nothing — it must come
+*before* `WS-A1b`.
+**Risk.** The spike is interesting enough to become a week. The third criterion
+exists to catch that.
+
+### On async subagents (WS-H6)
+
+Scheduled, but deliberately late and behind `WS-C3a`/`WS-C3b`, for a reason
+worth stating: the horizon scan marked it `hold` because **there is no measured
+problem yet**. The research loop blocking is a real shape, but nobody has
+measured how long an analyst actually waits. `WS-C3a` produces that number — it
+is what records how long a turn takes and where it goes — so H6 becomes
+*arguable* rather than assumed once C3a lands.
+
+If the number says analysts wait thirty seconds, H6 is worth 6–8 days. If it
+says four, it is not, and the honest outcome is to drop it and say so here.
 
 ### And one open question worth taking seriously
 
