@@ -11,15 +11,10 @@
  * open, and gives every surface a stable position the eye can learn.
  */
 import { Icons, type IconName } from "@/components/Icons";
-import { SURFACE_TABS, type SurfaceTab, useWorkspaceUI } from "@/lib/workspace-ui";
+import { PANE_REGISTRY, SURFACE_TABS, useWorkspaceUI } from "@/lib/workspace-ui";
 
-const ICON_FOR: Record<SurfaceTab, IconName> = {
-  Wiki: "wiki",
-  Library: "library",
-  Notes: "notes",
-  Hypotheses: "hypotheses",
-  Briefs: "briefs",
-};
+// No icon map here any more: the registry carries each pane's icon, so adding a
+// pane is one entry rather than an entry plus a parallel table to forget.
 
 interface Props {
   onBack: () => void;
@@ -49,7 +44,7 @@ export function Rail({ onBack, onOpenDrawer }: Props) {
       </button>
 
       {SURFACE_TABS.map((tab) => {
-        const Icon = Icons[ICON_FOR[tab]];
+        const Icon = Icons[(PANE_REGISTRY[tab].icon as IconName)];
         const open = panes.find((p) => p.kind === tab);
         const active = open?.id === focusedPaneId;
         return (

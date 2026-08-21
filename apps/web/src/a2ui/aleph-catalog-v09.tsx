@@ -68,7 +68,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { useSurface } from "./surface-context";
 import { api } from "@/lib/api";
-import { SURFACE_TABS, useWorkspaceUI, type SurfaceTab } from "@/lib/workspace-ui";
+import { isPaneKind, useWorkspaceUI } from "@/lib/workspace-ui";
 
 import { ApprovalCard as ApprovalCardView } from "./components/ApprovalCard";
 import { ArtifactCard as ArtifactCardView } from "./components/ArtifactCard";
@@ -143,9 +143,9 @@ function adapt(
         qc.invalidateQueries({ queryKey: ["hypotheses", projectId] });
         // `open` actions resolve to a workspace location — actually go there.
         const nav = out?.result?.navigate;
-        if (nav?.tab && (SURFACE_TABS as readonly string[]).includes(nav.tab)) {
+        if (nav?.tab && isPaneKind(nav.tab)) {
           if (nav.page_id) setOpenPageId(nav.page_id);
-          setActiveSurface(nav.tab as SurfaceTab);
+          setActiveSurface(nav.tab);
         }
       },
     });

@@ -14,8 +14,68 @@
  */
 import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 
-export const SURFACE_TABS = ["Wiki", "Library", "Notes", "Hypotheses", "Briefs"] as const;
-export type SurfaceTab = (typeof SURFACE_TABS)[number];
+/**
+ * The pane registry — one source of truth for what can be opened.
+ *
+ * This replaces a five-element `SURFACE_TABS` constant that had drifted out of
+ * agreement with the server: `routes/surfaces.py` accepted seven pane kinds
+ * while the client type admitted five, so `artifacts` and `grounding` could be
+ * streamed by the backend and had nowhere on the client to land.
+ * `GroundingSurface` was the visible cost — a React impl, a catalog entry, a
+ * registered component api, a server builder and a route branch, all complete,
+ * and no code path able to open it. The Rail's own docstring says a rail was
+ * chosen because "Aleph needs more surfaces than that", and then the ceiling
+ * was reintroduced one file over.
+ *
+ * A constant cannot survive plugins. When a plugin brings a surface, it appends
+ * an entry here at load time; nothing else in the UI needs to change, because
+ * everything downstream reads the registry rather than a hardcoded union.
+ *
+ * `wire` is what the server parses (`_PANE_KINDS`), kept explicit rather than
+ * lowercasing the id, so a display rename never silently changes the protocol.
+ * `scripts/check-pane-registry.sh` fails the build if the two disagree.
+ */
+export interface PaneKindDef {
+  /** Wire name the server's `_PANE_KINDS` accepts. */
+  readonly wire: string;
+  /** Icon key in `components/Icons`. */
+  readonly icon: string;
+  /** Does it appear in the rail as something you can open directly? */
+  readonly launchable: boolean;
+  /** Params the pane requires; a non-launchable pane is opened *from* one. */
+  readonly params: readonly string[];
+}
+
+export const PANE_REGISTRY = {
+  Wiki: { wire: "wiki", icon: "wiki", launchable: true, params: [] },
+  Library: { wire: "library", icon: "library", launchable: true, params: [] },
+  Artifacts: { wire: "artifacts", icon: "artifacts", launchable: true, params: [] },
+  Notes: { wire: "notes", icon: "notes", launchable: true, params: [] },
+  Hypotheses: { wire: "hypotheses", icon: "hypotheses", launchable: true, params: [] },
+  Briefs: { wire: "briefs", icon: "briefs", launchable: true, params: [] },
+  // Opened from a claim, never from the rail — it is meaningless without one.
+  Grounding: { wire: "grounding", icon: "grounding", launchable: false, params: ["claim_id"] },
+} as const satisfies Record<string, PaneKindDef>;
+
+export type SurfaceTab = keyof typeof PANE_REGISTRY;
+
+/** Every pane kind, launchable or not. Use this to validate an incoming name. */
+export const ALL_PANE_KINDS = Object.keys(PANE_REGISTRY) as SurfaceTab[];
+
+/** What the rail offers: the panes a person can open unprompted. */
+export const SURFACE_TABS = ALL_PANE_KINDS.filter(
+  (k) => PANE_REGISTRY[k].launchable,
+) as [SurfaceTab, ...SurfaceTab[]];
+
+/** Display name -> the name the server understands. */
+export function paneWireName(tab: SurfaceTab): string {
+  return PANE_REGISTRY[tab].wire;
+}
+
+/** Is this string a pane kind? Narrows, so callers stop casting. */
+export function isPaneKind(value: string): value is SurfaceTab {
+  return Object.hasOwn(PANE_REGISTRY, value);
+}
 
 /**
  * The analyst's current text/claim selection in the reader (WP-4d). Published by

@@ -74,6 +74,21 @@ export const Icons = {
       <path d="M8 9h8M8 13h5" />
     </Svg>
   ),
+  /** Artifacts — a rendered, versioned output. */
+  artifacts: (p: IconProps = {}) => (
+    <Svg {...p}>
+      <path d="M12 3l8 4v10l-8 4-8-4V7z" />
+      <path d="M4 7l8 4 8-4M12 11v10" />
+    </Svg>
+  ),
+  /** Grounding — a claim anchored to the evidence beneath it. */
+  grounding: (p: IconProps = {}) => (
+    <Svg {...p}>
+      <path d="M12 3v7" />
+      <circle cx="12" cy="12.5" r="2.5" />
+      <path d="M12 15v4M5 19h14" />
+    </Svg>
+  ),
   settings: (p: IconProps = {}) => (
     <Svg {...p}>
       <circle cx="12" cy="12" r="3" />
