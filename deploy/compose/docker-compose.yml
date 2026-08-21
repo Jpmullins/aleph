@@ -30,6 +30,7 @@ x-app-env: &app-env
   environment:
     DATABASE_URL: postgresql+asyncpg://aleph:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/aleph
     REDIS_URL: redis://redis:6379/0
+    CODE_RUNNER_REDIS_URL: redis://runner-redis:6379/0
 
 x-depends-on-data: &depends-on-data
   postgres:
@@ -84,6 +85,30 @@ services:
     volumes:
       - redis-data:/data
     ports: ["${REDIS_PORT:-6379}:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+      start_interval: 1s
+
+  # The sandbox's queue, deliberately a SEPARATE Redis from the platform bus.
+  #
+  # The kernel refuses to boot if these are the same URL — `code_runner_pool`'s
+  # probe returns "the sandbox would share a channel with agent tokens and
+  # privileged queues", which is exactly right and caught a real flaw in an
+  # earlier version of this file. A different DB index on the same server would
+  # satisfy the string comparison and not the intent: same server, same auth,
+  # and one FLUSHALL reaches both.
+  #
+  # On both networks because workers ENQUEUE render jobs here and code-runner
+  # CONSUMES them. The isolation is that agent tokens and privileged queues live
+  # on the platform Redis, which code-runner cannot reach at all.
+  runner-redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", ""]
+    networks: [aleph, runner]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -149,14 +174,23 @@ services:
     <<: [*app-env, *model-access]
     depends_on:
       <<: *depends-on-data
+      runner-redis:
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
     volumes:
       - assets:/app/data/assets
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f aleph_workers.arq > /dev/null"]
+      # arq's own health check, not a pgrep: it reads the health key the worker
+      # writes to Redis, so it reports whether the worker is PROCESSING rather
+      # than whether a process exists. `pgrep` was also simply absent from the
+      # code-runner image — correctly, since a sandbox has no business shipping
+      # process tools — so the old check could only ever fail.
+      # Full path: the workers image installs into /app/.venv and does not put it
+      # on PATH, unlike code-runner. Two images, two layouts.
+      test: ["CMD-SHELL", "/app/.venv/bin/arq --check aleph_workers.arq.WorkerSettings"]
       interval: 20s
-      timeout: 5s
+      timeout: 10s
       retries: 6
       start_period: 40s
     develop:
@@ -173,10 +207,12 @@ services:
     # API, the database, the model endpoint or the internet — only the queue.
     networks: [runner]
     environment:
-      REDIS_URL: redis://redis:6379/0
-      CODE_RUNNER_REDIS_URL: redis://redis:6379/0
+      # Only the runner bus. The platform Redis is not on this container's
+      # network at all, so this is a fact of the topology, not a promise.
+      REDIS_URL: redis://runner-redis:6379/0
+      CODE_RUNNER_REDIS_URL: redis://runner-redis:6379/0
     depends_on:
-      redis:
+      runner-redis:
         condition: service_healthy
     # Deliberately NOT given .env: this container must hold no credentials.
     read_only: true
@@ -191,9 +227,9 @@ services:
     mem_limit: 1g
     memswap_limit: 1g
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f aleph_code_runner.arq > /dev/null"]
+      test: ["CMD-SHELL", "arq --check aleph_code_runner.arq.WorkerSettings"]
       interval: 20s
-      timeout: 5s
+      timeout: 10s
       retries: 6
       start_period: 30s
 
@@ -203,14 +239,18 @@ services:
       dockerfile: apps/copilot-runtime/Dockerfile
     networks: [aleph]
     environment:
-      AGENT_URL: http://api:8000/copilotkit/agent/assistant
+      # ALEPH_AGENT_URL, not AGENT_URL: server.ts reads the prefixed name and
+      # otherwise falls back to http://aleph-api:8000, a hostname compose never
+      # creates (the aliases are `api` and `aleph-api-1`). The process starts
+      # and logs happily; the chat path is simply dead.
+      ALEPH_AGENT_URL: http://api:8000/copilotkit/agent/assistant
       PORT: "4000"
     depends_on:
       api:
         condition: service_healthy
     ports: ["${RUNTIME_PORT:-4000}:4000"]
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:4000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:4000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 15s
       timeout: 6s
       retries: 8
@@ -223,14 +263,17 @@ services:
     networks: [aleph]
     environment:
       VITE_API_URL: ${ALEPH_SELF_URL:-http://localhost:8000}
-      VITE_RUNTIME_URL: http://localhost:4000
+      # Vite must accept the container hostname the browser is NOT using and
+      # the host port it IS; without this a non-default WEB_PORT 403s.
+      VITE_ALLOWED_HOSTS: localhost,127.0.0.1
+      VITE_RUNTIME_URL: http://localhost:${RUNTIME_PORT:-4000}
       VITE_AUTH_MODE: ${ALEPH_AUTH_MODE:-local}
     depends_on:
       api:
         condition: service_healthy
     ports: ["${WEB_PORT:-5173}:5173"]
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:5173/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:5173/ || exit 1"]
       interval: 15s
       timeout: 6s
       retries: 8

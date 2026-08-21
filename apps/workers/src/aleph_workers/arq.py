@@ -105,8 +105,19 @@ async def _startup(ctx: dict[str, Any]) -> None:
 
 
 async def _shutdown(ctx: dict[str, Any]) -> None:
-    """Dependents before providers, every inverse runs, failures aggregate."""
-    await ctx["kernel"].shutdown()
+    """Dependents before providers, every inverse runs, failures aggregate.
+
+    `ctx` may have no kernel: arq runs `on_shutdown` even when `on_startup`
+    raised, and the kernel is stored only after `boot()` returns. Indexing
+    blindly replaced the real diagnostic with `KeyError: 'kernel'` — a boot that
+    failed on a named `ProbeFailed` reported a missing dict key instead, exactly
+    when the operator needed the reason. Nothing to tear down is a normal
+    outcome here, not an error.
+    """
+    kernel = ctx.get("kernel")
+    if kernel is None:
+        return
+    await kernel.shutdown()
 
 
 def _redis_from_url(url: str) -> RedisSettings:

@@ -67,7 +67,25 @@ const listener = createCopilotNodeListener({
   cors: true,
 });
 
-createServer(listener).listen(PORT, "0.0.0.0", () => {
+/**
+ * `GET /health` — a readiness signal the orchestrator can actually use.
+ *
+ * There was none, so compose's healthcheck asked for `/health`, got a 404, and
+ * marked a perfectly healthy process unhealthy forever. Everything else on this
+ * server is POST-only AG-UI traffic, so there was nothing safe to probe.
+ *
+ * It reports the agent URL it will forward to, because the failure this service
+ * actually has is pointing at a host that does not resolve — which looks
+ * identical to working until someone opens the chat.
+ */
+createServer((req, res) => {
+  if (req.method === "GET" && req.url === "/health") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ status: "ok", agent: AGENT_URL }));
+    return;
+  }
+  listener(req, res);
+}).listen(PORT, "0.0.0.0", () => {
   // eslint-disable-next-line no-console
   console.log(
     `aleph-copilot-runtime listening on :${PORT}${BASE_PATH} → agent ${AGENT_URL}`,
