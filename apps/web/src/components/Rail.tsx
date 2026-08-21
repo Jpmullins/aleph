@@ -10,6 +10,7 @@
  * A rail scales vertically, is always visible regardless of which surface is
  * open, and gives every surface a stable position the eye can learn.
  */
+import { AlephLogo } from "@/components/AlephLogo";
 import { Icons, type IconName } from "@/components/Icons";
 import { PANE_REGISTRY, SURFACE_TABS, useWorkspaceUI } from "@/lib/workspace-ui";
 
@@ -38,9 +39,12 @@ export function Rail({ onBack, onOpenDrawer }: Props) {
         onClick={onBack}
         aria-label="Back to projects"
         title="Projects"
-        className="mb-2 grid h-9 w-9 place-items-center  border border-line-strong font-mono text-[15px] font-bold text-accent hover:bg-sunken"
+        className="mb-2 grid h-9 w-9 place-items-center border border-line-strong text-accent hover:bg-sunken"
       >
-        ℵ
+        {/* The mark, not the letter. `ℵ` was a placeholder standing in for a
+            logo that did not exist; it does now, and a typed glyph renders in
+            whatever the system font decides rather than in our own drawing. */}
+        <AlephLogo size={18} variant="mark" />
       </button>
 
       {SURFACE_TABS.map((tab) => {

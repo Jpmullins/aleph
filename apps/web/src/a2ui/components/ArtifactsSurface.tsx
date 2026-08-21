@@ -140,17 +140,21 @@ function SourceViewer({
   onClose: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/50 p-4">
-      <div
-        className="flex h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg bg-surface shadow-xl"
-        data-testid="source-viewer"
-      >
+    // Inline, inside the block that owns it — NOT `fixed inset-0`.
+    //
+    // A modal over the whole window is the one gesture a spatial canvas cannot
+    // survive: it hides every other block, so you cannot read a PDF beside the
+    // claim that cites it, which is the entire reason to have a canvas. It also
+    // cannot be moved, resized or kept. Reading a source is a normal act, not
+    // an interruption.
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="source-viewer">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-surface">
         <div className="flex items-center gap-3 border-b border-line p-3">
           <h3 className="truncate text-sm font-semibold">{source.title}</h3>
           <button
             type="button"
             onClick={onClose}
-            className="ml-auto rounded px-2 py-1 text-ink-muted hover:text-ink"
+            className="ml-auto px-2 py-1 text-ink-muted hover:text-ink"
           >
             ✕
           </button>
