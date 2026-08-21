@@ -1,10 +1,20 @@
-"""Embedding-dimension guard (WP-5 A1): a dimension mismatch must be caught
-*before* any billed embed call, on both the initial-ingest path
-(`chunk_embed_job`) and the re-embed path (`reembed_for_project`).
+"""Embedding-dimension guard: a width mismatch must cost nothing.
 
-These are unit tests (no compose stack). The `LiteLLMClient` — the only site
-that writes a `ModelCall` / `CostLedgerEvent` — is a spy; the guarantee we
-assert is that it is *never invoked* on a mismatch, i.e. zero model spend.
+A model whose output width cannot fit `document_chunks.embedding` can never
+produce a writable vector, so calling it is pure waste. The guard rejects on
+metadata alone, before any billed call, on the re-embed path here and on the
+initial-ingest path in `tests/integration/test_chunk_embed_degrades.py`.
+
+The initial-ingest half moved to an integration test deliberately. It used to
+live here against a hand-built fake session, and it asserted the *old* ordering
+— that a mismatch stopped chunks from being written at all. That ordering is the
+defect: chunks are written before embedding now, so a mismatch costs the dense
+leg and nothing else. A fake session cannot express that, because the property
+is about transaction boundaries.
+
+The `LiteLLMClient` — the only site that writes a `ModelCall` /
+`CostLedgerEvent` — is a spy; the guarantee asserted is that it is *never
+invoked* on a mismatch, i.e. zero model spend.
 """
 
 from __future__ import annotations
@@ -22,8 +32,8 @@ from aleph_rks.models import EMBEDDING_DIM
 
 
 def test_embedding_dim_mismatch_matches_column() -> None:
-    # titan-embed-v2 is 1024-dim == the column width → no mismatch.
-    assert embedding_dim_mismatch("titan-embed-v2") is None
+    # titan-embed-text-v2 is 1024-dim == the column width → no mismatch.
+    assert embedding_dim_mismatch("titan-embed-text-v2") is None
 
 
 def test_embedding_dim_mismatch_unknown_model_is_none() -> None:
@@ -39,8 +49,20 @@ def test_embedding_dim_mismatch_known_wrong_dim() -> None:
 def test_is_known_embedding_model() -> None:
     from aleph_rks.embedding import is_known_embedding_model
 
-    assert is_known_embedding_model("titan-embed-v2") is True
+    assert is_known_embedding_model("titan-embed-text-v2") is True
     assert is_known_embedding_model("some-model-we-have-never-heard-of") is False
+
+
+def test_the_registry_names_no_model_that_is_not_served() -> None:
+    """`titan-embed-v2` was in this registry and no gateway serves it.
+
+    An entry here can only ever *reject* a model, so a fictional name is a
+    rejection that can never fire — and its presence read as evidence the name
+    was correct. The one it displaced, `titan-embed-text-v2`, is what the
+    gateway actually reports.
+    """
+    assert "titan-embed-v2" not in KNOWN_EMBEDDING_DIMS
+    assert KNOWN_EMBEDDING_DIMS["titan-embed-text-v2"] == EMBEDDING_DIM
 
 
 # ---- fakes -----------------------------------------------------------------
@@ -91,62 +113,6 @@ class _EmbedSpy:
     async def embed(self, **_kw: Any) -> Any:  # pragma: no cover - must not run
         self.calls += 1
         raise AssertionError("embed must not be called on a dimension mismatch")
-
-
-# ---- initial ingest --------------------------------------------------------
-
-
-async def test_initial_ingest_dim_mismatch_rejects_before_embed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from aleph_security.agent_token import mint_agent_token
-    from aleph_workers.jobs.chunk_embed import chunk_embed_job
-
-    monkeypatch.setitem(KNOWN_EMBEDDING_DIMS, "wrong-dim-model", 256)
-
-    user_id, project_id, agent_run_id = uuid4(), uuid4(), uuid4()
-    secret = "test-secret-key-that-is-at-least-32-bytes-long"
-    token = mint_agent_token(
-        secret=secret,
-        user_id=user_id,
-        project_id=project_id,
-        agent_run_id=agent_run_id,
-        actor_kind="aleph_agent",
-        correlation_id="corr-1",
-    )
-
-    source_id = uuid4()
-    normalized = SimpleNamespace(id=uuid4(), source_id=source_id, project_id=project_id)
-    source = SimpleNamespace(id=source_id, status="normalized")
-    profile = SimpleNamespace(
-        bindings_jsonb={"embedding": {"model": "wrong-dim-model", "provider": "litellm"}}
-    )
-    agent_run = SimpleNamespace(status="running", completed_at=None, error_text=None)
-
-    # execute() order: normalized, source, profile (session2); source (session3);
-    # agent_run (session4 / _finalize).
-    queue: list[Any] = [normalized, source, profile, source, agent_run]
-    counts = {"add": 0, "commit": 0, "flush": 0, "execute": 0}
-
-    def maker() -> _Session:
-        return _Session(queue, counts)
-
-    spy = _EmbedSpy()
-    ctx: dict[str, Any] = {
-        "agent_token_secret": secret,
-        "session_maker": maker,
-        "asset_store": SimpleNamespace(get=lambda _uri: b""),
-        "litellm_client": spy,
-    }
-
-    out = await chunk_embed_job(ctx, str(normalized.id), token)
-
-    assert out["ok"] is False
-    assert spy.calls == 0  # zero embed calls → zero ModelCall / CostLedgerEvent
-    assert source.status == "failed"
-    assert agent_run.status == "failed"
-    assert agent_run.error_text is not None
-    assert "wrong-dim-model" in agent_run.error_text
 
 
 # ---- re-embed --------------------------------------------------------------

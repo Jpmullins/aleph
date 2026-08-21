@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Annotated, Any
 
 from arq import create_pool
@@ -12,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
-from aleph_core.errors import NotFound, ValidationFailed
+from aleph_core.errors import NotFound
 from aleph_core.schemas.model_profile import (
     GatewayModelOut,
     ModelBindingIn,
@@ -22,12 +21,8 @@ from aleph_core.schemas.model_profile import (
 )
 from aleph_db.models.model_profile import ModelProfile
 from aleph_db.repos import model_profile as profile_repo
-from aleph_models.discovery import (
-    capabilities_for,
-    probe_model,
-    select_default_bindings,
-    unbound_capabilities,
-)
+from aleph_models.autoconfigure import autoconfigure_project
+from aleph_models.discovery import capabilities_for
 from aleph_observability.tracing import current_trace_id
 from aleph_security.roles import ProjectRole, require_at_least
 
@@ -126,45 +121,20 @@ async def autoconfigure_profile(
     pointed at something that cannot do the job.
     """
     require_at_least(principal, project_id, at_least=ProjectRole.OWNER)
-    p = await profile_repo.get_project_profile(session, project_id)
-    if p is None:
-        msg = f"project {project_id} has no profile"
-        raise NotFound(msg)
 
-    catalog = request.app.state.gateway_catalog
+    # The selection logic is shared with the worker job project creation
+    # enqueues (`autoconfigure_profile_job`), so the two cannot drift into
+    # binding different models from the same gateway.
+    p, outcome = await autoconfigure_project(
+        session,
+        project_id=project_id,
+        catalog=request.app.state.gateway_catalog,
+        base_url=request.app.state.settings.litellm_base_url,
+        api_key=request.app.state.settings.insights_litellm_api_key,
+        http_client=request.app.state.gateway_http,
+        probe=probe,
+    )
     settings = request.app.state.settings
-    models = await catalog.models(force=True)
-    if not models:
-        msg = "model gateway advertises no models; cannot configure a profile from it"
-        raise ValidationFailed(msg)
-
-    unreachable: dict[str, str] = {}
-    if probe:
-        errors = await asyncio.gather(
-            *[
-                probe_model(
-                    base_url=settings.litellm_base_url,
-                    api_key=settings.insights_litellm_api_key,
-                    model=m,
-                    client=request.app.state.gateway_http,
-                )
-                for m in models
-            ]
-        )
-        unreachable = {m.id: e for m, e in zip(models, errors, strict=True) if e is not None}
-
-    bindings = select_default_bindings(models, unreachable=frozenset(unreachable))
-    if not bindings:
-        msg = "no model on this gateway qualified for any capability"
-        raise ValidationFailed(msg)
-
-    old_embed = _embed_model(p.bindings_jsonb)
-    p.bindings_jsonb = {
-        cap: ModelBindingIn.model_validate(b).model_dump(mode="json") for cap, b in bindings.items()
-    }
-    embed_changed = _embed_model(p.bindings_jsonb) != old_embed
-    unbound = [c.value for c in unbound_capabilities(bindings)]
-    await session.flush()
     await ledger.append(
         project_id=project_id,
         actor_id=principal.user_id,
@@ -173,11 +143,11 @@ async def autoconfigure_profile(
         target_id=p.id,
         target_kind="model_profile",
         payload={
-            "bound": {c: b["model"] for c, b in bindings.items()},
-            "unbound": unbound,
-            "unreachable": sorted(unreachable),
+            "bound": outcome.bound,
+            "unbound": outcome.unbound,
+            "unreachable": sorted(outcome.unreachable),
             "probed": probe,
-            "reembed_enqueued": embed_changed,
+            "reembed_enqueued": outcome.embed_changed,
         },
         trace_id=current_trace_id(),
     )
@@ -185,7 +155,7 @@ async def autoconfigure_profile(
     result = _to_out(p)
     await session.commit()
 
-    if embed_changed:
+    if outcome.embed_changed:
         try:
             pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
             try:
@@ -197,9 +167,9 @@ async def autoconfigure_profile(
 
     return AutoconfigureOut(
         profile=result,
-        bound={c: b["model"] for c, b in bindings.items()},
-        unbound=unbound,
-        unreachable=unreachable,
+        bound=outcome.bound,
+        unbound=outcome.unbound,
+        unreachable=outcome.unreachable,
     )
 
 

@@ -152,12 +152,28 @@ class DocumentChunk(Base):
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     text_tsv: Mapped[TSVECTOR] = mapped_column(TSVECTOR, nullable=False)
-    embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM), nullable=False)
+    #: NULL until the embedder answers. The chunk row is written first so the
+    #: lexical leg — which needs no model at all — is searchable even when the
+    #: embedder is unreachable, misnamed or unbound. pgvector does not index
+    #: NULL rows, so an un-embedded chunk is simply absent from the dense leg;
+    #: `_hybrid_search` filters them out explicitly because ordering by
+    #: `cosine_distance` over NULL is undefined rather than merely unhelpful.
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
     section_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     char_start: Mapped[int] = mapped_column(Integer, nullable=False)
     char_end: Mapped[int] = mapped_column(Integer, nullable=False)
     token_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    embedder_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    #: NULL for the same reason as `embedding`: nothing has embedded it yet.
+    embedder_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+
+#: The three states a source's index can be in. `lexical_only` is the one that
+#: matters: it is a real, usable, *degraded* index — chunks exist and keyword
+#: search answers, but the dense leg has nothing. Before this existed the same
+#: situation was represented by the absence of any rows at all, which is
+#: indistinguishable from "never ingested" and is why a total retrieval outage
+#: reported nothing anywhere.
+INDEX_STATES = ("lexical_only", "embedded", "stale")
 
 
 class RetrievalIndexRecord(CommonColumns, Base):
@@ -165,6 +181,14 @@ class RetrievalIndexRecord(CommonColumns, Base):
 
     project_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     source_id: Mapped[UUID] = mapped_column(nullable=False, unique=True)
-    embedder_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    #: NULL while the index is `lexical_only` — no embedder has answered, so
+    #: there is no model name to record. Writing a placeholder here made a
+    #: dead embedder look like a successful one.
+    embedder_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     chunk_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: One of :data:`INDEX_STATES`.
+    state: Mapped[str] = mapped_column(String(32), nullable=False, server_default="embedded")
+    #: Why the index is not `embedded`, in words, for the pipeline strip. NULL
+    #: when the state is `embedded`.
+    degraded_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     indexed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

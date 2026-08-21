@@ -31,11 +31,11 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from aleph_core.rrf import fuse
 from aleph_core.tsquery import or_tsquery
-from aleph_rks.models import DocumentChunk, RetrievalIndexRecord
+from aleph_rks.models import EMBEDDING_DIM, DocumentChunk, RetrievalIndexRecord
 
 _log = structlog.get_logger(__name__)
 
@@ -82,6 +82,13 @@ async def _hybrid_search(
 
     fetch = max(top_k * 4, 40)
 
+    # `embedding IS NOT NULL` is load-bearing, not defensive. A chunk is written
+    # before it is embedded, so an un-embedded chunk is a normal row — and
+    # ordering by `cosine_distance` over a NULL vector is undefined in
+    # Postgres, not simply last. Without this predicate a degraded index makes
+    # the dense leg return an arbitrary page of rows, which RRF then fuses as
+    # though it were a ranking. An empty dense leg is the honest answer;
+    # `search_corpus` still answers from the lexical leg, which needs no model.
     dense_stmt = (
         select(
             DocumentChunk.id,
@@ -90,7 +97,7 @@ async def _hybrid_search(
             DocumentChunk.section_path,
             DocumentChunk.source_id,
         )
-        .where(*scope)
+        .where(*scope, DocumentChunk.embedding.isnot(None))
         .order_by(DocumentChunk.embedding.cosine_distance(query_embedding))  # type: ignore[attr-defined]
         .limit(fetch)
     )
@@ -220,12 +227,20 @@ async def reembed_for_project(
     from aleph_rks.embedding import embed_texts, embedding_dim_mismatch
 
     current_model = resolve_binding(profile_bindings, "embedding").model
+    # `embedder_model IS NULL` is the degraded case, and it has to be named
+    # explicitly: in SQL `NULL != 'x'` is NULL, not true, so a `lexical_only`
+    # index — the state a source lands in when the embedder was unreachable —
+    # would never be selected for repair by an inequality alone. That would
+    # make the repair path unable to repair the only failure it exists for.
     stale = list(
         (
             await session.execute(
                 select(RetrievalIndexRecord).where(
                     RetrievalIndexRecord.project_id == project_id,
-                    RetrievalIndexRecord.embedder_model != current_model,
+                    or_(
+                        RetrievalIndexRecord.embedder_model.is_(None),
+                        RetrievalIndexRecord.embedder_model != current_model,
+                    ),
                 )
             )
         )
@@ -250,11 +265,14 @@ async def reembed_for_project(
         if not chunks:
             continue
         # Dimension guard — BEFORE embedding, so a mismatch costs nothing.
-        # The `document_chunks.embedding` column is a fixed pgvector size
-        # (1024 for the default titan-embed-v2). If the target embedder's known
-        # output dimension differs, writing it would fail the flush anyway —
-        # skip this source and log loudly rather than pay to discover it.
-        existing_dim = len(chunks[0].embedding)
+        # The `document_chunks.embedding` column is a fixed pgvector size. If
+        # the target embedder's known output dimension differs, writing it
+        # would fail the flush anyway — skip this source and log loudly rather
+        # than pay to discover it. A chunk written but never embedded carries
+        # NULL, so measure the column width from a chunk that has a vector and
+        # fall back to the column's declared width when none does.
+        embedded_dims = [len(c.embedding) for c in chunks if c.embedding is not None]
+        existing_dim = embedded_dims[0] if embedded_dims else EMBEDDING_DIM
         mismatch_dim = embedding_dim_mismatch(current_model, column_dim=existing_dim)
         if mismatch_dim is not None:
             # Marked + skipped, never re-billed (F5): the model is NOT called.
@@ -264,6 +282,11 @@ async def reembed_for_project(
             # the next sweep re-detects and re-skips (still no spend) until the
             # binding is corrected. `dim_blocked` is counted + logged.
             dim_blocked += 1
+            rec.state = "lexical_only"
+            rec.degraded_reason = (
+                f"the bound embedding model '{current_model}' emits "
+                f"{mismatch_dim}-dim vectors, the store holds {existing_dim}-dim"
+            )
             _log.warning(
                 "rks.reembed.dim_mismatch_skipped",
                 source_id=str(rec.source_id),
@@ -288,6 +311,8 @@ async def reembed_for_project(
             chunk.embedder_model = result.model
         rec.embedder_model = result.model
         rec.indexed_at = utcnow()
+        rec.state = "embedded"
+        rec.degraded_reason = None
         await session.flush()
         sources_done += 1
         chunks_done += len(chunks)

@@ -8,7 +8,9 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
+import structlog
 from arq import create_pool
+from arq.connections import RedisSettings
 from fastapi import APIRouter, Body, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -30,6 +32,8 @@ from aleph_db.repos import project as project_repo
 from aleph_observability.tracing import current_trace_id
 from aleph_rks.models import Connector, ConnectorBinding
 from aleph_security.roles import ProjectRole, require_at_least
+
+_log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/v1/projects", tags=["projects"])
 
@@ -194,8 +198,6 @@ async def create_project(
             ttl_seconds=3600,
         )
         try:
-            from arq.connections import RedisSettings
-
             # Durable before dispatched: bootstrap_project_job authenticates with
             # the AgentRun flushed above and resolves the project by id. An arq
             # worker beats an uncommitted transaction, and the job would fail on
@@ -213,6 +215,29 @@ async def create_project(
             # Enqueue failure is non-fatal: the run stays 'pending' and can be
             # re-dispatched; project creation must still succeed.
             pass
+
+    # Bind the capabilities from the gateway that is actually configured.
+    # The templates ship no model names for exactly this reason: a name chosen
+    # when the code was written is a guess about someone else's gateway, and
+    # the last such guess (`titan-embed-v2` against a gateway serving
+    # `titan-embed-text-v2`) left every project with an embedder that could only
+    # 400 — which emptied the retrieval index without reporting anything.
+    #
+    # Enqueued, never awaited: autoconfigure probes every advertised model, and
+    # the agent already runs in-process inside FastAPI. Twenty-six probes belong
+    # in a worker, not on the create request.
+    try:
+        await session.commit()
+        pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+        try:
+            await pool.enqueue_job("autoconfigure_profile_job", str(project_id))
+        finally:
+            await pool.aclose()
+    except Exception:
+        # Non-fatal: the capabilities stay unbound and say so at resolution
+        # time, and the operator can click Configure from gateway. Project
+        # creation must still succeed.
+        _log.warning("project.create.autoconfigure_enqueue_failed", project_id=str(project_id))
 
     return ProjectOut.model_validate(project)
 

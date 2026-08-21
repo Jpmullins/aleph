@@ -24,7 +24,7 @@ from sqlalchemy import select
 from aleph_core.schemas.model_profile import Capability
 from aleph_models.client import ChatMessage
 from aleph_observability.tracing import start_span
-from aleph_rks.models import Source
+from aleph_rks.models import EMBEDDING_DIM, Source
 from aleph_rks.retrieval import descend_into_source, search_corpus
 from aleph_wiki.index_service import IndexService, PageSelectionResult
 from aleph_wiki.models import WikiPage, WikiRevision
@@ -63,6 +63,18 @@ _MISS_BODY = (
     "If the project genuinely has no coverage here, `/synthesize` will research "
     "the topic and propose new pages."
 )
+
+
+def _with_degradation(body: str, degraded: Degradation | None) -> str:
+    """Append the named degradation to a composed reply.
+
+    In the body, not only in a span attribute: the person reading the answer is
+    the one who needs to know it was produced with half the search working.
+    """
+    if degraded is None:
+        return body
+    note = _DEGRADED_NOTES.get(degraded)
+    return f"{body}\n\n{note}" if note else body
 
 
 def _prompt(name: str) -> str:
@@ -118,6 +130,23 @@ class SynthesisRequest:
     missing: str
 
 
+#: Named degradations. `embedder_unavailable` means the dense half of hybrid
+#: search could not run: the answer is lexical-only, which is a real answer and
+#: a worse one. It used to be reported as an empty list, which is
+#: indistinguishable from "the project knows nothing about this" — the single
+#: most misleading thing a retrieval system can say.
+Degradation = Literal["embedder_unavailable"]
+
+_DEGRADED_NOTES: dict[str, str] = {
+    "embedder_unavailable": (
+        "Note: meaning-based (vector) search is unavailable right now — the "
+        "embedding model did not answer — so this reply was found by keyword "
+        "match alone and may miss passages that say the same thing in different "
+        "words."
+    ),
+}
+
+
 @dataclass
 class RetrievalResult:
     selected_pages: list[SelectedPage]
@@ -129,6 +158,8 @@ class RetrievalResult:
     composed_body_md: str
     page_selection_reason: str
     truncated_pages: list[str] = field(default_factory=list)
+    #: None when retrieval ran as designed. See :data:`Degradation`.
+    degraded: Degradation | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +176,7 @@ class WikiFirstRetrievalRouter:
     ) -> None:
         self._maker = session_maker
         self._litellm = litellm
+        self._degraded: Degradation | None = None
 
     async def retrieve(
         self,
@@ -159,6 +191,8 @@ class WikiFirstRetrievalRouter:
         top_k_pages: int = 8,
         descent_budget_chunks: int = 12,
     ) -> RetrievalResult:
+        # Per-call, not per-router: a degradation belongs to the turn that hit it.
+        self._degraded: Degradation | None = None
         with start_span(
             "assistant.retrieve",
             **{
@@ -207,8 +241,9 @@ class WikiFirstRetrievalRouter:
                     descent_requests=[],
                     synthesis_requests=[SynthesisRequest(concept=query, missing=_MISS_REASON)],
                     coverage_judgment="synthesis_needed",
-                    composed_body_md=_MISS_BODY,
+                    composed_body_md=_with_degradation(_MISS_BODY, self._degraded),
                     page_selection_reason=_MISS_REASON,
+                    degraded=self._degraded,
                 )
 
             # Step 1b — LLM page-selector picks from the candidates. Skipped
@@ -314,8 +349,9 @@ class WikiFirstRetrievalRouter:
                 descent_requests=composer_out["descent_requests"],
                 synthesis_requests=composer_out["synthesis_requests"],
                 coverage_judgment=coverage,
-                composed_body_md=composer_out["body_md"],
+                composed_body_md=_with_degradation(composer_out["body_md"], self._degraded),
                 page_selection_reason=selected.reason,
+                degraded=self._degraded,
             )
 
     # ---- step helpers ------------------------------------------------------
@@ -338,10 +374,16 @@ class WikiFirstRetrievalRouter:
         in an ingested document was unreachable until some compile step had
         lifted it into a page.
 
-        An embedding failure degrades to no corpus hits rather than failing the
-        whole turn: page retrieval is still a usable answer, and a hard failure
-        here would make the assistant unavailable whenever the embedding model is.
+        An embedding failure degrades rather than failing the whole turn — but it
+        degrades *out loud*. Returning `[]` on a dead embedder was the same
+        answer as "this project has nothing on that", and the two are not the
+        same at all: the first is an outage, the second is a fact. The caller
+        gets a named degradation so the composed reply can say which one it is.
+
+        Degraded retrieval is still real retrieval: the lexical leg needs no
+        model, so a zero vector plus the query text still returns keyword hits.
         """
+        query_vector: list[float] | None = None
         try:
             embedded = await self._litellm.embed(
                 principal=principal,
@@ -351,18 +393,28 @@ class WikiFirstRetrievalRouter:
                 input=[query],
                 purpose="assistant.corpus_search.query_embed",
             )
-        except Exception:
-            _log.warning("assistant.corpus_search.embed_failed", project_id=str(project_id))
-            return []
-        if not embedded.embeddings:
-            return []
+            if embedded.embeddings:
+                query_vector = embedded.embeddings[0]
+        except Exception as exc:
+            _log.warning(
+                "assistant.corpus_search.embed_failed",
+                project_id=str(project_id),
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
+        if query_vector is None:
+            self._degraded = "embedder_unavailable"
+            # A zero vector orders nothing usefully, and `_hybrid_search` skips
+            # chunks with no embedding anyway — so the dense leg contributes
+            # nothing and the lexical leg carries the search.
+            query_vector = [0.0] * EMBEDDING_DIM
 
         async with self._maker() as session:
             hits = await search_corpus(
                 session,
                 project_id=project_id,
                 query_text=query,
-                query_embedding=embedded.embeddings[0],
+                query_embedding=query_vector,
                 top_k=budget,
             )
             short_ids = await _source_short_ids(session, {h.source_id for h in hits if h.source_id})

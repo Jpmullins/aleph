@@ -27,6 +27,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import structlog
+
 from aleph_api.a2ui_handlers import build_action_router
 from aleph_api.settings import Settings, get_settings
 from aleph_kernel import Context, EffectScope, Kernel
@@ -44,6 +46,8 @@ from aleph_runtime.capabilities import (
 #: Ships beside the app, not in the working directory: the set of core
 #: capabilities must not depend on where the process happened to start.
 BOOT_MANIFEST = Path(__file__).resolve().parents[2] / "aleph.toml"
+
+_log = structlog.get_logger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -81,6 +85,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.action_router = build_action_router()
 
         session_maker = reader.get(DB_SESSIONS)
+
+        # Startup reconciliation. A run left in `running` by a process that died
+        # is indistinguishable from work still in flight, so nothing reports it
+        # and the UI shows a spinner forever. Forty-five stuck `chunk_embed`
+        # runs — every one a failed index — is what that looked like in
+        # production. Reaping is best-effort: it must never stop the API from
+        # coming up, but a failure to reap is itself worth a log line.
+        try:
+            from aleph_db.repos.agent_runs import reap_stale_runs
+
+            async with session_maker() as session:
+                reaped = await reap_stale_runs(session)
+                await session.commit()
+            if reaped:
+                _log.warning("api.boot.reaped_stale_runs", count=reaped)
+        except Exception:
+            _log.exception("api.boot.reap_failed")
 
         # Rule 7: resolve the agent's model from the default named ModelProfile
         # rather than a hardcoded id, so the conversational surface uses the

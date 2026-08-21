@@ -1,12 +1,20 @@
 """chunk_embed_job: NormalizedDocument → DocumentChunk rows.
 
-1. Load markdown (verify nothing; the put_normalized writer is trusted source).
-2. Chunk per aleph_rks.chunking algorithm.
-3. Batch-embed via LiteLLMClient.embed.
-4. Insert DocumentChunk rows.
-5. Upsert RetrievalIndexRecord.
-6. Update Source.status="indexed".
-7. Ledger chunks.created, embeddings.completed.
+The work itself lives in :func:`aleph_rks.indexing.index_normalized_document`,
+which writes the chunks *before* it embeds them so a dead embedder degrades to
+keyword-only search instead of no search at all. This job is the lifecycle
+around it: an ``AgentRun`` the UI can watch, and a ledger event.
+
+Two rules this file used to break, both of which produced the same live outage
+(75 sources, 45 normalized documents, 0 chunks, 45 runs stuck in ``running``):
+
+* **A degraded capability is not a silent one.** When the dense leg cannot be
+  built the run finishes ``failed`` with the reason in ``error_text``, even
+  though the source is searchable lexically. Reporting ``succeeded`` there is
+  how a total retrieval outage went unnoticed for seven work packages.
+* **A run that stops is a run that reports.** Every exit path — including the
+  unexpected ones — finalizes the row. Previously an exception left it at
+  ``running`` forever.
 """
 
 from __future__ import annotations
@@ -21,17 +29,9 @@ from aleph_core.time import utcnow
 from aleph_db.models.agent import AgentRun
 from aleph_db.models.model_profile import ModelProfile
 from aleph_db.repos.ledger import LedgerWriter
-from aleph_models.profile import resolve_binding
 from aleph_observability.tracing import current_trace_id, start_span
-from aleph_rks.chunking import chunk_markdown
-from aleph_rks.embedding import embed_texts, embedding_dim_mismatch, is_known_embedding_model
-from aleph_rks.models import (
-    EMBEDDING_DIM,
-    DocumentChunk,
-    NormalizedDocument,
-    RetrievalIndexRecord,
-    Source,
-)
+from aleph_rks.indexing import index_normalized_document
+from aleph_rks.models import NormalizedDocument, Source
 from aleph_security.agent_token import verify_agent_token
 from aleph_security.principal import Principal
 
@@ -90,174 +90,92 @@ async def chunk_embed_job(
                 run.error_text = error_text[:4096]
             await session.commit()
 
-    with start_span(
-        "worker.chunk_embed",
-        **{
-            "aleph.normalized_document_id": str(normalized_id),
-            "aleph.project_id": str(claims.project_id),
-        },
-    ):
-        async with maker() as session:
-            ledger = LedgerWriter(session)
-            normalized = (
-                await session.execute(
-                    select(NormalizedDocument).where(NormalizedDocument.id == normalized_id)
-                )
-            ).scalar_one_or_none()
-            if normalized is None:
-                msg = f"normalized document {normalized_id} not found"
-                raise RuntimeError(msg)
-            source = (
-                await session.execute(select(Source).where(Source.id == normalized.source_id))
-            ).scalar_one_or_none()
-            if source is None:
-                msg = f"source {normalized.source_id} not found"
-                raise RuntimeError(msg)
-            profile = (
-                await session.execute(
-                    select(ModelProfile).where(ModelProfile.project_id == normalized.project_id)
-                )
-            ).scalar_one_or_none()
-            if profile is None:
-                msg = "project has no model profile"
-                raise RuntimeError(msg)
+    try:
+        with start_span(
+            "worker.chunk_embed",
+            **{
+                "aleph.normalized_document_id": str(normalized_id),
+                "aleph.project_id": str(claims.project_id),
+            },
+        ):
+            async with maker() as session:
+                normalized = (
+                    await session.execute(
+                        select(NormalizedDocument).where(NormalizedDocument.id == normalized_id)
+                    )
+                ).scalar_one_or_none()
+                if normalized is None:
+                    msg = f"normalized document {normalized_id} not found"
+                    raise RuntimeError(msg)
+                profile = (
+                    await session.execute(
+                        select(ModelProfile).where(ModelProfile.project_id == normalized.project_id)
+                    )
+                ).scalar_one_or_none()
+                if profile is None:
+                    msg = "project has no model profile"
+                    raise RuntimeError(msg)
+                project_id = normalized.project_id
+                source_id = normalized.source_id
+                bindings = dict(profile.bindings_jsonb)
 
-        # Embedding-dimension guard: resolve the project's `embedding` binding and
-        # reject BEFORE any (billed) embed call if the model's known output
-        # dimension does not match the pgvector column width. Writing a wrong-dim
-        # vector would fail the flush anyway; paying to discover that is the bug.
-        embed_model = resolve_binding(profile.bindings_jsonb, "embedding").model
-
-        async def _reject_dim(model: str, got_dim: int) -> dict[str, Any]:
-            reason = (
-                f"embedding model '{model}' emits {got_dim}-dim vectors, "
-                f"but document_chunks.embedding is {EMBEDDING_DIM}-dim; "
-                "rejected before embedding the document (no batch spend)"
+            outcome = await index_normalized_document(
+                maker=maker,
+                normalized_id=normalized_id,
+                asset_store=asset_store,
+                litellm=litellm,
+                principal=principal,
+                profile_bindings=bindings,
+                agent_run_id=claims.agent_run_id,
+                purpose="rks.embed",
             )
+
+            async with maker() as session:
+                ledger = LedgerWriter(session)
+                await ledger.append(
+                    project_id=project_id,
+                    actor_id=principal.user_id,
+                    actor_kind=principal.actor_kind,
+                    action_kind="embeddings.completed" if outcome.ok else "embeddings.degraded",
+                    target_id=normalized_id,
+                    target_kind="normalized_document",
+                    payload={
+                        "source_id": str(source_id),
+                        "chunk_count": outcome.chunk_count,
+                        "embedder_model": outcome.embedder_model,
+                        "state": outcome.state,
+                        "reason": outcome.reason,
+                    },
+                    trace_id=current_trace_id(),
+                )
+                await session.commit()
+    except Exception as exc:
+        await _finalize("failed", error_text=f"{type(exc).__name__}: {exc}")
+        raise
+
+    result = {
+        "ok": outcome.ok,
+        "chunk_count": outcome.chunk_count,
+        "embedder": outcome.embedder_model,
+        "state": outcome.state,
+        "reason": outcome.reason,
+    }
+    if outcome.ok:
+        await _finalize("succeeded", result)
+    else:
+        # Searchable, but not as designed. `failed` is the honest status: it is
+        # what puts the reason in front of an operator instead of in a log line
+        # nobody reads.
+        await _finalize("failed", result, error_text=outcome.reason)
+        # A source with no text at all is not a degradation, it is an empty
+        # document; only mark the source failed when chunks exist but the dense
+        # leg does not.
+        if outcome.chunk_count:
             async with maker() as session:
                 src = (
-                    await session.execute(select(Source).where(Source.id == normalized.source_id))
+                    await session.execute(select(Source).where(Source.id == source_id))
                 ).scalar_one_or_none()
                 if src is not None:
-                    src.status = "failed"
+                    src.failure_reason = (outcome.reason or "")[:2048]
                 await session.commit()
-            await _finalize("failed", error_text=reason)
-            return {"ok": False, "reason": reason}
-
-        # Known-model fast path: reject on metadata alone, zero spend.
-        mismatch_dim = embedding_dim_mismatch(embed_model)
-        if mismatch_dim is not None:
-            return await _reject_dim(embed_model, mismatch_dim)
-
-        # Fetch + chunk markdown.
-        markdown_bytes = asset_store.get(normalized.markdown_uri)
-        markdown = markdown_bytes.decode("utf-8")
-        chunks = chunk_markdown(markdown)
-        if not chunks:
-            await _finalize("succeeded", {"chunk_count": 0})
-            return {"ok": True, "chunk_count": 0}
-
-        # Unknown-model path: a single-item probe learns the real dim before the
-        # full batch, so a wrong-dim unknown embedder wastes one token, not the
-        # whole document. (Known models skipped this — their dim is in the
-        # static registry.)
-        if not is_known_embedding_model(embed_model):
-            probe = await embed_texts(
-                client=litellm,
-                principal=principal,
-                project_id=normalized.project_id,
-                agent_run_id=claims.agent_run_id,
-                profile_bindings=profile.bindings_jsonb,
-                texts=["dimension probe"],
-                purpose="rks.embed.probe",
-            )
-            probe_dim = len(probe.embeddings[0]) if probe.embeddings else EMBEDDING_DIM
-            if probe_dim != EMBEDDING_DIM:
-                return await _reject_dim(embed_model, probe_dim)
-
-        # Embed (this writes a ModelCall + CostLedgerEvent per batch).
-        embed_result = await embed_texts(
-            client=litellm,
-            principal=principal,
-            project_id=normalized.project_id,
-            agent_run_id=claims.agent_run_id,
-            profile_bindings=profile.bindings_jsonb,
-            texts=[c.text for c in chunks],
-            purpose="rks.embed",
-        )
-
-        # Insert chunks. text_tsv is filled by the trigger on document_chunks.
-        async with maker() as session:
-            ledger = LedgerWriter(session)
-            for c, embedding in zip(chunks, embed_result.embeddings, strict=False):
-                session.add(
-                    DocumentChunk(
-                        id=uuid7(),
-                        project_id=normalized.project_id,
-                        source_id=normalized.source_id,
-                        normalized_document_id=normalized.id,
-                        ordinal=c.ordinal,
-                        text=c.text,
-                        text_tsv="",  # trigger fills this
-                        embedding=embedding,
-                        section_path=c.section_path,
-                        char_start=c.char_start,
-                        char_end=c.char_end,
-                        token_count=c.token_count,
-                        embedder_model=embed_result.model,
-                    )
-                )
-
-            # Upsert RetrievalIndexRecord.
-            existing = (
-                await session.execute(
-                    select(RetrievalIndexRecord).where(
-                        RetrievalIndexRecord.source_id == normalized.source_id
-                    )
-                )
-            ).scalar_one_or_none()
-            if existing is None:
-                session.add(
-                    RetrievalIndexRecord(
-                        id=uuid7(),
-                        project_id=normalized.project_id,
-                        source_id=normalized.source_id,
-                        embedder_model=embed_result.model,
-                        chunk_count=len(chunks),
-                        indexed_at=utcnow(),
-                        created_by=principal.user_id,
-                    )
-                )
-            else:
-                existing.embedder_model = embed_result.model
-                existing.chunk_count = len(chunks)
-                existing.indexed_at = utcnow()
-
-            # Mark Source.status.
-            src = (
-                await session.execute(select(Source).where(Source.id == normalized.source_id))
-            ).scalar_one_or_none()
-            if src is not None:
-                src.status = "indexed"
-
-            await ledger.append(
-                project_id=normalized.project_id,
-                actor_id=principal.user_id,
-                actor_kind=principal.actor_kind,
-                action_kind="embeddings.completed",
-                target_id=normalized.id,
-                target_kind="normalized_document",
-                payload={
-                    "source_id": str(normalized.source_id),
-                    "chunk_count": len(chunks),
-                    "embedder_model": embed_result.model,
-                },
-                trace_id=current_trace_id(),
-            )
-            await session.commit()
-
-    await _finalize(
-        "succeeded",
-        {"chunk_count": len(chunks), "embedder": embed_result.model},
-    )
-    return {"ok": True, "chunk_count": len(chunks), "embedder": embed_result.model}
+    return result

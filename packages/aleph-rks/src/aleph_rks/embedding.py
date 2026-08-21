@@ -2,9 +2,18 @@
 
 We batch at 64 inputs per call (headroom under typical provider batch limits).
 The embedding model is whatever the project's `ModelProfile.embedding` binding
-resolves to (the default profiles use `titan-embed-v2`, 1024-dim — matching the
-`Vector(1024)` chunk column). Every call routes through the same `LiteLLMClient`
-the rest of Aleph uses, so cost is ledgered and OTEL spans are emitted.
+resolves to. Aleph ships no embedder name: the binding is chosen by
+`POST /v1/projects/{id}/model-profile/autoconfigure` from what the configured
+gateway actually serves, and probed before it is bound. Every call routes
+through the same `LiteLLMClient` the rest of Aleph uses, so cost is ledgered and
+OTEL spans are emitted.
+
+The shipped default used to be `titan-embed-v2`, which no gateway in this
+deployment serves — the served name is `titan-embed-text-v2`, one word apart.
+Every embed call 400'd, and because chunks were written only after the embed
+returned, one wrong name took the lexical leg down with it: 75 sources, 45
+normalized documents, 0 chunks. That is why the registry below lists names the
+gateway reports and why `chunk_embed` writes chunks before it embeds them.
 
 If `ModelProfile.embedding` for a project changes, the resulting chunks would
 have a different `embedder_model`. The re-embed worker
@@ -33,7 +42,19 @@ if TYPE_CHECKING:
 #: any billed embed call (the store column is fixed at ``EMBEDDING_DIM``). Models
 #: absent here are unknown-dimension and fall through to the normal embed path.
 KNOWN_EMBEDDING_DIMS: dict[str, int] = {
-    "titan-embed-v2": 1024,
+    # Names the configured gateway reports from /v1/models. `titan-embed-v2` was
+    # here and is not one of them; it was the shipped default and it is why
+    # `document_chunks` was empty. Do not re-add a name no gateway serves: an
+    # entry here only ever *rejects* a model, so a fictional name is a rejection
+    # that can never fire.
+    "titan-embed-text-v2": 1024,
+    "bedrock-titan-embed-text": 1024,
+    # Cohere Embed v4 defaults to 1536-wide output. It supports Matryoshka
+    # truncation to 1024 via a `dimensions` request parameter, which Aleph does
+    # not send yet — so the honest registry value is the width it returns
+    # today, and binding it is refused before any billed call rather than
+    # failing at the flush.
+    "cohere-embed-v4": 1536,
     "amazon.titan-embed-text-v2:0": 1024,
     "amazon.titan-embed-text-v1": 1536,
     "cohere.embed-english-v3": 1024,
@@ -41,8 +62,7 @@ KNOWN_EMBEDDING_DIMS: dict[str, int] = {
     "text-embedding-3-small": 1536,
     "text-embedding-3-large": 3072,
     "text-embedding-ada-002": 1536,
-    # Local vLLM embedder. Dense output is 1024, matching EMBEDDING_DIM, so it
-    # is a drop-in for titan-embed-v2 with no re-dimensioning of the column.
+    # Local vLLM embedder. Dense output is 1024, matching EMBEDDING_DIM.
     # (bge-m3 also emits sparse and ColBERT vectors; the OpenAI-compatible
     # /v1/embeddings route returns the dense one, which is what we store.)
     "bge-m3": 1024,
