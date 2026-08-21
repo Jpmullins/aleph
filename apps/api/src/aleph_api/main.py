@@ -70,6 +70,23 @@ def create_app() -> FastAPI:
         for o in os.environ.get("ALEPH_CORS_ORIGINS", "http://localhost:5173").split(",")
         if o.strip()
     ]
+    # Order matters, and `add_middleware` PREPENDS, so the last one added is
+    # the outermost. Reading bottom-up, the stack is:
+    #     CORS -> Error -> RequestID -> Auth -> routes
+    #
+    # CORS must be outermost. It used to be added first, which put it INSIDE
+    # ErrorMiddleware — so an unhandled exception produced a JSONResponse that
+    # never passed back through CORS, and the browser saw a response with no
+    # `Access-Control-Allow-Origin` header. Every server error then surfaced in
+    # the console as a CORS failure instead of the actual error, which is the
+    # worst possible way to report a 500: it names the wrong subsystem and
+    # hides the traceback the developer needs.
+    #
+    # ErrorMiddleware stays outside RequestID and Auth so it still catches
+    # everything those raise.
+    app.add_middleware(AuthMiddleware)
+    app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(ErrorMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
@@ -77,13 +94,6 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
         allow_credentials=True,
     )
-
-    # Order matters: ErrorMiddleware is outermost so it catches everything;
-    # AuthMiddleware runs after RequestIDMiddleware so we have a request_id
-    # bound to logs before auth resolves.
-    app.add_middleware(AuthMiddleware)
-    app.add_middleware(RequestIDMiddleware)
-    app.add_middleware(ErrorMiddleware)
 
     app.include_router(health.router)
     app.include_router(me.router)

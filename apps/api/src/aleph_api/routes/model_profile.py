@@ -252,6 +252,13 @@ async def update_project_profile(
         },
         trace_id=current_trace_id(),
     )
+    # Same refresh the other two write paths do, and for the same reason:
+    # `updated_at` has a server-side `onupdate`, so the flush above leaves it
+    # expired. Reading it then lazy-loads, and a lazy load on an async session
+    # raises MissingGreenlet — saving a model binding returned a 500 with no
+    # usable message, and because CORS sat inside the error middleware the
+    # browser reported it as a CORS failure instead.
+    await session.refresh(p)
     result = _to_out(p)
     await session.commit()
     # If the embedding model changed via a per-capability edit, repair drift too
