@@ -97,22 +97,41 @@ async def test_tampering_is_detectable(session: AsyncSession) -> None:
 
     The trigger blocks UPDATE, so this drops it for the length of one
     transaction to simulate an attacker with direct database access — which is
-    the only threat model under which the hash chain earns its keep — then
-    confirms `verify_project_chain` names the tampered event.
+    the only threat model under which the hash chain earns its keep.
+
+    `expire_all()` is load-bearing, not tidiness. `verify_project_chain` selects
+    on this same session, and SQLAlchemy's identity map returns the instances
+    already loaded by `_append` — carrying the ORIGINAL `chain_hash` in memory.
+    Without the expire, verification reads its own cache, never sees the forged
+    row, and reports the chain intact. This test passed against a tampered
+    database for exactly that reason until CI caught it.
     """
     project_id = uuid7()
     events = await _append(session, project_id, 3)
     victim = events[1]
+    forged = "f" * 64
 
     await session.execute(text("ALTER TABLE action_ledger_events DISABLE TRIGGER USER"))
     await session.execute(
         text("UPDATE action_ledger_events SET chain_hash = :h WHERE id = :i"),
-        {"h": "f" * 64, "i": victim.id},
+        {"h": forged, "i": victim.id},
     )
     await session.execute(text("ALTER TABLE action_ledger_events ENABLE TRIGGER USER"))
     await session.commit()
+
+    # Guard the guard: if the forgery silently did not land, the assertion below
+    # would pass for the wrong reason and this test would be worthless.
+    stored = (
+        await session.execute(
+            text("SELECT chain_hash FROM action_ledger_events WHERE id = :i"), {"i": victim.id}
+        )
+    ).scalar_one()
+    assert stored == forged, "the tamper never reached the database; test proves nothing"
+
+    session.expire_all()
 
     result = await verify_project_chain(session, project_id)
     assert not result.ok, "a forged chain_hash verified as intact"
     assert result.first_divergence is not None
     assert result.first_divergence.event_id == victim.id
+    assert result.first_divergence.actual == forged
