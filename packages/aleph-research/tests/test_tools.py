@@ -178,7 +178,7 @@ def test_dev_credential_defaults_gated_on_local(monkeypatch: pytest.MonkeyPatch)
 
 
 # --------------------------------------------------------------------------
-# dispatch_research (replaces deleted tests/unit/test_dispatch_research.py)
+# dispatch_research (absorbed from a per-file test deleted in the reset)
 # --------------------------------------------------------------------------
 
 

@@ -2,7 +2,7 @@
 
 Wire shape verified against
 `apps/web/node_modules/@a2ui/web_core/src/v0_9/schema/server-to-client.d.ts`
-and the working `apps/web/src/a2ui/_spike/SpikePanel.tsx`: each message is a
+and the working `apps/web/src/a2ui/aleph-catalog-v09.tsx`: each message is a
 *nested envelope* `{ "version": "v0.9", "<kind>": { ... } }`, NOT a flat
 `{ "kind": ... }` object. The MessageProcessor discriminates on the presence of
 the `createSurface` / `updateComponents` / `updateDataModel` key.

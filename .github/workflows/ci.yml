@@ -83,6 +83,23 @@ jobs:
       - name: Surface props the client actually binds
         run: ./scripts/check-surface-bindings.sh
 
+      # CLAUDE.md's "Fixed, with the test that pins each" section is what stops a
+      # fixed bug from silently un-fixing — and four of its pins named test files
+      # deleted in the harness reset, `pnpm-workspace.yaml` declared a member
+      # directory that was gone, and a dangling symlink under audit/ made six
+      # e2e checks SKIP forever while the runner reported no failures. A citation
+      # that names nothing reads as evidence and is an assertion.
+      - name: Every path named in prose or in a gate resolves
+        run: ./scripts/check-dead-refs.sh
+
+      # `docs/acceptance.md` is the scoreboard, and it drifted into the failure
+      # it exists to catch: A1 claimed 49 tests against a suite of 142, D4
+      # claimed an integration test asserting database rows against thirteen
+      # pure in-memory unit tests. This cannot check what a test asserts —
+      # nothing can — but it stops a ✅ row citing a test id pytest cannot find.
+      - name: Every ✅ acceptance row names a test that exists
+        run: ./scripts/check-acceptance-claims.sh
+
   python-unit:
     name: unit tests
     runs-on: ubuntu-latest
@@ -138,6 +155,85 @@ jobs:
         working-directory: apps/api
         run: uv run alembic check
       - run: uv run pytest -m integration -q
+
+  acceptance:
+    name: acceptance gate · self-check
+    runs-on: ubuntu-latest
+    # The gate CLAUDE.md calls "the gate to trust", finally running where it can
+    # be seen. It had never been invoked by CI at all: `grep -c acceptance.sh
+    # ci.yml` returned 0 while `docs/acceptance.md` reported 38 of 41 parts done.
+    #
+    # `--strict` because services ARE guaranteed here, so "cannot run on this
+    # machine" is not true on this machine — a SKIP in CI is a check that has
+    # quietly stopped running.
+    #
+    # `--self-check` because a check nobody has seen fail is an assumption
+    # wearing a green light. It mutates each subject and requires the check to
+    # notice.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: aleph
+          POSTGRES_PASSWORD: aleph
+          POSTGRES_DB: aleph
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U aleph"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      # Nine settings on `Settings` have no default, so a process that boots the
+      # real app raises pydantic ValidationError without them. `kernel_boot.py`
+      # and `worker_boot.py` are exactly that, which is why they could never
+      # have run in the existing integration job.
+      DATABASE_URL: postgresql+asyncpg://aleph:aleph@localhost:5432/aleph
+      REDIS_URL: redis://localhost:6379/0
+      ALEPH_TEST_DATABASE_URL: postgresql+asyncpg://aleph:aleph@localhost:5432/aleph
+      ALEPH_TEST_REDIS_URL: redis://localhost:6379/0
+      ALEPH_AUTH_MODE: local
+      # No gateway is reachable from CI, and that is fine: the checks that need
+      # one detect it and SKIP. A placeholder URL that resolves to nothing is
+      # more honest than a real one nobody can reach.
+      LITELLM_BASE_URL: http://127.0.0.1:1
+      INSIGHTS_LITELLM_API_KEY: ci-not-a-real-key
+      # Tracing is opt-in and stays off: an empty OTLP endpoint is the documented
+      # way to skip the exporter (aleph_observability/tracing.py:56-68).
+      LANGFUSE_HOST: ""
+      LANGFUSE_PUBLIC_KEY: ""
+      LANGFUSE_SECRET_KEY: ""
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+      ALEPH_API_INTERNAL_URL: http://127.0.0.1:8000
+      ALEPH_AGENT_TOKEN_SECRET: ci-only-secret-not-used-outside-this-job-32b
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - run: uv sync --all-packages --all-extras
+      - name: alembic upgrade head
+        working-directory: apps/api
+        run: uv run alembic upgrade head
+
+      # One pass: run every check AND prove the checks can fail.
+      #
+      # The skip budget only ever ratchets DOWN. Raising it is a decision that
+      # has to be argued for in a diff; leaving it uncapped is how "unrunnable
+      # here" became the place features went to hide.
+      - name: acceptance gate · self-check
+        run: ./scripts/acceptance.sh --self-check --max-skip 6
+
+      # The eight numbers, printed on every build. This does not gate — several
+      # of them are not measurable yet and say so — but a number nobody looks at
+      # is a number that drifts.
+      - name: the eight numbers
+        run: ./scripts/status.sh || true
 
   web:
     name: web typecheck · build

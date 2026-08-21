@@ -3,7 +3,7 @@
 Pure, I/O-free dict builders that emit the exact wire shape the upstream
 `@a2ui/web_core` `MessageProcessor` consumes. Verified against
 `apps/web/node_modules/@a2ui/web_core/src/v0_9/schema/server-to-client.d.ts`
-and the working spike `apps/web/src/a2ui/_spike/SpikePanel.tsx`.
+against the renderer that consumes them, `apps/web/src/a2ui/`.
 
 Each message is a *nested envelope* keyed by its kind, e.g.
 

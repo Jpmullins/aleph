@@ -163,14 +163,14 @@ docker compose -f deploy/compose/docker-compose.yml logs -f aleph-api
 
 Endpoints after bootstrap: web `:5173`, api `:8000`, copilot-runtime `:4000`, Langfuse `:3000`.
 An S3-compatible object store is opt-in (`docker compose --profile s3 up -d`); the default asset
-backend is the local filesystem at `data/assets`. A local chat+embedding gateway is opt-in
-(`--profile local-llm`) — see `docs/operations.md`.
+backend is the local filesystem at `data/assets`. Aleph serves no models and ships no gateway:
+point `LITELLM_BASE_URL` at any OpenAI-compatible endpoint — see `docs/operations.md`.
 
 ---
 
 ## Layout
 
-`uv` workspace (Python 3.13, pyright strict) + `pnpm` workspace (`apps/web`, `tests/playwright`).
+`uv` workspace (Python 3.13, pyright strict) + `pnpm` workspace (`apps/web`).
 
 ```
 apps/
@@ -328,7 +328,9 @@ below only with a test that would have caught them.
   assert the write happened). Claim Spine citations also record the verbatim quote and a char span
   (`tests/e2e/test_belief_spine.py::test_every_written_citation_carries_a_source_id`, acceptance C7),
   and the legacy wiki write path fills `Citation.chunk_ids` via `aleph_rks.claim_grounding`
-  (`packages/aleph-rks/tests/test_claim_grounding.py`, `tests/e2e/test_grounding_surface.py`).
+  (`packages/aleph-rks/tests/test_claim_grounding.py`). NOTE: the surface that renders that chain
+  end to end is unpinned — its test went in the harness reset and `docs/plan.md` `WS-UI-4` restores
+  it along with the pane's only route in.
 - **Freshness could not tell a grounded page from a claimless one** — both scored 50, because
   `_citation_health([])` returned full marks and `_verification` short-circuited before checking
   whether any claim existed. Both now return 0 for an empty citation set. NOTE: the regression test

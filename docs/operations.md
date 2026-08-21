@@ -49,8 +49,9 @@ not hypothetical — production currently has `document_chunks` at 0 rows agains
 curl -s localhost:8000/v1/gateway/models | python3 -m json.tool
 ```
 
-> The old `deploy/local-gateway/` directory referenced by earlier versions of
-> this document was deleted. There is no bundled gateway.
+> Earlier versions of this document described a bundled gateway service under
+> `deploy/`. There is none, and there was none by the time the sentence was
+> written. Aleph serves no models.
 
 
 ## Migrations

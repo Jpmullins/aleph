@@ -17,7 +17,7 @@ LLM step (when the job supplies a gateway client; ``recurate_overview``):
 This closes the gap that left wikilinks permanently broken and the overview
 stale after research: links resolved only at write time, and neither
 ``repair_broken_links`` nor any overview update was on the research/bootstrap
-path. See ``docs/superpowers/specs/2026-06-25-wiki-curator-design.md`` §1, §4.
+path.
 
 The curator commits the overview/cross-linked pages through
 ``WikiService.commit_revision`` with ``origin="curator"``. Curation is enqueued

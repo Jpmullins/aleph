@@ -13,8 +13,13 @@ Kinds: `source` is consumed by the Library viewer today. `rendered` and
 `artifact-version` are wired now (GOAL rule 2 written reason) because F1
 mandates *all* asset bytes flow through this one route and WP-4's catalog
 components consume artifacts strictly by URI against it — adding per-kind
-routes later would fork the boundary this route exists to unify. Both are
-exercised by positive-path integration tests in tests/e2e/test_asset_stream.py.
+routes later would fork the boundary this route exists to unify.
+
+The authorization half is pinned by
+`apps/api/tests/unit/test_asset_stream_auth.py`. The positive-path integration
+test this docstring used to name was deleted in the harness reset and has not
+been restored, so the happy path is currently unpinned — said here rather than
+left as a citation of a file that is not there.
 """
 
 from __future__ import annotations

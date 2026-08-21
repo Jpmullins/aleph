@@ -8,8 +8,9 @@ otherwise JIT-provisions a user row) and the route dependencies
 routes' own logic (consensus binding enforcement, connector_kind
 validation) runs for real against controlled rows.
 
-The metadata-lands-on-the-Source-row case needs real Postgres, so it lives
-in `tests/e2e/test_scholar_ingest.py` (`@pytest.mark.integration`).
+The metadata-lands-on-the-Source-row case needs real Postgres. The
+integration test that covered it was deleted in the harness reset and has not
+been restored, so that case is currently uncovered.
 """
 
 from __future__ import annotations

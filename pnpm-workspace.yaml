@@ -1,6 +1,9 @@
 packages:
   - "apps/web"
-  - "tests/playwright"
+  # `tests/playwright` was declared here for a directory deleted in the
+  # harness reset, so every documented `pnpm -C tests/playwright ...` command
+  # was one that could never run. It goes back when the directory does
+  # (docs/plan.md WS-UI-2 / WS-P4).
 
 allowBuilds:
   # Telemetry postinstall — keep blocked.

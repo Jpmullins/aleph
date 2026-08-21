@@ -17,8 +17,11 @@ four 0-25 dimensions:
 whole score is forced to 0 — a retracted source poisons the page regardless of
 the other dimensions (WP-6 §2 + §4).
 
-Deterministic: ``now`` is injected; no wall-clock reads, no DB. Property-tested
-in ``tests/test_freshness.py``; integration-tested via the curator.
+Deterministic: ``now`` is injected; no wall-clock reads, no DB.
+
+Currently UNPINNED. The property tests went with the wiki test suite in the
+harness reset, including the regression test for the defect where a grounded
+page and a claimless one both scored 50. CLAUDE.md records the same gap.
 """
 
 from __future__ import annotations

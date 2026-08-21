@@ -27,7 +27,11 @@ restore_all() {
 }
 trap restore_all EXIT INT TERM
 
-mutate() { # mutate FILE SED_EXPR
+# NOTE on the expressions below: perl runs with -0 (whole file slurped), so an
+# expression anchored with `^` needs the /m modifier or it matches only the very
+# start of the file — and a mutation that silently fails to apply is reported as
+# "this check cannot fail", which sends you to fix a check that is fine.
+mutate() { # mutate FILE PERL_EXPR
   local f="$1" expr="$2"
   cp "$f" "$BACKUP_DIR/$(echo "$f" | tr / _)"
   MUTATED+=("$f")
@@ -90,17 +94,93 @@ from aleph_assistant.retrieval import router as r
 assert 'titles' in r._MISS_REASON and 'bodies' in r._MISS_REASON
 \""
 
+# ---------------------------------------------------------------------------
+# The sweeps. Five of these run in CI on every push and none had ever been
+# observed failing — `scripts/acceptance.sh --self-check` covered the kernel and
+# the retrieval router and nothing else, so "six probes, all green" said nothing
+# about the six gates that actually block a merge.
+# ---------------------------------------------------------------------------
+
+probe "check-catalog-generated notices a hand-edited generated file" \
+  apps/web/src/a2ui/catalog.ts \
+  's/export const CATALOG_VERSION = "1.0.0";/export const CATALOG_VERSION = "9.9.9";/' \
+  "./scripts/check-catalog-generated.sh"
+
+probe "check-single-catalog notices a second catalog identity" \
+  apps/web/src/lib/workspace-ui.tsx \
+  's/^export interface PaneKindDef \{/export const ALEPH_V09_CATALOG_ID = "aleph:\/\/v1";\n\nexport interface PaneKindDef {/m' \
+  "./scripts/check-single-catalog.sh"
+
+probe "check-surface-bindings notices a prop the client never declares" \
+  packages/aleph-a2ui/src/aleph_a2ui/components/surfaces.py \
+  's/"pages": \{"path": "\/pages"\},/"pages": {"path": "\/pages"}, "not_a_declared_prop": {"path": "\/nope"},/' \
+  "./scripts/check-surface-bindings.sh"
+
+probe "check-graph-state-keys notices an undeclared state write" \
+  packages/aleph-research/src/aleph_research/research_workflow.py \
+  's/        return \{"candidates": candidates, "seen_keys": sorted\(seen\)\}/        return {"candidates": candidates, "seen_keys": sorted(seen), "a_key_no_typed_dict_declares": 1}/' \
+  "./scripts/check-graph-state-keys.sh"
+
+probe "check-dead-refs notices a path that is not there" \
+  docs/operations.md \
+  's/^# Operations/# Operations\n\nSee `deploy\/definitely-not-a-real-directory\/README.md`./' \
+  "./scripts/check-dead-refs.sh"
+
+probe "check-acceptance-claims notices a cited test that does not exist" \
+  docs/acceptance.md \
+  's/packages\/aleph-core\/tests\/test_rrf.py/packages\/aleph-core\/tests\/test_no_such_thing.py/' \
+  "./scripts/check-acceptance-claims.sh"
+
+# check-pane-registry's subject is the CLIENT growing a second copy of the
+# server's pane list, so the mutation belongs in the client.
+probe "check-pane-registry notices a hardcoded pane list in the client" \
+  apps/web/src/lib/workspace-ui.tsx \
+  's/^export interface PaneKindDef \{/const HARDCODED_PANES = ["wiki", "library", "notes", "hypotheses"];\n\nexport interface PaneKindDef {/m' \
+  "./scripts/check-pane-registry.sh"
+
+# ---------------------------------------------------------------------------
+# Retrieval, after WS-RS1. Each of these mutations recreates a specific half of
+# the outage that left `document_chunks` empty against 75 ingested sources.
+# ---------------------------------------------------------------------------
+
+# The assistant must say when half its search did not run. Returning `[]` on a
+# dead embedder is the same answer as "this project knows nothing about that".
+probe "a dead embedder is reported, not swallowed" \
+  packages/aleph-assistant/src/aleph_assistant/retrieval/router.py \
+  's/            self\._degraded = "embedder_unavailable"/            pass/' \
+  "uv run pytest packages/aleph-assistant/tests/test_router_degradation.py -q -p no:randomly"
+
 # Service-backed: only meaningful when postgres is up.
-if (echo > /dev/tcp/localhost/5432) >/dev/null 2>&1; then
-  export ALEPH_DATABASE_URL="${ALEPH_TEST_DATABASE_URL:-postgresql+asyncpg://aleph:changeme-local@localhost:5432/aleph}"
+# The port comes from the URL the tests will use. Probing 5432 unconditionally
+# meant the dev stack (Postgres on 5442) silently skipped every DB-backed probe.
+_DB_URL="${ALEPH_TEST_DATABASE_URL:-postgresql+asyncpg://aleph:changeme-local@localhost:5432/aleph}"
+_HOSTPORT="${_DB_URL#*://}"; _HOSTPORT="${_HOSTPORT#*@}"; _HOSTPORT="${_HOSTPORT%%/*}"
+_PG_HOST="${_HOSTPORT%%:*}"; _PG_PORT="${_HOSTPORT##*:}"
+[ "$_PG_PORT" = "$_PG_HOST" ] && _PG_PORT=5432
+if (echo > "/dev/tcp/$_PG_HOST/$_PG_PORT") >/dev/null 2>&1; then
+  export ALEPH_DATABASE_URL="$_DB_URL"
   export DATABASE_URL="$ALEPH_DATABASE_URL" ALEPH_AUTH_MODE=local
   export REDIS_URL="${ALEPH_TEST_REDIS_URL:-redis://localhost:6379/0}"
   probe "stale-link expansion is really filtered" \
     packages/aleph-assistant/src/aleph_assistant/retrieval/router.py \
     's/                    WikiLink\.src_revision_id == WikiPage\.current_revision_id,\n//' \
     "uv run pytest tests/e2e/test_retrieval_finds_body_text.py::test_expansion_ignores_links_from_superseded_revisions -q -p no:randomly"
+
+  # The chunk write must be COMMITTED before the embed call. Sharing one
+  # transaction rolls the chunks back with the failed embed, which is exactly
+  # the shape that emptied the index.
+  probe "chunks are committed before the embedder is called" \
+    packages/aleph-rks/src/aleph_rks/indexing.py \
+    's/            src\.status = "indexed"\n        await session\.commit\(\)/            src.status = "indexed"\n        await session.rollback()/' \
+    "uv run pytest tests/integration/test_chunk_embed_degrades.py::test_dead_embedder_still_writes_chunks -q -p no:randomly"
+
+  # A run whose owner died must be failed, not left claiming to run.
+  probe "the startup reaper actually fails a stale run" \
+    packages/aleph-db/src/aleph_db/repos/agent_runs.py \
+    's/        run\.status = "failed"/        pass/' \
+    "uv run pytest tests/integration/test_agent_run_reaper.py::test_a_run_running_past_the_deadline_is_failed -q -p no:randomly"
 else
-  printf '  \033[90m%-8s\033[0m stale-link mutation (needs postgres)\n' "skip"
+  printf '  \033[90m%-8s\033[0m 3 database-backed mutations (needs postgres)\n' "skip"
 fi
 
 # H1's subject is a database row, not a source file, so it needs its own
@@ -108,7 +188,9 @@ fi
 # check notices, and restores in a finally so a failure here cannot leave the
 # profile table pointing at a ghost.
 if (echo > /dev/tcp/localhost/5432) >/dev/null 2>&1 \
-   && curl -sf --max-time 5 "${LITELLM_BASE_URL:-http://localhost:8010}/v1/models" >/dev/null 2>&1; then
+   && [ -n "${LITELLM_BASE_URL:-}" ] \
+   && curl -sf --max-time 5 "${LITELLM_BASE_URL%/}/v1/models" \
+        -H "Authorization: Bearer ${INSIGHTS_LITELLM_API_KEY:-}" >/dev/null 2>&1; then
   H1_OUT=$(uv run python - <<'PYEOF' 2>/dev/null
 import asyncio, os, subprocess, sys
 from sqlalchemy import text

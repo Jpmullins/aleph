@@ -17,11 +17,26 @@
 #      asserting its check notices. A check nobody has seen fail is an
 #      assumption wearing a green light.
 #
+# And a fourth, added after the gate itself drifted into being the thing it was
+# built to prevent:
+#
+#   4. MISSING is not SKIP, and it is always fatal. SKIP means "this machine
+#      cannot run this check". MISSING means "the subject of this check is
+#      gone". Twenty invocations here named test files deleted in the harness
+#      reset; with services down they reported SKIP, and the tree looked green
+#      over eleven parts that could not run at all. The preflight below resolves
+#      every path this script names, before any check runs and regardless of
+#      whether anything is up.
+#
 # Usage:
 #   ./scripts/acceptance.sh              # everything runnable here
 #   ./scripts/acceptance.sh --quick      # skip anything needing services
 #   ./scripts/acceptance.sh --self-check # prove the checks can fail
 #   ./scripts/acceptance.sh --part B     # one part only
+#   ./scripts/acceptance.sh --strict     # a SKIP is a failure (for CI, where
+#                                        # services are guaranteed)
+#   ./scripts/acceptance.sh --max-skip N # fail if more than N parts skip. The
+#                                        # budget only ever ratchets DOWN.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -29,13 +44,17 @@ cd "$ROOT"
 
 QUICK=0
 SELF_CHECK=0
+STRICT=0
+MAX_SKIP=-1
 ONLY_PART=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --quick) QUICK=1 ;;
     --self-check) SELF_CHECK=1 ;;
+    --strict) STRICT=1 ;;
+    --max-skip) MAX_SKIP="${2:-0}"; shift ;;
     --part) ONLY_PART="${2:-}"; shift ;;
-    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,45p' "$0"; exit 0 ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
   shift
@@ -44,7 +63,7 @@ done
 DB_URL="${ALEPH_TEST_DATABASE_URL:-postgresql+asyncpg://aleph:changeme-local@localhost:5432/aleph}"
 REDIS="${ALEPH_TEST_REDIS_URL:-redis://localhost:6379/0}"
 
-PASS=0; FAIL=0; RED=0; SKIP=0
+PASS=0; FAIL=0; RED=0; SKIP=0; MISSING=0
 declare -a ROWS=()
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -57,15 +76,34 @@ record() {
     FAIL) FAIL=$((FAIL+1)) ;;
     RED)  RED=$((RED+1)) ;;
     SKIP) SKIP=$((SKIP+1)) ;;
+    MISS) MISSING=$((MISSING+1)) ;;
   esac
   row "$1" "$2" "$3"
 }
 
 part_selected() { [ -z "$ONLY_PART" ] || [ "${1:0:1}" = "$ONLY_PART" ]; }
 
+# Read the host and port out of the URLs the checks will actually use. This
+# probed localhost:5432 unconditionally, so a developer running the normal dev
+# stack — Postgres published on 5442 — got a screen of SKIPs and a green exit
+# while nothing at all had been verified.
+url_host_port() { # url_host_port URL DEFAULT_PORT
+  local url="$1" default="$2" hostport
+  hostport="${url#*://}"          # strip scheme
+  hostport="${hostport#*@}"       # strip credentials, if any
+  hostport="${hostport%%/*}"      # strip path
+  case "$hostport" in
+    *:*) echo "${hostport%%:*} ${hostport##*:}" ;;
+    *)   echo "$hostport $default" ;;
+  esac
+}
+
 services_up() {
-  (echo > /dev/tcp/localhost/5432) >/dev/null 2>&1 || return 1
-  (echo > /dev/tcp/localhost/6379) >/dev/null 2>&1 || return 1
+  local h p
+  read -r h p <<< "$(url_host_port "$DB_URL" 5432)"
+  (echo > "/dev/tcp/$h/$p") >/dev/null 2>&1 || return 1
+  read -r h p <<< "$(url_host_port "$REDIS" 6379)"
+  (echo > "/dev/tcp/$h/$p") >/dev/null 2>&1 || return 1
   return 0
 }
 
@@ -119,8 +157,43 @@ run_shell() {
 
 skip() { part_selected "$1" && record "$1" SKIP "$2"; }
 
+# ---------------------------------------------------------------------------
+# Preflight — does every subject this script names still exist?
+# ---------------------------------------------------------------------------
+#
+# Runs before any check and independently of whether services are up, because
+# that is the exact combination that hid the drift: with Postgres down, eleven
+# parts naming four deleted test files reported SKIP and the run exited 0.
+#
+# A path this script cannot resolve is MISSING, not SKIP, and MISSING always
+# fails the run. There is no flag to soften it — a warning is how this started.
+declare -a MISSING_PATHS=()
+preflight() {
+  local token path
+  while IFS= read -r token; do
+    [ -n "$token" ] || continue
+    path="${token%%::*}"
+    [ -e "$path" ] && continue
+    MISSING_PATHS+=("$token")
+  done < <(
+    grep -ohE '(tests|packages|apps|scripts|audit|docs)/[A-Za-z0-9_./+-]+(::[A-Za-z0-9_]+)?' "$0" \
+      | sed 's/[.,)"'"'"']*$//' \
+      | sort -u
+  )
+}
+
 bold "Aleph acceptance — $(git rev-parse --short HEAD 2>/dev/null || echo 'no git')"
 echo
+
+preflight
+if [ ${#MISSING_PATHS[@]} -gt 0 ]; then
+  bold "MISSING subjects — this gate names things that are not there:"
+  for m in "${MISSING_PATHS[@]}"; do
+    printf '  \033[31m%-8s\033[0m %s\n' "MISSING" "$m"
+    record "PRE" MISS "$m"
+  done
+  echo
+fi
 
 NEEDS_SERVICES=0
 if [ $QUICK -eq 0 ]; then
@@ -319,9 +392,20 @@ run_shell G2 "CI has a behavioural gate" \
 # ---------------------------------------------------------------------------
 # H — Model gateway
 # ---------------------------------------------------------------------------
-if [ $NEEDS_SERVICES -eq 1 ]; then
+# H1 calls the gateway, so it needs one. An unreachable gateway is a SKIP and
+# not a FAIL: CI has no model endpoint by design ("Aleph serves no models"), and
+# a red row there would train everyone to ignore the colour.
+gateway_up() {
+  [ -n "${LITELLM_BASE_URL:-}" ] || return 1
+  curl -sf --max-time 5 "${LITELLM_BASE_URL%/}/v1/models" \
+    -H "Authorization: Bearer ${INSIGHTS_LITELLM_API_KEY:-}" >/dev/null 2>&1
+}
+
+if [ $NEEDS_SERVICES -eq 1 ] && gateway_up; then
   run_shell H1 "every bound model is served, and the embedder emits the column's dim" \
     "uv run python scripts/_acceptance/gateway_serves_bound_models.py"
+elif [ $NEEDS_SERVICES -eq 1 ]; then
+  skip H1 "no gateway reachable at ${LITELLM_BASE_URL:-<unset>}"
 else
   skip H1 "needs postgres + a reachable gateway"
 fi
@@ -338,13 +422,14 @@ for r in "${ROWS[@]}"; do
     PASS) colour='\033[32m' ;;
     FAIL) colour='\033[31m' ;;
     RED)  colour='\033[33m' ;;
+    MISS) colour='\033[31m' ;;
     *)    colour='\033[90m' ;;
   esac
   printf "%-5s ${colour}%-6s\033[0m %s\n" "$id" "$status" "${detail:0:90}"
 done
 
 echo
-bold "pass=$PASS  fail=$FAIL  red=$RED (known defects under test)  skip=$SKIP (not built)"
+bold "pass=$PASS  fail=$FAIL  red=$RED (known defects under test)  skip=$SKIP (not runnable here)  missing=$MISSING (subject gone)"
 echo
 
 if [ $SELF_CHECK -eq 1 ]; then
@@ -353,12 +438,28 @@ if [ $SELF_CHECK -eq 1 ]; then
   echo
 fi
 
+if [ $MISSING -gt 0 ]; then
+  echo "MISSING — $MISSING subject(s) this gate names do not exist. A check whose"
+  echo "subject is gone is not a check that skipped; it is a check that cannot run"
+  echo "and has been reporting nothing. Restore the subject or delete the check."
+  exit 1
+fi
 if [ $FAIL -gt 0 ]; then
   echo "FAIL — $FAIL check(s) that should pass did not."
   exit 1
 fi
+if [ $STRICT -eq 1 ] && [ $SKIP -gt 0 ]; then
+  echo "STRICT — $SKIP part(s) skipped, and --strict says a skip is a failure."
+  echo "This runs where services are guaranteed, so 'cannot run here' is not true here."
+  exit 1
+fi
+if [ "$MAX_SKIP" -ge 0 ] && [ $SKIP -gt "$MAX_SKIP" ]; then
+  echo "SKIP BUDGET — $SKIP skipped, budget is $MAX_SKIP."
+  echo "The budget only ratchets down. Make the check runnable, or delete it."
+  exit 1
+fi
 if [ $SKIP -gt 0 ]; then
-  echo "INCOMPLETE — $SKIP part(s) not built. Nothing regressed."
+  echo "INCOMPLETE — $SKIP part(s) not runnable here. Nothing regressed."
   exit 0
 fi
 echo "COMPLETE — every part built and checked."

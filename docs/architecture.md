@@ -16,7 +16,8 @@ What exists today. For where it is going, see [`belief-engine.md`](belief-engine
 Supporting: `postgres` (pgvector), `redis`, `code-runner-redis`, and the Langfuse stack
 (`langfuse`, `langfuse-worker`, `clickhouse`, `langfuse-redis`, `langfuse-minio`) plus
 `otel-collector`. `minio` is opt-in under the `s3` profile; a chat+embedding gateway for local models
-is opt-in under `local-llm` (see [`operations.md`](operations.md)).
+is whatever OpenAI-compatible endpoint `LITELLM_BASE_URL` names (see
+[`operations.md`](operations.md)). Aleph ships none.
 
 ## Boot
 

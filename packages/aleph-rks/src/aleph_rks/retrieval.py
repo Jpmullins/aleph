@@ -235,11 +235,20 @@ async def reembed_for_project(
     Re-embedding goes through `embed_texts` → `LiteLLMClient.embed`, so it writes
     `ModelCall` + `CostLedgerEvent`. Returns (sources_reembedded, chunks_reembedded).
     """
+    from aleph_core.errors import ValidationFailed
     from aleph_core.time import utcnow
     from aleph_models.profile import resolve_binding
     from aleph_rks.embedding import embed_texts, embedding_dim_mismatch
 
-    current_model = resolve_binding(profile_bindings, "embedding").model
+    # A project with no `embedding` binding is the normal state between project
+    # creation and autoconfigure — templates ship no model name. Nothing to
+    # re-embed to, so this is a no-op rather than an exception on a background
+    # job nobody is watching.
+    try:
+        current_model = resolve_binding(profile_bindings, "embedding").model
+    except ValidationFailed:
+        _log.warning("rks.reembed.no_embedding_binding", project_id=str(project_id))
+        return 0, 0
     # `embedder_model IS NULL` is the degraded case, and it has to be named
     # explicitly: in SQL `NULL != 'x'` is NULL, not true, so a `lexical_only`
     # index — the state a source lands in when the embedder was unreachable —

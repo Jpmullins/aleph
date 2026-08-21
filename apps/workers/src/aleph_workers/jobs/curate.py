@@ -9,8 +9,6 @@ a page is committed. Two stages, isolated transactions:
 2. LLM overview recuration (best-effort, separate transaction): fold the new
    topic into the project overview page. A gateway failure here never undoes
    the deterministic knit.
-
-See ``docs/superpowers/specs/2026-06-25-wiki-curator-design.md``.
 """
 
 from __future__ import annotations

@@ -218,8 +218,8 @@ def chunk_markdown(
     the error accumulating down the document.
 
     That is worse than having no offsets: a grounding view would highlight
-    confidently, and wrongly. `tests/test_chunk_offsets.py` asserts the
-    invariant against real documents.
+    confidently, and wrongly. `packages/aleph-rks/tests/test_chunk_offsets.py`
+    asserts the invariant against real documents.
     """
     enc = tiktoken.get_encoding("cl100k_base")
     out: list[Chunk] = []
