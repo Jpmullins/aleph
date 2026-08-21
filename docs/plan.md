@@ -13,7 +13,7 @@ reading are in Part 4.
 
 ## Part 0 — Stop. The instrument is lying.
 
-Before any of the work below begins, one week of repair. This is the completeness
+Before any of the work below begins, one job: repair the gate. This is the completeness
 critic's finding and it is the single biggest risk in the plan.
 
 `scripts/acceptance.sh` is the artifact that answers "is Aleph finished". Today:
@@ -42,7 +42,7 @@ plausible work over three months, each green against its own criteria, and the
 first honest end-to-end measurement happens at the end — against an instrument
 that was already lying before anyone started.
 
-**Week 0, in order:**
+**First, in order:**
 
 1. Create `docs/decisions.md`. It does not exist and is cited nine times, and
    three clusters write criteria of the form `grep -n '…' docs/decisions.md`.
@@ -133,8 +133,7 @@ instead of only in fixtures". On live data that is **0 of 786**.
 filters — `grep -rnE "access_scope ==|access_scope\.in_|filter.*access_scope"`
 returns nothing. Every migration adds the column. CLAUDE.md lists it as a
 review-held rule; it is in fact the largest single instance of the defect class
-CLAUDE.md itself calls dominant. Enforce it or delete it — a week either way, and
-it is currently nobody's.
+CLAUDE.md itself calls dominant. Enforce it or delete it — either way it is currently nobody's.
 
 ### The frontend has no test runner, and three clusters wrote criteria against one
 
@@ -153,7 +152,7 @@ whatsoever. "Every part needs to function as expected" does not survive that.
 ---
 ## Part 3 — The work, by cluster
 
-**58 workstreams · 343 criteria that can fail.** Each carries what it is in plain
+**59 workstreams · 348 criteria that can fail.** Each carries what it is in plain
 language, why Aleph needs it, how, criteria, a review step and an iteration step.
 
 Ids are prefixed `WS-` deliberately: the completeness critic found that bare ids like
@@ -192,7 +191,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation test the whole path. Rebind a project's embedding to a nonsense model id, re-run ingest, and confirm four things fail as designed: the gateway acceptance check exits 1, chunks are still written (lexical search still answers), the AgentRun ends 'failed' with error text, and the assistant says 'degraded'.
 <br>**Iterate.** v2 turns degradation into a first-class state rather than a boolean: RetrievalIndexRecord.state in {lexical_only, embedded, stale}, rendered on the PipelineStrip with a Reindex action, plus a startup reconciliation sweep that fails any AgentRun still 'running' past a deadline. That converts a class of silent worker hangs — not only this one — into visible state.
-<br>**Effort.** 4-5 days. The reorder plus the nullable-embedding migration is ~1 day; fail-loud plus the backfill job ~1 day; · **Depends on:** —
+<br>**Depends on:** —
 <br>**Risk.** Making `embedding` nullable weakens an invariant the HNSW index assumes — pgvector will simply not index NULL rows, which is what we want, but ordering by cosine_distance over a NULL column is undefined, so the explicit filter in (c) is load-bearing and must be tested, not assumed. Second risk: autoconfigure on project creation adds a network round-trip to a hot path;
 
 
@@ -219,7 +218,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation: revert the ON CONFLICT upsert to the plain SELECT and confirm the concurrency test fails with IntegrityError on uq_wiki_rev_page_no; remove with_for_update() and confirm the version-number test fails; restore both and confirm green. Then run the ingest workflow against two sources that mint the same topic title, 20 times, and confirm zero 500s in the API log.
 <br>**Iterate.** v2 generalises the retry helper across the other max+1 sites in the codebase and adds a sweep that flags any `max(...) + 1` computed outside a row lock. Once RS8 moves claim writes off commit_revision entirely, the retry can be deleted and only the lock remains.
-<br>**Effort.** 2-3 days. The fix itself is ~30 lines and half a day. The real work is the concurrency test harness: eight genuinely concurrent sessions against real Postgres,… · **Depends on:** —
+<br>**Depends on:** —
 <br>**Risk.** `ON CONFLICT DO NOTHING RETURNING` returns no row on conflict, so the follow-up SELECT FOR UPDATE must be in the same transaction and can still deadlock under heavy fan-out — the retry must be bounded, not a loop. Second risk: holding a page row lock across a long commit serialises ingest if any caller holds it across a model call;
 
 
@@ -246,7 +245,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation: point the OpenAlex base URL at a stub that always returns 400 and confirm the route returns 4xx with the upstream reason rather than 503; point it at a stub that always returns 429 and confirm 503 plus Retry-After; set the token bucket rate to 0.01 and confirm the fan-out probe fails on the deadline rather than hanging. Restore each and confirm the probe passes.
 <br>**Iterate.** v2 moves the token bucket into Redis so the limit is per-deployment rather than per-process (it is per-process today, so two API replicas silently double the rate), and adds a per-host circuit breaker that opens after N consecutive failures and reports 'OpenAlex is unreachable' on the pipeline strip instead of failing every individual query.
-<br>**Effort.** 3-4 days. Status mapping and its tests ~1 day; deadline-based retry ~half a day; configurable buckets plus single-flight plus the fan-out probe ~1.5 days; · **Depends on:** —
+<br>**Depends on:** —
 <br>**Risk.** Raising the rate limit risks getting the deployment's mailto address blocked — OpenAlex's polite pool is 10 req/s with a mailto, so 1 req/s is over-conservative, but the ceiling must stay configurable and default conservative, and the change must be validated against the real service, not a stub.
 
 
@@ -275,7 +274,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation across three layers. Flip `or_tsquery` back to `plainto_tsquery` at retrieval.py:98 and confirm the CI eval job fails on the recall floor; restore. Delete one tests/e2e file and confirm acceptance reports FAIL, not SKIP; restore.
 <br>**Iterate.** v2 records every eval run into the existing Dataset / DatasetVersion / Observation tables in aleph-datasets, so the number has a history and a regression is a visible trend rather than a single boolean, and publishes it on a health pane. That also gives the self-improving-harness thesis its first real feedback signal: the agent can see whether its own changes moved the number.
-<br>**Effort.** ~1 week. Rewriting four end-to-end files against current code is 2-3 days and is the bulk — some assertions describe behaviour the harness reset changed, so the… · **Depends on:** WS-RS1
+<br>**Depends on:** WS-RS1
 <br>**Risk.** Checked-in embeddings pin one embedding model; if the default embedder changes, the baseline silently measures something else. Mitigate by recording the model id in baseline.json and failing loudly on mismatch. Second risk: the deleted tests are being rewritten from the acceptance script's node ids, which describe the pre-reset design — some parts may no longer be the right ass…
 
 
@@ -304,7 +303,7 @@ at the right file and the wrong row.
 
 **Review.** Establish run-to-run variance first by running the eval five times with different chunk orderings and recording the spread. Then mutation-test the set itself: shuffle 10% of the gold labels and confirm every metric moves by more than that variance; reverse the fused ranking and confirm nDCG@10 collapses to near zero.
 <br>**Iterate.** v2 splits the set into a public dev half and a held-out half that only CI sees, so tuning in RS6 and RS10 cannot overfit the number the gate reports. Add a per-question failure report so a regression names the specific question that broke rather than moving an aggregate.
-<br>**Effort.** 1.5-2 weeks, and most of it is data work rather than code. The metric implementations are 1-2 days. · **Depends on:** WS-RS4
+<br>**Depends on:** WS-RS4
 <br>**Risk.** The largest risk is labelling with a model and then measuring a model: the labels become an agreement score, not a correctness score. Budget a human pass over every multi-hop and unanswerable question specifically. Second risk: corpus licensing — every document must be redistributable, with a NOTICE, or the repository cannot ship the set.
 
 
@@ -335,7 +334,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation on all three legs. Bind Capability.RERANK to a stub that returns the reversed order and confirm nDCG@10 collapses — that proves the reranker's output is actually consumed rather than computed and dropped. Set hnsw.ef_search to 1 and confirm the row-count test fails. Strip section_path from the contextual text and confirm the eval drops measurably. Restore each and confirm the numbers return.
 <br>**Iterate.** v2 measures whether the LLM listwise reranker earns its latency on the request path — the agent runs in-process inside FastAPI, so a two-second rerank is two seconds of user-visible delay. If it does not, move it behind a 'deep' flag and keep the fast path fusion-only. Then evaluate query decomposition and HyDE against the same set;
-<br>**Effort.** ~2 weeks. Rerank interface plus two backends plus discovery wiring: 4-5 days. Contextual embedding plus reindex: 2-3 days. · **Depends on:** WS-RS1, WS-RS5
+<br>**Depends on:** WS-RS1, WS-RS5
 <br>**Risk.** The deployed gateway serves no reranker, so the primary backend cannot be validated against the real deployment and the LLM fallback is the one that will actually run — it is slower and non-deterministic, which is a latency and reproducibility risk on the in-process agent path.
 
 
@@ -364,7 +363,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation: restore the title-only listing and confirm the prompt-content test fails; make ground() always return a span and confirm the fabricated-quote test fails; remove the source_id kwarg and confirm the NULL-anchor query goes non-zero. Restore each.
 <br>**Iterate.** v2 adds a claim-level verification pass — does the sentence the citation is attached to actually follow from the quote? — as a reviewer in aleph-reviewer, and wires the DeepResearch Bench adapter that already exists and is imported by nothing (packages/aleph-evals/src/aleph_evals/adapters/deepresearch_bench.py:40 currently scores passed = status == 'completed', which measures liveness, not quality).
-<br>**Effort.** ~2 weeks. Rewriting _node_compose around an evidence pack: 3-4 days. Real citation verification including every failure path: 3-4 days. · **Depends on:** WS-RS1, WS-E2
+<br>**Depends on:** WS-RS1, WS-E2
 <br>**Risk.** Sending retrieved chunk text instead of a title list multiplies the compose prompt's token count by one to two orders of magnitude — cost and context-window pressure become real, and the evidence pack needs a hard budget with a documented selection policy rather than 'send everything'.
 
 
@@ -395,7 +394,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation on four axes. Make ground() return a span for everything and confirm the fabricated-quote test fails. Replace claim_key with a random uuid and confirm the identity test fails and that re-ingesting doubles the claim count. Remove the blocking from propose() and confirm the bounded test times out. Delete the trust-tier weighting and confirm WELL_SUPPORTED becomes unreachable again. Restore each.
 <br>**Iterate.** v2 has the extractor read the RS6-reranked chunks rather than the document in order, so it sees the most relevant passages first. Then add contradiction detection: nothing in the tree has ever written a 'contradicts' stance (all 786 citations are 'supports'), and without it CONTESTED is unreachable and the belief layer is only a citation index. Contradiction is what makes it a web of belief.
-<br>**Effort.** ~3 weeks, and it is the largest item in the cluster. The extractor plus its prompt and quality loop is a week alone. · **Depends on:** WS-RS1, WS-D1
+<br>**Depends on:** WS-RS1, WS-D1
 <br>**Risk.** The extractor is an LLM step whose output quality determines everything downstream, and there is no eval for extraction quality — build one (precision and recall of extracted claims against a hand-labelled set of 20 documents) or this ships unmeasured, which is exactly the failure mode the rest of this plan exists to correct.
 
 
@@ -424,7 +423,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation: add a seventh member to the Python enum without regenerating the catalog and confirm the sweep exits 1; delete the derived_from write and confirm the two-hop retraction test fails; drop the trust-tier weight back to 1.0 and confirm the WELL_SUPPORTED test fails; add an unhandled member and confirm pnpm build fails. Restore each.
 <br>**Iterate.** v2 adds declined branches to the retraction walk — a human saying 'this retraction does not affect this claim' — and surfaces the blast radius in the GroundingSurface pane, so it is something a person looks at rather than something an endpoint returns. That is what makes retraction a workflow instead of a query.
-<br>**Effort.** ~1 week. Enum unification and the sweep: 2-3 days. The derived_from producer plus the two-hop test: 2-3 days. Weight change plus its data migration: 1-2 days. · **Depends on:** WS-RS7, WS-RS8
+<br>**Depends on:** WS-RS7, WS-RS8
 <br>**Risk.** Recomputing confidence for 786 existing claims changes what the interface shows for every one of them, and some may reflect human judgement — the migration must skip origin='user' rows or it silently overwrites the one thing the belief design promises is immutable.
 
 
@@ -453,7 +452,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation: zero out the claim embeddings and confirm --surface claims recall collapses; remove the graph hop and confirm the multi-hop category drops (and if it does not, report that honestly and delete the hop). Restore. Crucially, run the final comparison against the held-out split from RS5's iteration step, never the dev split, because this number decides a structural change and the incentive to tune it is real.
 <br>**Iterate.** v2: if claims lose to passages, the correct next move is not to keep tuning claims — it is a hybrid that retrieves claims and then descends to their evidence chunks, which is what a knowledge graph is actually for. Measure that as a third surface before anyone decides to delete the wiki.
-<br>**Effort.** ~1.5 weeks. search_claims plus the graph hop: 4-5 days. Eval surface flag plus metrics plumbing: 2 days. Agent and assistant consumers: 2-3 days. · **Depends on:** WS-RS5, WS-RS8
+<br>**Depends on:** WS-RS5, WS-RS8
 <br>**Risk.** The entire wiki-deletion decision rides on this one number, so the structural temptation is to tune the eval until claims win. Mitigate by freezing the RS5 set and its baseline before search_claims is written, and by having the held-out split cast the deciding vote.
 
 
@@ -482,7 +481,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation: swap the layout normalizer back to pypdf across the fixture set and confirm the first three criteria fail. Feed a scanned image-only PDF and confirm it is flagged and routed rather than silently ingested as a near-empty document — today a scan produces a flag nobody reads and an empty body nobody notices.
 <br>**Iterate.** v2 extracts tables into aleph-datasets Observation rows so a table in a paper becomes queryable data rather than markdown, and treats figure captions as separately retrievable units. That is where a structure-aware ingest starts paying compound interest.
-<br>**Effort.** ~2 weeks, and this is the item most likely to grow. Evaluating three parsers honestly on a fixture set: 3-4 days. · **Depends on:** WS-RS1, WS-RS5
+<br>**Depends on:** WS-RS1, WS-RS5
 <br>**Risk.** Docling and Marker pull heavy ML dependencies including torch into the worker image, which means a large container, a slow cold start, and partial tension with the 'Aleph serves no models' principle. GROBID as a compose service keeps the model out of Aleph's image but adds an operational component to run and monitor.
 
 
@@ -511,7 +510,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation: remove `type` from one page's frontmatter and confirm the OKF validator exits 1; point a wikilink at a title that does not exist and confirm the exporter reports a dangling link rather than emitting a broken one; add a 17th lint check and confirm the count sweep fails. Restore each. Then the manual step that is the actual claim being made: open the exported vault in Obsidian and follow three links.
 <br>**Iterate.** v2 makes the export continuous — a worker that keeps a git repository of the vault in sync, so 'durable agent context' becomes a directory a human can edit and Aleph re-ingests. That is the OpenWiki shape and it is the version worth having; a one-shot zip is the stepping stone, not the destination.
-<br>**Effort.** ~1.5 weeks. Exporter, route and zip packaging: 4 days. Two dialects, OKF frontmatter and the checked-in validator: 3 days. · **Depends on:** —
+<br>**Depends on:** —
 <br>**Risk.** The wiki is under removal per docs/decisions.md D1, so an exporter written against WikiPage and WikiRevision may need rewriting against claims within months. Mitigate by exporting from a small view model rather than the ORM directly, so the source can be swapped without touching the format code. Second risk: OKF v0.1 is a young specification and will change;
 
 
@@ -543,7 +542,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation on the gate itself, which is the only honest way to check a gate. Break one real thing per check and confirm the corresponding row goes red: delete `blast_radius`'s call in `scripts/_acceptance/kernel_boot.py:75` and confirm A2 fails; rename a component in `catalog.json` without regenerating and confirm `check-catalog-generated.sh` fails;
 <br>**Iterate.** v2 makes a SKIP expensive rather than free: the gate records how many parts were skipped on `main` and fails the build if that number grows, so "unrunnable here" stops being a place features go to hide. v3 adds a per-check timestamp of the last time each check was observed to FAIL — a check nobody has ever seen fail is the thing CLAUDE.md warns about, and the gate should be able to name its own untested checks.
-<br>**Effort.** 2 days. The CI job is an hour; correcting the doc rows honestly means reading each cited test, which is the bulk of it. · **Depends on:** —
+<br>**Depends on:** —
 <br>**Risk.** Low technically, uncomfortable politically: turning the gate on will make several currently-green parts go red or skip, and the honest response is to let them, not to soften the check. Also, adding acceptance.sh to CI lengthens the build; if it becomes slow enough that people start skipping it, the gate is worse than before.
 
 
@@ -570,7 +569,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation, three passes. (a) Delete the deny rule and re-run criteria 1 and 2 — both must go red. Restore. (b) Insert an `mode="allow"` rule for `/skills/**` *ahead* of the deny and confirm criterion 1 goes red — this proves the check is reading the effective ordering rather than merely the presence of a `permissions=` kwarg. Restore.
 <br>**Iterate.** v2 turns the blanket deny into the governed path: writes are permitted into `/skills/authored/**` only, and every such write appends an `ActionLedgerEvent` — that is workstream H1. v3 widens the sweep from one call site to a rule: no new `FilesystemBackend(` rooted at any directory under `apps/` may appear anywhere, because the underlying mistake was pointing a read-write backend at the application's own source tree,…
-<br>**Effort.** 1 day. The permission plumbing is about ten lines. The test needs to drive the real middleware tool rather than the backend directly — that distinction matters… · **Depends on:** —
+<br>**Depends on:** —
 <br>**Risk.** `FilesystemMiddleware.__init__` raises `NotImplementedError` when permissions are combined with an execution-capable backend whose rule paths fall outside a CompositeBackend route (filesystem.py:690-702). `"/skills/**"` starts with the existing `/skills/` route prefix so `_all_paths_scoped_to_routes` returns True today, but if a future backend gains execution support this becom…
 
 
@@ -599,7 +598,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation, four passes, each restoring after. (a) Remove the `unregister` call from `install`'s except branch → criterion 1 red. (b) Return `plugin_id=None` from `disable` again → criterion 3 red. (c) Let `unregister` accept an ACTIVE capability → criterion 4's second test red. (d) Move the `protected` check below the `_mounted.pop` → criterion 4's first test red.
 <br>**Iterate.** v2 adds `Kernel.quarantine(plugin_id)`: a plugin that fails `check_health` twice moves to a FAILED-and-unregistered state with the reason retained, and `inspect()` reports it — so the agent can see its own graveyard instead of reinstalling the same broken thing in a loop.
-<br>**Effort.** 2 days. The kernel is small, has no I/O and is already well tested; most of the time goes into writing the four tests that should have existed, not into the cod… · **Depends on:** —
+<br>**Depends on:** —
 <br>**Risk.** `unregister` takes a `name`, not a `PluginId`. The kernel's primary guardrail is that core capability has no addressable id — "deactivating core capability is not refused, it is unexpressible" (kernel.py:41-49). A name-addressed method sidesteps that, so the `protected` check inside `unregister` is the only defence and it must ship with its own test.
 
 
@@ -630,7 +629,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation. (a) Comment out the install call inside the reconstitution loop → criterion 1 red. (b) Move the ledger append outside the transaction and force a rollback → criterion 2 red. (c) Replace `skill_from_source` with a bare `exec` → criterion 3 red, which is what proves the gate is on the real path and not merely present in the tree.
 <br>**Iterate.** v2 removes the restart requirement for the worker: a Redis pub/sub channel the worker subscribes to, calling the same `PluginService.install`, so a plugin installed in the API is live in the worker within seconds rather than at next deploy.
-<br>**Effort.** 2 weeks, and it should be planned as a fortnight rather than squeezed. The table and the service are about three days; the loader integration is two; · **Depends on:** WS-A1a
+<br>**Depends on:** WS-A1a
 <br>**Risk.** The highest risk in this plan, and it must be decided before the work starts rather than during. `skill_from_source` calls `exec` on agent-authored code inside the API process (skills.py:117), and the module's own docstring is honest that the gate secures *loading*, not *execution* (skills.py:23-28) — once a helper is called it runs with the API process's full authority, includ…
 
 
@@ -661,7 +660,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation. (a) Make `preview_removal` return an empty list unconditionally → criterion 3 red. (b) Make `inspect()` hand out a `plugin_id` for protected specs → criterion 4 red *and* `scripts/_acceptance/kernel_boot.py` goes red independently, since it already asserts zero manifest capabilities are agent-addressable (:77-82) — two witnesses for the guardrail is the point.
 <br>**Iterate.** v2 makes the refusal actionable rather than merely correct: instead of "refused, would also stop X and Y", return the ordered plan the agent could execute, since `deactivate` already computes the teardown order (kernel.py:342-344). v3 renders the blast radius as an A2UI surface in the plugins pane — the kernel already computes the graph, so this is a projection, not new logic.
-<br>**Effort.** 1 week. Tools and routes are two days; the honest tests, the role gate and the pane are the rest. · **Depends on:** WS-A1b
+<br>**Depends on:** WS-A1b
 <br>**Risk.** An agent tool that installs code is a privilege the assistant did not previously have, reached over a chat endpoint. The existing `middleware/agent_scope.py` and `_authorized` bound *which project* a request may touch, not *what authority* it carries.
 
 
@@ -690,7 +689,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation. (a) Drop `/skills/authored` from the `skills=` list, leaving one source → criterion 1 red. This is the specific failure the "two sources, not one" correction exists to catch, and it is invisible without a test. (b) Point `_authored_namespace` at a constant tuple instead of the per-project callable → criterion 4 red. (c) Remove the metadata-clearing middleware → criterion 2 red.
 <br>**Iterate.** v2 adds the review gate that arguably belongs in v1: an authored skill is written in `state="proposed"` and enters the agent's own metadata only after an operator approves it in the plugins pane, reusing the ApprovalCard flow that already exists.
-<br>**Effort.** 4 days. The backend routing is half a day. The metadata-invalidation middleware and the project-scope tests are the real work, and the ledger wiring is half a d… · **Depends on:** WS-K1, WS-A1b
+<br>**Depends on:** WS-K1, WS-A1b
 <br>**Risk.** An authored skill is an instruction the model will follow, and its content can originate in a document the agent ingested. The AST gate covers `kernel.py` and cannot inspect prose — skills.py:23-28 says so plainly.
 
 
@@ -719,7 +718,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation. (a) Remove `TextField` from `ALEPH_CARD_IMPLS`'s effective set in the render catalog → criteria 1 and 2 go red from opposite directions, which is what proves they are independent checks rather than the same check twice. (b) Unregister `plugin.settings.save` → criterion 4 red. (c) Hand-edit `catalog.generated.ts` → `check-catalog-generated.sh` red.
 <br>**Iterate.** v2 moves delivery from build-time to run-time: the browser provider already pushes its catalog schema as run context under `A2UI_SCHEMA_CONTEXT_DESCRIPTION`, which is the "bring your own catalog" direction the stack intends, and taking it deletes `apps/copilot-runtime/src/catalog.generated.ts` and half of `check-catalog-generated.sh`.
-<br>**Effort.** 4 days. Generating from the render catalog is a day; the catalog.json additions, the action handler and the settings-surface consumer are the rest. · **Depends on:** —
+<br>**Depends on:** —
 <br>**Risk.** `extractCatalogComponentSchemas` needs the live catalog object, which means a build-time script has to import a `.tsx` module that pulls in React components. If that import chain proves unrunnable outside Vite, the fallback is a Vitest-driven extraction step, or skipping straight to the run-time delivery described in the iteration step.
 
 
@@ -748,7 +747,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation. (a) Remove the collision check → criterion 2 red. (b) Give two plugin catalogs the same id → criterion 4's second clause red. (c) Drop the pane's `requires` declaration → criterion 5 red, and this is the important one, because it proves the kernel is genuinely reading the declaration graph rather than the test asserting a constant. Restore each.
 <br>**Iterate.** v2 adds a snapshot test pinning each published catalog's component names and prop types within a major version, so removing or re-typing a component forces a `@2` rather than silently breaking every surface created before the change — the stability rule that nothing currently enforces.
-<br>**Effort.** 1.5 weeks. Python-side catalog assembly and the collision check are three days; the TypeScript multi-catalog plumbing, the chat merge-and-remount, and the rewri… · **Depends on:** WS-A1b, WS-A3a
+<br>**Depends on:** WS-A1b, WS-A3a
 <br>**Risk.** The chat renderer accepts one catalog, so per-plugin isolation in chat is a merge — and a merge is precisely where the silent-overwrite hazard lives. The collision check must run on the merged chat catalog too, not only on the per-pane catalogs, or the isolation guarantee holds in panes and quietly fails in chat.
 
 
@@ -777,7 +776,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation. (a) Move Aleph's rubric-source middleware *after* `RubricMiddleware` in the list → criterion 1 must go red. This is the one that matters, because it converts the hook-ordering assumption into something proven rather than believed. (b) Construct `RubricMiddleware(max_iterations=21)` → must raise `ValueError` from the library's own cap check (rubric.py:365-370).
 <br>**Iterate.** v2 lets a plugin or a skill declare its own rubric, so the standard travels with the ability instead of being a single global setting — that is what makes H1's authored skills evaluable at all. v3 records every `RubricEvaluation` as rows via the library's `on_evaluation` callback (rubric.py:337-345), turning "is the agent getting better at this task" from an impression into a query.
-<br>**Effort.** 4 days. The middleware itself is an afternoon. One day goes to the hook-ordering and plumbing unknown, one to the cost wiring, and the rest to the tests — sever… · **Depends on:** WS-A1b
+<br>**Depends on:** WS-A1b
 <br>**Risk.** `RubricMiddleware` is marked `@beta` (rubric.py:296), so its API can move under us. The concrete operational risk is larger: each iteration is a full agent turn, so a rubric the grader can never satisfy turns one user message into `max_iterations + 1` complete turns plus grader calls. Backlog E5 already reports unexplained gateway rate limiting attributed to subagent fan-out.
 
 
@@ -809,7 +808,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation testing in both directions. (a) Delete the `except Exception` block from the new route and confirm `test_graph_exception_yields_run_error` fails; restore. (b) Delete the terminal latch and confirm `test_no_events_after_terminal` fails; restore.
 <br>**Iterate.** Second pass classifies the failure instead of just reporting it: map exception types to stable codes (`PermissionDenied` → `forbidden`, `httpx.TimeoutException` → `upstream_timeout`, `openai.RateLimitError` → `rate_limited`, anything else → `internal`) and put the code alongside the message in the RUN_ERROR payload.
-<br>**Effort.** 1.5 days. The code being replaced is 40 lines and fully read; the work is the tests and the per-request config plumbing, not the route. · **Depends on:** —
+<br>**Depends on:** —
 <br>**Risk.** Low, and bounded. The risk is behavioural drift from upstream: if `ag_ui_langgraph` changes `LangGraphAgent.run()`'s contract, Aleph now owns the wrapper and must follow. Mitigated by keeping the wrapper to the three additions above and continuing to call `agent.run()` unchanged — Aleph owns the envelope, never the event translation.
 
 
@@ -836,7 +835,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation testing, three probes. (a) Remove `AlephAgentMiddleware` from the orchestrator's `middleware=` list and confirm `check-agent-middleware.sh` and `test_permission_denied_becomes_tool_message` both fail; restore. (b) Remove it from exactly one subagent dict and confirm the sweep fails naming that file; restore.
 <br>**Iterate.** Second pass makes the error message useful to the model rather than merely non-fatal: include the tool name, the argument that was rejected, and a suggested next action per exception class (`NotFound` on a slug → 'call search_wiki first and use the page_id it returns').
-<br>**Effort.** 4 days. One day for the middleware and its unit tests, one to attach and sweep across six subagent builders, half a day for the browser handlers, half for searc… · **Depends on:** WS-E1a
+<br>**Depends on:** WS-E1a
 <br>**Risk.** Medium. The real risk is over-catching: swallowing a `PermissionDenied` and handing the model a friendly sentence must not become a way for the agent to keep probing a project it has no access to. Mitigate by making the guard re-raise nothing but still emitting a ledger-visible event for authorization failures (C3a records it), and by keeping `test_agent_project_authorization.p…
 
 
@@ -863,7 +862,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation testing plus a load probe. (a) Set `max_size` back to 1 and confirm `test_pool_max_size_is_not_one` fails; restore. (b) Make the backoff sleep a no-op and confirm `test_rate_limit_is_retried_with_backoff` fails on the sleep assertion; restore.
 <br>**Iterate.** Second pass adds a concurrency ceiling with a queue rather than only retrying: a semaphore around the model call sized from settings, so a six-way subagent fan-out issues a bounded number of concurrent gateway requests instead of all of them at once. Retry is what you do after being rate limited; a ceiling is what stops you getting there. Pair it with the counting probe so the before/after is a number.
-<br>**Effort.** 2 days. The pool and timeout changes are hours; the retry middleware and its clock-mocked tests are a day; the counting probe is half a day. · **Depends on:** WS-E1b
+<br>**Depends on:** WS-E1b
 <br>**Risk.** Medium-low. Raising the pool ceiling raises Postgres connection pressure in a process that already runs a 10+20 SQLAlchemy engine — check `max_connections` on the compose Postgres before picking a default, or the fix moves the failure rather than removing it.
 
 
@@ -892,7 +891,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation testing on the plumbing, because that is where this silently breaks. (a) Change the middleware to read `agent_run_id` from `metadata` instead of `configurable` and confirm `test_subagent_attribution` fails — this is the exact trap that made D2's `agent_run_id` permanently NULL, and the test must be able to catch it.
 <br>**Iterate.** Second pass adds the state the timeline needs to be readable rather than merely complete: record the agent's plan (`write_todos`) transitions as events so the Inspector can show intent next to activity, and add a per-run rollup (`tool_count`, `token_total`, `wall_ms`, `failure_code`) onto `AgentRun.result_payload` so the run list does not require aggregating events client-side.
-<br>**Effort.** 5 days. Two days for the run lifecycle and its integration tests against live Postgres, two for the event emission and subagent attribution across the middlewar… · **Depends on:** WS-E1a, WS-E1b
+<br>**Depends on:** WS-E1a, WS-E1b
 <br>**Risk.** Medium. Write amplification is the real one: a chatty turn could emit dozens of events, each currently written through its own short-lived session by design (repos/agent_events.py docstring), and that pattern was sized for worker phases (a handful per job), not per-tool-call chat. Measure event count per turn before shipping and batch if needed.
 
 
@@ -921,7 +920,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation testing against the exact failure shape that produced this hole. (a) Revert the `agent_run_id` read back to `metadata.get('agent_run_id')` and confirm `test_run_id_is_populated` fails — this proves the test catches the configurable/metadata distinction that made the field NULL for the whole life of the feature. (b) Delete the failed-call recording and confirm `test_failed_call_is_still_recorded` fails.
 <br>**Iterate.** Second pass turns attribution into a budget: a per-project spend ceiling checked in `awrap_model_call` before the call, which refuses (or downgrades the model) rather than silently overspending, and surfaces remaining budget on the Inspector's run header. That is the thing the recorded data is actually for; recording without a control loop is bookkeeping.
-<br>**Effort.** 3 days. One day to move costing onto the hook and rewrite the two defect-pinning tests, one for the dev-principal removal and its integration test (this touches… · **Depends on:** WS-C3a
+<br>**Depends on:** WS-C3a
 <br>**Risk.** Medium. Removing `_dev_principal` from `_read_wiki_impl` changes who the retrieval router runs as, and the router is legacy wiki code under removal — there is a real chance the real principal lacks something the dev principal implicitly had, which will show up as a permission failure in the retriever subagent rather than at the change site.
 
 
@@ -950,7 +949,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation testing on the two seams that fail silently here. (a) Rename one prop in `inspector_surface_v09` without updating the client zod schema and confirm `check-surface-bindings.sh` fails naming it — this is the sweep that exists because the wiki surface once shipped ten categories the client never declared; restore.
 <br>**Iterate.** Second pass makes it a debugging instrument rather than a log viewer: filter the timeline by subagent and by outcome, show the model's arguments and the tool's return side by side (truncated with expand), add a copy-as-report action that produces a pasteable failure summary, and link a run's cost rows (D2) into the run header so 'what did this turn cost' is answerable in the same place as 'what did it do'.
-<br>**Effort.** 8-10 days, and this is the one to be honest about. Three days server-side (registry, param generalization, surface builder, integration tests), two on the catal… · **Depends on:** WS-C3a
+<br>**Depends on:** WS-C3a
 <br>**Risk.** Medium. The pane parameter generalization touches the parser every existing pane goes through, including the grounding pane whose claim id currently arrives mislabelled as `page_id` — that migration must be done in the same change or grounding breaks silently, which is exactly the failure mode `check-surface-bindings.sh` was written for.
 
 
@@ -977,7 +976,7 @@ at the right file and the wrong row.
 
 **Review.** Two-stage, because the dependency and the feature fail differently. Stage one is a revert drill: bump the dependency on a branch, run every gate, and confirm the exact command to go back (`uv sync` with the old pin) restores a green suite — a dependency bump you cannot cheaply undo is not a step, it is a commitment.
 <br>**Iterate.** Second pass moves Aleph's own fan-out-shaped work onto it: the reviewer subagent's per-page lint sweep and the researcher's per-paper DOI verification are both loops the model currently drives one call at a time, and both have hard coverage requirements.
-<br>**Effort.** 4 days if the dependency bump is clean: one day for the spike and full-gate run, one for wiring and unit tests, one for the prompt guidance and fixture task, on… · **Depends on:** WS-E1b, WS-E1c
+<br>**Depends on:** WS-E1b, WS-E1c
 <br>**Risk.** High relative to the rest of this cluster, and the highest here. It is the only new runtime dependency in the plan, it is marked beta upstream, and it pulls a JavaScript engine into the API process — which is the same process that hosts the agent in-band with every HTTP request, so a hang or a memory leak in the sandbox is an API outage, not a degraded feature.
 
 
@@ -1006,7 +1005,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation testing plus a failure drill. (a) Make the worker ignore the cancellation flag and confirm `test_cancel_stops_the_job` fails; restore. (b) Break the parent link and confirm `test_parent_link` fails; restore. (c) Failure drill: kill the arq worker while a background run is in flight and confirm the run does not sit at `running` forever — either a heartbeat marks it stale or a startup reaper resolves it;
 <br>**Iterate.** Second pass replaces polling with a push: when a background run terminates, emit into the conversation rather than waiting to be asked — the `/agent-events` broker already wakes on a Postgres NOTIFY the instant a row commits (routes/agent_events.py docstring), so the notification path exists and only needs a consumer that reaches the chat surface.
-<br>**Effort.** 6-8 days. Two days for the three tools and their routes, two for cancellation done properly (a flag the worker honours between phases, plus the ledger rows), on… · **Depends on:** WS-C3a, WS-C3b
+<br>**Depends on:** WS-C3a, WS-C3b
 <br>**Risk.** Medium. Cancellation is the hard part and the easiest to fake: a flag nobody checks looks identical to a flag that works until you test it, which is why the drill above is a criterion rather than a nicety. Second risk: this adds a general 'the agent can dispatch background work' primitive, and without the concurrency cap in the iteration step that is a way for a confused agent…
 
 
@@ -1040,7 +1039,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation testing on all three mechanisms, each reverted after the check. (a) Remove the pricing= argument from the lifespan bind_runtime call and confirm the new production-wiring test fails. (b) Restore 'self._source = other._source' in PricingTable.merge and confirm the two-provenance test fails.
 <br>**Iterate.** v2 turns the number into something an operator sees rather than something an auditor could reconstruct: GET /v1/projects/{id}/cost gains a breakdown by pricing_source, so the answer reads '$12.40 gateway-priced, $3.10 asserted from hints, $0.00 across 4 unpriced models' and unpriced spend becomes a figure on a screen instead of an ERROR line in container logs.
-<br>**Effort.** About a week. Items 1, 4 and 5 are roughly a day each. Item 2 is the real work: ModelPricing is a frozen dataclass consumed by pricing.py, client.py and the cos… · **Depends on:** —
+<br>**Depends on:** —
 <br>**Risk.** The background refresh task is the risk, not the pricing maths. The models capability is protected = true in both boot manifests (apps/api/aleph.toml:36-40 and apps/workers/aleph.toml), so a refresh task that does not cancel cleanly stops BOTH processes from exiting. Cancel with a timeout and assert shutdown completes inside scripts/_acceptance/kernel_boot.py.
 
 
@@ -1069,7 +1068,7 @@ at the right file and the wrong row.
 
 **Review.** One mutation per criterion, each restored afterward. Raise ALEPH_GATEWAY_MAX_CONCURRENCY above the burst size and confirm the concurrency test fails. Delete the Retry-After parse and confirm the wait test fails. Revert the 429 branch in probe_model and confirm the binding test fails. Point /readyz back at litellm.health() and confirm the one-request test fails.
 <br>**Iterate.** v1 bounds request COUNT. v2 bounds SPEND: the limiter reads the per-project cost total MEP-1 makes trustworthy and refuses to start a new agent turn once a project's configured budget is exhausted, returning a message the assistant can say out loud rather than surfacing someone else's 429.
-<br>**Effort.** A week and a half. The limiter capability plus the two non-agent call sites is three days. · **Depends on:** —
+<br>**Depends on:** —
 <br>**Risk.** The highest risk in the cluster is item 1's agent half. Passing a custom http_async_client to ChatOpenAI bypasses the openai SDK's own connection management, and its max_retries=2 (copilot_agent.py:1505) then stacks on top of the limiter's queueing — a request waiting for a token can be retried by the SDK while still queued, doubling the queue depth under exactly the conditions…
 
 
@@ -1096,7 +1095,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation on the sweep first, since it has the most leverage: add a line to docs/operations.md referencing deploy/does-not-exist/, confirm docs_claims.py exits non-zero AND names the file and line number rather than just failing, then remove it.
 <br>**Iterate.** v2 promotes the fake into a conformance suite: one parametrised test running Aleph's entire model path against three endpoint profiles — a full-metadata gateway, an ids-only restricted-key gateway, and an ids-only gateway with no hints available — asserting what Aleph does in each.
-<br>**Effort.** Three to four days, and the cheapest thing in the cluster. The fake app is a day and a half, the failure modes another day, the docs sweep and the doc edits a d… · **Depends on:** —
+<br>**Depends on:** —
 <br>**Risk.** Low, with one trap worth naming: a fake that is too permissive silently weakens every test built on it. Guard against that by making the fake's DEFAULT configuration the hostile one — restricted key so /model/info 403s, no rates reported — so a test wanting a well-behaved gateway has to ask for it explicitly.
 
 
@@ -1127,7 +1126,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation on the isolation guarantee first, because that is the one that becomes a security incident if it regresses: make the resolver ignore its cache key and always return the default client, confirm BOTH the disjoint-model-list test and the request-counter test fail, restore. Then mutation on redaction: return the decrypted key in the output schema and confirm the leak test fails.
 <br>**Iterate.** v1 scopes an endpoint to a project. v2 adds ordered fallback: a list of endpoints per capability, so when the primary answers 429 or 503 the resolver moves to the next and records which endpoint served each ModelCall. That converts MEP-2's limiter from a brake into a router, and it is the point where 'connect to any OpenAI-compatible endpoint' becomes 'survive one of them going down' — which is the difference between…
-<br>**Effort.** Two and a half to three weeks, and the largest item in the cluster. Table and migration: one day. · **Depends on:** WS-MEP-1, WS-MEP-2, WS-MEP-3
+<br>**Depends on:** WS-MEP-1, WS-MEP-2, WS-MEP-3
 <br>**Risk.** Three real ones. (1) Secret migration: existing ConnectorCredential rows are encrypted under sha256(agent_token_secret || project_id) with no key id, so the migration must re-encrypt under the new key inside a transaction and must be reversible, or a failed deploy destroys every connector credential in the deployment. Write and TEST the down-migration.
 
 
@@ -1156,7 +1155,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation on the leak check first, because it is the one with consequences: temporarily have the API return the plaintext key, confirm the Playwright secret-interception assertion fails, revert. Then mutation on reachability: force reachable: true for every model and confirm the disabled-option test fails.
 <br>**Iterate.** v2 moves this off the slide-over drawer and onto the board as a settings pane (backlog B1), where per-plugin settings cards have to land anyway. That is also the moment packages/aleph-a2ui/src/aleph_a2ui/settings_card.py gets its first consumer — a 279-line JSON-Schema-to-A2UI settings-surface generator with a 194-line test suite and, verified by grep, ZERO importers outside its own tests, whose canonical test fixtur…
-<br>**Effort.** Four to five days. Form, list and probe wiring: two days. Write-only key handling and redaction: half a day. · **Depends on:** WS-MEP-4
+<br>**Depends on:** WS-MEP-4
 <br>**Risk.** Moderate, mostly about placement. Drawers.tsx is 742 lines and the backlog calls it simultaneously the settings drawer B1 replaces, the most drifted file in the tree, and where A4's per-plugin cards must land. Building a substantial new section inside a file already scheduled for replacement wastes the work;
 
 
@@ -1185,7 +1184,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation on the cache key, which is where this fails silently rather than loudly: drop endpoint_id from the signature and confirm the two-project isolation test fails; drop the bindings hash and confirm the PATCH-takes-effect test fails; restore both.
 <br>**Iterate.** v2 makes model resolution observable instead of inferable: GET /v1/projects/{id}/agent/resolution returning which endpoint, which model per capability, which harness profile and which cache generation the next turn will use. Today that information exists only inside a closure created at boot, which is why 'the assistant is using the wrong model' is currently undiagnosable without reading container logs.
-<br>**Effort.** A week to a week and a half. Factory and cache: two days. The mount replacement is the uncertain part — add_langgraph_fastapi_endpoint is third-party and assume… · **Depends on:** WS-MEP-4
+<br>**Depends on:** WS-MEP-4
 <br>**Risk.** The dominant risk is authentication. Resolving a project per request on the agent endpoint re-touches the surface where /copilotkit previously sat on an auth skip list and took its project scope from a client-supplied thread id — a defect CLAUDE.md documents as fixed by two independent defences, both of which must survive.
 
 
@@ -1195,7 +1194,7 @@ at the right file and the wrong row.
 
 **Why.** The reason this belongs in this cluster rather than anywhere else: once MEP-4 lets an operator point a project at Ollama or vLLM, 'one prompt for every model' stops being a tuning nicety and becomes the thing that makes small models unusable. And the lookup key is the non-obvious fact that decides the entire design.
 
-**How.** 1. Ship the context-window fix first; it is a day and depends on nothing. _gateway_chat_model (copilot_agent.py:1483-1514) builds ChatOpenAI with no profile= argument. Pass profile={'max_input_tokens': <binding.max_input_tokens>} from the resolved ModelBindingIn, which already carries that field (packages/aleph-core/src/aleph_core/schemas/model_profile.py:58). Verified in this venv: ChatOpenAI accepts the kwarg on langchain-core 1.4.8, and deepagents.middleware.summarization.compute_summarization_defaults then returns ('fraction', 0.85) instead of ('tokens', 170000). create_summarization_middleware is applied to every subagent at deepagents/graph.py:594, so this affects seven agents, not one. 2. Profiles as operator-editable data.
+**How.** 1. Ship the context-window fix first; it is small and depends on nothing. _gateway_chat_model (copilot_agent.py:1483-1514) builds ChatOpenAI with no profile= argument. Pass profile={'max_input_tokens': <binding.max_input_tokens>} from the resolved ModelBindingIn, which already carries that field (packages/aleph-core/src/aleph_core/schemas/model_profile.py:58). Verified in this venv: ChatOpenAI accepts the kwarg on langchain-core 1.4.8, and deepagents.middleware.summarization.compute_summarization_defaults then returns ('fraction', 0.85) instead of ('tokens', 170000). create_summarization_middleware is applied to every subagent at deepagents/graph.py:594, so this affects seven agents, not one. 2. Profiles as operator-editable data.
 
 **Criteria:**
 
@@ -1214,7 +1213,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation on the key shape first, since it is the failure this design exists to prevent: register a profile under 'openai' instead of 'openai:<id>', confirm the bare-key test fails, and — more importantly — confirm that an unrelated second model now picks up that profile's prompt suffix, demonstrating the blast radius on the record. Restore.
 <br>**Iterate.** v2 turns profiles from operator-authored into measured: run the eval per profile class on a schedule, record tool-call error rate and token cost per class in the same ledger MEP-1 made trustworthy, and require a profile change to be justified by a number.
-<br>**Effort.** A week, split unevenly. The profile= context-window fix is a day and can ship the moment someone has an hour — it needs neither MEP-6 nor anything else. · **Depends on:** WS-MEP-6
+<br>**Depends on:** WS-MEP-6
 <br>**Risk.** Two. (1) Harness profiles change prompts, and prompt changes are the least testable thing in the system — a profile that helps by opinion and hurts by measurement is the default outcome, not the edge case. That is why criterion six is a number rather than a threshold: refuse to ship profile content with no measurement attached, even a crude one.
 
 
@@ -1248,7 +1247,7 @@ at the right file and the wrong row.
 
 **Review.** One mutation per script. (a) Write apps/web/src/components/Orphan.tsx exporting a component nobody imports — the dead-code check must exit 1 naming it; delete. (b) Add `.zombie { color: red }` inside @layer components — the dead-CSS check must exit 1; delete. (c) Add one `rounded-lg` and one `text-slate-500` — the ratchet must exit 1 twice, naming both counters; revert.
 <br>**Iterate.** v2 replaces the hand-rolled reachability walk with `knip`, once its config is tuned for this app's dynamic lookups (Icons[kind.icon] at Rail.tsx:56, the catalog registration table at aleph-catalog-v09.tsx:592). knip also finds unused exports, which the walk does not — CATALOG_VERSION and ACTION_NAMES (a2ui/catalog.ts:7,35) have zero importers and would be caught.
-<br>**Effort.** 3-4 days. The deletions are an afternoon. The reachability walk is a day including alias resolution, dynamic import() handling and the Icons special case. · **Depends on:** —
+<br>**Depends on:** —
 <br>**Risk.** Medium-low. The real risk is deleting something reached dynamically rather than by import. The A2UI catalog registers its views in a literal table (aleph-catalog-v09.tsx:592) so those are import-reachable, but Icons[kind.icon] is a runtime string lookup and the walk must not conclude an icon is dead — handled by the second entry point plus the registry cross-check.
 
 
@@ -1277,7 +1276,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation on each of the six component tests: break exactly what each asserts — remove a rail entry from the mocked /panes payload, invert Block's verb-render condition, drop a field from the settings fixture — and confirm precisely that test fails and no other. For Playwright, add `console.warn("mutation")` to App.tsx and confirm the smoke goes red; remove it.
 <br>**Iterate.** v2 adds two things the harness makes cheap. (a) Visual regression: Playwright screenshots of the Board and one pane in both themes, which turns workstream G's token drift from a grep into an image diff. (b) An axe-core accessibility pass in the smoke, which immediately catches the missing focus trap and Escape handler on Drawers.tsx:29-30 (which declares role='dialog' aria-modal='true' and implements neither) and the…
-<br>**Effort.** 1 week, with one honest unknown: whether @a2ui/react/v0_9's MessageProcessor renders in jsdom. Budget day 1 as a spike. Vitest + RTL wiring is half a day; · **Depends on:** WS-UI-1
+<br>**Depends on:** WS-UI-1
 <br>**Risk.** Medium. Two named risks. (1) If A2UI will not render in jsdom, the fallback of testing views directly loses coverage of the binder — which is exactly where UI-3's defects live — so UI-3's criteria would have to move to Playwright. Decide this on day 1, not in week 3. (2) Playwright against docker compose is the classic flaky-CI source;
 
 
@@ -1306,7 +1305,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation on the seam itself. Delete the per-pane try/except and confirm criterion 2 goes red. Revert the registry lookup to the if/elif chain and confirm criterion 1 goes red. Reintroduce one "Wiki" literal in CopilotChatSurface.tsx and confirm the upgraded sweep catches it (it does not today).
 <br>**Iterate.** v2 makes pane registration per-project, which GET /v1/projects/{id}/panes already anticipates in its docstring ('once a plugin can be enabled per project, "what can this workbench do" stops having one global answer', surfaces.py:56-60), and invalidates the ['panes', projectId] react-query key on activation instead of staleTime: Infinity (workspace-ui.tsx:69).
-<br>**Effort.** 1 week. Server side (registry builders, fault isolation, param parsing) is 2-3 days. Client side is 2 days and is the fiddly part, because the title/id conflati… · **Depends on:** WS-UI-2
+<br>**Depends on:** WS-UI-2
 <br>**Risk.** Medium. The id/title migration touches the agent's focus_tab tool and the nav.tab contract the server produces (a2ui_handlers.py:751-782), so an incomplete migration leaves navigation that silently does nothing — the exact defect class this cluster exists to remove.
 
 
@@ -1337,7 +1336,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation on each half of the producer/consumer pair: (a) remove the plugin.settings.save registration → criterion 2 goes red; (b) remove the schema validation → criterion 3 goes red; (c) delete the pane builder registration → criterion 1 goes red.
 <br>**Iterate.** v2 handles the schema shapes settings_card.py currently renders as a visible 'not editable here' line (_unsupported, settings_card.py:148-155) — arrays and nested objects are the common ones — and adds conditional field visibility so a field appears only when another is set.
-<br>**Effort.** 2 weeks. The generator being done removes the largest chunk. Table + migration + service + ledger is 3 days. · **Depends on:** WS-B1a
+<br>**Depends on:** WS-B1a
 <br>**Risk.** Medium. Two things to get right or regret. (1) Where secrets live: putting them in plugin_settings.values would be fast and would put plaintext credentials in a JSONB column that both ledger diffs and settings surfaces read. Do not.
 
 
@@ -1366,7 +1365,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation: remove the settings registry entry → criterion 1 red; remove the focus-trap hook → criterion 4 red. The substantive review is a regression walk, because the failure mode here is a feature quietly disappearing: write the old-section → new-pane mapping table in the PR description first, then walk it item by item against the running stack — model profile change lands (verify with GET /v1/projects/{id}/model-pr…
 <br>**Iterate.** v2 makes a settings pane addressable by URL so a layout including it is shareable and restorable, which needs pane layout persisted server-side — currently WorkspaceUIProvider state is in-memory only (workspace-ui.tsx:181). v3 adds search across all plugin settings, which becomes worth building the moment a second suite exists and is trivial once every setting is a declared schema field rather than a hand-written for…
-<br>**Effort.** 2 weeks. Porting the four sections is a week — the connectors section has real interaction (credential entry, enable/disable toggles). · **Depends on:** WS-A4
+<br>**Depends on:** WS-A4
 <br>**Risk.** Medium-high, and the risk is regression rather than difficulty. Drawers.tsx is where model profile, capability binding, connectors, credentials, cost rollup, members, the ledger view and the profile all live; porting it piecemeal is how one of those quietly vanishes.
 
 
@@ -1395,7 +1394,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation in all three directions, one each: add a producer prop with no client declaration; add a catalog.json prop with no zod entry; add a zod prop no view reads. The sweep must fail on each, naming the file and the prop. Then confirm the fixes are real rather than cosmetic: for each of the 9 catalog-only props kept, open the surface in the browser and confirm the value renders;
 <br>**Iterate.** v2 makes GET /v1/a2ui/catalog (apps/api/src/aleph_api/routes/cards.py:48 — a route with zero callers) do the job the generated file's own header already claims it does: 'The web app fetches the canonical schema from GET /v1/a2ui/catalog at startup and validates against it' (a2ui/catalog.ts:2-4). No such fetch exists.
-<br>**Effort.** 1.5 weeks. The sweep rewrite is 3 days — parsing routes/surfaces.py's builders reliably is the hard part and may need the producers routed through a small grepp… · **Depends on:** WS-UI-2
+<br>**Depends on:** WS-UI-2
 <br>**Risk.** Medium. The lockfile de-duplication is the risky item: forcing @copilotkit/a2ui-renderer onto @a2ui/web_core@0.10 may break its rendering, and the installed CopilotKit is 1.58 — the 'v2' in several source comments (lib/copilot.tsx, CopilotChatSurface.tsx:1, ThemeToggle.tsx:13) is the /v2 subpath of the 1.58 package, not a major version.
 
 
@@ -1426,8 +1425,8 @@ at the right file and the wrong row.
 
 **Review.** Mutation, mostly by reverting: put `() => undefined` back on one verb → criterion 2 red; remove the claim branch → criterion 1 red; re-add one inert hover class → criterion 4 red. Then the part that is not optional here: a human click-everything pass with the stack running.
 <br>**Iterate.** v2 turns that manual pass into a Playwright crawler that walks the accessibility tree, activates every enabled control on each surface, and asserts each produced either a network request, a DOM change, or a declared no-op annotation — which makes 'renders but does nothing' a check rather than a habit.
-<br>**Effort.** 1 week. The grounding path is 2 days (server branch, client param, tests). Verbs and trust derivation are 2 days. · **Depends on:** WS-B1a, WS-UI-3
-<br>**Risk.** Low-medium. The main risk is scope: the click-everything pass will find more inert controls than the ones enumerated, and each is a small decision that can turn into a feature. Timebox it — anything that cannot be made to work in under a day gets the control removed and a backlog entry, which is strictly better than shipping it inert.
+<br>**Depends on:** WS-B1a, WS-UI-3
+<br>**Risk.** Low-medium. The main risk is scope: the click-everything pass will find more inert controls than the ones enumerated, and each is a small decision that can turn into a feature. Timebox it — anything that cannot be made to work quickly gets the control removed and a backlog entry, which is strictly better than shipping it inert.
 
 
 #### WS-G · Design-token conformance: 187 to zero, ratcheted
@@ -1455,7 +1454,7 @@ at the right file and the wrong row.
 
 **Review.** The mutation is criterion 4 and it is cheap; the substantive review is visual. Screenshot every surface in both themes before and after and diff. A token fix that changes nothing visible means the token was already resolving and the change was cosmetic; a fix that changes something unexpectedly means a token was doing work nobody knew about.
 <br>**Iterate.** v2 removes the possibility rather than the instances: a Tailwind preset that deletes the default colour palette and the rounded/shadow scales from the theme entirely, so text-slate-500 stops being a valid class and the build fails instead of a grep. That is strictly stronger than a sweep and is the right end state.
-<br>**Effort.** 2 weeks, and it is the least intellectually demanding and most tedious item in the cluster: 264 sites across roughly 30 files. · **Depends on:** WS-B1, WS-UI-4
+<br>**Depends on:** WS-B1, WS-UI-4
 <br>**Risk.** Low technically, medium in practice. The risk is that it gets deferred forever because nothing breaks without it — which is why UI-1's ratchet exists, so the number can only fall. Second risk is over-correction: stripping colour from something that genuinely encoded state.
 
 
@@ -1484,7 +1483,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation: restore the Google Fonts <link> and confirm criterion 2 fails; restore #ffffff in _STYLE and confirm criterion 3 fails. Then a real offline check, which the aborted-route test only approximates: boot the compose stack on a machine with the host's outbound DNS blocked, load the app, and confirm the type is correct.
 <br>**Iterate.** v2 generates the compiled document's stylesheet from tokens.css at build time rather than maintaining a second Python copy of the palette, so the two cannot drift — the same problem the A2UI catalog has and the same fix: one editable source, a generator, and a check that the generated copy matches (the pattern scripts/check-catalog-generated.sh already implements).
-<br>**Effort.** 3-4 days. Vendoring the fonts is a day. Theming the compiled document is a day and a half, most of it in preserving determinism while adding a theme parameter. · **Depends on:** WS-G
+<br>**Depends on:** WS-G
 <br>**Risk.** Low. The one real risk is font subsetting: an over-aggressive subset drops glyphs the content needs — the app already renders ›, ℵ, ☀, ☾, ⚠ and arbitrary source text in any language. Ship full woff2 rather than a Latin subset unless the size is measured to matter, and add a test that the mono face renders a representative glyph set.
 
 
@@ -1518,7 +1517,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation-test every restored pin individually, not the suite as a whole. For each: revert the fix it was written for, run only that test, require a failure, restore, require a pass. Concretely — re-AND the query gate in aleph_rks retrieval so it is body-blind again; null out `Citation.source_id` at the write site in aleph_wiki.belief_service; drop the `body_text` column from the wiki_index projection.
 <br>**Iterate.** Turn test_route_smoke.py from "does not 500" into contract enforcement: for each route assert the JSON body validates against the declared OpenAPI response model, and for each mutating route assert exactly one ActionLedgerEvent row appeared in the same transaction.
-<br>**Effort.** One week. Two days for the fixtures — the hazard is already documented in tests/integration/conftest.py:33-38 (a session-scoped async engine binds its asyncpg p… · **Depends on:** —
+<br>**Depends on:** —
 <br>**Risk.** The recovered tests were written 25 commits ago; the wiki restructure landed since (a73dc2b through afe19db changed frontmatter, slug resolution and link resolution). Expect two of the six to be cheaper to rewrite than to port — budget for that rather than forcing a port.
 
 
@@ -1526,7 +1525,7 @@ at the right file and the wrong row.
 
 **What it is.** When the API throws an unhandled exception, the log line it writes contains four keys — environment, event, level, timestamp — and nothing that identifies which request it was, which user, or which project. The HTTP response carries no `x-request-id` header either, even when the browser sent one. So a user saying "I got a 500 at 14:22" cannot be matched to any line in the log. The cause is middleware ordering: apps/api/src/aleph_api/main.py:87-89 adds Auth, then RequestID, then Error, and Starlette's add_middleware prepends — so Error ends up outside RequestID.
 
-**Why.** This is small, cheap, and it is the reason the expensive items in the backlog are expensive. E1 ("Agent run fails, then the runtime tries to keep streaming — the primary RUN_ERROR has not been traced yet") is hard precisely because a browser-side failure cannot be joined to a server-side log line. The backlog's answer to E1 is C3/H7, an Inspector pane — a week of work that would show agent-side events and still would not connect a browser 500 to its log line.
+**Why.** This is small, cheap, and it is the reason the expensive items in the backlog are expensive. E1 ("Agent run fails, then the runtime tries to keep streaming — the primary RUN_ERROR has not been traced yet") is hard precisely because a browser-side failure cannot be joined to a server-side log line. The backlog's answer to E1 is C3/H7, an Inspector pane — substantial work that would show agent-side events and still would not connect a browser 500 to its log line.
 
 **How.** 1) Move the log-and-respond behaviour so that it runs inside the request context. Two viable shapes: put ErrorMiddleware innermost of the three (Auth, Error, RequestID ordering so RequestID is outermost of the pair) while keeping CORSMiddleware outermost — the commit 2712665 fix that made CORS outermost must not regress; or keep the ordering and have RequestIDMiddleware catch, stamp and re-raise. Prefer the reorder, and pin the resulting order with a test. 2) Bind more than the request id: user id and project id are both resolvable after AuthMiddleware, and aleph_observability.logging already exposes bind_request_context (used at middleware/auth.py, imported at request_id.py:13-16). Bind principal id and, where the path carries {project_id}, the project. 3) Stamp `x-request-id` on error responses too — set it in ErrorMiddleware's JSONResponse construction as well as on the success path.
 
@@ -1545,7 +1544,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation: reinstate the original ordering in main.py:87-89, run the new tests, require both the header test and the log test to fail, restore, require both to pass. Then a second mutation — add a no-op middleware in the wrong position — and require the order-pinning test to fail. Add both mutations as probes in scripts/_acceptance/self_check.sh alongside the six existing static probes (self_check.sh:60-91).
 <br>**Iterate.** Surface the request id in the UI. The RFC 7807 problem body built at middleware/errors.py:23-29 has an `instance` field and no correlation id; add the request id to the body and render it in the web app's error toast, so a user-reported failure arrives with the id already attached instead of a timestamp and a guess. Pairs directly with P9's trace correlation.
-<br>**Effort.** One day. The change is under 30 lines; most of the day is the three tests and confirming the CORS invariant survives. · **Depends on:** —
+<br>**Depends on:** —
 <br>**Risk.** Low, with one real trap: middleware ordering in Starlette is counter-intuitive (add_middleware prepends), and this exact area already produced one shipped defect where every 500 surfaced in the browser as a CORS failure (backlog B4). Getting the order wrong a second time is the failure mode. The order-pinning test exists specifically to make that impossible to do silently.
 
 
@@ -1576,7 +1575,7 @@ at the right file and the wrong row.
 
 **Review.** Three mutations against the running stack, each restored after. (1) `docker kill aleph-api-1` and confirm it comes back within 30s — today it stays dead. (2) Point LITELLM_BASE_URL at a black hole and confirm `up -d --wait` still succeeds and the web UI loads — today the whole stack fails to come up.
 <br>**Iterate.** Second pass adds the operator-facing half: healthcheck-driven alerting hooks, a documented resource sizing table in docs/operations.md (what each service needs at rest and under an ingest), and a compose override file for a single-host production deployment separate from the dev file — the current apps/web/Dockerfile.dev running `npm run dev` behind an unpinned `npm install` (Dockerfile.dev:10, with no lockfile copie…
-<br>**Effort.** Four days. Restart policies, mem_limits and USER lines are an afternoon. The readiness split plus its tests is a day. · **Depends on:** —
+<br>**Depends on:** —
 <br>**Risk.** Adding USER to the API image will break the `assets:/app/data/assets` named volume (docker-compose.yml:160) unless ownership is set at build time — this is exactly the failure the stale comment at apps/api/Dockerfile:29-31 was written about, and it is why the image currently runs as root.
 
 
@@ -1605,7 +1604,7 @@ at the right file and the wrong row.
 
 **Review.** Three mutations across three layers, each restored: MAX_PANES (unit, tests the reducer), the SSE URL builder in SurfaceStreamProvider.tsx:96 (unit, tests the transport the whole reading region shares), and the rail's launchable filter driven by GET /v1/projects/{id}/panes (playwright, tests the server-driven pane registry end to end).
 <br>**Iterate.** Add Playwright trace and screenshot upload on failure, then a visual baseline for the nine components the backlog's G audit scores as `clean` (Board, Block, ContextBar, AssistantDock, ReadingRegion, AlephLogo, Icons, CopilotChatSurface, ProjectWorkspace).
-<br>**Effort.** Three to four days. Vitest setup half a day; recovering and repointing the seven specs a day (they are real and recent); · **Depends on:** WS-P3
+<br>**Depends on:** WS-P3
 <br>**Risk.** Browser e2e in CI is the classic flaky-test trap, and a flaky required job trains everyone to re-run rather than read. Mitigate by keeping the e2e job on push-to-main rather than every PR at first, and by treating any test that needs a retry as a defect in the test rather than a fact of life.
 
 
@@ -1634,7 +1633,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation in two directions. Downward: delete a subject file, require MISSING and exit 1, restore. Upward: introduce a real regression that a service-backed check should catch — e.g. break the RRF fusion in packages/aleph-core so B4 fails — and confirm `--strict` in CI goes red rather than reporting INCOMPLETE and exiting 0.
 <br>**Iterate.** Once the gate is honest and green, make it the thing the docs are generated from rather than the thing they describe. Emit a machine-readable result (JSON) per run and have docs/acceptance.md's status table rendered from it, so the table cannot claim a part is done when its check is MISSING — the drift that produced this workstream in the first place.
-<br>**Effort.** Two days. The preflight and MISSING status is half a day. The five sweep probes in self_check.sh are a day — each needs a mutation that the sweep genuinely catc… · **Depends on:** WS-P1
+<br>**Depends on:** WS-P1
 <br>**Risk.** Turning MISSING into a hard failure will make the gate red on the day it lands unless P1 has restored the tests first — hence the dependency. If P1 slips, the honest interim is to land the mechanism and let CI run it non-blocking for exactly one sprint with a dated comment, rather than weakening MISSING to a warning, because a warning is how this drift started.
 
 
@@ -1663,7 +1662,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation-test all six sweeps in one pass and record every mutation in scripts/_acceptance/self_check.sh (P5 adds the probe slots): hand-edit apps/web/src/a2ui/catalog.ts; add an undeclared state-key write to a LangGraph node; declare a second ALEPH_V09_CATALOG_ID; add a pane kind to the server registry only; add a `{"path": ...}` binding the client zod schema does not declare; drop ProjectScopeDep from a handler.
 <br>**Iterate.** Extend the project-scope sweep from "takes the dependency" to "checks the role": several handlers call require_at_least(principal, project_id, at_least=ProjectRole.EDITOR) (e.g. routes/sources.py:73) and several do not, and which mutating routes require which role is currently a per-route judgement with no record.
-<br>**Effort.** Two days. The surface_bindings fail-open fix is under an hour including its test. The project-scope sweep is the bulk: an AST walk over 31 route modules plus it… · **Depends on:** WS-P5
+<br>**Depends on:** WS-P5
 <br>**Risk.** An over-eager sweep is worse than no sweep, because the response to false positives is to disable it. The mitigation is the one this repo already discovered: ship the analyzer with a unit test that pins both directions (fires on the defect, quiet on the lookalike) before wiring it into CI. Second risk: the allowlist becomes a dumping ground.
 
 
@@ -1692,7 +1691,7 @@ at the right file and the wrong row.
 
 **Review.** Rehearse the incident. On a stack with at least two projects each holding a real connector credential: rotate the token secret and confirm agent tokens still mint and verify while credentials still decrypt; then rotate the credential master key through the re-encrypt path and confirm every row is readable after and unreadable with the old key;
 <br>**Iterate.** Move the master key out of environment variables entirely — an interface with one file-based implementation (reading a mounted secret) and one that calls out to a KMS or Vault, chosen by setting. That is what makes rotation routine rather than an incident procedure, and it is the same shape as the connector-credential contract that already exists, so it is a small step once the key is separated.
-<br>**Effort.** Three days. The split and the deduplication are a day including the migration for the key-version column. · **Depends on:** WS-P1, WS-P3
+<br>**Depends on:** WS-P1, WS-P3
 <br>**Risk.** The highest-consequence workstream here: a mistake makes existing credentials undecryptable for real rather than hypothetically. Mitigation is strict ordering — add the key-version column and the read-both-versions path first, deploy that, then re-encrypt, then remove the old-version read. Never in one step.
 
 
@@ -1721,7 +1720,7 @@ at the right file and the wrong row.
 
 **Review.** A real drill, not a script review: take a backup from a stack with a populated project, `docker compose down -v` to destroy everything including volumes, restore, and confirm the web UI opens the same project with the same sources, claims and notes. Then a negative drill: corrupt one page of the dump and confirm restore-drill.sh reports failure rather than a partially restored stack that looks fine.
 <br>**Iterate.** Move from dump-and-restore to point-in-time recovery: WAL archiving to the object store (MinIO already exists behind `--profile s3` at docker-compose.yml:380) and a documented recovery target time. Add a scheduled drill — a CI cron that restores the most recent dump into a scratch stack weekly — because a backup that has never been restored on a schedule is a backup nobody has verified this month.
-<br>**Effort.** Three days. The dump and restore scripts are a day. The drill with real verification is a day — the value is entirely in the verification, and per-table row cou… · **Depends on:** WS-P3
+<br>**Depends on:** WS-P3
 <br>**Risk.** Near-certain: at least one of the 23 unexecuted downgrades will fail the first time it runs, most likely one that drops a column with a dependent index or an enum type. That is the point of the exercise, but budget for fixing two or three migrations rather than only adding a CI step.
 
 
@@ -1750,7 +1749,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation with a question attached. Drive the stack, capture the counters, then deliberately break the model gateway and confirm the LLM failure counter rises and the success counter stops — a metric that does not move when the thing it measures breaks is decoration. Then use the new metrics to actually answer backlog E5: run one agent turn with subagent fan-out and read the per-turn request count off the counter.
 <br>**Iterate.** Turn the metrics into the kernel's degradation signal. acceptance D5 asserts "probation: a capability that degrades is retired automatically" and packages/aleph-kernel/tests/test_probation.py passes — but degrade is currently defined against the capability's own probe.
-<br>**Effort.** Three days. The meter plumbing plus the /metrics route is a day. Instrumenting the five subsystems is a day, and choosing the right label cardinality is where t… · **Depends on:** WS-P2
+<br>**Depends on:** WS-P2
 <br>**Risk.** Label cardinality is the standard way to turn a metrics endpoint into an outage: any label carrying a project id, a user id or a raw path with a UUID in it grows without bound. Use the route template, not the path. Second risk: this becomes a write path with no read path — the exact defect class CLAUDE.md names as dominant — if nothing ever queries the endpoint.
 
 
@@ -1758,7 +1757,7 @@ at the right file and the wrong row.
 
 **What it is.** Backlog D3 says the Node bridge between the browser and the agent does not forward the user's credential, so `oidc` mode cannot authenticate the chat path. The premise is literally true — apps/copilot-runtime/src/server.ts:44 is `new HttpAgent({ url: AGENT_URL })` with no headers — but the conclusion is stale for the installed version, and I verified this against the package in the tree.
 
-**Why.** The backlog parks D3 and D4 together as one deferred project, and that framing costs more than the work does. D3 is one prop on one component plus a test — roughly a day — and parking it behind D4's genuine transport rewrite makes a cheap fix look expensive and keeps oidc mode unusable for the chat path.
+**Why.** The backlog parks D3 and D4 together as one deferred project, and that framing costs more than the work does. D3 is one prop on one component plus a test, and parking it behind D4's genuine transport rewrite makes a cheap fix look expensive and keeps oidc mode unusable for the chat path.
 
 **How.** 1) Hold the access token in React state in apps/web/src/lib/copilot.tsx and pass `headers={() => ({ Authorization: \`Bearer ${token}\` })}` to CopilotKitProvider. The only real friction is that the prop is synchronous while apps/web/src/lib/auth.ts:71-80 getAccessToken() is async — so hold it in state and refresh from the UserManager's automaticSilentRenew, which auth.ts:45 already enables. In local mode the LOCAL_BEARER constant is returned synchronously, so nothing changes there. 2) Narrow the runtime's CORS: replace `cors: true` at server.ts:80 with an explicit origin list from an env var, defaulting to the same origins the API accepts (ALEPH_CORS_ORIGINS in deploy/compose/.env.example already carries that list). Compose passes it to the copilot-runtime service, which today gets only ALEPH_AGENT_URL and PORT (docker-compose.yml:251-256).
 
@@ -1779,7 +1778,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation in both halves. Remove the headers prop from copilot.tsx → the vitest test and the oidc integration test both go red; restore. Set cors back to true in server.ts → the origin test goes red; restore. Then a manual pass in oidc mode with a real IdP: open the chat, send a message, confirm it works;
 <br>**Iterate.** Once the header path works, verify the negative direction: that a token for project A cannot drive an agent run against project B through the bridge. middleware/agent_scope.py and copilot_agent's _authorized helper already enforce this at both ends (pinned by apps/api/tests/unit/test_agent_thread_scope.py and test_agent_project_authorization.py), but neither test drives the request through the Node bridge, so the com…
-<br>**Effort.** One to one and a half days. The prop plus its state plumbing is a couple of hours; the CORS narrowing is an hour; · **Depends on:** WS-P4
+<br>**Depends on:** WS-P4
 <br>**Risk.** Low. The one real trap is the sync/async mismatch: if the token is read once at mount and never refreshed, the chat works for an hour and then silently stops — a failure that looks like the agent being broken rather than the token expiring. The expiry test in the review step exists specifically to catch that.
 
 
@@ -1808,7 +1807,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation across all four sites plus the server: remove the credential from the shared builder → all four stream tests go red; restore. Point a stream token at a different project id → the 403 test fires. Then a manual oidc session: leave a workspace open past the token's TTL and confirm the streams reconnect with a fresh credential rather than silently going quiet — a stream that stops delivering with no error is ind…
 <br>**Iterate.** Add stream-level observability once the transport works: connection count, reconnect rate and per-stream event throughput as metrics from P9, and a resume-token audit so a stream that silently stops is visible as a number rather than as a user saying the workspace went quiet. Then extend the same credential path to any new stream by construction — the sweep from the success criteria is what makes that automatic.
-<br>**Effort.** One week. Two days on the decision and a prototype of the chosen option (this is genuinely a design choice with security consequences and should not be made by… · **Depends on:** WS-D3
+<br>**Depends on:** WS-D3
 <br>**Risk.** The highest-uncertainty item in this cluster. A query-parameter token puts a credential in every access log and every browser history entry; a cookie reintroduces CSRF surface that the current bearer-only design deliberately avoids;
 
 
@@ -1837,7 +1836,7 @@ at the right file and the wrong row.
 
 **Review.** Mutation on the two checks that matter: introduce a dependency with a known high-severity advisory and confirm the security job fails, then remove it and confirm green. Separately, unpin one base image digest and confirm nothing breaks (proving the pin is not load-bearing for the build) but that Dependabot subsequently opens a PR for it — the second half is verified by waiting one cycle rather than by a command, and…
 <br>**Iterate.** Add an SBOM per image (syft or docker buildx's built-in) published as a CI artifact, and a policy gate that fails on new critical findings rather than on any finding at all — the first pass will produce a backlog of low-severity noise in transitive dependencies, and a job that is always red is a job everyone ignores. The second pass is where the severity threshold gets tuned against real output.
-<br>**Effort.** One day for dependabot.yml, the security job and CodeQL. Half a day for digest pinning. The web Dockerfile fix is either an hour (copy the lockfile) or folds in… · **Depends on:** WS-P3
+<br>**Depends on:** WS-P3
 <br>**Risk.** The first run will produce a wall of findings, most of them transitive and low severity, and the natural response is to set the threshold so high that the job never fires. Set the initial gate at high-and-above with a written note about why, and revisit.
 ## Part 4 — What the reviewers rejected
 
@@ -1907,7 +1906,7 @@ because each is a way a plan can look rigorous and measure nothing.
 
 **9. WS-MEP-5 — All four Playwright criteria (real error text, disabled unreachable option, key never reaches the browser, add-and-test flow)**
 
-*Why it fails as a criterion:* They cannot be run at all. There is no tests/playwright directory (`ls tests/` returns only conftest.py, integration/, unit/), no `@playwright/test` in apps/web/package.json (scripts are dev/build/preview/typecheck/lint only) and none at the repo root, and pnpm-workspace.yaml:3 still declares `tests/playwright` as a workspace member of a directory that does not exist. Commit 483816d rebuilt tests/ deliberately without e2e or playwright. Building the harness — config, fixtures, a booted stack or a mocked API, CI wiring — is unscheduled and unestimated, and the plan budgets 'a day and a half' fo
+*Why it fails as a criterion:* They cannot be run at all. There is no tests/playwright directory (`ls tests/` returns only conftest.py, integration/, unit/), no `@playwright/test` in apps/web/package.json (scripts are dev/build/preview/typecheck/lint only) and none at the repo root, and pnpm-workspace.yaml:3 still declares `tests/playwright` as a workspace member of a directory that does not exist. Commit 483816d rebuilt tests/ deliberately without e2e or playwright. Building the harness — config, fixtures, a booted stack or a mocked API, CI wiring — is unscheduled and unestimated, and the plan budgets almost nothing fo
 
 *Replaced with:* Either (a) add an explicit MEP-5 precondition 'tests/playwright exists, `pnpm -C tests/playwright test` runs and one deliberately-broken spec is observed red' with its own estimate, or (b) restate these four as Vitest/RTL component tests plus one API-level assertion, e.g. 'a response-body test asserts the plaintext key string appears in no response from any /gateway-endpoints route, and a component test asserts the option for a model with reachable:false has the disabled attribute'.
 
@@ -2013,85 +2012,85 @@ number that would move. **63 opportunities: 45 adopt, 10 trial, 3 assess, 5 hold
 **`ADOPT` · Decouple /readyz from the model gateway, and make gateway status a first-class application state**
 <br>`apps/api/src/aleph_api/routes/health.py:48-56` folds `litellm_gateway` into `all_ok`, so an unreachable operator gateway makes `/readyz` return 503. `deploy/compose/docker-compose.yml:165` uses exactly that endpoint as the API healthcheck, and `copilot-runtime` (line 253) and `web` (line 285) both declare `depends_on: api: condition: service_healthy`.
 <br>*Why here:* `deploy/README.md:52` promises the opposite in bold: "**Readiness does not depend on the model endpoint.** The stack comes up whether or not your models are reachable." That statement is false against the code. Aleph's whole deployment thesis is "point it at any OpenAI-compatible endpoint" — the single most likely first-run mistake is a wrong URL, and today that mistake produces a crash-looping st…
-<br>*Win:* With `LITELLM_BASE_URL` pointed at a closed port: `docker compose up -d --wait` currently exits non-zero and `web` never starts. Target: exits 0, `docker compose ps --format '{{.Service}} {{.Health}}'` shows 6/6 core services healthy, `curl -s localhost:8000/readyz` returns 200, `curl -s localhost:8000/v1/gateway/statu… · *Effort:* A day. The route split is an hour; the banner and the `--wait` regression test are the rest.
+<br>*Win:* With `LITELLM_BASE_URL` pointed at a closed port: `docker compose up -d --wait` currently exits non-zero and `web` never starts. Target: exits 0, `docker compose ps --format '{{.Service}} {{.Health}}'` shows 6/6 core services healthy, `curl -s localhost:8000/readyz` returns 200, `curl -s localhost:8000/v1/gateway/statu…
 
 
 **`ADOPT` · Compose runtime hardening: restart policies, resource limits, log rotation, and loopback-only data ports — enforced by a…**
 <br>`deploy/compose/docker-compose.yml` declares 13 services. `grep -n 'restart:'` returns exactly one line (144, `restart: "no"` on the one-shot `migrate`), so **12 long-running services have Docker's default `restart: no`** — a host reboot or an OOM kill leaves them down permanently. `mem_limit` appears once (line 237, `code-runner`), so postgres, redis, api and workers are unbounded.
 <br>*Why here:* This is a self-hosted docker compose product — the compose file *is* the deployment. Every one of these is a difference between "ran on my laptop once" and "runs unattended". The Redis exposure is the sharpest: `deploy/compose/docker-compose.yml:100-118` builds an elaborate two-Redis isolation story so the sandbox cannot see agent tokens, and then publishes the privileged Redis on all interfaces w…
-<br>*Win:* Four counts, each currently at its worst value, measured by the new script: services with a restart policy 0/12 → 12/12; services with a memory limit 1/12 → 12/12; services with `logging.options.max-size` 0/13 → 13/13; data-store ports bound to loopback 0/4 → 4/4 (postgres, redis, clickhouse, minio). · *Effort:* Half a day for the compose edits, half a day for the check script and its self-check. One day total.
+<br>*Win:* Four counts, each currently at its worst value, measured by the new script: services with a restart policy 0/12 → 12/12; services with a memory limit 1/12 → 12/12; services with `logging.options.max-size` 0/13 → 13/13; data-store ports bound to loopback 0/4 → 4/4 (postgres, redis, clickhouse, minio).
 
 
 **`ADOPT` · Ship a production web image — the deployed container is a Vite dev server built from an unpinned `npm install`**
 <br>`apps/web/Dockerfile.dev` is the **only** Dockerfile for the web app (`ls apps/web/Dockerfile*` returns one file), and `deploy/compose/docker-compose.yml:272` builds the `web` service from it. Its `CMD` is `npm run dev -- --host 0.0.0.0`.
 <br>*Why here:* `apps/copilot-runtime/Dockerfile:7-15` contains a comment documenting this exact bug class having already bitten this project: "The manifest previously floated: it declared `@copilotkit/runtime ^1.58` and resolved 1.63.2… The deployed container only worked because of that accidental float." That lesson was applied to the Node bridge and not to the web app, where the identical hazard is live.
-<br>*Win:* Three numbers: `docker build` of the web image twice, 24h apart, currently can yield different `node_modules` trees → target is byte-identical `pnpm-lock.yaml`-derived resolution, checked by `pnpm install --frozen-lockfile` failing the build on drift. · *Effort:* Two days — one for the Dockerfile and compose wiring, one to confirm the built bundle behaves identically for SSE, the s…
+<br>*Win:* Three numbers: `docker build` of the web image twice, 24h apart, currently can yield different `node_modules` trees → target is byte-identical `pnpm-lock.yaml`-derived resolution, checked by `pnpm install --frozen-lockfile` failing the build on drift.
 
 
 **`ADOPT` · Non-root containers and digest-pinned base images, with a sweep**
 <br>`grep -c '^USER' apps/*/Dockerfile*` returns 1 across 5 Dockerfiles — only `apps/code-runner/Dockerfile:33-34` drops to uid 10001. `apps/api/Dockerfile` and `apps/workers/Dockerfile` run as root, and their comments say "the container may run as an arbitrary uid (compose sets `user:` for the shared asset bind mount)" — but `grep -n 'user:' deploy/compose/docker-compose.yml` returns nothing, and `sc…
 <br>*Why here:* The API container holds `INSIGHTS_LITELLM_API_KEY`, `POSTGRES_PASSWORD` and `ALEPH_AGENT_TOKEN_SECRET` in its environment, and it hosts the agent in-process. Root inside that container plus a writable `/app` is the difference between a container escape being hard and being routine.
-<br>*Win:* `grep -c '^USER ' apps/*/Dockerfile*` 1/5 → 5/5, and `docker compose exec api id -u` returns non-zero. Digest pins: 0/10 external image references → 10/10, checked by `scripts/check-compose-hardening.sh` grepping for `image:` lines without `@sha256:`. Self-check by removing one pin. · *Effort:* A day for `USER` plus the volume-permission fallout on `/app/data/assets`; two hours for the pins.
+<br>*Win:* `grep -c '^USER ' apps/*/Dockerfile*` 1/5 → 5/5, and `docker compose exec api id -u` returns non-zero. Digest pins: 0/10 external image references → 10/10, checked by `scripts/check-compose-hardening.sh` grepping for `image:` lines without `@sha256:`. Self-check by removing one pin.
 
 
 **`ADOPT` · Backup and restore, proven by an automated restore test — not by having a backup script**
 <br>There is no backup anything: `grep -rniE 'pg_dump|backup' deploy/ scripts/` finds only `scripts/_acceptance/self_check.sh` backing up *source files* during a mutation test. Add a `tools`-profile compose service running `pg_dump -Fc` on a schedule plus an assets tar, and — the part that matters — `scripts/restore-drill.sh` that restores the dump into a scratch database, runs `alembic check` against…
 <br>*Why here:* `deploy/README.md:113-118` documents `down -v` as "deletes every project, source and claim. There is no undo." That is honest and also the whole problem: the durable knowledge layer this product exists to build — claims, evidence anchors, the hash-chained action ledger — lives in one unbacked Postgres volume plus a `data/assets` bind mount.
-<br>*Win:* Restore drill runtime and outcome, both currently undefined: target `./scripts/restore-drill.sh` exits 0, prints rows restored per table, and asserts `verify_project_chain(...).ok` for 100% of projects. Add it to `scripts/acceptance.sh` as a new part so a broken drill shows as FAIL rather than SKIP. · *Effort:* Three days — the dump service is an afternoon, the drill script and its assertions are two days, mostly in making the sc…
+<br>*Win:* Restore drill runtime and outcome, both currently undefined: target `./scripts/restore-drill.sh` exits 0, prints rows restored per table, and asserts `verify_project_chain(...).ok` for 100% of projects. Add it to `scripts/acceptance.sh` as a new part so a broken drill shows as FAIL rather than SKIP.
 
 
 **`ADOPT` · Prove migration rollback in CI with a downgrade round-trip per revision**
 <br>25 revisions in `apps/api/alembic/versions/`, and every one has a `downgrade()` body — several substantial (50 lines in `20260726_0900_drop_budgets`, 42 in `20260815_1200_claim_spine`). But `grep -rn downgrade .github/ scripts/ tests/` returns nothing: **no downgrade has ever been executed**.
 <br>*Why here:* CI already enforces `alembic check` for forward drift (`.github/workflows/ci.yml`, `alembic check (no model drift)`), so the forward path is genuinely guarded and the reverse path is entirely unguarded. This is precisely the defect shape CLAUDE.md names as dominant — 25 downgrade functions written correctly and read by nothing.
-<br>*Win:* Revisions with a proven-executable downgrade: 0/25 → 25/25, measured by a CI step that loops `alembic downgrade -1` back to base and up again. Expect this to fail on first run — that failure is the value. Self-check by breaking one `downgrade()` and asserting CI goes red. · *Effort:* A day to add the step; budget two to four more days to fix whatever it exposes, since several of these touch pgvector co…
+<br>*Win:* Revisions with a proven-executable downgrade: 0/25 → 25/25, measured by a CI step that loops `alembic downgrade -1` back to base and up again. Expect this to fail on first run — that failure is the value. Self-check by breaking one `downgrade()` and asserting CI goes red.
 
 
 **`ADOPT` · Supply chain: SBOM, vulnerability scan, secret scan, and automated dependency updates**
 <br>`grep -rniE 'sbom|syft|grype|trivy|cyclonedx|pip-audit|osv|gitleaks|codeql|semgrep|bandit'` over the repo returns **zero hits**, and `.github/` contains exactly one file (`workflows/ci.yml`) — no `dependabot.yml`, no Renovate config.
 <br>*Why here:* Aleph is distributed as a compose stack that other people run, holding their API keys and their research corpus. The dependency surface is large and fast-moving: `deepagents 0.6.6`, `@copilotkit/*` on carets, `@a2ui/react ^0.10`, `langchain`, `pynacl`, `pyjwt`.
-<br>*Win:* Four numbers from zero: CI jobs performing a security scan 0 → 1; known-vulnerable direct dependencies, currently unknown → a published count with a documented policy (e.g. 0 critical, 0 high); SBOM artifacts per release 0 → 5 (one per image); dependency PRs raised per week 0 → whatever Dependabot finds. · *Effort:* Two days to wire all four; the ongoing cost is triage, which is why the two-week non-blocking baseline matters before yo…
+<br>*Win:* Four numbers from zero: CI jobs performing a security scan 0 → 1; known-vulnerable direct dependencies, currently unknown → a published count with a documented policy (e.g. 0 critical, 0 high); SBOM artifacts per release 0 → 5 (one per image); dependency PRs raised per week 0 → whatever Dependabot finds.
 
 
 **`ADOPT` · Rate limiting, per-project concurrency caps, and spend caps at the gateway boundary**
 <br>There is no inbound rate limiting anywhere — `grep -rniE 'rate.?limit|slowapi|limiter|throttl'` over `apps/` finds only outbound throttles (`packages/aleph-scholar/src/aleph_scholar/http.py:35`, the Consensus monthly counter in `consensus.py:49-55`).
 <br>*Why here:* `docs/backlog.md` E5 records the live symptom — "Gateway rate limiting… reported as 'weirdly rate limited'; not yet characterised" — and correctly guesses the cause is agent subagent fan-out. Aleph runs the agent **in-process inside FastAPI** on a single uvicorn worker with five SSE endpoints (`agent_events.py:160`, `changes.py:208`, `surfaces.py:312` and `:446`, `assistant`), so one project's run…
-<br>*Win:* Three: 429 responses returned by Aleph, currently 0 (it has no mechanism) → a nonzero count under a load test that exceeds the configured budget; concurrent in-flight gateway calls per project, currently unbounded → capped at a configured N, asserted by a test that launches N+1 and observes the (N+1)th queue rather tha… · *Effort:* Four to five days. The token bucket is a day (Redis is already a kernel capability).
+<br>*Win:* Three: 429 responses returned by Aleph, currently 0 (it has no mechanism) → a nonzero count under a load test that exceeds the configured budget; concurrent in-flight gateway calls per project, currently unbounded → capped at a configured N, asserted by a test that launches N+1 and observes the (N+1)th queue rather tha…
 
 
 **`ADOPT` · Prove multi-tenancy isolation with a generated cross-tenant route sweep; assess Postgres RLS underneath it**
 <br>Isolation is enforced entirely in application code by `ProjectScopeDep` (`apps/api/src/aleph_api/middleware/project_scope.py`), used 125 times across `apps/api/src/aleph_api/routes/`. It is careful code — the route-template matching comment at lines 28-37 documents a real lockout bug it already fixed.
 <br>*Why here:* CLAUDE.md lists "every row carries `project_id`" under *Rules that are real but only held by review*, with the explicit note "No sweep checks this; new models are caught in review or not at all." The same is true of the routes.
-<br>*Win:* Sweep: project-scoped routes covered by a cross-tenant refusal assertion, currently 1 of roughly 116 → 116 of 116, printed as a count by the test so it cannot silently shrink. Self-check by removing `ProjectScopeDep` from one handler and asserting the sweep goes red. · *Effort:* The sweep is two days, most of it constructing valid request bodies for POST/PATCH routes.
+<br>*Win:* Sweep: project-scoped routes covered by a cross-tenant refusal assertion, currently 1 of roughly 116 → 116 of 116, printed as a count by the test so it cannot silently shrink. Self-check by removing `ProjectScopeDep` from one handler and asserting the sweep goes red.
 
 
 **`ADOPT` · Secret hygiene and rotation: refuse placeholders at boot, version the keys, harden on `aleph_env=prod`**
 <br>`apps/api/src/aleph_api/settings.py` declares `aleph_agent_token_secret: str` with no minimum length and no validator (the file has zero `field_validator`s across all 103 lines), so a stack started with `.env.example`'s literal `CHANGE-ME-run-openssl-rand-hex-32` boots happily and signs agent tokens with it.
 <br>*Why here:* `local` auth mode synthesises a fixed dev principal for every unauthenticated request (`apps/api/src/aleph_api/middleware/auth.py:12-16`). It is the compose default and, per CLAUDE.md, "the only deployed mode". Combined with the 0.0.0.0 port binds, a stack deployed as documented is an unauthenticated API on a routable address.
-<br>*Win:* Concretely testable: booting with `ALEPH_ENV=prod ALEPH_AUTH_MODE=local` currently starts the API → target exits non-zero with a named error, pinned by a unit test. Booting with the literal `.env.example` placeholder secret currently starts → target exits non-zero. · *Effort:* Two days for the boot guards and the `.env.example`/bootstrap reconciliation.
+<br>*Win:* Concretely testable: booting with `ALEPH_ENV=prod ALEPH_AUTH_MODE=local` currently starts the API → target exits non-zero with a named error, pinned by a unit test. Booting with the literal `.env.example` placeholder secret currently starts → target exits non-zero.
 
 
 **`ADOPT` · Kill the dead checks and the doc drift — an operator following the docs today hits deleted files**
 <br>Three verified rots. (1) `audit/checks/e2e/node_modules` is a symlink to `../../../tests/playwright/node_modules`, and `tests/playwright/` no longer exists — so `audit/run.sh:51-55` never sets `E2E_OK=1` and **all six e2e checks silently SKIP forever**, which is the precise failure mode CLAUDE.md warns about under "A green `audit/run.sh` is weaker evidence than it looks".
 <br>*Why here:* The owner's standard is "no stale or dead code laying around and every part needs to function as expected", and CLAUDE.md's opening paragraph is an argument that documentation asserting things that are not true is the root cause of the project's worst defect. These three are that exact failure, live in the tree.
-<br>*Win:* Three counts. Broken path/profile references across `docs/`, `deploy/README.md` and `scripts/`: currently at least 5 verified (`deploy/local-gateway/`, `--profile local-llm`, `postgres-initdb.sh`, service names `aleph-api`/`aleph-migrate`, the ALEPH_UID mechanism) → 0, enforced by `check-docs-refs.sh` in the `python-qu… · *Effort:* A day for the three fixes plus the check script. Restoring `tests/playwright` if you choose that branch is a separate tw…
+<br>*Win:* Three counts. Broken path/profile references across `docs/`, `deploy/README.md` and `scripts/`: currently at least 5 verified (`deploy/local-gateway/`, `--profile local-llm`, `postgres-initdb.sh`, service names `aleph-api`/`aleph-migrate`, the ALEPH_UID mechanism) → 0, enforced by `check-docs-refs.sh` in the `python-qu…
 
 
 **`TRIAL` · RED metrics, SLOs, and alert rules — an opt-in `metrics` compose profile**
 <br>`grep -rniE 'prometheus|/metrics|alertmanager|grafana'` over `apps/`, `packages/`, `deploy/` and `.github/` returns **zero hits**. OTEL tracing exists (`packages/aleph-observability`, `deploy/compose/otel-collector-config.yaml`) and exports to Langfuse, but traces are a debugging tool, not an alerting substrate.
 <br>*Why here:* Right now the only production signal is `docker compose ps` and log tailing — `deploy/README.md:100-107` says as much. With no metrics there is no way to state an SLO, which means "everything prod ready" has no evidence behind it.
-<br>*Win:* From nothing to something countable: metrics endpoints 0 → 1; named SLOs 0 → 4 (API availability, p95 latency on non-SSE routes, ingest job success rate, gateway call success rate), each with a published target and a burn-rate alert. · *Effort:* Three days for instrumentation plus the profile; a further two to write SLOs that are honest rather than aspirational, w…
+<br>*Win:* From nothing to something countable: metrics endpoints 0 → 1; named SLOs 0 → 4 (API availability, p95 latency on non-SSE routes, ingest job success rate, gateway call success rate), each with a published target and a burn-rate alert.
 
 
 **`TRIAL` · A real audit export: cursor-paginated, chain-verified NDJSON**
 <br>`apps/api/src/aleph_api/routes/ledger.py:29-49` is the only way to read the action ledger over HTTP. It caps at `limit: Query(ge=1, le=500)`, orders `timestamp.desc()`, and offers `since`/`until` filters — no cursor, no total count, no export format. Paging a long-lived project means walking `until` backwards and hoping no two events share a timestamp.
 <br>*Why here:* The hash-chained append-only ledger is one of this system's genuinely strong properties — `tests/integration/test_ledger_immutability.py` proves the UPDATE/DELETE triggers against real Postgres, not a mock, and that is rare and worth something. But an audit trail that cannot be exported is an audit trail that exists only inside the system it is auditing.
-<br>*Win:* Maximum ledger events retrievable in one request: 500 → unbounded, measured by exporting a project seeded with 100,000 events and asserting the received line count equals `SELECT count(*)`. · *Effort:* Two days.
+<br>*Win:* Maximum ledger events retrievable in one request: 500 → unbounded, measured by exporting a project seeded with 100,000 events and asserting the received line count equals `SELECT count(*)`.
 
 
 **`TRIAL` · Load testing on the SSE fan-out, and failure injection between Aleph and the gateway**
 <br>`grep -rniE 'k6|locust|artillery|vegeta|chaos|toxiproxy'` over `scripts/`, `.github/`, `deploy/` and `docs/` returns nothing outside prose. Add `tests/load/` with a k6 script that opens N concurrent workspace sessions — each holding one multiplexed `SurfaceStreamProvider` SSE connection plus an agent run — and a `--profile chaos` compose overlay putting Toxiproxy between the app and `LITELLM_BASE_…
 <br>*Why here:* The specific architecture makes this non-optional rather than nice-to-have: the agent runs **in-process inside FastAPI** on a single uvicorn worker (`apps/api/Dockerfile`, no `--workers`), and the reading region holds one long-lived SSE connection per pane group.
-<br>*Win:* Two numbers that do not exist today: concurrent workspace sessions before p95 non-SSE latency exceeds 1s — unknown → a published number the compose defaults are sized against. And behaviour under a 100%-429 gateway: currently unknown → asserted as "UI stays responsive, `/readyz` stays 200, banner shows the gateway stat… · *Effort:* A week. Three days for the k6 scripts against SSE and the agent path, two for the Toxiproxy overlay, two for the first r…
+<br>*Win:* Two numbers that do not exist today: concurrent workspace sessions before p95 non-SSE latency exceeds 1s — unknown → a published number the compose defaults are sized against. And behaviour under a 100%-429 gateway: currently unknown → asserted as "UI stays responsive, `/readyz` stays 200, banner shows the gateway stat…
 
 
 ### The case that this plan is wrong
@@ -2100,67 +2099,67 @@ number that would move. **63 opportunities: 45 adopt, 10 trial, 3 assess, 5 hold
 **`ADOPT` · Stop treating acceptance.sh as the gate — it has already produced a false green on the single most load-bearing claim in…**
 <br>`scripts/acceptance.sh:287-288` defines E5 ("aleph-belief patch contract is wired or deleted") as `grep -rl 'aleph_belief' apps packages | grep -v packages/aleph-belief | wc -l >= 1`. I ran that exact command: it returns `packages/aleph-wiki/src/aleph_wiki/belief_service.py`, rc=0, so the runner reports `E5 PASS — FIXED — was a known defect`.
 <br>*Why here:* CLAUDE.md names `scripts/acceptance.sh` as "the gate to trust" precisely because it counts skips separately and can self-check. That property has already failed. Every strategic decision in `docs/backlog.md` — including "the self-improvement thesis is far closer than section A implies" — was made against a scoreboard reading 38/41 ✅.
-<br>*Win:* Two numbers. (1) Acceptance rows whose named test path does not resolve: **currently 11 of 41** (B1,B2,B3,B7,C1,C3,C4,C5,C6,C7,C8) — target 0, measured by a preflight in acceptance.sh that runs `pytest --collect-only <path>` for every row and exits non-zero on any unresolved id. · *Effort:* Preflight + regenerating the acceptance.md status column from a run artifact instead of hand-asserting it: **2 days**.
+<br>*Win:* Two numbers. (1) Acceptance rows whose named test path does not resolve: **currently 11 of 41** (B1,B2,B3,B7,C1,C3,C4,C5,C6,C7,C8) — target 0, measured by a preflight in acceptance.sh that runs `pytest --collect-only <path>` for every row and exits non-zero on any unresolved id.
 
 
 **`ADOPT` · Replace the "producer with no consumer" grep with a real transitive-reachability gate, and publish the number**
 <br>Aleph's stated dominant defect class is "a column, table, or service that is written correctly and read by nothing." I measured it. **2,412 source lines have zero production callers**, guarded by **1,466 lines of test** that keep them green: `aleph_belief/patch.py` (200), `reconcile.py` (285), `trust.py` (76) — imported only by `aleph_wiki/belief_service.py` (512), which is imported by nothing;
 <br>*Why here:* This is 8 of the 38 ✅ acceptance parts (A4, A6, D1–D6) going green off code no request ever reaches, plus C0/C5 partially. The kernel's own docstring says the probe requirement is "the structural answer to a codebase whose dominant defect was write paths shipped with no read path" — but probes only run for capabilities in `aleph.toml`, and none of the dead modules are capabilities.
-<br>*Win:* `scripts/check-reachable.sh` — BFS the AST import graph from {aleph.toml factories, main.py include_router targets, arq job map, copilot_agent subagent builders} and print unreachable `src/**.py` line count. It reports **2,412 across 11 modules today** (I verified each by grep; · *Effort:* The script, with the router/manifest/subagent entrypoint resolution done properly: **2 days**.
+<br>*Win:* `scripts/check-reachable.sh` — BFS the AST import graph from {aleph.toml factories, main.py include_router targets, arq job map, copilot_agent subagent builders} and print unreachable `src/**.py` line count. It reports **2,412 across 11 modules today** (I verified each by grep;
 
 
 **`ADOPT` · Kill the belief spine as a second knowledge substrate, or force it to ship one consumer this week — it is currently comp…**
 <br>Two substrates exist. One is measured and consumed: `aleph_rks.retrieval.search_corpus` fuses pgvector cosine and `ts_rank` with RRF at k=60 over `DocumentChunk`; recall@1 0.91 hybrid vs 0.60 lexical on a 45-pair set (acceptance B6 PASS: `45 question/source pairs`); its consumers are real — `aleph_assistant/retrieval/router.py:361,697` and `aleph_evals/retrieval_eval.py:238`.
 <br>*Why here:* `docs/acceptance.md` E1/E2/E3 (delete the wiki) are blocked on "a belief extractor beating 0.91 recall@1" — a bar set by the layer that already works. So the plan is: build a second substrate, prove it beats the first at the first's own job, then delete the third (the wiki). That is three-body work to reach parity.
-<br>*Win:* A forcing test with a deadline. Either (a) `grep -rl 'belief_service' apps/ packages/ | grep -v belief_service.py` returns ≥1 **and** an HTTP route returns a claim by `claim_key` with derived confidence (measured: `curl /v1/projects/{id}/claims` returns non-empty against a seeded project), or (b) delete `packages/aleph… · *Effort:* Deciding: **a day** of reading `docs/belief-engine.md` against `aleph_rks/claim_grounding.py`.
+<br>*Win:* A forcing test with a deadline. Either (a) `grep -rl 'belief_service' apps/ packages/ | grep -v belief_service.py` returns ≥1 **and** an HTTP route returns a claim by `claim_key` with derived confidence (measured: `curl /v1/projects/{id}/claims` returns non-empty against a seeded project), or (b) delete `packages/aleph…
 
 
 **`ADOPT` · Do not build the A1 plugin system. Prove the boot manifest already is one — today it demonstrably is not, and nothing ch…**
 <br>`apps/api/aleph.toml` declares 10 capabilities, 7 `protected = true` and 3 not, with the comment: *"Research capabilities. Not protected: the research suite is a plugin suite, and an operator may legitimately run Aleph without it."* That claim is false in code.
 <br>*Why here:* Backlog A1 proposes building a `Plugin` type, registry, activate/deactivate, dependency resolution and an isolation boundary. But `Kernel` already has `register_dynamic` (kernel.py:82), `activate` (:159), `replace` (:240), `deactivate` (:317) and `reprobe` (:289), and I verified by grep that **none of them has a single call site outside `packages/aleph-kernel/tests` and `scripts/_acceptance/`**.
-<br>*Win:* One integration test, `test_api_boots_without_the_research_suite`: strip the three non-protected `[[capability]]` blocks from a copy of `aleph.toml`, boot, assert `kernel.boot()` succeeds and that the 7 non-research routes still answer 200 while the research routes answer a clean 501/404. It **fails today**. · *Effort:* The failing test plus splitting `BOUND_KEYS` into required vs optional and making the optional lookups `Context.get_opti…
+<br>*Win:* One integration test, `test_api_boots_without_the_research_suite`: strip the three non-protected `[[capability]]` blocks from a copy of `aleph.toml`, boot, assert `kernel.boot()` succeeds and that the 7 non-research routes still answer 200 while the research routes answer a clean 501/404. It **fails today**.
 
 
 **`ADOPT` · Route agent-authored code through code-runner, not `exec()` in the FastAPI process — the guardrail story currently has n…**
 <br>`packages/aleph-kernel/src/aleph_kernel/skills.py:118` runs `exec(compile(code, f"<skill:{name}>", "exec"), namespace)`. The AST gate is honest that it is not a defence: `ast_gate.py:19-24` says outright *"It is not a sandbox and not a capability check. A gated module can still do anything Python can do once its functions are called."* It buys one property — loading is not running.
 <br>*Why here:* The thesis is "an agent authors plugins for itself." The failure mode when an agent writes a bad skill and it persists is currently: definition-only Python, admitted by a static gate that forbids six module names, then `exec`'d inside the process that holds the DB session factory, the JWKS, the gateway credential and the asset store.
-<br>*Win:* Three tests that fail today and must pass: an authored skill that calls `open('/etc/passwd')` is refused or fails closed; an authored skill that imports the app's session factory cannot reach the database; · *Effort:* Reusing the existing arq job + executor for skill execution, with a typed call/return contract: **a week**.
+<br>*Win:* Three tests that fail today and must pass: an authored skill that calls `open('/etc/passwd')` is refused or fails closed; an authored skill that imports the app's session factory cannot reach the database;
 
 
 **`ADOPT` · Reconcile CLAUDE.md with the tree: the wiki is being invested in, not removed, and the document authorising that decisio…**
 <br>CLAUDE.md says: *"Treat wiki code as legacy under removal. Do not extend it, do not fix its cosmetics, do not add tests to it. Migrate callers off it."* Measured against the last 12 commits touching `packages/aleph-wiki`: **+6,001 / −51 lines**, including a brand-new 469-line `schema.py`, a 119-line `schema_service.py`, a 590-line `lint.py`, a 209-line `frontmatter.py`, a 303-line `navigation.py`,…
 <br>*Why here:* CLAUDE.md's own preamble says the previous version "asserted invariants that were false in code… and that is the single reason a broken retrieval path survived seven work packages." The same failure has recurred, in the same file, about the same subsystem — and this time the rationale document has been deleted, so nobody can even check whether the removal decision still holds.
-<br>*Win:* Two checks. (1) A link check over `docs/*.md` + `CLAUDE.md`: dangling relative links **currently 6** (all to `decisions.md`) — target 0. (2) `scripts/check-wiki-frozen.sh`: `git diff --numstat <freeze-ref> HEAD -- packages/aleph-wiki` must show 0 added lines, or the rule is deleted from CLAUDE.md. · *Effort:* Link check: **half a day**. The reconciliation decision — restore `decisions.md` with D1/D5, or write the replacement pa…
+<br>*Win:* Two checks. (1) A link check over `docs/*.md` + `CLAUDE.md`: dangling relative links **currently 6** (all to `decisions.md`) — target 0. (2) `scripts/check-wiki-frozen.sh`: `git diff --numstat <freeze-ref> HEAD -- packages/aleph-wiki` must show 0 added lines, or the rule is deleted from CLAUDE.md.
 
 
 **`ADOPT` · Invest in retrieval quality — it is the only measured subsystem, and not one of the backlog's ten prioritised items touc…**
 <br>`docs/backlog.md`'s "Suggested order" lists 10 items: model endpoint + harness profiles, agent-writes-a-skill, Inspector, RUN_ERROR, settings panes + UI rebuild, interpreters, RubricMiddleware, UI sweep, catalog composition + plugin system, then async subagents / OKF / E2-E4 / D1-D2.
 <br>*Why here:* The owner's standard is "the research capability fully SoTA." Retrieval is the research capability. A 0.91 recall@1 with no reranking and a single-axis eval is a solid 2024 baseline, not 2026 state of the art — and the plan spends its next two quarters on harness plumbing instead.
-<br>*Win:* Two numbers on the existing harness. (1) recall@1 on the 45-pair set: 0.91 → target ≥0.95, measured by the unchanged command `uv run python -m aleph_evals.retrieval_eval`, with the reranker on/off reported the way `mode: hybrid|lexical` already is. · *Effort:* Reranker behind a `Capability.RERANK` binding with graceful passthrough when unbound: **a week**.
+<br>*Win:* Two numbers on the existing harness. (1) recall@1 on the 45-pair set: 0.91 → target ≥0.95, measured by the unchanged command `uv run python -m aleph_evals.retrieval_eval`, with the reranker on/off reported the way `mode: hybrid|lexical` already is.
 
 
 **`ADOPT` · Make the instrument-aesthetic spec a ratcheting sweep — the 180 number reproduces exactly and will otherwise regrow**
 <br>I reproduced `docs/backlog.md` section G independently across the 43 components in `apps/web/src/components` and `apps/web/src/a2ui/components`: `rounded-(sm|md|lg|xl|2xl|3xl|full)` = **55**, `shadow-(sm|md|lg|xl|2xl)` = **9**, raw Tailwind palette classes (`(text|bg|border|ring|from|to)-<scale>-<n>`) = **116**. Total **180**, matching the backlog exactly.
 <br>*Why here:* The owner's standard is that the UI "cannot be half-baked with stale or dead code laying around." A hardcoded `text-slate-500` does not respond to the theme at all, so it renders identically on both grounds — which is why the interface looks right in one theme and wrong in the other. The backlog notes the 11 clean components are, without exception, the ones written during the redesign.
-<br>*Win:* `scripts/check-instrument-aesthetic.sh` prints the three counts and exits non-zero above a ceiling committed in the script. Today: 55 / 9 / 116 = 180. Ceiling ratchets down with each cleanup; target 0. · *Effort:* The sweep: **half a day**. Driving 180 → 0: the backlog's own estimate of 4 rebuilds + 12 revisions + 16 touch-ups is ro…
+<br>*Win:* `scripts/check-instrument-aesthetic.sh` prints the three counts and exits non-zero above a ceiling committed in the script. Today: 55 / 9 / 116 = 180. Ceiling ratchets down with each cleanup; target 0.
 
 
 **`TRIAL` · Re-verify the backlog itself — two of its "NOT BUILT" items are already built and dead in the tree**
 <br>`docs/backlog.md` opens with *"Verified against the code, not remembered."* Two entries are not. **A4** ("Per-plugin settings cards — NOT BUILT… Missing: a settings contract a plugin declares, a renderer that composes declared cards") — `packages/aleph-a2ui/src/aleph_a2ui/settings_card.py` is 279 lines and exists;
 <br>*Why here:* The backlog is the input to this plan, and it is being used to size work. Scoping A4 as greenfield when 279 lines already exist means either rebuilding what is there or discovering it mid-sprint; either way the estimate is wrong.
-<br>*Win:* Backlog entries whose status claim is contradicted by a file in the tree: **2 today** (A4, C2), found by name-grepping each entry's named artefact. Target 0, re-run whenever the backlog is edited. · *Effort:* **Half a day** to re-walk the backlog against `check-reachable.sh` output once that script exists.
+<br>*Win:* Backlog entries whose status claim is contradicted by a file in the tree: **2 today** (A4, C2), found by name-grepping each entry's named artefact. Target 0, re-run whenever the backlog is edited.
 
 
 **`ASSESS` · Assess whether the kernel earns 2,120 lines and 143 tests — or whether AsyncExitStack plus the probe convention is the w…**
 <br>In production the kernel does two things: order capability setup by declared dependency, and unwind LIFO on shutdown running every inverse even when one raises. That is `contextlib.AsyncExitStack` over a topologically-sorted list.
 <br>*Why here:* CLAUDE.md says "the kernel is the product." If that is the bet, the dynamic half needs a production caller within a defined window or it is speculative generality with a 143-test maintenance tax — and every one of those tests is a reason not to delete it later.
-<br>*Win:* A dated decision with a number attached. Production call sites of `kernel.register_dynamic|activate|replace|deactivate|reprobe`: **0 today**. Set a review date; if still 0, delete `agent_api.py` (197), the dynamic half of `kernel.py` (~130 of 368), `spawn_ledger.py` (198), and their 5 test files (~880 lines) — kernel s… · *Effort:* The decision: **a day**. Executing the reduction if the answer is 0: **2-3 days**, mostly test deletion.
+<br>*Win:* A dated decision with a number attached. Production call sites of `kernel.register_dynamic|activate|replace|deactivate|reprobe`: **0 today**. Set a review date; if still 0, delete `agent_api.py` (197), the dynamic half of `kernel.py` (~130 of 368), `spawn_ledger.py` (198), and their 5 test files (~880 lines) — kernel s…
 
 
 **`HOLD` · Cap the beta/preview surface — the backlog puts three unstable Deep Agents APIs on the critical path of the thesis**
 <br>`docs/backlog.md`'s H adoption table marks H3 (`RubricMiddleware`) **beta**, H5 (interpreters + dynamic subagents) **beta**, H6 (async subagents) **preview** — 3 of its 8 rows. All three appear in the suggested order (positions 6, 7, 10), and H5 is proposed as the fix for E5's gateway rate limiting.
 <br>*Why here:* The agent already runs in-process inside FastAPI (`lifespan.py` → `setup_copilotkit`), so a breaking change in a beta middleware is not a contained failure — it is the request path. And backlog E1 reports the agent is already failing with `RUN_ERROR` on the newest project, un-traced, against the *stable* API.
-<br>*Win:* Count of thesis-critical features depending on a beta/preview upstream API: **3 today** (H3, H5, H6) — cap at 1. Enforced by a contract test per adopted beta feature that asserts the imported symbol's signature (`inspect.signature`) matches what Aleph calls, so `uv sync` to a new deepagents fails CI instead of producti… · *Effort:* Contract tests: **2 days**. The real cost is the sequencing decision — trial H1 (`StoreBackend`, stable) and H7 (`stream…
+<br>*Win:* Count of thesis-critical features depending on a beta/preview upstream API: **3 today** (H3, H5, H6) — cap at 1. Enforced by a contract test per adopted beta feature that asserts the imported symbol's signature (`inspect.signature`) matches what Aleph calls, so `uv sync` to a new deepagents fails CI instead of producti…
 
 
 ### Generative UI
@@ -2169,67 +2168,67 @@ number that would move. **63 opportunities: 45 adopt, 10 trial, 3 assess, 5 hold
 **`ADOPT` · Let agent-composed UI land on the Board, not only in the chat dock**
 <br>Today the Board renders exactly the seven server-built surfaces declared in `packages/aleph-a2ui/src/aleph_a2ui/pane_registry.py` (wiki, library, artifacts, notes, hypotheses, briefs, grounding). Anything the agent composes — `render_a2ui` surfaces via the A2UI middleware, `generateSandboxedUi` markup — renders inside the CopilotKit chat transcript in `AssistantDock`, on a different transport, and…
 <br>*Why here:* Block.tsx's own docstring claims this is solved — "A chat reply, a catalog-assembled surface, agent-written HTML and a third-party panel are the SAME object at different sizes… That is what removes the two-paths problem at the design level rather than patching it in code". It is not solved; there are still two renderers on two transports and they have already drifted.
-<br>*Win:* `grep -c 'band="open"\|band="controlled"\|band="third-party"' apps/web/src/components/Board.tsx` goes from 0 to ≥1. Add a sweep `scripts/check-block-bands.sh` asserting every variant of `BlockBand` in Block.tsx has ≥1 producer under `apps/web/src`; it exits 1 today (3 of 4 unproduced) and 0 after. · *Effort:* Client-side bridge (a): two days. Server-persisted `agent` pane kind (b): a week — registry entry, a builder, a persiste…
+<br>*Win:* `grep -c 'band="open"\|band="controlled"\|band="third-party"' apps/web/src/components/Board.tsx` goes from 0 to ≥1. Add a sweep `scripts/check-block-bands.sh` asserting every variant of `BlockBand` in Block.tsx has ≥1 producer under `apps/web/src`; it exits 1 today (3 of 4 unproduced) and 0 after.
 
 
 **`ADOPT` · Make the Grounding surface reachable — the provenance pane is complete on five layers and has zero call sites**
 <br>`GroundingSurface` exists end to end: `PaneKind(id="grounding", launchable=False, params=("claim_id",))` in `pane_registry.py`, a builder `_grounding_messages` at `apps/api/src/aleph_api/routes/surfaces.py:923` that walks claim → citation → chunk → char-span → source, a catalog entry at `apps/web/src/a2ui/aleph-catalog-v09.tsx:532`, and a 194-line renderer `apps/web/src/a2ui/components/GroundingSu…
 <br>*Why here:* Provenance display is the product. CLAUDE.md leads with claims being "evidence-anchored", records that `chunks_for_claim` now fills `Citation.chunk_ids` on the real write path, and cites `test_chunk_offsets.py` proving `markdown[char_start:char_end] == chunk.text`. All of that work terminates in a surface no user can open.
-<br>*Win:* `grep -rc 'openPane("grounding"\|openPane("Grounding"' apps/web/src` goes 0 → ≥1. Add a `"claim"` branch to `_open` and a unit test asserting `_open(target_kind="claim")` returns a `navigate` dict containing a `tab` key — it fails today for every `target_kind` not in the eight listed. · *Effort:* A day. One handler branch, one client navigate case that opens a parameterised pane, one server test and one e2e.
+<br>*Win:* `grep -rc 'openPane("grounding"\|openPane("Grounding"' apps/web/src` goes 0 → ≥1. Add a `"claim"` branch to `_open` and a unit test asserting `_open(target_kind="claim")` returns a `navigate` dict containing a `tab` key — it fails today for every `target_kind` not in the eight listed.
 
 
 **`ADOPT` · Human-in-the-loop that actually pauses the run — `useHumanInTheLoop` / `useInterrupt`, both already installed and both a…**
 <br>`grep -rlw useHumanInTheLoop apps/web/src` → 0. `grep -rlw useInterrupt apps/web/src` → 0. No `humanInTheLoop` prop on `<CopilotKitProvider>` in `apps/web/src/lib/copilot.tsx`. Both hooks are exported by the *installed* `@copilotkit/react-core@1.58.0` (`node_modules/@copilotkit/react-core/dist/v2/index.d.mts`), so no upgrade is required to start.
 <br>*Why here:* CLAUDE.md's stated product is an agent that authors plugins for itself "with guardrails preventing it from removing load-bearing capability". A guardrail that fires after the write is not a guardrail. The AG-UI `Interrupt` type carries a `responseSchema` (JSON Schema for the answer), which means the approval form is *generated from the schema* — a new plugin needs no frontend work to become approv…
-<br>*Win:* `grep -rlw 'useHumanInTheLoop\|useInterrupt' apps/web/src` goes 0 → ≥1 file. A Playwright test that triggers a gated tool and asserts the run is *blocked*: assert no `ActionLedgerEvent` row for the target action exists while the approval card is on screen, and exactly one appears after Approve. · *Effort:* First gated tool with `useHumanInTheLoop`: two days (client-only, no protocol change).
+<br>*Win:* `grep -rlw 'useHumanInTheLoop\|useInterrupt' apps/web/src` goes 0 → ≥1 file. A Playwright test that triggers a gated tool and asserts the run is *blocked*: assert no `ActionLedgerEvent` row for the target action exists while the approval card is on screen, and exactly one appears after Approve.
 
 
 **`ADOPT` · Card actions have no pending state, no error path, and fire three invalidations that match no query**
 <br>Every A2UI card action funnels through `adapt()` in `apps/web/src/a2ui/aleph-catalog-v09.tsx:112-171`. Three defects, all verified: 1. `action.isPending` is computed by `useMutation` and never passed to the view — the `onAction` signature returns `void` (`_shared.tsx:5-8`). Click Approve and nothing changes until the SSE surface stream happens to push. Double-clicks fire two POSTs. 2.
 <br>*Why here:* The owner's standard is "every part needs to function as expected". A button that gives no feedback for 300ms and no feedback at all on failure reads as broken, and a no-op cache invalidation is precisely the "looks right in isolation" failure CLAUDE.md is written to prevent. It also makes the ApprovalCard racy: nothing stops two approvals of the same proposal.
-<br>*Win:* Three counts, all currently 0: files under `apps/web/src` referencing `useOptimistic` or an `onMutate` rollback; `onError` handlers on card mutations; `ErrorBoundary` components. · *Effort:* Two days. Thread `pending`/`error` through `RendererProps`, add `onError`, add one `ErrorBoundary` per Block so one bad…
+<br>*Win:* Three counts, all currently 0: files under `apps/web/src` referencing `useOptimistic` or an `onMutate` rollback; `onError` handlers on card mutations; `ErrorBoundary` components.
 
 
 **`ADOPT` · The Block's lifecycle indicator cannot report a still-arriving surface, and three of its buttons do nothing**
 <br>`Block.tsx`'s docstring names four things it says are "primary rather than metadata": trust, band, lifecycle, and the verbs. Three of the four are inert on the only page that renders them. - `Board.tsx:232-238`: `error ? "failed" : surface ? "settled" : connected ? "building" : "building"` — the last two branches are identical, and the `stale` state has no producer at all.
 <br>*Why here:* "Cannot be half-baked with stale or dead code laying around" is the owner's stated bar, and this is the most-looked-at component in the product failing it in three ways at once. The trust meter is worse than dead — it is actively misleading, asserting "signed" over content the agent composed.
-<br>*Win:* `grep -c '=> undefined' apps/web/src/components/Board.tsx` goes 3 → 0. A sweep asserting no ternary in `apps/web/src` has identical branches: 2 hits today (`Board.tsx:236`, `PipelineStrip.tsx:61`), 0 after. `grep -c 'trust="' apps/web/src/components/Board.tsx` where the value is a literal: 1 → 0. · *Effort:* A day for the dead ternaries, the hardcoded trust, and wiring `Again` to a re-emit.
+<br>*Win:* `grep -c '=> undefined' apps/web/src/components/Board.tsx` goes 3 → 0. A sweep asserting no ternary in `apps/web/src` has identical branches: 2 hits today (`Board.tsx:236`, `PipelineStrip.tsx:61`), 0 after. `grep -c 'trust="' apps/web/src/components/Board.tsx` where the value is a literal: 1 → 0.
 
 
 **`ADOPT` · The Board is a spatial canvas with no keyboard access at all**
 <br>Across 8,838 lines of `apps/web/src` there is exactly **one** `onKeyDown` (`a2ui/components/NoteEditorCard.tsx:71`) and **zero** `tabIndex` attributes. Blocks are moved and resized only by `onPointerDown`/`onPointerMove` (`Board.tsx:118-176`). There is no way to focus a block, move it, resize it, or cycle between blocks from the keyboard, and no command palette.
 <br>*Why here:* An analyst adjudicating a contested claim moves between a page, its source and its grounding tree dozens of times an hour. Requiring a mouse for every one of those is a throughput cost, not just a compliance one — and a spatial canvas is precisely the layout where keyboard navigation is hardest to retrofit later.
-<br>*Win:* Four counts, all reproducible with grep: `tabIndex` 0 → ≥1 per block; `onKeyDown` 1 → ≥4; `aria-live` in live (non-dead) modules 0 → ≥2; Escape/focus-trap handlers on `role="dialog"` 0 → 1. · *Effort:* A week. Roving-tabindex block focus with arrow-key move/resize is two days;
+<br>*Win:* Four counts, all reproducible with grep: `tabIndex` 0 → ≥1 per block; `onKeyDown` 1 → ≥4; `aria-live` in live (non-dead) modules 0 → ≥2; Escape/focus-trap handlers on `role="dialog"` 0 → 1.
 
 
 **`ADOPT` · Delete 716 lines of dead frontend and add a sweep so it cannot come back**
 <br>A module-graph walk from `main.tsx` over `apps/web/src` (58 files, 8,838 lines) finds four modules with zero importers anywhere in the repository: - `components/ActivityCard.tsx` — 349 lines, the only user of `useAgent`, so the sole consumer of the agent's streamed `todos` plan is dead - `a2ui/A2UISurfaceView.tsx` — 213 lines, all three exports (`surfaceSeq`, `A2UISurfaceView`, `A2UIStreamSurfaceV…
 <br>*Why here:* This is the direct answer to "cannot be half-baked with stale or dead code laying around". It also actively misleads: `ActivityCard` is the only code that ever consumed the agent's live plan, so its death silently removed the plan view; a reader grepping for `useAgent` concludes Aleph consumes agent state when nothing does.
-<br>*Win:* `scripts/check-dead-modules.sh` (a ~30-line module-graph walk from `main.tsx`, honouring side-effect imports like `import "@/lib/fetch-bind"`) prints the unreferenced set and exits 1. It exits 1 today naming 4 modules / 672 lines; it exits 0 after. Web source drops 8,838 → ~8,120 lines. · *Effort:* Half a day to delete and fix the docs, half a day for the sweep. If `ActivityCard`'s plan view is wanted, rebuild it as…
+<br>*Win:* `scripts/check-dead-modules.sh` (a ~30-line module-graph walk from `main.tsx`, honouring side-effect imports like `import "@/lib/fetch-bind"`) prints the unreferenced set and exits 1. It exits 1 today naming 4 modules / 672 lines; it exits 0 after. Web source drops 8,838 → ~8,120 lines.
 
 
 **`TRIAL` · MCP Apps — the third band, and the middleware is already sitting in node_modules**
 <br>MCP Apps lets an MCP server ship its own interactive UI: the agent calls a tool that has an associated UI resource, the runtime fetches the resource and renders it in a sandboxed iframe with zero frontend code, and it persists in thread history across reconnects. Aleph does not use it — `grep -rn 'mcpApps\|mcpServers' apps/copilot-runtime/src` → 0. It is nearly free here.
 <br>*Why here:* Backlog A3 wants "every plugin can come with its own catalog for A2UI and publish it", and A4 wants per-plugin settings cards — MCP Apps is the industry's answer to the same question, and it is the one band where the Node runtime earns its keep (the other three are client-side facts, per `docs/research/generative-ui-spectrum.md` §6).
-<br>*Win:* `grep -c 'mcpApps' apps/copilot-runtime/src/server.ts` goes 0 → 1. A Playwright spec pointing at a local reference MCP App server asserting a sandboxed iframe appears with content from that server: 0 → 1 passing. · *Effort:* The spike is half a day (one config key, one public server). Landing it properly — Blocks with `band="third-party"`, a s…
+<br>*Win:* `grep -c 'mcpApps' apps/copilot-runtime/src/server.ts` goes 0 → 1. A Playwright spec pointing at a local reference MCP App server asserting a sandboxed iframe appears with content from that server: 0 → 1 passing.
 
 
 **`TRIAL` · Aleph uses 2 of 19 CopilotKit v2 hooks — the Inspector, the Controlled band and capability-driven UI are all already ins…**
 <br>Counted against the installed `@copilotkit/react-core@1.58.0` v2 surface: 19 hooks are exported, and `apps/web/src` references three — `useAgentContext` (3 files), `useFrontendTool` (2 files), and `useAgent` (1 file, the dead `ActivityCard`). Two in live code.
 <br>*Why here:* `useCapabilities` is the plugin manifest the product thesis needs, in a shape that already exists — when a plugin is activated the capability document changes, and the UI adapts instead of being recompiled. `custom` is where Aleph's plugin identifiers belong.
-<br>*Win:* Live-code hook adoption 2/19 → target ≥6/19, countable with a one-line loop over the exported names. `grep -c 'showDevConsole' apps/web/src/lib/copilot.tsx` 0 → 1 (the Inspector, same day). · *Effort:* Inspector: an hour. `useCapabilities`-driven affordances: three days, and it needs the Python side to actually publish a…
+<br>*Win:* Live-code hook adoption 2/19 → target ≥6/19, countable with a one-line loop over the exported names. `grep -c 'showDevConsole' apps/web/src/lib/copilot.tsx` 0 → 1 (the Inspector, same day).
 
 
 **`ASSESS` · Close the CopilotKit version skew before building on any of it**
 <br>Three versions in play and no two agree. `apps/web/package.json` asks for `@copilotkit/react-core: ^1.58` and has 1.58.0 installed; `apps/copilot-runtime/package.json` pins `@copilotkit/runtime: 1.63.2`; npm currently publishes 1.69.0 for both. `@ag-ui/client` is pinned at 0.0.57 against a published 0.0.58.
 <br>*Why here:* Items 3, 5 and 9 above all land on this stack. Building HITL or MCP Apps on a skewed pair means every failure has two candidate causes. Doing the upgrade first is what makes the next four pieces of work debuggable — and the Inspector (item 9) is the instrument that makes the upgrade itself verifiable.
-<br>*Win:* Three counts to zero: (1) packages where the installed version differs from another workspace's pin for the same scope — 2 today (`react-core` 1.58.0 vs `runtime` 1.63.2); (2) `^`/`~` ranges on any `@copilotkit/*` or `@ag-ui/*` dependency — 1 today (`"@copilotkit/react-core": "^1.58"`); · *Effort:* Two days to align and re-verify the chat path. A fortnight if the Python bump to `ag-ui-protocol` 0.1.20 / `ag-ui-langgr…
+<br>*Win:* Three counts to zero: (1) packages where the installed version differs from another workspace's pin for the same scope — 2 today (`react-core` 1.58.0 vs `runtime` 1.63.2); (2) `^`/`~` ranges on any `@copilotkit/*` or `@ag-ui/*` dependency — 1 today (`"@copilotkit/react-core": "^1.58"`);
 
 
 **`HOLD` · Undo over agent actions — the substrate exists, the inverses do not**
 <br>Every state mutation writes a hash-chained `ActionLedgerEvent` in the same transaction, and `packages/aleph-kernel/src/aleph_kernel/effects.py` opens with "every context mutation flows through one primitive, so every mutation is tracked and every tracked mutation can be undone". It is tempting to read that as an undo stack for agent actions.
 <br>*Why here:* I am recommending against building this now, and the reason is structural rather than about effort. A general undo requires a registered inverse per action kind, and the inverse of "retract a source" is not "un-retract" — it is a re-derivation of every claim whose confidence moved, which is the reconciler's job and the reconciler is still being built (`packages/aleph-belief`).
-<br>*Win:* The honest measurable here is a negative one, and it is worth writing down so the decision can be revisited on evidence rather than mood: count the ledger action kinds that would need a registered inverse (`grep -rho 'kind="[a-z_]*\.[a-z_]*"' packages apps | sort -u | wc -l`) and the subset for which an inverse is curr… · *Effort:* General undo: a month-plus, and blocked on the reconciler. The ledger-as-a-block substitute: two days, and it rides alon…
+<br>*Win:* The honest measurable here is a negative one, and it is worth writing down so the decision can be revisited on evidence rather than mood: count the ledger action kinds that would need a registered inverse (`grep -rho 'kind="[a-z_]*\.[a-z_]*"' packages apps | sort -u | wc -l`) and the subset for which an inverse is curr…
 
 
 ### Retrieval and knowledge
@@ -2238,85 +2237,85 @@ number that would move. **63 opportunities: 45 adopt, 10 trial, 3 assess, 5 hold
 **`ADOPT` · Make the production retrieval index non-empty, and give it a boot probe that fails when it is**
 <br>The corpus index is the substrate every SoTA retrieval technique sits on. On the live stack it has never been populated. `docker exec aleph-postgres-1 psql -U aleph -d aleph -c 'select count(*) from document_chunks'` returns **0** against 75 sources and 45 normalized_documents; `retrieval_index_records` is also 0; `agent_runs` shows **45 chunk_embed runs, all status='running', 0 succeeded**.
 <br>*Why here:* Every other item on this list is a percentage improvement on a number that is currently zero in production. It is also the exact defect class CLAUDE.md names as dominant — a write path with no working consumer — but one level up: a whole subsystem that is correct in unit tests, measured in a bespoke eval harness that seeds its own rows, and inert in the only deployment.
-<br>*Win:* Three counters, all currently at their failing value. (1) `select count(*) from document_chunks` goes 0 → ≥2,500 (45 docs averaging 140,185 chars ≈ 35k tokens ≈ ~70 chunks each at target_tokens=512). · *Effort:* One to two days. The binding is a data fix plus a seed-profile fix; the probe is ~40 lines in `aleph_runtime/capabilitie…
+<br>*Win:* Three counters, all currently at their failing value. (1) `select count(*) from document_chunks` goes 0 → ≥2,500 (45 docs averaging 140,185 chars ≈ 35k tokens ≈ ~70 chunks each at target_tokens=512).
 
 
 **`ADOPT` · Make the research composer read the passages it cites, then measure sentence-level attribution (citation precision / rec…**
 <br>Two coupled gaps. (a) `research_workflow.py:_node_compose` builds the model's entire evidence context as `listing = '\n'.join(f'c{i}: {s.title}' + (f' — {s.url}' if s.url else ''))` (line 859-862). Titles and URLs. No chunk text, no snippet — `IngestedSource.snippet` is only used in `_node_reflect` (line 823) and is `None` for every OpenAlex candidate (`_candidate_from_work` sets `snippet=None`, l…
 <br>*Why here:* CLAUDE.md's product thesis is a web of belief where 'claims are first-class, evidence-anchored' and 'prose is rendered from that layer'. Today the flagship prose path is the inverse: prose generated from titles, with citation markers attached afterwards, and 786 stored citations of which none has been verified against its source.
-<br>*Win:* (1) Passage bytes reaching the composer per source: 0 → ≥1,500 chars of retrieved chunk text per cited source (assert in a test on the composer's user message). (2) A new `attribution` scorer: for each `[cN]`-bearing sentence in a produced report, ask a judge-tier model whether the cited chunk entails it; · *Effort:* About a week. Three days to make compose retrieve (call `descend_into_source` per ingested source, or `search_corpus` pe…
+<br>*Win:* (1) Passage bytes reaching the composer per source: 0 → ≥1,500 chars of retrieved chunk text per cited source (assert in a test on the composer's user message). (2) A new `attribution` scorer: for each `[cN]`-bearing sentence in a produced report, ask a judge-tier model whether the cited chunk entails it;
 
 
 **`ADOPT` · Add a rerank stage — and because this gateway serves no cross-encoder, make it a listwise LLM reranker over a model it d…**
 <br>`search_corpus` returns the RRF-fused list directly (`retrieval.py:118-142`); there is no second-stage scoring. `Capability.RERANK` exists (`aleph_core/schemas/model_profile.py:21`), `discovery.py:392` has a `CapabilityPolicy(mode='rerank', tier='light')` for it, and `apps/web/src/components/Drawers.tsx:189,201` shows it in Settings as 'Reorders retrieved chunks' — but `LiteLLMClient` has only `ch…
 <br>*Why here:* Aleph's first stage retrieves top_k=8 with `fetch = max(top_k*4, 40)` candidates already in hand (`retrieval.py:83`) — the over-fetch that a reranker needs is already being paid for and then thrown away. It is also the one lever that helps most where Aleph is weakest: 140k-char un-sectioned PDF chunks, where lexical overlap and a single dense vector both under-discriminate.
-<br>*Win:* nDCG@10 on the rebuilt eval (opportunity 5) is the headline; on the current 45-pair set the honest number is recall@1, which reranking should move because @1 is where ranking is actually tested (0.91 today; @1 paraphrase is 0.87). · *Effort:* Three to four days: `LiteLLMClient.rerank()` with a listwise-LLM implementation plus a native `/v1/rerank` path when the…
+<br>*Win:* nDCG@10 on the rebuilt eval (opportunity 5) is the headline; on the current 45-pair set the honest number is recall@1, which reranking should move because @1 is where ranking is actually tested (0.91 today; @1 paraphrase is 0.87).
 
 
 **`ADOPT` · Contextual retrieval — stop embedding bare chunk text**
 <br>`chunk_embed.py:186` embeds `texts=[c.text for c in chunks]`. Nothing else: no document title, no `section_path`, no document-level summary. The chunk goes into the dense index and the `text_tsv` GIN index as an isolated fragment. Note the eval does not do this: `retrieval_eval.py:200` builds `bodies = [f"{doc['title']}.
 <br>*Why here:* Aleph's corpus is scientific PDFs averaging 140k chars, and — see opportunity 8 — only 1 of 45 normalized documents has any markdown heading, so `section_path` is NULL for essentially every chunk. A mid-paper fragment therefore carries no signal about which paper it is from or which section it is in. 'The effect was significant (p<0.01)' is unretrievable and, once retrieved, uncitable.
-<br>*Win:* Run the rebuilt eval (opportunity 5) three ways over the same corpus — bare chunk, deterministic context prefix, LLM-generated context prefix — and report recall@1 / nDCG@10 for each. The deterministic arm is free; · *Effort:* Deterministic tier: two to three days (change `chunk_embed.py` to index `f'{title} — {section_path}\n{c.text}'` while ke…
+<br>*Win:* Run the rebuilt eval (opportunity 5) three ways over the same corpus — bare chunk, deterministic context prefix, LLM-generated context prefix — and report recall@1 / nDCG@10 for each. The deterministic arm is free;
 
 
 **`ADOPT` · Replace the 45-pair toy eval with one that can actually fail**
 <br>The current set is 12 documents of ~350 characters each and 45 questions, every one with exactly one gold document (`wc -l` on `datasets/retrieval/*.jsonl`; verified 0 multi-label questions). `retrieval_eval.py:207-230` seeds one chunk per document, so the chunker is not under test.
 <br>*Why here:* acceptance.md says '0.91 recall@1 is the bar the belief engine has to beat' and gates the entire wiki deletion (Part E) on beating it. That is a load-bearing number resting on 45 questions over 12 short paragraphs, measured through a seeder that does not match production indexing.
-<br>*Win:* Concrete targets: corpus ≥2,500 chunks (the project's own 45 ingested documents, indexed by the production job); ≥300 query/passage pairs with ≥3 graded per query; report nDCG@10, recall@50 and MRR@10, with a per-phrasing breakdown as today. · *Effort:* Two weeks, and it is the item most likely to be under-estimated. One week to build the pair set (LLM-drafted from real c…
+<br>*Win:* Concrete targets: corpus ≥2,500 chunks (the project's own 45 ingested documents, indexed by the production job); ≥300 query/passage pairs with ≥3 graded per query; report nDCG@10, recall@50 and MRR@10, with a per-phrasing breakdown as today.
 
 
 **`ADOPT` · Rebind the embedder to cohere-embed-v4 at 1024 Matryoshka dimensions**
 <br>The gateway serves `cohere-embed-v4`. I probed it: default output is 1536-dim, but `{"dimensions": 1024}` returns exactly 1024 — a drop-in fit for `DocumentChunk.embedding = Vector(EMBEDDING_DIM=1024)` (`aleph_rks/models.py:34,155`) with no migration and no column re-dimensioning. The current default binding is a model the gateway does not serve at all;
 <br>*Why here:* Amazon Titan Text Embeddings V2 is a 2024-era general-purpose embedder; Cohere Embed v4 is a current-generation retrieval embedder with a 128k context window and native Matryoshka truncation. Aleph's own eval already shows the dense leg is worth +0.31 recall@1 and that almost all of it comes from paraphrase questions — the leg most sensitive to embedder quality is the one carrying the most weight.…
-<br>*Win:* A/B on the rebuilt eval, same corpus, same queries, only the `embedding` binding changed: report recall@1 and nDCG@10 for titan-embed-text-v2@1024 vs cohere-embed-v4@1024. `reembed_for_project` already exists and is idempotent (`retrieval.py:201-296`), so the switch is a worker run and the delta is directly attributabl… · *Effort:* One day for the code (forward `dimensions` through `LiteLLMClient.embed`, add the registry entry, rebind), plus one re-e…
+<br>*Win:* A/B on the rebuilt eval, same corpus, same queries, only the `embedding` binding changed: report recall@1 and nDCG@10 for titan-embed-text-v2@1024 vs cohere-embed-v4@1024. `reembed_for_project` already exists and is idempotent (`retrieval.py:201-296`), so the switch is a worker run and the delta is directly attributabl…
 
 
 **`ADOPT` · Turn on pgvector iterative index scans for the project-filtered dense leg**
 <br>The dense query is `select(...).where(DocumentChunk.project_id == project_id).order_by(DocumentChunk.embedding.cosine_distance(q)).limit(fetch)` with `fetch = max(top_k*4, 40)` (`retrieval.py:79-96`). With an HNSW index, the filter is applied *after* the index scan, so a query in a small project can come back with far fewer than `fetch` rows — or none — while the index reports success.
 <br>*Why here:* Aleph is multi-tenant by construction — 'every row carries project_id' is a stated design commitment — so *every* dense query is a filtered query. This is the failure mode where the system reports no error and simply returns a worse list, which is the shape of defect this codebase has shipped repeatedly.
-<br>*Win:* A test that seeds N=20 projects with 500 chunks each, queries one project, and asserts the dense leg returns `fetch` rows (40) rather than a truncated set. It fails today and passes with `SET LOCAL hnsw.iterative_scan = 'relaxed_order'` in the retrieval transaction. · *Effort:* One day, including the test. Cheap enough that not doing it is a choice to keep an unquantified recall leak.
+<br>*Win:* A test that seeds N=20 projects with 500 chunks each, queries one project, and asserts the dense leg returns `fetch` rows (40) rather than a truncated set. It fails today and passes with `SET LOCAL hnsw.iterative_scan = 'relaxed_order'` in the retrieval transaction.
 
 
 **`ADOPT` · Replace pypdf with a layout-aware PDF parser — section_path is NULL for the entire corpus**
 <br>`PyPDFNormalizer.normalize` (`normalization.py:64-108`) calls `page.extract_text()` per page and joins with blank lines. No headings, no reading order, no tables, no equations; `structure` is hardcoded `{'heading_count': 0, 'table_count': 0, 'figure_count': 0}` (line 98-103).
 <br>*Why here:* For a scientific corpus, the section a passage came from is most of its meaning: a number in Methods, in Results, and in Related Work are three different claims. Aleph stores `section_path` on every chunk, threads it through `ChunkHit` and `DescentChunk`, and renders it — and it is NULL for 44 of 45 documents.
-<br>*Win:* Two counts, both currently at their worst value: `select count(*) from normalized_documents where (structure_jsonb->>'heading_count')::int > 0` goes 1 → ≥35 of 45, and `select count(*) from document_chunks where section_path is not null` goes (once chunks exist) 0 → >80%. · *Effort:* One to two weeks, and it carries a real dependency decision (a layout parser is a heavy dependency and possibly a separa…
+<br>*Win:* Two counts, both currently at their worst value: `select count(*) from normalized_documents where (structure_jsonb->>'heading_count')::int > 0` goes 1 → ≥35 of 45, and `select count(*) from document_chunks where section_path is not null` goes (once chunks exist) 0 → >80%.
 
 
 **`ADOPT` · Make claims retrievable — the Claim Spine has two indexes, no writer, and an O(n²) reconciler**
 <br>`WikiClaim` declares `embedding: Vector(1024)` with an HNSW index `ix_claims_embedding_hnsw` and a GIN expression index `ix_claims_text_fts` over `to_tsvector('english', text)` (`aleph_wiki/models.py:203-216,243`). `grep -rn '\.embedding' packages/aleph-wiki packages/aleph-belief apps/api/src` returns **nothing** — no writer. Live DB: 786 claims, `count(*) where embedding is not null` = **0**.
 <br>*Why here:* acceptance.md gates the wiki deletion on the belief path beating 0.91 recall@1 — but there is no belief retrieval path at all to measure. The Claim Spine is currently write-only with respect to retrieval, which means Part E can never unblock on its own terms.
-<br>*Win:* (1) `select count(*) from wiki_claims where embedding is not null` goes 0 → 786, written on the same transaction as the claim. (2) A `search_claims` entry point with the same hybrid+RRF shape as `search_corpus`, benchmarked on the rebuilt eval as a third arm alongside chunk retrieval — this produces the number acceptan… · *Effort:* About a week: embed claims on the write path (batched, ledgered, reusing `embed_texts`), add `search_claims`, add ANN bl…
+<br>*Win:* (1) `select count(*) from wiki_claims where embedding is not null` goes 0 → 786, written on the same transaction as the claim. (2) A `search_claims` entry point with the same hybrid+RRF shape as `search_corpus`, benchmarked on the rebuilt eval as a third arm alongside chunk retrieval — this produces the number acceptan…
 
 
 **`TRIAL` · Multi-query expansion fused by RRF, targeted at the paraphrase gap**
 <br>`search_corpus` issues exactly one query with the user's raw text (`retrieval.py:103,113`). No expansion, no decomposition, no synonym generation. The assistant router (`router.py:184`) passes the question through verbatim.
 <br>*Why here:* Aleph's own eval already isolates the residual error: at recall@1, verbatim questions score 1.00 and paraphrase questions score 0.87 (acceptance.md §B). Vocabulary mismatch is the remaining failure mode by the project's own measurement, and generating 3-4 alternate phrasings and RRF-fusing their result lists is the cheapest direct attack on it.
-<br>*Win:* recall@1 and nDCG@10 on the *paraphrase* slice of the rebuilt eval specifically, since that is where the mechanism should act — the eval already breaks down by phrasing (`retrieval_eval.py:250-253,306-307`), so the slice exists. · *Effort:* Three days, including the expansion prompt, parallel embedding, and the eval arm. Genuinely cheap.
+<br>*Win:* recall@1 and nDCG@10 on the *paraphrase* slice of the rebuilt eval specifically, since that is where the mechanism should act — the eval already breaks down by phrasing (`retrieval_eval.py:250-253,306-307`), so the slice exists.
 
 
 **`TRIAL` · BM25 lexical scoring instead of Postgres ts_rank**
 <br>The lexical leg ranks with `func.ts_rank(DocumentChunk.text_tsv, tsquery)` (`retrieval.py:113`). `ts_rank` is a weighted term-density score with no inverse document frequency and no document-length normalisation. Combined with `or_tsquery` (`tsquery.py:51-59`), which rewrites the parsed conjunction to a disjunction, a natural-language question matches any chunk containing any one stem — so on a re…
 <br>*Why here:* The whole architecture rests on the lexical leg being an *independent, competent* ranker — RRF's value comes from agreement between two rankers that disagree in useful ways, and a leg that cannot tell a rare domain term from a common one contributes noise rather than signal.
-<br>*Win:* On the rebuilt eval, run the lexical leg alone three ways — `ts_rank`, `ts_rank_cd`, BM25 — and report recall@50 and nDCG@10 for each, plus p95 query latency at corpus scale. The decision rule should be stated in advance: adopt BM25 only if it beats `ts_rank` by more than the noise band on lexical-only recall@50, becau… · *Effort:* About a week if `pg_search` goes in (extension into the Postgres image, migration for the BM25 index, retrieval change,…
+<br>*Win:* On the rebuilt eval, run the lexical leg alone three ways — `ts_rank`, `ts_rank_cd`, BM25 — and report recall@50 and nDCG@10 for each, plus p95 query latency at corpus scale. The decision rule should be stated in advance: adopt BM25 only if it beats `ts_rank` by more than the noise band on lexical-only recall@50, becau…
 
 
 **`ASSESS` · GraphRAG-style community summarisation over the claim graph**
 <br>The pieces are notionally present — `claim_edges` with `kind ∈ supports|contradicts|derived_from|specializes|supersedes` (`aleph_wiki/models.py:408-430`) is exactly a typed knowledge graph — but the table has 0 rows on the live stack and the only writer emits `supersedes`.
 <br>*Why here:* Global sensemaking is a genuinely different query class from the one hybrid chunk retrieval serves, and it is the class a research workbench gets asked most often ('what does this literature disagree about', 'what is the consensus').
-<br>*Win:* Before building anything: instrument the assistant to classify each turn as local (fact-seeking) or global (sensemaking), and count. If under ~15% of real turns are global, the honest answer is that this is not where the value is. · *Effort:* Three weeks minimum for a real implementation, plus meaningful indexing cost per corpus.
+<br>*Win:* Before building anything: instrument the assistant to classify each turn as local (fact-seeking) or global (sensemaking), and count. If under ~15% of real turns are global, the honest answer is that this is not where the value is.
 
 
 **`HOLD` · ColBERT-style late interaction, and ColPali-style vision late interaction over PDF pages**
 <br>Late interaction stores a vector per token (or per patch) and scores by MaxSim, keeping the term-level detail a single pooled vector discards. Aleph stores exactly one 1024-dim vector per chunk (`DocumentChunk.embedding`, `models.py:155`) and the installed pgvector 0.8.6 has no multi-vector primitive — a real implementation means a second index type or a second store, which is a deployment change…
 <br>*Why here:* The vision variant is the interesting one, because it is the alternative answer to opportunity 8: instead of parsing a PDF into text and losing the layout, embed the rendered page image with a late-interaction vision model and retrieve pages directly. For a corpus that is 40 scientific PDFs averaging 140k chars with one usable heading between them, that is a materially different bet.
-<br>*Win:* None obtainable today, which is the reason for the verdict. The trigger to revisit is concrete and checkable: when the configured gateway advertises a multi-vector or vision-embedding model (`aleph_models.discovery` already reads the catalogue and already leaves capabilities unbound rather than guessing), re-open this… · *Effort:* Not schedulable. Revisit when the gateway catalogue changes, or if the parser bench in opportunity 8 shows that no text…
+<br>*Win:* None obtainable today, which is the reason for the verdict. The trigger to revisit is concrete and checkable: when the configured gateway advertises a multi-vector or vision-embedding model (`aleph_models.discovery` already reads the catalogue and already leaves capabilities unbound rather than guessing), re-open this…
 
 
 **`HOLD` · HyDE (hypothetical document embeddings) as a query transform**
 <br>Generate a fake answer to the query with an LLM, embed *that*, and search with it — on the theory that a hypothetical answer sits closer in embedding space to the real passage than the question does. Aleph does none of this; the raw question is embedded directly (`router.py:335-345`).
 <br>*Why here:* It is the obvious candidate for the paraphrase gap, which is why it needs an explicit no rather than silence. It would add an LLM generation to the critical path of every retrieval turn — and Aleph's agent runs in-process inside FastAPI, so latency on the request path is a real constraint, not a preference.
-<br>*Win:* The honest measurable is a negative one: after opportunities 3, 4 and 6 land, check whether the paraphrase slice of the rebuilt eval still shows a gap. If recall@1 on paraphrase reaches parity with verbatim, HyDE has nothing left to buy and this stays closed. · *Effort:* Two days to implement if it is ever justified. The recommendation is not to spend them — using the embedder's native que…
+<br>*Win:* The honest measurable is a negative one: after opportunities 3, 4 and 6 land, check whether the paraphrase slice of the rebuilt eval still shows a gap. If recall@1 on paraphrase reaches parity with verbatim, HyDE has nothing left to buy and this stays closed.
 
 
 ### Agent harness
@@ -2325,79 +2324,79 @@ number that would move. **63 opportunities: 45 adopt, 10 trial, 3 assess, 5 hold
 **`ADOPT` · Feed the gateway's real context window into compaction — today the agent compacts at a hardcoded 170k regardless of the…**
 <br>`create_deep_agent` installs `create_summarization_middleware(model, backend)` in the default stack (`.venv/.../deepagents/graph.py:740`). Its thresholds come from `compute_summarization_defaults` (`.venv/.../deepagents/middleware/summarization.py:172-209`), which reads `model.profile['max_input_tokens']`.
 <br>*Why here:* `aleph_models.discovery` already reads `max_input_tokens` from the gateway's `/model/info` (packages/aleph-models/src/aleph_models/discovery.py:87, 177) and stores it on every binding (`binding_for`, line 449). Nothing on the agent path reads it — grep shows the only consumer is the Settings API surfacing it to the UI (apps/api/src/aleph_api/routes/model_profile.py:77).
-<br>*Win:* Provider `context_length_exceeded` / `ContextOverflowError` responses per 100 agent turns against a sub-170k binding: currently unbounded, target 0. Testable without a live model: bind a profile whose `max_input_tokens` is 32000, drive a thread past 32k approximate tokens, assert `_summarization_event` fired at least o… · *Effort:* 1-2 days. The threshold plumbing is one middleware constructed with values already loaded at lifespan;
+<br>*Win:* Provider `context_length_exceeded` / `ContextOverflowError` responses per 100 agent turns against a sub-170k binding: currently unbounded, target 0. Testable without a live model: bind a profile whose `max_input_tokens` is 32000, drive a thread past 32k approximate tokens, assert `_summarization_event` fired at least o…
 
 
 **`ADOPT` · Prompt caching is silently a no-op on Aleph's agent path — ~10k tokens of identical prefix are re-billed at full rate ev…**
 <br>deepagents appends `AnthropicPromptCachingMiddleware(unsupported_model_behavior='ignore')` unconditionally (`.venv/.../deepagents/graph.py:609`, and the equivalent for the top-level agent). That middleware returns immediately unless the model is a `ChatAnthropic` instance — `.venv/.../langchain_anthropic/middleware/prompt_caching.py:104: if not isinstance(request.model, ChatAnthropic)`.
 <br>*Why here:* I measured the static prefix: Aleph's own SYSTEM_PROMPT is 1,644 approximate tokens, deepagents' BASE is 569, the filesystem middleware prompt 2,347, the subagent middleware prompt 2,279, skills 469, and Aleph's four bundled SKILL.md metadata blocks 297 — 7,605 tokens before any tool schema, plus 1,483 tokens of docstring across the 11 `@tool` functions in copilot_agent.py and deepagents' own eigh…
-<br>*Win:* `SELECT sum(cached_tokens), sum(cache_savings_usd) FROM model_calls WHERE purpose LIKE 'assistant.%'` is exactly 0 today. Target: cached_tokens / input_tokens > 0.6 measured over a session of 5+ turns. Secondary: median time-to-first-token on turn N>1. · *Effort:* 2-3 days including a test that asserts a `cache_control` key reaches the outbound payload and one that asserts a nonzero…
+<br>*Win:* `SELECT sum(cached_tokens), sum(cache_savings_usd) FROM model_calls WHERE purpose LIKE 'assistant.%'` is exactly 0 today. Target: cached_tokens / input_tokens > 0.6 measured over a session of 5+ turns. Secondary: median time-to-first-token on turn N>1.
 
 
 **`ADOPT` · Resolve the model per request, not once at boot — and stop `set_model_profile` telling the user something untrue**
 <br>`build_assistant_deep_agent` (copilot_agent.py:1529) constructs one orchestrator `ChatOpenAI` and six subagent models at startup. `_resolve_agent_model` (line 1439) reads `_runtime['agent_bindings']`, which lifespan populates once from the **default named template**, not from any project (apps/api/src/aleph_api/lifespan.py:88-106).
 <br>*Why here:* The `set_model_profile` tool writes the project row and then tells the analyst 'New LLM/agent calls use that profile's models' (copilot_agent.py:1287-1291). For the agent's own turns and every subagent turn, that sentence is false — those models were frozen at process start.
-<br>*Win:* A test that (a) switches project A's profile to `aleph-production`, (b) runs one turn, (c) asserts the resulting `ModelCall.model` differs from the boot default. It cannot pass today. · *Effort:* 3-4 days. The middleware is small; the care is in caching resolved `ChatOpenAI` instances per (project, capability) so a…
+<br>*Win:* A test that (a) switches project A's profile to `aleph-production`, (b) runs one turn, (c) asserts the resulting `ModelCall.model` differs from the boot default. It cannot pass today.
 
 
 **`ADOPT` · Systemic tool-output spill: cap what a tool result may put in context, store the rest, hand back a preview plus a locato…**
 <br>A post-execute policy that measures the model-facing tool result, and when it exceeds a byte cap writes the full text to the agent backend and replaces the inline result with a head/tail preview plus a retrieval path the agent can `read_file`.
 <br>*Why here:* Aleph's tools are retrieval tools — their whole job is to return document text. `deep_read` returns a composed answer over expanded wikilinks; `search_corpus` returns chunks. That is precisely the shape whose size is unpredictable and dominated by content the model reads once.
-<br>*Win:* p99 `len(ToolMessage.content)` over a session, asserted ≤ the configured cap in a test that calls `deep_read` against a large corpus. Today that number is unbounded and unmeasured. Secondary: tokens per turn attributable to tool results, from the `ModelCall.input_tokens` delta across a turn. · *Effort:* 3-4 days. Aleph already has the storage half — the `CompositeBackend` in `_memory_backend` (copilot_agent.py:1622) can r…
+<br>*Win:* p99 `len(ToolMessage.content)` over a session, asserted ≤ the configured cap in a test that calls `deep_read` against a large corpus. Today that number is unbounded and unmeasured. Secondary: tokens per turn attributable to tool results, from the `ModelCall.input_tokens` delta across a turn.
 
 
 **`ADOPT` · Build the Inspector on the trajectory Aleph already persists and currently reads with nothing**
 <br>An agent Inspector pane (backlog C3) fed from two sources that both exist: the durable `AsyncPostgresSaver` checkpoint, and Deep Agents' `stream.subagents` handles for the live view (backlog H7). Add a read route over `graph.aget_state` / `checkpointer.alist` plus per-turn `AgentRun` / `AgentEvent` rows for the conversational agent.
 <br>*Why here:* Two verified gaps meet here. First, the trajectory is already written and read by nothing: `build_agent_checkpointer` mounts `AsyncPostgresSaver` (copilot_agent.py:1410-1426) and grep finds no call to `aget_state`, `get_state` or `alist` anywhere in `apps/api` or `apps/workers` — the checkpoint is used only by the graph to resume itself.
-<br>*Win:* `GET /v1/projects/{id}/agent-runs/{thread_id}/trajectory` returns ≥1 tool-call record for a turn that made a tool call — a check that returns 0 today and can fail. Downstream: median minutes to localise an agent failure, currently 'read container logs'. · *Effort:* About a week: the durable read route and the pane are each 2 days; wiring `AgentRun`/`AgentEvent` emission into the agen…
+<br>*Win:* `GET /v1/projects/{id}/agent-runs/{thread_id}/trajectory` returns ≥1 tool-call record for a turn that made a tool call — a check that returns 0 today and can fail. Downstream: median minutes to localise an agent failure, currently 'read container logs'.
 
 
 **`ADOPT` · The eval harness discovers zero datasets and exits 0 — and there is no agent-behaviour eval of any kind**
 <br>`packages/aleph-evals` has a dataset-discovering runner (`_discover_specs`, runner.py:62) and six scorers — citation, coverage, cost, permission, retrieval, synthesis. It scans `datasets/<inc>_<area>/manifest.yaml`. I ran `uv run python -m aleph_evals --datasets all --gate soft`: the output is `{"selected_datasets": [], "any_failures": false}`.
 <br>*Why here:* CLAUDE.md's own standard is 'prefer criteria that can FAIL' and it already calls out `audit/run.sh` for this exact sin. The eval runner is currently a greener version of the same problem: six scorers with no case can never report a regression, while the CLI reports success.
-<br>*Win:* Three numbers that do not exist today: (1) `selected_datasets` length > 0 from the runner; (2) tool-choice accuracy over a labelled set of N prompts with an expected first tool, reported as a percentage; (3) end-to-end task success rate over a small suite of research tasks. Each can regress, which is the point. · *Effort:* A first honest number in a week — the runner and scorers already exist, so the cost is authoring 30-50 labelled cases an…
+<br>*Win:* Three numbers that do not exist today: (1) `selected_datasets` length > 0 from the runner; (2) tool-choice accuracy over a labelled set of N prompts with an expected first tool, reported as a percentage; (3) end-to-end task success rate over a small suite of research tasks. Each can regress, which is the point.
 
 
 **`ADOPT` · Wire the SpawnLedger — Aleph has written depth/fan-out/budget brakes and enforces none of them**
 <br>`packages/aleph-kernel/src/aleph_kernel/spawn_ledger.py` (198 lines) implements exactly the right thing: `max_depth`, `max_children`, and a budget that is *deducted from the parent's remaining* so 'a subtree cannot outspend its root', with reservation at spawn time so a parent cannot promise the same budget twice. It has zero callers outside its own tests — verified by grep across the whole tree.
 <br>*Why here:* Backlog E5 reports the gateway 'weirdly rate limited' and names subagent fan-out as the likely cause — and the brake for that is sitting in the tree, finished, unwired. This is also the strongest version of the 'ship a consumer with every producer' rule: cost is recorded to six decimal places with pricing provenance, and no code path anywhere can act on it.
-<br>*Win:* A turn given a $0.05 budget refuses its 4th subagent spawn with a stated reason — a test that cannot pass today. Operationally: max `ModelCall` count attributable to a single thread over 24h, and count of turns exceeding a configured spawn budget (target 0, currently unmeasurable). · *Effort:* 3-4 days. The ledger is written and tested; the work is a `SubAgentMiddleware` wrapper that opens a root per turn, spawn…
+<br>*Win:* A turn given a $0.05 budget refuses its 4th subagent spawn with a stated reason — a test that cannot pass today. Operationally: max `ModelCall` count attributable to a single thread over 24h, and count of turns exceeding a configured spawn budget (target 0, currently unmeasurable).
 
 
 **`ADOPT` · Make the agent able to author a skill — using `aleph_kernel.skills` and its AST gate as admission control instead of lea…**
 <br>Two skills implementations exist. The live one is deepagents' `SkillsMiddleware` over a read-only `FilesystemBackend` (copilot_agent.py:1596, `_SKILLS_DIR` at 1463) serving four bundled SKILL.md files. The other, `packages/aleph-kernel/src/aleph_kernel/skills.py` (197 lines) plus `ast_gate.py` (203 lines), gates source before executing it, execs into a fresh namespace so a skill cannot shadow a mo…
 <br>*Why here:* This is the product thesis (CLAUDE.md: 'an agent that authors plugins for itself... with guardrails preventing it from removing load-bearing capability') and it is currently unexpressible — the skills backend is a read-only host filesystem, so nothing the agent learns survives the session.
-<br>*Win:* Three checks that all fail today: (1) a skill the agent authored in thread A is listed by `SkillsMiddleware` in thread B after an API restart; (2) a skill whose `kernel.py` performs work at module top level is rejected with a line number rather than admitted; · *Effort:* About a week for the writable backend plus gate; the guardrail (backlog A2) is mostly already built.
+<br>*Win:* Three checks that all fail today: (1) a skill the agent authored in thread A is listed by `SkillsMiddleware` in thread B after an API restart; (2) a skill whose `kernel.py` performs work at module top level is rejected with a line number rather than admitted;
 
 
 **`ADOPT` · Loop and repeat guards on the tool-call stream — the cheapest item on this list**
 <br>Two small policies with no model-facing surface. (a) A repeat detector: count consecutive tool calls with identical canonicalized arguments and, at thresholds, inject an advisory nudge telling the model to re-read the last result and change approach. (b) A per-tool declared timeout, enforced as a structured `TOOL_TIMEOUT` result rather than a hung turn.
 <br>*Why here:* Aleph's expensive tools are the ones most likely to be repeated — `deep_read` re-run with a near-identical query, `search_wiki` re-run after an empty result. The empty-search confabulation bug already fixed in `retrieval/router.py` was exactly the shape that invites a retry loop, and a loop against a metered path (`search_consensus` is quota-metered per month, subagents/researcher.py:184) burns a…
-<br>*Win:* Count of agent runs containing ≥3 consecutive identical tool calls, computed from the trajectory (item 5 makes this queryable): target 0 after the nudge lands. Count of turns exceeding a per-tool deadline, currently unmeasurable because no deadline exists. · *Effort:* 2 days for both, as one middleware. Almost all the design work is already written down in the deepseek-harness READMEs.
+<br>*Win:* Count of agent runs containing ≥3 consecutive identical tool calls, computed from the trajectory (item 5 makes this queryable): target 0 after the nudge lands. Count of turns exceeding a per-tool deadline, currently unmeasurable because no deadline exists.
 
 
 **`ADOPT` · Instrument the agent graph for OTEL — `diagnose_platform` reads traces the agent never emits**
 <br>`aleph-observability` instruments FastAPI, httpx, SQLAlchemy and Redis (packages/aleph-observability/pyproject.toml:10-13) and nothing else. There is no LangChain/LangGraph instrumentation and no Langfuse callback handler on the agent path — `_gateway_chat_model` attaches exactly one callback, the cost handler (copilot_agent.py:1506).
 <br>*Why here:* Aleph ships a `diagnose_platform` tool (copilot_agent.py:1318-1364) whose whole purpose is to read the platform's own Langfuse traces and report what is broken — while the conversational agent contributes none of its own spans to that store. So the agent can diagnose the workers and cannot diagnose itself.
-<br>*Win:* Spans emitted per agent turn: 0 today, target ≥1 per tool call and ≥1 per subagent delegation, asserted by an in-memory span exporter in a test. Secondary: whether `diagnose_platform` can name the failing step of an errored chat run — currently it cannot. · *Effort:* 2 days: add the Langfuse LangChain callback (or `openinference-instrumentation-langchain`) alongside `AgentCostCallbackH…
+<br>*Win:* Spans emitted per agent turn: 0 today, target ≥1 per tool call and ≥1 per subagent delegation, asserted by an in-memory span exporter in a test. Secondary: whether `diagnose_platform` can name the failing step of an errored chat run — currently it cannot.
 
 
 **`TRIAL` · Deterministic record/replay of gateway traffic, so agent behaviour is testable without a live model**
 <br>Record real gateway request/response pairs once into JSON cassettes, replay them in tests. `grep -rn 'vcr|cassette|respx|record_mode'` over the tree returns nothing outside `.venv` — Aleph has no replay layer of any kind. Every agent test today either mocks at the Python object level (apps/api/tests/unit/test_subagents.py asserts a constructed model's `base_url`, not behaviour) or needs `LITELLM_B…
 <br>*Why here:* The 18 agent-adjacent unit tests in `apps/api/tests/unit/` pin construction, not conduct: `test_agent_gateway_base_url.py` pins URL shaping, `test_agent_checkpointer.py` pins that a saver is passed. Not one exercises a turn. That is why backlog E1's `RUN_ERROR` has to be reproduced by hand in a browser.
-<br>*Win:* Number of tests exercising a complete agent turn that pass with no gateway configured: 0 today, target ≥5 covering tool call, subagent delegation, approval gate, and a compaction trigger. Secondary: CI wall-clock stays flat because replayed turns cost no tokens. · *Effort:* 4-5 days for a `respx`-based recorder around the OpenAI transport plus the first three cassettes.
+<br>*Win:* Number of tests exercising a complete agent turn that pass with no gateway configured: 0 today, target ≥5 covering tool call, subagent delegation, approval gate, and a compaction trigger. Secondary: CI wall-clock stays flat because replayed turns cost no tokens.
 
 
 **`TRIAL` · A general MCP client as the tool-source registry — a cheaper plugin system than the bespoke one A1 describes**
 <br>Aleph is an MCP *server* (`packages/aleph-a2ui/src/aleph_a2ui/mcp_server.py` publishes the A2UI catalog) and an MCP *client* for exactly one hardcoded connector (`packages/aleph-scholar/src/aleph_scholar/consensus.py:39, 204`). There is no way to register an MCP server as a tool source for the agent. The `mcp` SDK is already a workspace dependency;
 <br>*Why here:* Backlog A1 wants runtime activate/deactivate of plugins and orders it last on purpose, because 'a plugin system designed before [items 2, 5 and 6] would be designed against guesses'. An MCP tool-source registry is the version of A1 that needs no invented protocol: a plugin becomes a server you register, per-project enable/disable is a row, and the trust tiering A4 wants maps onto per-server tool a…
-<br>*Win:* Number of tool sources addable without a code change and a redeploy: 0 → N. A check that can fail: register a stdio MCP server in config, assert its tools appear in the compiled agent's tool list, disable it for one project and assert they disappear for that project only. · *Effort:* About a week for stdio + streamable-HTTP transports, a per-project enable table with the usual `project_id` / `access_sc…
+<br>*Win:* Number of tool sources addable without a code change and a redeploy: 0 → N. A check that can fail: register a stdio MCP server in config, assert its tools appear in the compiled agent's tool list, disable it for one project and assert they disappear for that project only.
 
 
 **`HOLD` · Async subagents (backlog H6) for the research loop**
 <br>`deepagents.middleware.async_subagents.AsyncSubAgentMiddleware` is present in the installed 0.6.6 (verified importable) and returns a job id immediately so the supervisor keeps talking while work proceeds, with check / mid-flight update / cancel.
 <br>*Why here:* The backlog places this at item 10 on the grounds that 'Aleph's research loop is exactly this shape and currently blocks'. Reading the code, it does not. `_start_research_impl` (copilot_agent.py:825-868) self-calls `POST /v1/projects/{id}/synthesize`, which dispatches an arq job, and returns immediately with 'It runs in the background (~1 minute)...
-<br>*Win:* None that I can state honestly. The candidate metric — supervisor wall-clock blocked per research dispatch — is already near zero, and I could not find a second in-agent call path that blocks on long work. · *Effort:* Would be about a week including the `langgraph.json` dual-graph registration and the worker-pool sizing the docs warn ab…
+<br>*Win:* None that I can state honestly. The candidate metric — supervisor wall-clock blocked per research dispatch — is already near zero, and I could not find a second in-agent call path that blocks on long work.
 ---
 
 ## Part 6 — How this runs
@@ -2442,16 +2441,16 @@ that individually pass and collectively do not merge.
 
 ### Sequence
 
-**Week 0** — Part 0. Make the gate honest and make it run.
+**First** — Part 0. Make the gate honest and make it run.
 
 **Then, in dependency order:**
 
-1. **Unbreak retrieval** (WS-RS1) — days, and it unblocks four clusters' ability
+1. **Unbreak retrieval** (WS-RS1) — small, and it unblocks four clusters' ability
    to measure anything. Rebind the embedder, add a boot probe that fails loudly,
    sweep the 45 stuck runs, and decide in writing what happens to 786 ungrounded
    claims: re-extract or delete.
 2. **Close the unsupervised skill-write path** (WS-K1) and **fix the two kernel
-   bugs** (WS-A1a) — days each, and they gate the self-improvement work.
+   bugs** (WS-A1a) — small, and they gate the self-improvement work.
 3. **Prompt caching, context window, spill and loop guards** (harness horizon,
    `adopt`) — the cheapest items on the list and the likely cause of the gateway
    rate limiting.
@@ -2481,7 +2480,62 @@ and because a plan without them silently assumes first drafts are correct.
 
 ---
 
-## Part 7 — Explicitly not doing
+## Part 7 — Sources to review before executing
+
+A new session picking this up should read these first. Each is mapped to the
+workstreams that depend on it, so the reading is scoped rather than general.
+
+### LangChain / Deep Agents
+
+| Doc | Workstreams |
+|---|---|
+| [Skills](https://docs.langchain.com/oss/python/deepagents/skills) — `SKILL.md` frontmatter, three-level progressive disclosure, `SkillsMiddleware`, and the backends (`State` / `Store` / `Filesystem`) | `WS-H1`, `WS-K1`, `WS-A1b`, `WS-A2` |
+| [Profiles](https://docs.langchain.com/oss/python/deepagents/profiles) — `HarnessProfile`, `register_harness_profile`, YAML config, per-provider defaults | `WS-MEP-7`, `WS-MEP-6` |
+| [Rubric](https://docs.langchain.com/oss/python/deepagents/rubric) — `RubricMiddleware`, LLM-as-judge, iterate-until-satisfied. **Beta**, needs ≥0.6.5 | `WS-H3` |
+| [Interpreters](https://docs.langchain.com/oss/python/deepagents/interpreters) — in-memory workspace, programmatic tool calling. **Beta**, needs `deepagents[quickjs]` | `WS-H5` |
+| [Dynamic subagents](https://docs.langchain.com/oss/python/deepagents/dynamic-subagents) — dispatching subagents from interpreter code | `WS-H5` |
+| [Async subagents](https://docs.langchain.com/oss/python/deepagents/async-subagents) — job ids, check/update/cancel, **ASGI transport when `url` is omitted**. Preview | `WS-H6` |
+| [Event streaming](https://docs.langchain.com/oss/python/deepagents/event-streaming) — `stream.subagents`, `astream_events(version="v3")`, `asyncio.gather` | `WS-C3a`, `WS-C3b` |
+| [OpenWiki](https://docs.langchain.com/oss/openwiki/overview) — agent-facing wiki as durable context, and **OKF v0.1** (front matter, indexes, linked concepts) | `WS-H8` |
+
+### CopilotKit
+
+| Doc | Workstreams |
+|---|---|
+| [Intelligence — self-improvement](https://www.copilotkit.ai/copilotkit-intelligence#self-improvement) — the pillar the first assessment missed: in-context learning from feedback, captured interactions, automatic skill development | Context for `WS-H1`/`WS-A2`; the decline is recorded in Part 7 |
+| [OSS vs Enterprise](https://docs.copilotkit.ai/concepts/oss-vs-enterprise) — what the licensed backend actually provides, and the Helm/Kubernetes self-hosting path | The evidence behind declining C1 |
+| [Generative UI spectrum](https://www.copilotkit.ai/generative-ui-spectrum) — the four bands; Aleph uses three | `WS-C2`, `WS-A4`, `WS-UI-3` |
+
+### Specifications
+
+- [Agent Skills specification](https://agentskills.io/specification) — the format both
+  `aleph_kernel/skills.py` and deepagents' `SkillsMiddleware` implement, and the
+  reason they are two implementations of one thing (`WS-A1b`).
+- [Agent Protocol](https://github.com/langchain-ai/agent-protocol) — what async
+  subagents speak (`WS-H6`).
+
+### MCP servers available in-session
+
+Do not work from memory on any of the above. These were used to build this plan
+and are the current source:
+
+- `copilotkit-mcp` — `search-docs`, `explore-docs`, `search-ag-ui-docs`, `search-code`
+- `docs-langchain` — `search_docs`, and `query_docs_filesystem` for reading whole
+  pages by path (`cat /oss/python/deepagents/skills.mdx`)
+- `reference-langchain` — `get_symbol`, `search_api` for API signatures
+- `context7` — `resolve-library-id` then `query-docs`, for anything else
+
+**Beta and preview surface.** `WS-H3` and `WS-H5` are beta; `WS-H6` is preview.
+The horizon scan flagged that three thesis-critical features currently sit on
+unstable upstream APIs, and recommended capping that at one. The decision taken
+here is to adopt them anyway — the owner's instruction was *"don't fight the
+beta, just use the best stuff"* — but each should carry a contract test
+asserting the imported symbol's signature matches what Aleph calls, so a
+`uv sync` to a new `deepagents` fails CI rather than production.
+
+---
+
+## Part 8 — Explicitly not doing
 
 Each of these belongs in `docs/decisions.md` as a dated entry, so it stops being
 re-litigated every planning round.
@@ -2491,17 +2545,74 @@ re-litigated every planning round.
 - **The wiki is not deleted in this cycle.** Acceptance E1/E2/E3 stay skipped.
   One workstream produces the deciding measurement; nothing schedules the
   deletion. Say the exit condition and stop there.
-- **OIDC is not shipped.** Everything is measured in `local` mode. This silently
-  changes what two clusters must build, so it needs to be written, not assumed.
-- **`access_scope` is deleted, not implemented.** Route-side `require_at_least`
-  at ~20 sites is the real control. A second, unread authorization concept in
-  every table is worse than none.
-- **`audit/` is deleted.** Three overlapping registries of intent
-  (`docs/acceptance.md` 41 rows, `scripts/acceptance.sh` 38 ids, `audit/claims.yaml`
-  ~28 claims) already disagree in both directions. One gate.
-- **`aleph-datasets` is deleted.** Its only importers are `alembic/env.py` and a
-  consistency test. A package that exists to be imported by the migration runner
-  is the package-scale version of the same defect.
+- **OIDC *deployment* is not a goal this cycle** — but its two known holes are
+  closed, and this line used to say the opposite.
+
+  **Correction (21 Aug):** an earlier draft said flatly *"OIDC is not shipped"*
+  while `WS-D3` and `WS-D4` are both scheduled OIDC workstreams — the same
+  mistake as the async-subagents line above, found by the same check. `WS-D3`'s
+  own rationale argues against parking it: *"parking it behind D4's genuine
+  transport rewrite makes a cheap fix look expensive and keeps oidc mode
+  unusable for the chat path."* It is one prop on one component plus a test, and it also closes an open proxy on port 4000 — which is a
+  `local`-mode problem too, not only an OIDC one. `WS-D4` is a genuine transport
+  decision and is scheduled as one, because in `oidc` mode every live surface is
+  dark, and that is not partial degradation, it is the workspace not working.
+
+  What remains out of scope: standing up an identity provider, and measuring
+  anything in `oidc` mode. Measurement stays in `local`.
+
+### Three deletions that were promised and unowned
+
+An earlier draft of this section promised three deletions with **no workstream
+behind any of them**, and one of them contradicted scheduled work. They are now
+one workstream, because they are the same job — removing a second, unread
+concept — and because a promise with no owner is how the last round of
+"review-held rules" became this backlog.
+
+#### WS-X1 · Delete the three unread concepts
+
+**What it is.** Three things exist, are maintained, and are read by nothing.
+`access_scope` is a column on every table with **70 assignment sites and zero
+query filters**. `audit/` is a second acceptance gate whose id set already
+disagrees with `docs/acceptance.md` in both directions and whose `claims.yaml`
+asserts a defect that is no longer true. `aleph-datasets` is a workspace package
+whose only importers are `alembic/env.py` and a consistency test.
+
+**Why.** Each is the defect class CLAUDE.md names as dominant, and
+`access_scope` is the largest single instance of it in the codebase. Keeping an
+unread authorization concept in every table is worse than having none, because
+it reads as a control that is not there.
+
+**Note the conflict this resolves.** `WS-A1b` adds a *new* `access_scope` column
+to its plugins table, following the existing project-scope rule — correctly, as
+the rule stands. So this workstream must land **before** A1b, or A1b is adding a
+column this one removes. That ordering was invisible while the deletion had no
+workstream.
+
+**Criteria:**
+- No column, no assignment, no rule
+  <br>`grep -rn 'access_scope' apps packages --include='*.py' | wc -l` returns 0, and a migration drops it from every table
+- Role checks still hold, so the deletion removed nothing real
+  <br>`uv run pytest -m integration -k 'role or permission' -q` passes, and mutating one `require_at_least` call to a no-op makes it fail
+- One acceptance gate, not two
+  <br>`test -d audit && exit 1` — and the seven real `.spec.ts` files under `audit/checks/e2e/` are harvested into `tests/playwright/` by `WS-P4` first, not deleted with the directory
+- The package count goes down
+  <br>`grep -c 'members' pyproject.toml` unchanged but `aleph-datasets` absent from `[tool.uv.workspace]`, and `docs/acceptance.md` E4's ceiling drops from ≤21 to ≤20
+- Nothing silently depended on any of it
+  <br>`uv sync --all-packages && uv run pytest -q` passes, and the API and workers both boot — `curl -s localhost:8000/readyz` returns `ready`
+
+**Review.** For `access_scope` specifically, the review is the mutation: confirm
+that route-side `require_at_least` is genuinely the control by breaking one call
+site and watching an integration test go red. If nothing goes red, the column
+was not the only thing that was decorative.
+**Iterate.** Add a sweep that fails on any new write-only column — a field
+assigned in `apps`/`packages` and never read in a filter — so the class does not
+return under a different name.
+**Depends on:** `WS-P4` (harvest the specs first).
+**Risk.** `access_scope` may turn out to be read somewhere the grep misses — raw
+SQL, a JSONB path, or a string-built query. The first criterion is a grep;
+before running the migration, also check `grep -rn 'access_scope' --include='*.sql'`
+and the Alembic history for a functional index.
 - **No Enterprise Intelligence (C1).** Evaluated and declined — Deep Agents gives
   the same primitives with no licence, no Kubernetes, and nothing leaving the
   deployment.
@@ -2509,7 +2620,7 @@ re-litigated every planning round.
   **Correction (21 Aug):** an earlier draft of this section also listed *"no
   async subagents, no MCP client"*. That was wrong on both counts and it
   contradicted the plan's own body. `WS-H6` (async subagents) is a scheduled
-  workstream — 6 criteria, 6–8 days, behind `WS-C3a`/`WS-C3b`. The line came
+  workstream — 6 criteria, behind `WS-C3a`/`WS-C3b`. The line came
   from lifting the completeness critic's list wholesale; the critic was
   reasoning from the *backlog's* suggested order, where H6 sat tenth, not from
   the cluster plans that had already scheduled it. Both are now stated properly
@@ -2517,6 +2628,38 @@ re-litigated every planning round.
 - **No multi-tenancy, no collaboration, no presence, no mobile layout.** One
   user, three projects.
 - **No new workspace package.** The count holds at ≤21 and should ratchet down.
+
+### A contradiction this plan inherits, and does not resolve
+
+`CLAUDE.md:71` says: *"Treat wiki code as **legacy under removal**. Do not extend
+it, do not fix its cosmetics, do not add tests to it."* It points at
+`docs/decisions.md` D1 for the reasoning — a file that does not exist, so the
+reasoning is gone.
+
+**That rule has been comprehensively violated, by me, in the sessions
+immediately preceding this plan.** The wiki gained a schema governance layer,
+sixteen lint checks, derived hubs and an index, LLM classification, link
+resolution and a test suite. `packages/aleph-wiki` is the single most-invested
+package in recent history.
+
+The horizon scan flagged it independently: *"Reconcile CLAUDE.md with the tree:
+the wiki is being invested in, not removed."*
+
+So one of two things is true, and nobody has written down which:
+
+1. **The removal decision is stale.** The Claim Spine was going to replace the
+   wiki as the retrieval surface; it has 786 claims, zero edges, zero callers and
+   has never run (Part 2). If the replacement never arrived and the wiki is now
+   the working knowledge layer, `CLAUDE.md:71` should be deleted and D1 rewritten.
+2. **The removal decision stands**, in which case a large amount of recent work
+   went into a subsystem scheduled for deletion, and `WS-RS10`'s measurement is
+   the thing that decides when it goes.
+
+`WS-RS10` produces the deciding number — claim-level retrieval measured against
+chunk-level on the same eval — which is the honest version of "does the
+replacement actually beat what it replaces". **But the decision itself is not
+scheduled, and it should be made before more is invested either way.** It
+belongs in the `docs/decisions.md` that Part 0 creates.
 
 ### Backlog coverage
 
@@ -2563,7 +2706,7 @@ it too late. The middleware is already in `node_modules`
 (`grep -rn 'mcpApps\|mcpServers' apps/copilot-runtime/src` → 0, so it is
 config, not code).
 
-**Approach.** Timebox to half a day, before `WS-A1b` starts. Stand up one public
+**Approach.** Timebox it hard, and land it before `WS-A1b` starts. Stand up one public
 reference MCP server, set the config key, and answer two questions in
 `docs/decisions.md`: does an MCP App render in a Block, and would mounting MCP
 tool sources satisfy what A1's plugin registry is actually for?
@@ -2574,15 +2717,15 @@ tool sources satisfy what A1's plugin registry is actually for?
 - The decision is written down before A1b starts
   <br>`grep -c 'MCP' docs/decisions.md` returns ≥ 1, dated before the first WS-A1b commit
 - The spike does not become the work
-  <br>`git log --oneline --since=<spike date> -- apps/copilot-runtime/ | wc -l` ≤ 3 unless the decision was "adopt"
+  <br>`git log --oneline -- apps/copilot-runtime/` shows ≤ 3 commits from the spike unless the decision was "adopt"
 
 **Review.** The output is a decision, not a feature. If the spike ships code
 without a written decision, it failed.
 **Iterate.** If adopted, MCP Apps becomes the third trust tier in `WS-A4`'s
 settings contract — a plugin whose UI Aleph never wrote and does not vouch for.
-**Effort.** Half a day for the spike. · **Depends on:** nothing — it must come
+**Depends on:** nothing — it must come
 *before* `WS-A1b`.
-**Risk.** The spike is interesting enough to become a week. The third criterion
+**Risk.** The spike is interesting enough to sprawl. The third criterion
 exists to catch that.
 
 ### On async subagents (WS-H6)
@@ -2594,8 +2737,8 @@ measured how long an analyst actually waits. `WS-C3a` produces that number — i
 is what records how long a turn takes and where it goes — so H6 becomes
 *arguable* rather than assumed once C3a lands.
 
-If the number says analysts wait thirty seconds, H6 is worth 6–8 days. If it
-says four, it is not, and the honest outcome is to drop it and say so here.
+If the number says analysts wait a long time, H6 earns its place. If it says
+seconds, it does not, and the honest outcome is to drop it and say so here.
 
 ### And one open question worth taking seriously
 
