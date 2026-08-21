@@ -20,6 +20,7 @@ minutes, so it has to put the thing worth fixing first.
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -49,6 +50,40 @@ STALE_AFTER = timedelta(days=90)
 #: How many over-threshold stubs the report names individually. The rest are
 #: summarised in one line — a backlog is a ranked list, not a wall.
 STUB_READY_REPORTED = 25
+
+#: Suffixes stripped when deciding whether two titles name the same topic.
+#: Longest first, and only one is ever removed. Kept to three because each
+#: additional rule buys a rarer pair and risks a commoner false one — English
+#: has no short suffix list that gets `policies`→`policy` without also getting
+#: `series`→`serie`, and a merge suggestion is cheap to dismiss but expensive
+#: to distrust.
+_DEDUPE_SUFFIXES = ("ing", "ion", "s")
+
+#: What must survive a strip. Below this, stripping produces fragments that
+#: collide with unrelated words — `bus`→`bu`, `ring`→`r`.
+_MIN_STEM = 3
+
+
+def _dedupe_key(title: str) -> str:
+    """A normalised form for near-duplicate detection.
+
+    Lowercased, punctuation dropped, and each word reduced past the endings that
+    distinguish `checkpoint` from `checkpointing` and `index` from `indexes`.
+    Deliberately crude: it is a signal for a human to look, not an automatic
+    merge, and a false pair costs one glance while a missed pair costs a topic
+    permanently split in two.
+    """
+    words: list[str] = []
+    for raw in re.split(r"[^a-z0-9]+", title.lower()):
+        if not raw or raw in {"the", "a", "an", "of", "and", "for", "in", "to"}:
+            continue
+        stem = raw
+        for suffix in _DEDUPE_SUFFIXES:
+            if stem.endswith(suffix) and len(stem) - len(suffix) >= _MIN_STEM:
+                stem = stem[: -len(suffix)]
+                break
+        words.append(stem)
+    return " ".join(sorted(words))
 
 
 @dataclass(frozen=True, slots=True)
@@ -461,7 +496,33 @@ async def lint_wiki(
                     )
                 )
 
-    # ---- 12. stubs ready for promotion --------------------------------------
+    # ---- 12. near-duplicate titles ------------------------------------------
+    # "Add to existing page rather than creating near-duplicates" is a rule in
+    # the schema with nothing enforcing it, and mechanical extraction breaks it
+    # constantly: this corpus holds both `checkpoint` and `checkpointing`, which
+    # are one topic split across two pages so that neither accumulates the
+    # evidence and a reader finds whichever the ranker preferred.
+    #
+    # Compared on a normalised key rather than by edit distance: cheap, exact,
+    # and it catches the cases that actually occur (plural, gerund, hyphen,
+    # acronym-with-expansion) without reporting every pair of short titles.
+    normalised: dict[str, list[WikiPage]] = defaultdict(list)
+    for page in pages:
+        normalised[_dedupe_key(page.title)].append(page)
+    for key, group in normalised.items():
+        if len(group) < 2 or not key:
+            continue
+        titles_ = ", ".join(sorted(f"{p.title!r}" for p in group))
+        report.findings.append(
+            Finding(
+                check="near-duplicate",
+                severity="structure",
+                message=f"{len(group)} pages are the same topic: {titles_}",
+                fix="merge into one page; split evidence means neither is complete",
+            )
+        )
+
+    # ---- 13. stubs ready for promotion --------------------------------------
     # Not a defect — the opposite. These have met the threshold and are waiting
     # to become real pages, and surfacing them is what turns the threshold from
     # a rule into a work queue.

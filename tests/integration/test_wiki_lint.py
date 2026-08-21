@@ -360,3 +360,44 @@ class TestReportShape:
         ordered = (await _lint(session, project)).sorted_findings()
         assert ordered[0].severity == "broken"
         assert ordered[-1].severity in {"quality", "style"}
+
+
+class TestNearDuplicates:
+    async def test_a_gerund_and_its_stem_are_one_topic(
+        self, session: AsyncSession, project: uuid.UUID
+    ) -> None:
+        """The real corpus holds both `Checkpoint` and `Checkpointing` — one
+        topic across two pages, so neither accumulates the evidence."""
+        session.add_all([_page(project, "Checkpoint"), _page(project, "Checkpointing")])
+        await session.flush()
+        report = await _lint(session, project)
+        dupes = [f for f in report.findings if f.check == "near-duplicate"]
+        assert len(dupes) == 1
+        assert "Checkpoint" in dupes[0].message and "Checkpointing" in dupes[0].message
+
+    async def test_plurals_and_hyphens_normalise_together(
+        self, session: AsyncSession, project: uuid.UUID
+    ) -> None:
+        session.add_all(
+            [
+                _page(project, "Write-Ahead Log", slug="write-ahead-log"),
+                _page(project, "write ahead logs", slug="write-ahead-logs"),
+            ]
+        )
+        await session.flush()
+        assert "near-duplicate" in _checks(await _lint(session, project))
+
+    async def test_genuinely_different_titles_are_not_paired(
+        self, session: AsyncSession, project: uuid.UUID
+    ) -> None:
+        """A false pair costs one glance, but a checker that pairs everything
+        is one nobody reads."""
+        session.add_all(
+            [
+                _page(project, "Erasure Coding", slug="erasure-coding"),
+                _page(project, "Garbage Collection", slug="garbage-collection"),
+                _page(project, "Write Amplification", slug="write-amplification"),
+            ]
+        )
+        await session.flush()
+        assert "near-duplicate" not in _checks(await _lint(session, project))

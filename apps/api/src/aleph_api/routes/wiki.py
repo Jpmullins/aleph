@@ -10,9 +10,9 @@ from uuid import UUID
 from fastapi import APIRouter, Body, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
+from aleph_api.deps import LedgerDep, LiteLLMDep, PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
 from aleph_artifacts.models import RenderedAsset
 from aleph_artifacts.render_service import record_render
@@ -20,12 +20,19 @@ from aleph_connectors.models import ApprovalDecision
 from aleph_core.errors import NotFound, ValidationFailed
 from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
+from aleph_db.repos import model_profile as profile_repo
 from aleph_observability.tracing import current_trace_id
 from aleph_security.roles import ProjectRole, require_at_least
+from aleph_wiki.classify import classify_pages, propose_schema
 from aleph_wiki.feedback_service import write_feedback
 from aleph_wiki.html_compiler import compile_page_html
 from aleph_wiki.index_service import IndexService
+from aleph_wiki.lint import lint_wiki
 from aleph_wiki.models import WikiClaim, WikiLink, WikiPage, WikiRevision
+from aleph_wiki.navigation import HubPlan, build_index, plan_hubs, sync_hubs
+from aleph_wiki.schema import Category, WikiSchema
+from aleph_wiki.schema_service import SchemaService
+from aleph_wiki.wiki_service import WikiLinkDraft, WikiService
 
 router = APIRouter(prefix="/v1/projects", tags=["wiki"])
 
@@ -45,6 +52,15 @@ class WikiPageSummaryOut(BaseModel):
     volatility: str
     verified_at: datetime | None
     freshness: int | None
+    # Schema governance (aleph_wiki.schema). Present on the summary rather than
+    # only on the detail read because the surface groups, filters and badges on
+    # every one of them — fetching 679 pages to group them by category would be
+    # 679 round-trips.
+    category: str | None
+    page_type: str | None
+    tags: list[str]
+    confidence: str | None
+    contested: bool
 
 
 class WikiRevisionOut(BaseModel):
@@ -511,3 +527,430 @@ async def wiki_search(
         )
         for h in hits
     ]
+
+
+# --- schema governance -------------------------------------------------------
+#
+# The schema is what the write path validates against and what the agent reads
+# before it writes. Exposing it means the taxonomy is editable by the person
+# whose domain it describes, rather than being whatever the shipped default
+# happened to assume.
+
+
+class CategoryOut(BaseModel):
+    id: str
+    title: str
+    blurb: str = ""
+
+
+class WikiSchemaOut(BaseModel):
+    domain: str
+    categories: list[CategoryOut]
+    tags: list[str]
+    page_types: list[str]
+    min_outbound_links: int
+    page_split_lines: int
+    stub_promotion_mentions: int
+    #: False means this project is still on the shipped default. Worth showing:
+    #: a taxonomy nobody has adapted to the domain is a different thing from
+    #: one somebody chose.
+    customised: bool
+
+
+class WikiSchemaIn(BaseModel):
+    domain: str = Field(min_length=1, max_length=4096)
+    categories: list[CategoryOut] = Field(min_length=1)
+    tags: list[str] = Field(min_length=1)
+    page_types: list[str] | None = None
+    min_outbound_links: int = Field(default=3, ge=0, le=20)
+    page_split_lines: int = Field(default=200, ge=20, le=5000)
+    stub_promotion_mentions: int = Field(default=5, ge=1, le=100)
+
+
+def _schema_out(schema: WikiSchema, *, customised: bool) -> WikiSchemaOut:
+    return WikiSchemaOut(
+        domain=schema.domain,
+        categories=[CategoryOut(id=c.id, title=c.title, blurb=c.blurb) for c in schema.categories],
+        tags=list(schema.tags),
+        page_types=list(schema.page_types),
+        min_outbound_links=schema.min_outbound_links,
+        page_split_lines=schema.page_split_lines,
+        stub_promotion_mentions=schema.stub_promotion_mentions,
+        customised=customised,
+    )
+
+
+@router.get("/{project_id}/wiki/schema", response_model=WikiSchemaOut)
+async def get_wiki_schema(project_id: ProjectScopeDep, session: SessionDep) -> WikiSchemaOut:
+    svc = SchemaService(session)
+    return _schema_out(await svc.get(project_id), customised=await svc.is_customised(project_id))
+
+
+@router.put("/{project_id}/wiki/schema", response_model=WikiSchemaOut)
+async def put_wiki_schema(
+    project_id: ProjectScopeDep,
+    body: Annotated[WikiSchemaIn, Body()],
+    session: SessionDep,
+    principal: PrincipalDep,
+    ledger: LedgerDep,
+) -> WikiSchemaOut:
+    """Replace the project's schema.
+
+    Editor, not viewer: the taxonomy governs what every future write is allowed
+    to say, so widening it is a change to the corpus's rules, not a preference.
+    """
+    require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
+
+    duplicates = {c.id for c in body.categories if [x.id for x in body.categories].count(c.id) > 1}
+    if duplicates:
+        raise ValidationFailed(
+            f"duplicate category ids: {', '.join(sorted(duplicates))} — "
+            "[[slug]] resolution is by shortest path, so two categories with "
+            "one id makes every link into them ambiguous"
+        )
+
+    schema = WikiSchema(
+        domain=body.domain,
+        categories=tuple(Category(id=c.id, title=c.title, blurb=c.blurb) for c in body.categories),
+        tags=tuple(dict.fromkeys(body.tags)),
+        page_types=tuple(body.page_types) if body.page_types else WikiSchema.page_types,
+        min_outbound_links=body.min_outbound_links,
+        page_split_lines=body.page_split_lines,
+        stub_promotion_mentions=body.stub_promotion_mentions,
+    )
+    saved = await SchemaService(session).set(
+        project_id=project_id,
+        schema=schema,
+        principal=principal,
+        ledger=ledger,
+        trace_id=current_trace_id(),
+    )
+    await session.commit()
+    return _schema_out(saved, customised=True)
+
+
+# --- lint --------------------------------------------------------------------
+
+
+class LintFindingOut(BaseModel):
+    check: str
+    severity: str
+    message: str
+    fix: str
+    page_id: UUID | None
+    page_title: str
+
+
+class LintReportOut(BaseModel):
+    pages_scanned: int
+    stubs_skipped: int
+    checked_at: datetime
+    total: int
+    by_severity: dict[str, int]
+    by_check: dict[str, int]
+    findings: list[LintFindingOut]
+
+
+@router.get("/{project_id}/wiki/lint", response_model=LintReportOut)
+async def wiki_lint(
+    project_id: ProjectScopeDep,
+    session: SessionDep,
+    severity: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=2000)] = 500,
+) -> LintReportOut:
+    """Run every lint check over this project's wiki.
+
+    Read-only. Findings are advice, and acting on one is a write that goes
+    through the service so it lands in the ledger — a lint that repaired things
+    itself would mutate the corpus with no record of why.
+    """
+    schema = await SchemaService(session).get(project_id)
+    report = await lint_wiki(session, project_id=project_id, schema=schema)
+    findings = report.sorted_findings()
+    if severity:
+        wanted = {s.strip() for s in severity.split(",") if s.strip()}
+        findings = [f for f in findings if f.severity in wanted]
+    return LintReportOut(
+        pages_scanned=report.pages_scanned,
+        stubs_skipped=report.stubs_skipped,
+        checked_at=report.checked_at,
+        total=len(findings),
+        by_severity=report.by_severity,
+        by_check=report.by_check,
+        findings=[LintFindingOut(**f.to_dict()) for f in findings[:limit]],
+    )
+
+
+# --- navigation --------------------------------------------------------------
+
+
+class IndexEntryOut(BaseModel):
+    title: str
+    slug: str
+    summary: str
+    status: str
+    is_stub: bool
+
+
+class IndexSectionOut(BaseModel):
+    key: str
+    title: str
+    written: int
+    planned: int
+    entries: list[IndexEntryOut]
+
+
+@router.get("/{project_id}/wiki/index", response_model=list[IndexSectionOut])
+async def wiki_index(project_id: ProjectScopeDep, session: SessionDep) -> list[IndexSectionOut]:
+    """The project index, derived rather than hand-maintained.
+
+    `index.md` in a hermes vault is a file somebody has to remember to update;
+    here it is a query, so a page that exists is listed by construction.
+    """
+    schema = await SchemaService(session).get(project_id)
+    sections = await build_index(session, project_id=project_id, schema=schema)
+    return [
+        IndexSectionOut(
+            key=s.key,
+            title=s.title,
+            written=sum(1 for e in s.entries if not e.is_stub),
+            planned=sum(1 for e in s.entries if e.is_stub),
+            entries=[
+                IndexEntryOut(
+                    title=e.title,
+                    slug=e.slug,
+                    summary=e.summary,
+                    status=e.status,
+                    is_stub=e.is_stub,
+                )
+                for e in s.entries
+            ],
+        )
+        for s in sections
+    ]
+
+
+class HubPreviewOut(BaseModel):
+    category: str
+    title: str
+    body_md: str
+    written: int
+    planned: int
+
+
+@router.get("/{project_id}/wiki/hubs", response_model=list[HubPreviewOut])
+async def wiki_hubs(project_id: ProjectScopeDep, session: SessionDep) -> list[HubPreviewOut]:
+    """What each category hub would say if regenerated now."""
+    schema = await SchemaService(session).get(project_id)
+    return [
+        HubPreviewOut(
+            category=p.category.id,
+            title=f"{p.category.title} Hub",
+            body_md=p.body_md,
+            written=sum(1 for e in p.entries if not e.is_stub),
+            planned=sum(1 for e in p.entries if e.is_stub),
+        )
+        for p in await plan_hubs(session, project_id=project_id, schema=schema)
+    ]
+
+
+# --- deriving a schema from the corpus ---------------------------------------
+#
+# The shipped default describes AI/ML research because that is the first plugin
+# suite. On any other project it is the wrong taxonomy, and a wrong taxonomy is
+# worse than none: it gives every page a plausible-looking home, so nothing ever
+# reports a problem while the categories quietly stop meaning anything.
+
+
+class SchemaProposalOut(BaseModel):
+    proposed: WikiSchemaOut | None
+    current: WikiSchemaOut
+    #: Named so the caller can show what would change before accepting.
+    categories_added: list[str]
+    categories_removed: list[str]
+    tags_added: list[str]
+    tags_removed: list[str]
+
+
+@router.post("/{project_id}/wiki/schema/propose", response_model=SchemaProposalOut)
+async def propose_wiki_schema(
+    project_id: ProjectScopeDep,
+    session: SessionDep,
+    litellm: LiteLLMDep,
+    principal: PrincipalDep,
+) -> SchemaProposalOut:
+    """Propose a schema fitting the corpus that actually exists.
+
+    Read-only: this returns a proposal and writes nothing. The taxonomy governs
+    every future write, so adopting one is a deliberate act — `PUT /wiki/schema`
+    with the proposal is what accepts it.
+    """
+    require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
+    profile = await profile_repo.get_project_profile(session, project_id)
+    if profile is None:
+        msg = f"project {project_id} has no model profile"
+        raise NotFound(msg)
+
+    svc = SchemaService(session)
+    current = await svc.get(project_id)
+    proposed = await propose_schema(
+        session,
+        project_id=project_id,
+        client=litellm,
+        principal=principal,
+        profile_bindings=profile.bindings_jsonb,
+        current=current,
+    )
+    if proposed is None:
+        return SchemaProposalOut(
+            proposed=None,
+            current=_schema_out(current, customised=await svc.is_customised(project_id)),
+            categories_added=[],
+            categories_removed=[],
+            tags_added=[],
+            tags_removed=[],
+        )
+    return SchemaProposalOut(
+        proposed=_schema_out(proposed, customised=True),
+        current=_schema_out(current, customised=await svc.is_customised(project_id)),
+        categories_added=sorted(proposed.category_ids - current.category_ids),
+        categories_removed=sorted(current.category_ids - proposed.category_ids),
+        tags_added=sorted(set(proposed.tags) - set(current.tags)),
+        tags_removed=sorted(set(current.tags) - set(proposed.tags)),
+    )
+
+
+class ClassifyIn(BaseModel):
+    include_stubs: bool = True
+    #: Bounded so one request cannot turn into an unbounded model spend. A
+    #: caller with a large corpus runs it repeatedly; it is resumable because
+    #: only uncategorised pages are ever touched.
+    limit: int = Field(default=400, ge=1, le=2000)
+
+
+class ClassifyOut(BaseModel):
+    filed: int
+    skipped: int
+    unknown_category: int
+    remaining_uncategorised: int
+    summary: str
+
+
+@router.post("/{project_id}/wiki/classify", response_model=ClassifyOut)
+async def classify_wiki_pages(
+    project_id: ProjectScopeDep,
+    body: Annotated[ClassifyIn, Body()],
+    session: SessionDep,
+    litellm: LiteLLMDep,
+    principal: PrincipalDep,
+) -> ClassifyOut:
+    """File uncategorised pages into the schema in force.
+
+    Touches only pages with no category, so it is resumable and never silently
+    refiles a page somebody placed by hand.
+    """
+    require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
+    profile = await profile_repo.get_project_profile(session, project_id)
+    if profile is None:
+        msg = f"project {project_id} has no model profile"
+        raise NotFound(msg)
+
+    schema = await SchemaService(session).get(project_id)
+    result = await classify_pages(
+        session,
+        project_id=project_id,
+        schema=schema,
+        client=litellm,
+        principal=principal,
+        profile_bindings=profile.bindings_jsonb,
+        include_stubs=body.include_stubs,
+        limit=body.limit,
+    )
+    await session.commit()
+
+    remaining = (
+        await session.execute(
+            select(func.count())
+            .select_from(WikiPage)
+            .where(WikiPage.project_id == project_id, WikiPage.category.is_(None))
+        )
+    ).scalar_one()
+    return ClassifyOut(
+        filed=result.filed,
+        skipped=result.skipped,
+        unknown_category=result.unknown_category,
+        remaining_uncategorised=int(remaining or 0),
+        summary=result.summary(),
+    )
+
+
+class HubSyncOut(BaseModel):
+    created: int
+    updated: int
+    unchanged: int
+    summary: str
+
+
+@router.post("/{project_id}/wiki/hubs/sync", response_model=HubSyncOut)
+async def sync_wiki_hubs(
+    project_id: ProjectScopeDep,
+    session: SessionDep,
+    principal: PrincipalDep,
+    ledger: LedgerDep,
+) -> HubSyncOut:
+    """Write every category hub as a real page.
+
+    A hub is derived, but it is persisted rather than rendered on the fly so
+    `[[logging-recovery-hub]]` resolves like any other wikilink and an exported
+    vault opens in Obsidian with its navigation intact.
+
+    Idempotent: a hub whose body already matches is skipped, so running this on
+    a schedule does not append a revision per category per run to an immutable,
+    append-only revision table.
+    """
+    require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
+    schema = await SchemaService(session).get(project_id)
+    svc = WikiService(session)
+
+    async def commit(plan: HubPlan) -> None:
+        result = await svc.commit_revision(
+            principal=principal,
+            ledger=ledger,
+            project_id=project_id,
+            page_id=None,
+            title=f"{plan.category.title} Hub",
+            slug=plan.category.hub_slug,
+            page_kind="topic",
+            body_md=plan.body_md,
+            summary=plan.category.blurb,
+            claims=[],
+            wikilinks=[
+                WikiLinkDraft(dst_title=e.title, dst_page_id=None)
+                for e in plan.entries
+                if not e.is_stub
+            ],
+            commit_message=f"regenerate {plan.category.id} hub",
+            respect_hand_edits=False,
+            origin="system",
+        )
+        # A hub is a hub. The commit path knows `page_kind`, which is about how
+        # the page was produced; `page_type` is what kind of knowledge it holds,
+        # and without setting it the hub would be treated as an ordinary page —
+        # listed inside itself, and reported as an orphan by the lint.
+        page = (
+            await session.execute(select(WikiPage).where(WikiPage.id == result.page_id))
+        ).scalar_one()
+        page.page_type = "hub"
+        page.category = plan.category.id
+        page.tags = ["hub"]
+        page.confidence = "high"
+        page.status = "approved"
+
+    outcome = await sync_hubs(session, project_id=project_id, schema=schema, commit=commit)
+    await session.commit()
+    return HubSyncOut(
+        created=outcome.created,
+        updated=outcome.updated,
+        unchanged=outcome.unchanged,
+        summary=outcome.summary(),
+    )
