@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from aleph_core.errors import NotFound
 from aleph_core.ids import uuid7
@@ -450,7 +450,22 @@ class WikiService:
             page_kind=page_kind,
             current_revision_id=None,
             is_stub=page_kind == "stub",
-            status="draft",
+            # A stub is not a draft, and must not enter the review queue.
+            #
+            # Stubs are minted whenever a page links to a title that does not
+            # exist yet — they hold no content and nobody proposed them. Filing
+            # them as "draft" put 235 empty placeholders in front of the owner
+            # for approval alongside 15 real pages, which is 94% noise. An
+            # approval gesture that has to be performed 235 times cannot mean
+            # "I read this and agree"; it can only mean "make the banner go
+            # away", which is worse than not asking.
+            #
+            # The reference design (hermes-agent's llm-wiki skill, which built
+            # ~/wiki/ai-research) treats these as RED LINKS: allowed to be
+            # unresolved, listed as planned, and only promoted to a real page
+            # when they meet a threshold — 2+ source mentions, or central to
+            # one source. `promote_stub_if_earned` below is that rule.
+            status="stub" if page_kind == "stub" else "draft",
             last_compiled_at=None,
             created_by=created_by,
             access_scope="project",
@@ -458,6 +473,48 @@ class WikiService:
         self._session.add(new_page)
         await self._session.flush()
         return new_page
+
+    #: A stub becomes a real page when this many distinct sources mention it.
+    #: One mention is a passing reference; two is a topic the corpus keeps
+    #: returning to. Taken from the reference wiki's Page Thresholds.
+    STUB_PROMOTION_MENTIONS = 2
+
+    async def promote_stub_if_earned(self, *, project_id: UUID, page_id: UUID) -> bool:
+        """Turn a red link into a real page once the corpus keeps returning to it.
+
+        Creating a page for every mention is what produced 235 empty stubs from
+        11 sources. Creating one only when the corpus earns it is the same rule
+        the reference wiki applies, and it moves the decision from the owner's
+        review queue (where it is 235 clicks) to ingest (where it is arithmetic).
+
+        Returns True if the page was promoted.
+        """
+        page = (
+            await self._session.execute(
+                select(WikiPage).where(
+                    WikiPage.id == page_id, WikiPage.project_id == project_id
+                )
+            )
+        ).scalar_one_or_none()
+        if page is None or not page.is_stub:
+            return False
+
+        mentions = (
+            await self._session.execute(
+                select(func.count(func.distinct(WikiLink.src_revision_id))).where(
+                    WikiLink.project_id == project_id,
+                    WikiLink.dst_page_id == page_id,
+                )
+            )
+        ).scalar_one()
+
+        if (mentions or 0) < self.STUB_PROMOTION_MENTIONS:
+            return False
+
+        page.is_stub = False
+        page.status = "draft"  # now a genuine proposal, so it joins the queue
+        await self._session.flush()
+        return True
 
     async def _prior_body_and_sections(
         self, page: WikiPage
