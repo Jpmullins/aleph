@@ -406,10 +406,22 @@ async def search_wiki(query: str, config: RunnableConfig, top_k: int = 6) -> str
 async def wiki_curation_status(config: RunnableConfig) -> str:
     """Report what in the project's wiki needs curation attention.
 
-    Returns the page counts by lifecycle status (draft/approved/archived), the
-    titles of draft pages awaiting review, and the number of unresolved
-    (broken) wikilinks. Call this when the analyst asks how the wiki is doing,
-    what needs review, or before proposing curation actions.
+    Returns page counts by lifecycle status, the titles of drafts awaiting
+    review, and the number of unresolved (broken) wikilinks. Call this when the
+    analyst asks how the wiki is doing, what needs review, how many pages exist,
+    or before proposing curation actions. It is the ONLY way to get exact
+    counts — `search_wiki` returns ranked matches and caps at the top hits, so
+    counting its results always undercounts.
+
+    The statuses are not interchangeable:
+
+    - `stub` — a title some page linked to that nobody has written yet. It has
+      no content and nobody proposed it, so it is NOT awaiting review and must
+      never be described as a draft or as work pending approval. Stubs are
+      normally most of a grown wiki. They become drafts on their own once two
+      separate pages cite them.
+    - `draft` — has content and is genuinely waiting for the analyst.
+    - `approved` / `archived` — reviewed, and settled.
     """
     from sqlalchemy import func, select
 
@@ -460,9 +472,18 @@ async def wiki_curation_status(config: RunnableConfig) -> str:
     total = sum(counts.values())
     if total == 0:
         return "The wiki has no pages yet for this project."
+    stubs = counts.get("stub", 0)
+    awaiting = counts.get("draft", 0)
     parts = [
         f"Wiki curation status — {total} page{'s' if total != 1 else ''}: "
         + ", ".join(f"{n} {status}" for status, n in sorted(counts.items())),
+        f"Awaiting your review: {awaiting}."
+        + (
+            f" The {stubs} stub{'s' if stubs != 1 else ''} are unwritten titles other "
+            "pages link to, not work pending approval — do not count them as drafts."
+            if stubs
+            else ""
+        ),
         f"Unresolved (broken) wikilinks: {broken}"
         + (" — these can be fixed with the Repair-links action." if broken else "."),
     ]
