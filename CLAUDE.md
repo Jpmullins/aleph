@@ -384,11 +384,31 @@ Distribution `aleph-xxx` · module `aleph_xxx` · tables plural snake_case · ac
 
 ## Docs
 
+**Start here if you are picking this up fresh:**
+
+1. **`docs/plan.md`** — the work. 59 workstreams, 348 criteria that can fail, each with what it is in
+   plain language, why, how, a review step and an iteration step. Read **Part 0 first**: the
+   acceptance gate is currently certifying things that are false, and repairing it comes before any
+   other work. Part 1 is the eight numbers that mean "done". Part 7 lists every LangChain and
+   CopilotKit doc to read, mapped to the workstreams that need it — **do not work from memory on
+   those APIs**, use the `docs-langchain` and `copilotkit-mcp` MCP servers.
+2. **`docs/decisions.md`** — the dated decisions and their reasoning. D1 (two knowledge plugins, the
+   wiki stays), D5 (kernel is Python), D6 (OIDC removed), D7 (three unread concepts deleted).
+3. **`docs/backlog.md`** — the inventory the plan was built from, including the measured UI audit
+   and the Deep Agents adoption table (sync/async, install, beta status).
+
+**The single most important fact before doing anything:** retrieval is dead on the deployed
+instance. `document_chunks` has 0 rows against 75 sources — the profile binds an embedding model
+name the gateway does not serve. Everything that measures retrieval is measuring an empty table.
+`docs/plan.md` `WS-RS1`.
+
+**Reference:**
+
 - `docs/architecture.md` — what exists today, honestly, including the security posture
-- `docs/acceptance.md` — the refactor decomposed into parts, each with a check that can fail
-- `docs/belief-engine.md` — the Claim Spine design being built
+- `docs/acceptance.md` — the parts table. Note Part E is withdrawn (there is no wiki deletion)
+- `docs/belief-engine.md` — the Claim Spine design; note it has never run
 - `docs/wiki-schema.md` — the wiki's governance: schema, statuses, thresholds, lint, links
-- `docs/decisions.md` — the dated decisions, including why the wiki removal was reversed
-- `docs/operations.md` — stack, migrations, gates, running against local models
-- `docs/update/` — pre-refactor audit reports (dated 2026-07-26, written against `bcc478a`). Useful as
-  history; **superseded** wherever they disagree with the five documents above.
+- `docs/operations.md` — stack, migrations, gates, pointing Aleph at any OpenAI-compatible endpoint
+- `docs/html/` — `plan.html` and `backlog.html`, the same content as readable standalone pages
+- `docs/update/` — pre-refactor audit reports (2026-07-26, against `bcc478a`). History only;
+  **superseded** wherever they disagree with the documents above.

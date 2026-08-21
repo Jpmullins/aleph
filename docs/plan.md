@@ -92,6 +92,34 @@ the load, or five of those decisions are assumed rather than argued.
 
 ---
 
+## Part 1b — The knowledge layer is two plugins
+
+Recorded here because it reframes the whole research cluster, and because the
+plan was drafted before it was settled (`docs/decisions.md` D1, 2026-08-21).
+
+The wiki is **not** being deleted. The old decision had the Claim Spine
+replacing it as the retrieval surface; that replacement never ran, and the wiki
+became the working knowledge layer. There are **two knowledge plugins and both
+stay**:
+
+- **The wiki** — what the project *concluded*. Synthesised pages, claims, hubs,
+  a governed vocabulary. Curated and cross-linked; a thing a person reads.
+- **RAG over the raw collection** — what the project *collected*. Every source
+  chunked and indexed, searched directly, so an answer is grounded in the actual
+  passage rather than in somebody's summary of it.
+
+*"What do we think about X, and on what evidence?"* is the wiki. *"What did
+source 47 actually say?"* is the RAG. Framing them as competitors is what
+produced the removal decision, and it was a false choice.
+
+The Claim Spine is the evidence layer **underneath** the wiki — what makes a
+page's assertions traceable to an exact sentence — not its successor.
+
+**Acceptance Part E is withdrawn.** It asked when the wiki could be deleted.
+There is no deletion to unblock.
+
+---
+
 ## Part 2 — What is actually broken right now
 
 Verified live, not remembered. These reorder everything.
@@ -2496,6 +2524,7 @@ workstreams that depend on it, so the reading is scoped rather than general.
 | [Dynamic subagents](https://docs.langchain.com/oss/python/deepagents/dynamic-subagents) — dispatching subagents from interpreter code | `WS-H5` |
 | [Async subagents](https://docs.langchain.com/oss/python/deepagents/async-subagents) — job ids, check/update/cancel, **ASGI transport when `url` is omitted**. Preview | `WS-H6` |
 | [Event streaming](https://docs.langchain.com/oss/python/deepagents/event-streaming) — `stream.subagents`, `astream_events(version="v3")`, `asyncio.gather` | `WS-C3a`, `WS-C3b` |
+| [RAG](https://docs.langchain.com/oss/python/deepagents/rag) — four patterns; the one that fits is **retrieve-offload-delegate**: fetch chunks, write them to the filesystem backend instead of the orchestrator's context, let subagents read them in parallel | `WS-RS1`, `WS-RS6`, `WS-RS7`, `WS-H5` |
 | [OpenWiki](https://docs.langchain.com/oss/openwiki/overview) — agent-facing wiki as durable context, and **OKF v0.1** (front matter, indexes, linked concepts) | `WS-H8` |
 
 ### CopilotKit
