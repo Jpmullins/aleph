@@ -1,4 +1,16 @@
-"""Assigns a request id to every incoming request and binds it to structlog."""
+"""Assigns a request id to every incoming request and binds it to structlog.
+
+Position matters: this must be OUTSIDE `ErrorMiddleware`. The stamp below runs
+on a response, and an exception is not a response — it passes through this frame
+without one, so when this middleware sat inside the error handler every 500 went
+back with no `x-request-id`, including when the caller had supplied the id
+itself. `main.py` documents the whole ordering and a test pins it.
+
+The id is written to `request.state` as well as to the structlog contextvars,
+because `request.state` is backed by the ASGI scope and so is readable from
+every layer, while a contextvar bound here only reaches layers BELOW this one —
+`call_next` runs them in a spawned task, which gets a copy of the context.
+"""
 
 from __future__ import annotations
 

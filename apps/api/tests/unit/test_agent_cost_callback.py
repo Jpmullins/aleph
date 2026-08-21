@@ -238,15 +238,20 @@ async def test_skips_when_no_project_id() -> None:
 def _settings_for_test() -> Any:
     """Minimal stand-in carrying only what `subagent_model` reads.
 
-    `subagent_model` -> `_gateway_chat_model` only touches `.litellm_base_url`
-    and `.insights_litellm_api_key`, so a SimpleNamespace suffices (no env /
-    full Settings construction needed for this unit test).
+    `subagent_model` -> `_gateway_chat_model` reads the gateway address, the key,
+    and the agent's request-timeout budget, so a SimpleNamespace suffices (no
+    env / full Settings construction needed for this unit test).
+
+    The timeout was a literal until the budget moved onto Settings, which is why
+    it appears here at all: a stub that omits it now fails at construction,
+    which is the correct and visible way for a stub to go stale.
     """
     from types import SimpleNamespace
 
     return SimpleNamespace(
         litellm_base_url="http://gateway.invalid/v1",
         insights_litellm_api_key="test-key",
+        aleph_agent_request_timeout_s=180.0,
     )
 
 

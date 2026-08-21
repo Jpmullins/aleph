@@ -1380,7 +1380,7 @@ def _psycopg_conn_string(database_url: str) -> str:
 
 
 def build_agent_store(
-    *, database_url: str
+    *, database_url: str, settings: Settings | None = None
 ) -> tuple[AsyncConnectionPool[AsyncConnection[DictRow]], AsyncPostgresStore]:
     """Build the Postgres-backed langgraph store for cross-session agent memory.
 
@@ -1401,12 +1401,23 @@ def build_agent_store(
     # Mirror langgraph's own `AsyncPostgresStore.from_conn_string` pool config:
     # autocommit (the store manages its own transactions), no prepared
     # statements, and dict rows. The cast matches langgraph's own typing.
+    # `max_size` is the fix, and it is not a tuning knob. `AsyncConnectionPool`
+    # defaults `max_size` to `min_size`, so this pool held exactly ONE
+    # connection: every saved checkpoint, every memory read and every one of six
+    # concurrent subagents queued behind it and gave up after 30 seconds. That
+    # is the shape of "the assistant is slow and then fails" with no error
+    # message anywhere.
+    from aleph_api.settings import get_settings
+
+    cfg = settings if settings is not None else get_settings()
     pool = cast(
         "AsyncConnectionPool[AsyncConnection[DictRow]]",
         AsyncConnectionPool(
             _psycopg_conn_string(database_url),
             open=False,
-            min_size=1,
+            min_size=cfg.aleph_agent_pool_min_size,
+            max_size=cfg.aleph_agent_pool_max_size,
+            timeout=cfg.aleph_agent_pool_timeout_s,
             kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
         ),
     )
@@ -1508,8 +1519,15 @@ def _gateway_chat_model(settings: Settings, *, purpose: str, capability: Any = N
         base_url=_openai_base_url(settings.litellm_base_url),
         api_key=settings.insights_litellm_api_key,
         temperature=0.2,
-        timeout=60,
-        max_retries=2,
+        # Configuration, not literals. 60s was below the p99 of a tool-heavy
+        # turn against a shared gateway.
+        timeout=settings.aleph_agent_request_timeout_s,
+        # The SDK's own retry is OFF on purpose. `AlephAgentMiddleware.
+        # awrap_model_call` retries with real backoff and honours Retry-After;
+        # leaving max_retries here would stack two retry budgets, so being rate
+        # limited would multiply the request rate rather than reduce it —
+        # exactly backwards, and exactly when the gateway can least afford it.
+        max_retries=0,
         callbacks=[AgentCostCallbackHandler(model=model, purpose=purpose)],
         # A streaming OpenAI-compatible response omits the `usage` block unless
         # `stream_options.include_usage` is set. Without this the on_llm_end

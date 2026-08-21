@@ -72,7 +72,7 @@ def create_app() -> FastAPI:
     ]
     # Order matters, and `add_middleware` PREPENDS, so the last one added is
     # the outermost. Reading bottom-up, the stack is:
-    #     CORS -> Error -> RequestID -> Auth -> routes
+    #     CORS -> RequestID -> Error -> Auth -> routes
     #
     # CORS must be outermost. It used to be added first, which put it INSIDE
     # ErrorMiddleware — so an unhandled exception produced a JSONResponse that
@@ -82,11 +82,29 @@ def create_app() -> FastAPI:
     # worst possible way to report a 500: it names the wrong subsystem and
     # hides the traceback the developer needs.
     #
-    # ErrorMiddleware stays outside RequestID and Auth so it still catches
-    # everything those raise.
+    # RequestID must be outside Error. It was inside, and an exception does not
+    # come back as a response — it passes through that frame, skipping the line
+    # that stamps `x-request-id`. So every 500 answered with no correlation id,
+    # even when the caller had sent one, and a user's "I got a 500 at 14:22"
+    # could not be joined to any line in the log. Outside, the request context
+    # RequestID binds is still live while Error logs and formats, and the
+    # problem response passes back out through the stamp on its way to CORS.
+    #
+    # Error must stay outside Auth, which is the middleware most likely to
+    # raise (it talks to Postgres to resolve the principal). The one thing it
+    # no longer wraps is RequestIDMiddleware itself — five lines that generate
+    # a uuid and read a header — and that is the trade this ordering makes.
+    #
+    # Correlation does not RELY on this order: ErrorMiddleware reads the id,
+    # principal and project out of the shared ASGI scope rather than inheriting
+    # contextvars, because a BaseHTTPMiddleware's downstream bindings cannot
+    # reach an upstream frame. The order is still pinned, by
+    # `tests/unit/test_request_correlation.py::test_middleware_order_is_pinned`
+    # and `test_cors_survives_errors.py::test_cors_is_the_outermost_middleware`,
+    # so a fourth middleware cannot land in the wrong slot in silence.
     app.add_middleware(AuthMiddleware)
-    app.add_middleware(RequestIDMiddleware)
     app.add_middleware(ErrorMiddleware)
+    app.add_middleware(RequestIDMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,

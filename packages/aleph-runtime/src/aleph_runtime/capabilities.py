@@ -479,7 +479,7 @@ def agent_store() -> CapabilitySpec:
         from aleph_api.copilot_agent import build_agent_store
 
         settings: Settings = ctx.get(SETTINGS)
-        pool, store = build_agent_store(database_url=settings.database_url)
+        pool, store = build_agent_store(database_url=settings.database_url, settings=settings)
         await pool.open()
         # Registered immediately after open() so a failure in setup() below
         # cannot leak the pool's background task and connections — the old code

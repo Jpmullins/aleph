@@ -27,7 +27,9 @@ visible rather than merely quiet.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+import asyncio
+import random
+from typing import TYPE_CHECKING, Any, Literal
 
 import structlog
 from langchain.agents.middleware.types import AgentMiddleware
@@ -76,8 +78,136 @@ def describe_tool_failure(tool_name: str, exc: BaseException) -> str:
     return f"{tool_name} failed: {exc.__class__.__name__}: {reason}. {_advice_for(exc)}"
 
 
+# ---------------------------------------------------------------------------
+# Model-call failures: classify, back off, and fail with a code
+# ---------------------------------------------------------------------------
+
+#: Stable codes the AG-UI route reports to the browser. Deliberately few: a code
+#: exists so a person can act on it, and "internal" covering everything unknown
+#: is more useful than twelve codes nobody has ever seen.
+FailureCode = Literal["rate_limited", "upstream_timeout", "internal"]
+
+
+class AgentModelUnavailable(Exception):
+    """The model could not be reached inside the configured retry budget.
+
+    Typed rather than bare so the failure the browser is shown, the log line and
+    the RUN_ERROR frame all carry the same word. An untyped exception is why
+    "weirdly rate limited" and "the run errored with nothing in the log" were
+    the same event described from two ends and never joined up.
+    """
+
+    def __init__(self, *, code: FailureCode, attempts: int, cause: BaseException) -> None:
+        self.code = code
+        self.attempts = attempts
+        self.cause = cause
+        super().__init__(
+            f"the model was unavailable after {attempts} attempt(s) [{code}]: "
+            f"{type(cause).__name__}: {cause}"
+        )
+
+
+def classify_model_failure(exc: BaseException) -> FailureCode:
+    """Map an exception to a retry decision.
+
+    Matched on the class NAME and on the status code rather than by importing
+    provider exception classes: the gateway is whatever OpenAI-compatible
+    endpoint the operator pointed Aleph at, so the exception type depends on
+    which client library raised it, and an import-based check silently stops
+    recognising anything the next one raises.
+    """
+    status = getattr(exc, "status_code", None) or getattr(
+        getattr(exc, "response", None), "status_code", None
+    )
+    if status == 429:
+        return "rate_limited"
+    if status in {408, 502, 503, 504}:
+        return "upstream_timeout"
+
+    name = type(exc).__name__.lower()
+    if "ratelimit" in name:
+        return "rate_limited"
+    if isinstance(exc, TimeoutError) or "timeout" in name or "connectionerror" in name:
+        return "upstream_timeout"
+
+    text = str(exc).lower()
+    if "rate limit" in text or "too many requests" in text:
+        return "rate_limited"
+    return "internal"
+
+
+def retry_after_seconds(exc: BaseException) -> float | None:
+    """The gateway's own ``Retry-After``, if it sent one.
+
+    A server that has told you when to come back is a better source than any
+    backoff curve, and ignoring it is how a client turns one rate limit into
+    several.
+    """
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    if headers is None:
+        return None
+    try:
+        raw = headers.get("retry-after")
+    except Exception:  # a header container that does not behave like a mapping
+        return None
+    if raw is None:
+        return None
+    try:
+        return max(0.0, float(str(raw).strip()))
+    except ValueError:
+        # The HTTP-date form. Rare from a gateway, and guessing is worse than
+        # falling back to the curve.
+        return None
+
+
+def retry_delay(
+    attempt: int,
+    exc: BaseException,
+    *,
+    base: float,
+    ceiling: float,
+    jitter: float = 0.0,
+) -> float:
+    """Seconds to wait before attempt ``attempt + 1``.
+
+    ``Retry-After`` wins when present. Otherwise exponential from ``base``,
+    capped at ``ceiling``, plus a caller-supplied jitter fraction — without
+    jitter, N concurrent subagents that were rate limited together come back
+    together, which reproduces the burst that caused it.
+    """
+    stated = retry_after_seconds(exc)
+    if stated is not None:
+        return min(stated, ceiling)
+    delay = min(base * (2**attempt), ceiling)
+    return delay * (1.0 + jitter)
+
+
 class AlephAgentMiddleware(AgentMiddleware):
-    """Wraps every tool call so an exception becomes a readable tool result."""
+    """Wraps every tool call and every model call so a failure is survivable.
+
+    ``sleeper`` and ``jitter`` are injectable so the retry can be tested without
+    a test that actually waits thirty seconds — a backoff test that sleeps for
+    real is a test people delete.
+    """
+
+    def __init__(
+        self,
+        *,
+        settings: Any = None,
+        sleeper: Callable[[float], Awaitable[None]] | None = None,
+        jitter: Callable[[], float] | None = None,
+    ) -> None:
+        super().__init__()
+        self._settings_override = settings
+        self._sleep = sleeper if sleeper is not None else asyncio.sleep
+        self._jitter_source = jitter if jitter is not None else (lambda: random.random() * 0.25)
+
+    def _settings(self) -> Any:
+        if self._settings_override is not None:
+            return self._settings_override
+        from aleph_api.settings import get_settings
+
+        return get_settings()
 
     async def awrap_tool_call(
         self,
@@ -119,3 +249,67 @@ class AlephAgentMiddleware(AgentMiddleware):
                 name=name,
                 status="error",
             )
+
+    async def awrap_model_call(
+        self,
+        request: Any,
+        handler: Callable[[Any], Awaitable[Any]],
+    ) -> Any:
+        """Retry a rate limit with real backoff; fail with a typed error.
+
+        Three things were wrong and they compounded. Every model call gave up
+        after 60 seconds with two retries; the retries were IMMEDIATE, which is
+        the worst possible response to being rate limited; and the resulting
+        exception killed the run outright, so "weirdly rate limited" and "the
+        run errored with nothing in the log" were the same event seen from two
+        ends.
+
+        The backoff is exponential with jitter, and honours ``Retry-After`` when
+        the gateway sends one — a server that has told you when to come back is
+        the only source of truth better than a guess. The SDK's own
+        ``max_retries`` is set to 0 in ``_gateway_chat_model`` so the two budgets
+        cannot stack: a request queued behind a retry being retried again by the
+        SDK multiplies the request rate exactly when the gateway can least
+        afford it.
+
+        Exhausting the budget raises ``AgentModelUnavailable``, which carries the
+        stable ``rate_limited`` / ``upstream_timeout`` / ``internal`` code the
+        AG-UI route reports to the browser. A bare exception is what made the
+        original failure untraceable.
+        """
+        settings = self._settings()
+        budget = max(1, settings.aleph_agent_max_retries)
+        base = settings.aleph_agent_retry_base_delay_s
+        ceiling = settings.aleph_agent_retry_max_delay_s
+
+        last: BaseException | None = None
+        for attempt in range(budget):
+            try:
+                return await handler(request)
+            except Exception as exc:
+                last = exc
+                code = classify_model_failure(exc)
+                if code == "internal" or attempt == budget - 1:
+                    break
+                delay = retry_delay(
+                    attempt, exc, base=base, ceiling=ceiling, jitter=self._jitter_source()
+                )
+                _log.warning(
+                    "agent.model.retrying",
+                    attempt=attempt + 1,
+                    of=budget,
+                    delay_s=round(delay, 2),
+                    code=code,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                await self._sleep(delay)
+
+        assert last is not None
+        code = classify_model_failure(last)
+        _log.error(
+            "agent.model.exhausted",
+            attempts=budget,
+            code=code,
+            error=f"{type(last).__name__}: {last}",
+        )
+        raise AgentModelUnavailable(code=code, attempts=budget, cause=last) from last

@@ -86,6 +86,33 @@ class Settings(BaseSettings):
     aleph_scholar_mailto: str = "dev@aleph.local"
     aleph_consensus_monthly_search_cap: int = 200
 
+    # The agent's own Postgres pool and its gateway budget.
+    #
+    # The pool held exactly ONE connection: `AsyncConnectionPool` defaults
+    # `max_size` to `min_size`, so every saved checkpoint, every memory read and
+    # every concurrent subagent queued behind the same connection and gave up
+    # after 30 seconds. A six-way subagent fan-out is six things contending for
+    # one connection, which is the shape of "the assistant is slow and then
+    # fails" that has no error message.
+    #
+    # `aleph_agent_pool_max_size` is deliberately modest next to the SQLAlchemy
+    # engine's 10+20: this is a SECOND pool in the same process, and raising it
+    # moves pressure onto the compose Postgres rather than removing it. Check
+    # `max_connections` there before raising it further.
+    aleph_agent_pool_min_size: int = 1
+    aleph_agent_pool_max_size: int = 8
+    aleph_agent_pool_timeout_s: float = 30.0
+
+    # 60 seconds is below the p99 of a tool-heavy turn against a shared gateway,
+    # and two immediate retries is the worst possible response to being rate
+    # limited. Both were literals in `_gateway_chat_model`; the retry now happens
+    # in `AlephAgentMiddleware.awrap_model_call` with real backoff, and the SDK's
+    # own retry is turned OFF so the two do not stack.
+    aleph_agent_request_timeout_s: float = 180.0
+    aleph_agent_max_retries: int = 3
+    aleph_agent_retry_base_delay_s: float = 1.0
+    aleph_agent_retry_max_delay_s: float = 30.0
+
     # Bootstrap-on-create. When a project is created, a background
     # `bootstrap_project_job` scopes the title+description into seed topics,
     # seeds an overview wiki page, and fans out research per topic. Cost is

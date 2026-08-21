@@ -5,6 +5,14 @@ All four endpoints are read-only POSTs (the body is a query, not a
 mutation), so — like the other project GET routes — project membership via
 `ProjectScopeDep` is the only gate; no role check beyond it.
 
+Upstream failures are reported by *cause*, not by one blanket code. Every
+non-2xx from OpenAlex or Crossref used to become `GatewayUnavailable` — HTTP
+503, "the upstream service is unavailable" — including a 400 caused by a
+filter Aleph itself built wrong. That tells an operator the internet is down
+when the actual message is "your query syntax is wrong", and it is
+unactionable in exactly the situation where the answer was one line away. The
+split lives in `_UPSTREAM_STATUS_MAP` / `_upstream_response` below.
+
 `consensus-search` additionally enforces the project's `ConnectorBinding`
 for the `consensus` connector (disabled → 403 `connector_disabled`,
 mirroring the in-process credential resolution) and binds the Consensus
@@ -30,12 +38,14 @@ from aleph_connectors.credentials import (
     ConnectorCredentialService,
     LibsodiumSealedBoxCipher,
 )
-from aleph_core.errors import GatewayUnavailable, NotFound, PermissionDenied
+from aleph_core.errors import NotFound, PermissionDenied
 from aleph_rks.models import Connector, ConnectorBinding
 from aleph_scholar import (
     ConsensusClient,
     ConsensusReconnectRequired,
+    ScholarClientError,
     ScholarService,
+    ScholarUnavailable,
     ScholarUpstreamError,
 )
 from aleph_scholar.types import DoiVerdict, WorkRef
@@ -51,6 +61,90 @@ _RECONNECT_DETAIL = (
 
 def _scholar(request: Request) -> ScholarService:
     return request.app.state.scholar
+
+
+# ---------------------------------------------------------------------------
+# Upstream failure → HTTP status
+# ---------------------------------------------------------------------------
+
+#: Upstream 4xx → the status Aleph reports. Only these three are the *request's*
+#: fault in a way the caller can act on, so only these three are echoed as-is:
+#:
+#:   400 — the upstream rejected the query (a filter Aleph built, a malformed
+#:         DOI in the batch). The reason names the offending parameter.
+#:   404 — the upstream has no such work. Search paths rarely see it; the
+#:         single-work paths return `None` for it before `ensure_ok` runs.
+#:   422 — the upstream parsed the request and refused the values.
+_UPSTREAM_STATUS_MAP: dict[int, int] = {400: 400, 404: 404, 422: 422}
+
+#: Every other upstream 4xx — 401/403 (a key or policy changed on their side),
+#: 451, an upstream quirk. Not the caller's fault and not fixable by changing
+#: the request, so it is not a 4xx *here*; but the upstream did answer, so it
+#: is not "unavailable" either. 502 is the honest middle.
+_UPSTREAM_DEFAULT_STATUS = 502
+
+#: `Retry-After` when the upstream did not send one of its own. RFC 9110 allows
+#: it on a 503 and clients back off on it; omitting the header entirely invites
+#: an immediate retry into the same rate limit, which is how a 429 turns into a
+#: block. Deliberately a plain number and not the request deadline — the
+#: deadline is how long *this* request waited, not how long the upstream needs.
+_DEFAULT_RETRY_AFTER_S = 30
+
+
+def _upstream_response(
+    request: Request, exc: ScholarUpstreamError, *, provider: str
+) -> JSONResponse:
+    """RFC 7807 problem detail for an upstream failure, split by cause.
+
+    Returned rather than raised because a 503 must carry `Retry-After`, and
+    `ErrorMiddleware._problem` builds a body with no headers. The body shape
+    matches that middleware's so a client parses one thing either way.
+
+    `str(exc)` carries the full upstream URL (query string included, which is
+    the actionable part of a bad-filter 400) and goes to the log. The response
+    body carries the upstream's own reason, without the URL — the caller does
+    not need the deployment's `mailto=` echoed back at them.
+    """
+    if isinstance(exc, ScholarClientError):
+        status = _UPSTREAM_STATUS_MAP.get(exc.status_code or 0, _UPSTREAM_DEFAULT_STATUS)
+        code = "upstream_rejected"
+        detail = (
+            f"{provider} rejected the request (HTTP {exc.status_code}): {exc.reason}"
+            if exc.reason
+            else f"{provider} rejected the request (HTTP {exc.status_code})."
+        )
+        headers: dict[str, str] = {}
+        _log.warning(
+            "scholar upstream rejected the request",
+            provider=provider,
+            upstream_status=exc.status_code,
+            error=str(exc)[:1000],
+        )
+    else:
+        status = 503
+        code = "upstream_unavailable"
+        retry_after = exc.retry_after if isinstance(exc, ScholarUnavailable) else None
+        seconds = max(1, round(retry_after)) if retry_after is not None else _DEFAULT_RETRY_AFTER_S
+        detail = f"{provider} did not answer within the request budget — retry in {seconds}s."
+        headers = {"Retry-After": str(seconds)}
+        _log.warning(
+            "scholar upstream unavailable",
+            provider=provider,
+            upstream_status=getattr(exc, "status_code", None),
+            retry_after=seconds,
+            error=str(exc)[:1000],
+        )
+    body: dict[str, Any] = {
+        "type": f"about:blank#{code}",
+        "title": code.replace("_", " ").capitalize(),
+        "status": status,
+        "detail": detail,
+        "instance": str(request.url.path),
+        "details": {"provider": provider, "upstream_status": exc.status_code},
+    }
+    return JSONResponse(
+        body, status_code=status, media_type="application/problem+json", headers=headers
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +212,12 @@ class ScholarSearchIn(BaseModel):
     provider: Literal["openalex", "crossref"]
     query: str = Field(min_length=1, max_length=2048)
     limit: int = Field(10, ge=1, le=50)
+    #: Wall-clock budget for the whole attempt sequence — rate-limit waiting,
+    #: every retry, and every backoff between them. The retry budget used to be
+    #: "three attempts", which is three of something whose duration nobody
+    #: knows; a caller waiting on an interactive search and a caller running a
+    #: batch have genuinely different answers, so the caller says.
+    deadline_s: float | None = Field(None, ge=1.0, le=60.0)
 
 
 class ScholarSearchOut(BaseModel):
@@ -165,16 +265,20 @@ async def search(
     request: Request,
     project_id: ProjectScopeDep,
     body: Annotated[ScholarSearchIn, Body()],
-) -> ScholarSearchOut:
+) -> ScholarSearchOut | JSONResponse:
     """Bibliographic search — OpenAlex (discovery) or Crossref (metadata)."""
     svc = _scholar(request)
     try:
         if body.provider == "openalex":
-            works = await svc.search_openalex(body.query, per_page=body.limit)
+            works = await svc.search_openalex(
+                body.query, per_page=body.limit, deadline_s=body.deadline_s
+            )
         else:
-            works = await svc.crossref_lookup(body.query, rows=body.limit)
+            works = await svc.crossref_lookup(
+                body.query, rows=body.limit, deadline_s=body.deadline_s
+            )
     except ScholarUpstreamError as exc:
-        raise GatewayUnavailable(str(exc)) from exc
+        return _upstream_response(request, exc, provider=body.provider)
     return ScholarSearchOut(works=[WorkRefOut.from_ref(w) for w in works])
 
 
@@ -183,7 +287,7 @@ async def expand_citations(
     request: Request,
     project_id: ProjectScopeDep,
     body: Annotated[ExpandCitationsIn, Body()],
-) -> ExpandCitationsOut:
+) -> ExpandCitationsOut | JSONResponse:
     """Citation-graph neighborhood of a DOI / OpenAlex id.
 
     `backward` = works it cites; `forward` = works that cite it.
@@ -193,7 +297,7 @@ async def expand_citations(
             body.ref, direction=body.direction, limit=body.limit
         )
     except ScholarUpstreamError as exc:
-        raise GatewayUnavailable(str(exc)) from exc
+        return _upstream_response(request, exc, provider="openalex")
     return ExpandCitationsOut(
         backward=[WorkRefOut.from_ref(w) for w in expansion.backward],
         forward=[WorkRefOut.from_ref(w) for w in expansion.forward],
@@ -309,12 +413,7 @@ async def consensus_search(
             "No Consensus credential for this project — run scripts/connect-consensus.py."
         )
     except ScholarUpstreamError as exc:
-        _log.warning(
-            "consensus search upstream failure",
-            project_id=str(project_id),
-            error=str(exc)[:500],
-        )
-        raise GatewayUnavailable(str(exc)) from exc
+        return _upstream_response(request, exc, provider="consensus")
 
     if result.reconnect_required:
         return _reconnect_response(result.message)
