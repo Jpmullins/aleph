@@ -41,15 +41,24 @@ which supersedes the old decision that the wiki was being deleted.
   somebody's summary of it. `aleph_rks.retrieval.search_corpus` fuses a dense (pgvector cosine) and
   a lexical (`ts_rank`) ranking with RRF at k=60; the 45-pair eval reports recall@1 0.91 hybrid vs
   0.60 lexical-only.
-- **⚠ The RAG is currently dead in production.** `document_chunks` has **0 rows** against 75 ingested
-  sources: the profile binds the embedder to `titan-embed-v2` and the gateway serves
-  `titan-embed-text-v2`. Chunks are written only *after* the embed returns, so one wrong name also
-  killed the lexical leg, which needs no model. The measured 0.91 is against seeded fixtures, not
-  against anything a user can search. Fix first — `docs/plan.md` `WS-RS1`.
+- **The RAG is alive again as of 2026-08-21.** It had been dead: `document_chunks` held **0 rows**
+  against 75 ingested sources, because both profile templates bound the embedder to
+  `titan-embed-v2` and the gateway serves `titan-embed-text-v2`. Chunks were written only *after* the
+  embed returned, so one wrong word also killed the lexical leg — which needs no model at all — and
+  45 index jobs sat in `running` with no error recorded anywhere. Measured after the repair:
+  **3,451 chunks, all embedded, 0 normalized documents without chunks, 0 stuck runs.** Aleph now
+  ships no embedder name; the binding is chosen by autoconfigure from what the gateway reports and
+  probed before use. `WS-RS1`, landed.
+  **The 0.91 recall figure is still a laboratory number** — it is measured on 45 questions over 12
+  short paragraphs with one seeded chunk per document, so it does not describe the production index.
+  `WS-RS5` replaces the set; until then, treat 0.91 as "the retriever works", not as a quality claim.
 - **The Claim Spine** (`docs/belief-engine.md`) is the evidence layer *underneath* the wiki, not a
   replacement for it: durable claims with verbatim quotes anchored to exact character offsets, so a
-  page's assertions are traceable to a sentence. It has never run — 786 claims, 0 edges, 0 verbatim
-  quotes, and `BeliefService` has no callers. See `WS-RS8`.
+  page's assertions are traceable to a sentence. **It has never run in production** — 796 claims,
+  0 edges, 0 verbatim quotes, and `BeliefService` has no caller outside its own module. It is now
+  covered end to end by `tests/e2e/test_belief_spine.py`, which exercises the service directly; that
+  makes `WS-RS8` a wiring job rather than a rewrite, and does **not** mean the belief layer is
+  running. See `WS-RS8`.
 - **They are different plugins and both are fully accessible.** *"What do we think about X, and on
   what evidence?"* is the wiki. *"What did source 47 actually say?"* is the RAG. Framing them as
   competitors is what produced the removal decision, and it was a false choice.
@@ -231,7 +240,24 @@ depend on apps; no cycles. `aleph-scholar` carries no workspace deps.
    `scripts/check-graph-state-keys.sh`. Undeclared writes are discarded silently, so the reader's
    `state.get(k, [])` returns empty and the feature is inert while every step reports success; four
    shipped defects had exactly this shape.
-8. **The agent path talks to the gateway and nothing else.** Every agent `ChatOpenAI` — orchestrator
+8. **Every path named in a load-bearing doc, in a gate, or in a source docstring resolves.**
+   `scripts/check-dead-refs.sh`. Four of this file's own "Fixed, with the test that pins each"
+   entries named test files deleted in the harness reset, `pnpm-workspace.yaml` declared a member
+   directory that was gone, and a dangling symlink under `audit/` made six e2e checks SKIP forever
+   while the runner reported no failures. A citation that names nothing reads as evidence and is an
+   assertion.
+9. **Every ✅ row in `docs/acceptance.md` names a test that exists and that pytest can collect.**
+   `scripts/check-acceptance-claims.sh`. It cannot check what a test asserts — nothing can — but a
+   row claiming "49 tests" against a suite of 142, or citing a node id pytest cannot find, is the
+   scoreboard asserting rather than measuring.
+10. **The agent cannot write under `/skills`.** `scripts/check-agent-fs-permissions.sh`, which reads
+   the *effective* permission decision rather than the presence of a `permissions=` kwarg: matching
+   is first-match-wins, so an allow rule ahead of the deny reopens everything while a grep stays
+   happy.
+11. **Every agent and subagent survives a raising tool.** `scripts/check-agent-middleware.sh`.
+   deepagents lets a subagent spec REPLACE the parent's middleware rather than extend it, so "the
+   orchestrator has it" is not "the subagents have it".
+12. **The agent path talks to the gateway and nothing else.** Every agent `ChatOpenAI` — orchestrator
    and every subagent — is built by the one constructor `copilot_agent._gateway_chat_model`, pointed
    at the LiteLLM gateway. `test_subagents.py::test_subagent_model_points_at_gateway` asserts the
    built model's `base_url` is the configured gateway, and `test_agent_gateway_base_url.py` pins the
@@ -284,7 +310,11 @@ below only with a test that would have caught them.
   response carries token usage *and* a project id is resolvable from the run metadata; a
   `ChatOpenAI` response without usage (no `stream_usage=True`, or a provider that omits it) is
   silently uncosted. `test_skips_when_no_usage` / `test_skips_when_no_project_id` pin the current
-  behaviour, not the desired one.
+  behaviour, not the desired one. Measured 2026-08-21:
+  `select count(*) from model_calls where pricing_source='unknown' or agent_run_id is null` returns
+  **159**, and `agent_run_id` is unconditionally NULL on the agent path because the only two minters
+  of it are `_self_headers` and `a2ui_handlers`, neither of which the chat path goes through.
+  `WS-C3a` creates the run, `WS-D2` attributes to it, `WS-MEP-1` prices it.
 - **A green `audit/run.sh` is weaker evidence than it looks.** It probes a live stack, and a check
   whose precondition is missing exits `skip` (e.g. "no project has recorded LLM spend yet"). `run.sh`
   labels skips rather than hiding them, but a run over an empty stack exercises almost nothing while
@@ -296,6 +326,64 @@ below only with a test that would have caught them.
   real problem in the only mode Aleph runs, and is `WS-D3` in `docs/plan.md`.
 
 ### Fixed, with the test that pins each
+
+**2026-08-21 (executing `docs/plan.md`)**
+
+- **Retrieval was dead in production and nothing said so.** `WS-RS1`. Chunks are now written and
+  committed *before* the embed call, so a dead embedder degrades to keyword-only search instead of an
+  empty index; `RetrievalIndexRecord.state` makes `lexical_only` a real state instead of representing
+  it by the absence of rows, which is indistinguishable from "never ingested". The dense leg filters
+  `embedding IS NOT NULL` explicitly, because ordering by `cosine_distance` over NULL is undefined
+  rather than last. `search_corpus(query_embedding=None)` means lexical-only — the degraded caller
+  used to pass a zero vector, which is *not* equivalent: cosine distance to the zero vector is
+  degenerate, so the dense leg returned an arbitrary page of rows and RRF fused that noise as a
+  ranking. → `tests/integration/test_chunk_embed_degrades.py` (5),
+  `packages/aleph-assistant/tests/test_router_degradation.py` (6), `tests/e2e/test_search_corpus.py`.
+- **A run whose owning process died claimed to be running forever.** 45 `chunk_embed` runs sat in
+  `running`, every one a failed index nobody had been told about. `reap_stale_runs` runs at API boot,
+  fails them with a reason, and ledgers each in the same transaction — and deliberately does not reap
+  a young run or one with no `started_at`, because an over-eager reaper kills live work.
+  → `tests/integration/test_agent_run_reaper.py` (7).
+- **A NUL byte made a document permanently unindexable and took the batch with it.** Postgres `text`
+  cannot hold `\x00` at all, so one PDF aborted a 34-document repair at whatever position it
+  occupied. `defang` now replaces NUL with U+FFFD — one character for one character, so grounding
+  offsets into the stored document are unchanged — and the repair pass survives a single bad
+  document instead of dropping everything behind it.
+- **The agent could rewrite its own standing orders.** `WS-K1`. `create_deep_agent` was called with
+  no `permissions=`, `FilesystemBackend` implements `write`, and deepagents allows any operation no
+  rule matches — so the assistant could silently edit the bundled `SKILL.md` files on the live
+  container, and text in an ingested page could in principle instruct it to.
+  → `tests/unit/test_agent_skill_write_gate.py`, `scripts/check-agent-fs-permissions.sh`, which
+  checks the EFFECTIVE decision rather than the presence of a kwarg (matching is first-match-wins,
+  so an allow ahead of the deny reopens everything).
+- **A failed agent run produced a stream that just stopped.** `WS-E1a`. Aleph owns the AG-UI route
+  (`agui_endpoint.py`): an `except` emitting RUN_ERROR as the final frame, a terminal latch (upstream
+  falls straight through from RUN_ERROR to RUN_FINISHED, and a client seeing both may reasonably
+  conclude the run recovered), and one id shared by the frame, the log record and the
+  `X-Aleph-Run-Id` header. → `apps/api/tests/unit/test_agent_endpoint_errors.py` (6).
+- **Any one of 27 tools raising killed the conversation.** `WS-E1b`.
+  `AlephAgentMiddleware.awrap_tool_call` turns an exception into a `ToolMessage(status="error")` the
+  model can route around. `PermissionDenied` is handled distinctly and tells the model to stop and
+  ask rather than try another id, so a friendly sentence does not become a way to keep probing.
+  → `apps/api/tests/unit/test_agent_tool_guard.py` (11), `scripts/check-agent-middleware.sh`, which
+  asserts all six subagents carry it — deepagents lets a spec REPLACE the parent's middleware.
+- **`search_wiki` returned no identifier, so `open_page` had no reachable success path.**
+  → `apps/api/tests/unit/test_search_wiki_returns_ids.py` (5).
+- **The agent's Postgres pool held exactly one connection.** `WS-E1c`. `AsyncConnectionPool` defaults
+  `max_size` to `min_size`. Every checkpoint, memory read and concurrent subagent queued behind it
+  and gave up after 30s — "slow, then fails", with no error message. Timeout and retry are now
+  settings, the SDK's own retry is **0** so two budgets cannot stack, and `awrap_model_call` backs
+  off with jitter and honours `Retry-After`. → `test_agent_store_pool.py`, `test_agent_model_retry.py`.
+- **A failed install left a ghost that broke every later install.** `WS-A1a`. `Kernel.unregister`,
+  `install` cleaning up both failure branches, and `disable` handing back the handle it was given.
+  → eight tests in `packages/aleph-kernel/tests/test_agent_api.py`; the suite is 150, was 142.
+- **The gate itself was the thing it was built to prevent.** Part 0. `acceptance.sh` gained a
+  MISSING status (always fatal), a preflight that resolves every path it names before anything runs,
+  `--strict` / `--max-skip`, and a `services_up` that reads the configured host and port instead of
+  probing localhost:5432 unconditionally. `scripts/check-dead-refs.sh` found 27 dead references
+  including four of this file's own defect pins; `scripts/check-acceptance-claims.sh` found 23 ✅
+  rows citing nothing at all. The self-check went from 6 mutations to 19, one per sweep by name.
+
 
 **2026-08-15 → 2026-08-17 (the harness refactor, and the gateway/shell merge)**
 
@@ -399,10 +487,17 @@ Distribution `aleph-xxx` · module `aleph_xxx` · tables plural snake_case · ac
 3. **`docs/backlog.md`** — the inventory the plan was built from, including the measured UI audit
    and the Deep Agents adoption table (sync/async, install, beta status).
 
-**The single most important fact before doing anything:** retrieval is dead on the deployed
-instance. `document_chunks` has 0 rows against 75 sources — the profile binds an embedding model
-name the gateway does not serve. Everything that measures retrieval is measuring an empty table.
-`docs/plan.md` `WS-RS1`.
+**Two commands before doing anything:**
+
+```bash
+./scripts/status.sh        # the eight numbers of docs/plan.md Part 1
+./scripts/acceptance.sh    # the gate; MISSING is fatal, SKIP is counted separately
+```
+
+`status.sh` is the honest picture and it prints `n/a` — never zero — for a number it cannot
+compute, because a zero meaning "no defects" and a zero meaning "nothing was measured" look
+identical on a dashboard and this project has already shipped one of those. As of 2026-08-21 four
+of the eight are failing and three are not yet measurable; each says which.
 
 **Reference:**
 
