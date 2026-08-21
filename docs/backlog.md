@@ -117,14 +117,52 @@ CopilotKit names four bands. Aleph now uses three.
 | MCP Apps | **NOT BUILT** — discussed, never started |
 | Open-ended (`generateSandboxedUi`) | **DONE** — with a design skill and two read-only sandbox functions |
 
-### C1. CopilotKit Intelligence — **NOT BUILT**
+### C1. CopilotKit Enterprise Intelligence — **EVALUATED, mostly already built**
 
-Asked about explicitly; never adopted, never evaluated in code.
+Asked about three times and never actually looked at. Researched via the
+CopilotKit docs MCP. Here is the real answer.
+
+**What it is:** a separate backend service beside the runtime, licensed and
+commercial. It provides:
+
+| Capability | Aleph's equivalent today |
+|---|---|
+| Durable, resumable threads (Postgres + Redis, single-writer locks, WebSocket sync) | LangGraph checkpoints in Postgres — **exists**, but resume is unreliable (see below) |
+| Event timelines / thread history | The action ledger — hash-chained, append-only — **exists and is stronger** |
+| Agent trace inspection | OTEL + Langfuse, behind `--profile tracing` — **exists** |
+| Multi-tenancy (org / project / user) | `project_id` + `access_scope` on every row — **exists** |
+| Inspector & Admin Console (hosted web UI) | **Nothing.** This is the real gap. |
+| API key management, project selection | Not applicable — Aleph is single-tenant per deployment |
+
+**The deployment problem.** Two options, and both conflict with how Aleph is
+built. Cloud-hosted sends every thread to CopilotKit's infrastructure, which is
+the opposite of a stack that runs its own gateway specifically so nothing leaves.
+Self-hosted installs the `copilot-intelligence` Helm chart **into Kubernetes**,
+with CopilotKit engineering involved in the deployment. Aleph deploys with
+`docker compose`, which was an explicit requirement.
+
+**Recommendation: do not adopt it.** Aleph has already built the self-hosted
+equivalent of four of its five capabilities, and its ledger is a stronger
+version of the event history. Taking it on would mean either giving up data
+residency or adopting Kubernetes, to gain things that already exist.
+
+**But take the one idea that is missing — the Inspector.** A surface that shows
+the AG-UI event stream, the tool calls, and where a run failed. Aleph has none,
+which is why the `RUN_ERROR` in E1 is still untraced and why diagnosing the chat
+path means reading container logs. This is buildable directly on Aleph's own
+data: the ledger already records every action, and the agent-events SSE stream
+already exists. Filed as **C3**.
 
 ### C2. MCP Apps — **NOT BUILT**
 
 The third band. Would let an MCP server ship its own UI, which is close to what
 A3 wants for plugins.
+### C3. An agent Inspector pane — **NOT BUILT**
+
+The one genuinely valuable idea from Enterprise Intelligence, rebuilt on data
+Aleph already has: AG-UI event stream, tool calls with arguments and results,
+run status, and the failure point when a run errors. A pane, not a hosted
+console. Would have shortened every agent debugging session in this project.
 
 ---
 
@@ -193,17 +231,132 @@ So the list above is read as "what remains", not "what exists".
 
 ---
 
+## G. The UI/UX has not been rebuilt to the spec — **PARTIAL**
+
+**Asked for:** the workspace redesign applies to the whole interface, not the
+shell. The spec is the instrument aesthetic recorded in
+`apps/web/src/styles/tokens.css`: square corners (`--radius: 0`), hairline
+borders, no shadows, and **colour reserved for state** — green means holding,
+rust means contested, and nothing else in the interface is ever coloured.
+
+**Measured**, 43 components across `components/` and `a2ui/components/`:
+
+- **180 violations** of that spec
+- **4 need a rebuild**, 12 need revision,
+  16 need touch-ups, 11 are clean
+
+The clean ones are, without exception, the components written during the
+redesign — `Board`, `Block`, `ContextBar`, `AssistantDock`, `ReadingRegion`,
+`AlephLogo`, `Icons`, `CopilotChatSurface`, `ProjectWorkspace`. Everything
+inherited from the previous UI still carries `rounded-lg`, `shadow-sm` and a
+Tailwind palette that the token system was written to replace. `Drawers.tsx`
+alone has 24 hardcoded palette colours and zero token references.
+
+A hardcoded `text-slate-500` is not a cosmetic problem here: it does not respond
+to the theme at all, so it renders the same on both grounds — which is why parts
+of the interface look correct in one theme and wrong in the other.
+
+### Per-component audit
+
+| Component | Round | Shadow | Palette | Lines | Verdict |
+|---|--:|--:|--:|--:|---|
+| `Drawers` | 12 | 1 | 24 | 742 | **REBUILD** |
+| `WikiPageCard` | 3 | 1 | 20 | 430 | **REBUILD** |
+| `GroundingSurface` | 3 | 0 | 16 | 194 | **REBUILD** |
+| `ActivityCard` | 3 | 0 | 13 | 349 | **REBUILD** |
+| `HypothesesSurface` | 7 | 1 | 0 | 170 | **revise** |
+| `HypothesisMatrix` | 1 | 0 | 6 | 122 | **revise** |
+| `ApprovalCard` | 2 | 0 | 4 | 105 | **revise** |
+| `_shared` | 2 | 2 | 2 | 222 | **revise** |
+| `SourceUploadModal` | 4 | 1 | 1 | 102 | **revise** |
+| `DiffCard` | 1 | 0 | 4 | 94 | **revise** |
+| `FindingCard` | 0 | 0 | 4 | 65 | **revise** |
+| `HtmlDocCard` | 1 | 0 | 3 | 54 | **revise** |
+| `WikiBodyMarkdown` | 0 | 0 | 4 | 163 | **revise** |
+| `BriefsSurface` | 1 | 0 | 2 | 50 | **revise** |
+| `LeftPanel` | 3 | 0 | 0 | 175 | **revise** |
+| `WikilinkChip` | 0 | 0 | 3 | 49 | **revise** |
+| `ArtifactsSurface` | 2 | 0 | 0 | 207 | **touch-up** |
+| `ClaimCard` | 0 | 0 | 2 | 55 | **touch-up** |
+| `FormCard` | 1 | 0 | 1 | 90 | **touch-up** |
+| `HtmlFrameCard` | 1 | 0 | 1 | 46 | **touch-up** |
+| `ImageCard` | 1 | 0 | 1 | 38 | **touch-up** |
+| `NoteEditorCard` | 2 | 0 | 0 | 116 | **touch-up** |
+| `WikiSurface` | 2 | 0 | 0 | 375 | **touch-up** |
+| `PipelineStrip` | 0 | 0 | 2 | 82 | **touch-up** |
+| `ProjectList` | 0 | 1 | 1 | 291 | **touch-up** |
+| `ChartCard` | 0 | 0 | 1 | 112 | **touch-up** |
+| `NotesSurface` | 1 | 0 | 0 | 90 | **touch-up** |
+| `SourceCard` | 1 | 0 | 0 | 100 | **touch-up** |
+| `A2UIRightPanel` | 0 | 0 | 1 | 44 | **touch-up** |
+| `Block` | 0 | 1 | 0 | 210 | **touch-up** |
+| `Rail` | 0 | 1 | 0 | 122 | **touch-up** |
+| `ThemeToggle` | 1 | 0 | 0 | 114 | **touch-up** |
+| `ArtifactCard` | 0 | 0 | 0 | 66 | **clean** |
+| `HypothesisCard` | 0 | 0 | 0 | 33 | **clean** |
+| `TableCard` | 0 | 0 | 0 | 124 | **clean** |
+| `AlephLogo` | 0 | 0 | 0 | 95 | **clean** |
+| `AssistantDock` | 0 | 0 | 0 | 98 | **clean** |
+| `Board` | 0 | 0 | 0 | 305 | **clean** |
+| `ContextBar` | 0 | 0 | 0 | 139 | **clean** |
+| `CopilotChatSurface` | 0 | 0 | 0 | 193 | **clean** |
+| `Icons` | 0 | 0 | 0 | 151 | **clean** |
+| `ProjectWorkspace` | 0 | 0 | 0 | 138 | **clean** |
+| `ReadingRegion` | 0 | 0 | 0 | 110 | **clean** |
+
+**Counting rules:** *Round* is `rounded-{sm..full}` (the spec is `--radius: 0`).
+*Shadow* is `shadow-{sm..xl}` (the spec has none). *Palette* is a Tailwind
+colour scale used directly instead of a token. Reproduce with the script in
+this file's history, or by grepping those three patterns.
+
+### What a rebuild means
+
+Not a restyle. Each of the four REBUILD components predates the pane model and
+holds structure that no longer fits — `Drawers.tsx` is the settings drawer that
+item B1 replaces with panes, and `WikiPageCard` still carries its own layout
+chrome rather than being a renderer inside a pane. Revising their colours would
+leave the wrong structure wearing the right paint.
+
+---
+
 ## Suggested order
 
-1. **B2** — set the model endpoint from the UI. Blocks using Aleph against any
-   other provider, which is a stated hard requirement.
-2. **E1** — trace the agent `RUN_ERROR`. The chat path is the product surface.
-3. **B1 + A4** — settings as panes, with a per-plugin settings contract. B1 is
-   the container A4 needs.
-4. **A3** — catalog composition, which is the other half of a plugin's UI.
-5. **A1** — the plugin system proper. Largest, and the three above are the
-   concrete forcing functions for its shape.
-6. **A2** — the agent authoring plugins, once A1 exists.
-7. **E2–E4**, then **D1–D2**.
+Each step is the forcing function for the next.
 
-**D3/D4** stay parked until OIDC deployment is taken up as a whole.
+1. **B2 — set the model endpoint from the UI.** Blocks using Aleph against any
+   other provider, which is a stated hard requirement. Self-contained: a
+   per-project endpoint and credential, a probe before saving, and discovery
+   re-runs against whatever it is pointed at.
+
+2. **C3 — the Inspector pane.** Built before E1, not after: tracing the agent
+   `RUN_ERROR` by reading container logs is what makes agent bugs expensive, and
+   the Inspector is the tool that makes every later item on this list cheaper to
+   debug. Runs on data Aleph already has.
+
+3. **E1 — trace the `RUN_ERROR`** with the Inspector in hand. The chat path is
+   the product surface.
+
+4. **B1 + A4 + G's four REBUILD components.** These are one piece of work, not
+   three. `Drawers.tsx` is the settings drawer B1 replaces with panes; it is also
+   the most drifted component in the tree (24 hardcoded colours, zero tokens);
+   and it is where A4's per-plugin settings cards have to land. Rebuilding it as
+   panes settles all three.
+
+5. **G's remaining revisions.** 12 components need revision and 16 need
+   touch-ups. Mechanical once the four rebuilds have set the pattern, and worth
+   a sweep that fails on `rounded-*`, `shadow-*` and raw palette classes so the
+   drift cannot return.
+
+6. **A3 — catalog composition.** The other half of a plugin's UI, and it
+   requires changing the single-catalog sweep's invariant.
+
+7. **A1 — the plugin system proper.** Largest. Items 4–6 are the concrete
+   forcing functions for its shape, which is why it comes after them rather
+   than before.
+
+8. **A2 — the agent authoring plugins**, once A1 exists.
+
+9. **E2–E4**, then **D1–D2**.
+
+**Not doing:** C1 (Enterprise Intelligence) — evaluated and declined, see above.
+**Parked:** D3 and D4 until OIDC deployment is taken up as a whole.
