@@ -54,11 +54,6 @@ try:
     import aleph_reviewer.models  # noqa: F401
 except ImportError:
     pass
-# Inc 6: datasets.
-try:
-    import aleph_datasets.models  # noqa: F401
-except ImportError:
-    pass
 # Inc 7: artifacts.
 try:
     import aleph_artifacts.models  # noqa: F401

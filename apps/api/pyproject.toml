@@ -43,7 +43,6 @@ dependencies = [
     "aleph-notes",
     "aleph-reviewer",
     "aleph-hypotheses",
-    "aleph-datasets",
     "aleph-artifacts",
 ]
 

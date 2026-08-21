@@ -62,7 +62,6 @@ class AliasService:
                 canonical_page_id=canonical_page_id,
                 confidence=confidence,
                 created_by=created_by,
-                access_scope="project",
             )
             self._session.add(result)
             await self._session.flush()

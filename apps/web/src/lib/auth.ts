@@ -1,16 +1,23 @@
-import { UserManager, WebStorageStateStore } from "oidc-client-ts";
+/**
+ * Identity for a single-user deployment.
+ *
+ * Aleph runs one user. The OIDC code-flow that used to live here — issuer,
+ * client id, audience, `oidc-client-ts`, a session-storage token store — was
+ * removed (`docs/decisions.md` D6): it was half-built, never deployed, and its
+ * two known holes were shaping work that had no user waiting on it.
+ *
+ * What remains is the sentinel bearer the API recognises as the local
+ * principal. It is still sent on every request rather than omitted, so the
+ * middleware and the log lines look the same as they would with a real token —
+ * which is what makes the auth path exercised rather than bypassed.
+ *
+ * The exported shape is unchanged, so callers did not move. `login`,
+ * `logout` and `handleCallback` are retained as no-ops: `App.tsx` still calls
+ * them on the mount path, and deleting them would push this decision into the
+ * router for no gain.
+ */
 
-// `local` (default) bypasses OIDC entirely and returns a sentinel
-// bearer that the API recognizes as the local-dev principal.
-// `oidc` runs the real OIDC code-flow against the configured issuer.
-const authMode = (import.meta.env.VITE_AUTH_MODE as string | undefined) ?? "local";
-
-const issuer = (import.meta.env.VITE_AUTH_ISSUER as string | undefined) ?? "";
-const clientId = (import.meta.env.VITE_AUTH_CLIENT_ID as string | undefined) ?? "aleph-web";
-const audience = (import.meta.env.VITE_AUTH_AUDIENCE as string | undefined) ?? "aleph";
-
-// Sentinel bearer the API ignores in local mode but still echoes through
-// the request path so middleware/log lines look the same as production.
+/** Sentinel bearer. The API ignores its contents and synthesizes the dev principal. */
 const LOCAL_BEARER = "local-dev";
 
 const LOCAL_USER = {
@@ -23,63 +30,27 @@ const LOCAL_USER = {
   expired: false,
 } as const;
 
-// Session-storage only; never localStorage.
-const store = typeof window !== "undefined"
-  ? new WebStorageStateStore({ store: window.sessionStorage })
-  : undefined;
-
-let manager: UserManager | null = null;
-
-function getManager(): UserManager {
-  if (manager) return manager;
-  if (!issuer) {
-    throw new Error("VITE_AUTH_ISSUER not configured (required for VITE_AUTH_MODE=oidc)");
-  }
-  manager = new UserManager({
-    authority: issuer,
-    client_id: clientId,
-    redirect_uri: `${window.location.origin}/auth/callback`,
-    post_logout_redirect_uri: window.location.origin,
-    response_type: "code",
-    scope: `openid profile email aleph:${audience}`,
-    automaticSilentRenew: true,
-    userStore: store,
-    monitorSession: false,
-  });
-  return manager;
-}
-
+/** Always true. Kept so `App.tsx` need not branch on a mode that no longer varies. */
 export function isLocalAuth(): boolean {
-  return authMode === "local";
+  return true;
 }
 
 export async function login(): Promise<void> {
-  if (authMode === "local") return;
-  await getManager().signinRedirect();
+  // No-op: there is nothing to log in to.
 }
 
 export async function handleCallback(): Promise<void> {
-  if (authMode === "local") return;
-  await getManager().signinRedirectCallback();
+  // No-op: there is no redirect to handle.
 }
 
 export async function logout(): Promise<void> {
-  if (authMode === "local") return;
-  await getManager().signoutRedirect();
+  // No-op: there is no session to end.
 }
 
 export async function getAccessToken(): Promise<string | null> {
-  if (authMode === "local") return LOCAL_BEARER;
-  try {
-    const user = await getManager().getUser();
-    if (!user || user.expired) return null;
-    return user.access_token;
-  } catch {
-    return null;
-  }
+  return LOCAL_BEARER;
 }
 
 export async function getCurrentUser() {
-  if (authMode === "local") return LOCAL_USER;
-  return getManager().getUser();
+  return LOCAL_USER;
 }

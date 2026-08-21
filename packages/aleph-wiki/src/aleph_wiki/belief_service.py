@@ -206,7 +206,6 @@ class BeliefService:
                     confidence="under_investigation",
                     status="active",
                     created_by=principal.user_id,
-                    access_scope="project",
                 )
                 self._session.add(claim)
                 await self._session.flush()
@@ -378,7 +377,6 @@ class BeliefService:
                     kind="supersedes",
                     weight=1.0,
                     created_by=principal.user_id,
-                    access_scope="project",
                 )
             )
             await self._session.flush()

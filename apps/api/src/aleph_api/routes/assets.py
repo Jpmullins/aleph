@@ -2,7 +2,7 @@
 
 All asset bytes — raw source files, rendered assets, artifact versions —
 reach the browser through this route, inside the principal boundary:
-AuthMiddleware resolves the principal (401 without a bearer in oidc mode)
+AuthMiddleware resolves the principal
 and ProjectScopeDep enforces membership (404 across projects). Storage is
 never exposed directly; there are no signed direct-to-store URLs.
 

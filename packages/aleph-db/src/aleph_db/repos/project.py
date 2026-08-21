@@ -93,7 +93,6 @@ def new_project(
         description=description,
         model_profile_id=model_profile_id,
         created_by=created_by,
-        access_scope="project",
     )
 
 
@@ -110,5 +109,4 @@ def new_member(
         user_id=user_id,
         role=role,
         created_by=created_by,
-        access_scope="project",
     )

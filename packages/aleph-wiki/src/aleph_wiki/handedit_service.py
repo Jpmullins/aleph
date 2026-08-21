@@ -59,7 +59,6 @@ async def mark_section(
         cleared_at=None,
         cleared_by=None,
         created_by=applied_by,
-        access_scope="project",
     )
     session.add(mark)
     await session.flush()

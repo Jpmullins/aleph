@@ -74,7 +74,7 @@ async def _self_post(
     Shared by the self-calling handlers (agent-action execution, note promote).
     Mints an HS256 agent token scoped to the acting analyst (`principal`), the
     project, and a fresh agent_run_id — the auth middleware verifies it in BOTH
-    local and oidc mode (the old local-dev bearer sentinel authenticated only in
+    every mode (the old local-dev bearer sentinel authenticated only in
     local mode). The real route writes its own ledger + state in its own
     transaction.
     """
@@ -172,7 +172,6 @@ async def _approve(
             decided_by=principal.user_id,
             decided_at=utcnow(),
             created_by=principal.user_id,
-            access_scope="project",
         )
         session.add(decision)
         p.status = "approved"
@@ -207,7 +206,6 @@ async def _approve(
             decided_by=principal.user_id,
             decided_at=utcnow(),
             created_by=principal.user_id,
-            access_scope="project",
         )
         session.add(decision)
         # apply_merge redirects links, rewrites inbound bodies, aliases the
@@ -263,7 +261,6 @@ async def _approve(
             decided_by=principal.user_id,
             decided_at=utcnow(),
             created_by=principal.user_id,
-            access_scope="project",
         )
         session.add(decision)
         req.status = "approved"
@@ -342,7 +339,6 @@ async def _approve(
             decided_by=principal.user_id,
             decided_at=utcnow(),
             created_by=principal.user_id,
-            access_scope="project",
         )
         session.add(decision)
         page.status = "approved"
@@ -380,7 +376,6 @@ async def _approve(
             decided_by=principal.user_id,
             decided_at=utcnow(),
             created_by=principal.user_id,
-            access_scope="project",
         )
         session.add(decision)
         now = utcnow()
@@ -438,7 +433,6 @@ async def _reject(
             decided_by=principal.user_id,
             decided_at=utcnow(),
             created_by=principal.user_id,
-            access_scope="project",
         )
         session.add(decision)
         p.status = "rejected"
@@ -484,7 +478,6 @@ async def _reject(
             decided_by=principal.user_id,
             decided_at=utcnow(),
             created_by=principal.user_id,
-            access_scope="project",
         )
         session.add(decision)
         mp.status = "rejected"
@@ -531,7 +524,6 @@ async def _reject(
             decided_by=principal.user_id,
             decided_at=utcnow(),
             created_by=principal.user_id,
-            access_scope="project",
         )
         session.add(decision)
         req.status = "rejected"
@@ -617,7 +609,6 @@ async def _reject(
             decided_by=principal.user_id,
             decided_at=utcnow(),
             created_by=principal.user_id,
-            access_scope="project",
         )
         session.add(decision)
         page.status = "archived"
@@ -665,7 +656,6 @@ async def _reject(
             decided_by=principal.user_id,
             decided_at=utcnow(),
             created_by=principal.user_id,
-            access_scope="project",
         )
         session.add(decision)
         downgraded = 0

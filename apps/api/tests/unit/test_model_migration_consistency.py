@@ -68,7 +68,6 @@ def _orm_metadata():
         "aleph_hypotheses.models",
         "aleph_notes.models",
         "aleph_reviewer.models",
-        "aleph_datasets.models",
         "aleph_connectors.models",
         "aleph_evals.models",
     ):

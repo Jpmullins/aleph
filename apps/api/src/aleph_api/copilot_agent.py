@@ -220,7 +220,7 @@ def get_runtime() -> dict[str, Any]:
 # The in-process assistant reaches state ONLY by self-calling its own tested
 # API routes (rule #3). Those calls historically carried a hardcoded local-dev
 # bearer sentinel, which the auth middleware honors ONLY in local auth mode — so
-# under OIDC every self-call 401s. `_self_headers` mints a real short-lived
+# without one every self-call 401s. `_self_headers` mints a real short-lived
 # HS256 agent token instead, which the middleware verifies in BOTH modes.
 
 # A self-call completes in seconds; the token never needs to outlive the
@@ -261,8 +261,7 @@ async def _self_headers(project_id: UUID, *, settings: Any) -> dict[str, str]:
     Replaces the hardcoded local-dev bearer sentinel with a
     real short-lived HS256 agent token scoped to the acting project + a fresh
     agent_run_id. The sentinel authenticated ONLY in local auth mode; a minted
-    agent token is verified by the auth middleware in BOTH local and oidc mode,
-    so these self-calls no longer 401 under OIDC.
+    agent token is verified by the auth middleware, so these self-calls do not 401.
     """
     from aleph_security.agent_token import mint_agent_token
 

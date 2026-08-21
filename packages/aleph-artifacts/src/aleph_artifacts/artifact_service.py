@@ -55,7 +55,6 @@ async def create_artifact(
         description=description,
         current_version_id=None,
         created_by=principal.user_id,
-        access_scope="project",
     )
     session.add(a)
     await session.flush()

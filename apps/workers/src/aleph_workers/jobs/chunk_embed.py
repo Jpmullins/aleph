@@ -69,7 +69,6 @@ async def chunk_embed_job(
                 started_at=utcnow(),
                 input_payload={"normalized_document_id": str(normalized_id)},
                 created_by=principal.user_id,
-                access_scope="project",
             )
         )
         await session.commit()
@@ -227,7 +226,6 @@ async def chunk_embed_job(
                         chunk_count=len(chunks),
                         indexed_at=utcnow(),
                         created_by=principal.user_id,
-                        access_scope="project",
                     )
                 )
             else:

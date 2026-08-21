@@ -272,7 +272,6 @@ async def approve_page(
         decided_by=principal.user_id,
         decided_at=utcnow(),
         created_by=principal.user_id,
-        access_scope="project",
     )
     session.add(decision)
     page.status = "approved"
@@ -320,7 +319,6 @@ async def reject_page(
         decided_by=principal.user_id,
         decided_at=utcnow(),
         created_by=principal.user_id,
-        access_scope="project",
     )
     session.add(decision)
     page.status = "archived"

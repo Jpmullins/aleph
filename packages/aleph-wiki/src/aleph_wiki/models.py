@@ -434,4 +434,3 @@ class ClaimEdge(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     created_by: Mapped[UUID] = mapped_column(nullable=False)
-    access_scope: Mapped[str] = mapped_column(String(16), nullable=False, server_default="project")

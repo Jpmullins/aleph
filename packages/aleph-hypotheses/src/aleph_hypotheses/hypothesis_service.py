@@ -53,7 +53,6 @@ async def create_hypothesis(
         current_version_id=None,
         last_evidence_change_at=None,
         created_by=principal.user_id,
-        access_scope="project",
     )
     session.add(hypothesis)
     await session.flush()
@@ -203,7 +202,6 @@ async def add_evidence(
         weight=weight,
         note=note,
         created_by=principal.user_id,
-        access_scope="project",
     )
     session.add(ev)
     hypothesis.last_evidence_change_at = utcnow()

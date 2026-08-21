@@ -147,7 +147,6 @@ class ConnectorCredentialService:
                 kms_key_arn=None,
                 rotated_at=None,
                 created_by=principal.user_id,
-                access_scope="project",
             )
             self._session.add(existing)
             action_kind = "connector_credential.create"

@@ -112,6 +112,5 @@ OTEL spans are exported through `otel-collector`; traces land in Langfuse (`:300
 ## Auth in deployment
 
 Local mode is the compose default and skips user JWT verification entirely. Deploying means flipping
-`ALEPH_AUTH_MODE=oidc` and setting `ALEPH_AUTH_ISSUER`, `ALEPH_AUTH_AUDIENCE`, `ALEPH_AUTH_JWKS_URL`
 (plus `VITE_AUTH_MODE` for the frontend). Do not deploy without also closing the agent-endpoint gap
 recorded in [`../CLAUDE.md`](../CLAUDE.md#known-broken--do-not-trust-these).

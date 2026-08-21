@@ -54,7 +54,6 @@ async def create_request(
         requested_by_id=requested_by.user_id,
         status="pending",
         created_by=requested_by.user_id,
-        access_scope="project",
     )
     session.add(req)
     await session.flush()
@@ -99,7 +98,6 @@ async def decide(
         decided_by=principal.user_id,
         decided_at=utcnow(),
         created_by=principal.user_id,
-        access_scope="project",
     )
     session.add(decision_row)
     req.status = decision

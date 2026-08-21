@@ -45,7 +45,6 @@ from aleph_observability import (
 )
 from aleph_rks.asset_store import AssetStore, create_asset_store
 from aleph_scholar import ScholarService
-from aleph_security.jwt import JWKSCache
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
@@ -71,7 +70,6 @@ PRICING = "pricing"
 GATEWAY_CATALOG = "models.gateway_catalog"
 ASSET_STORE = "asset_store"
 SCHOLAR = "scholar"
-JWKS = "jwks_cache"
 CHANGE_BROKER = "realtime.broker"
 NOTIFY_LISTENER = "realtime.listener"
 AGENT_STORE = "agent.store"
@@ -234,39 +232,6 @@ def redis_client() -> CapabilitySpec:
         probe=probe,
         requires=frozenset({SETTINGS}),
         provides=frozenset({REDIS}),
-    )
-
-
-def auth_jwks() -> CapabilitySpec:
-    """JWKS cache. Only meaningful in OIDC mode; in local mode nothing is provided."""
-
-    async def setup(ctx: Context) -> AsyncIterator[Callable[[], Awaitable[None]]]:
-        settings: Settings = ctx.get(SETTINGS)
-        cache: JWKSCache | None = None
-        if settings.aleph_auth_mode == "oidc":
-            if not settings.aleph_auth_jwks_url:
-                msg = "ALEPH_AUTH_JWKS_URL is required when ALEPH_AUTH_MODE=oidc"
-                raise RuntimeError(msg)
-            cache = JWKSCache(jwks_url=settings.aleph_auth_jwks_url, http_client=ctx.get(HTTP_AUTH))
-        ctx.provide(JWKS, cache)
-        if False:  # pragma: no cover - nothing to undo beyond the binding
-            yield
-
-    async def probe(ctx: Context) -> ProbeResult:
-        settings: Settings = ctx.get(SETTINGS)
-        cache = ctx.get(JWKS)
-        if settings.aleph_auth_mode == "oidc" and cache is None:
-            return problem("auth mode is oidc but no JWKS cache was built")
-        if settings.aleph_auth_mode != "oidc" and cache is not None:
-            return problem("a JWKS cache was built outside oidc mode")
-        return ok(f"auth mode {settings.aleph_auth_mode}")
-
-    return CapabilitySpec(
-        name="auth",
-        setup=setup,
-        probe=probe,
-        requires=frozenset({SETTINGS, HTTP_AUTH}),
-        provides=frozenset({JWKS}),
     )
 
 
@@ -564,7 +529,6 @@ def core_capabilities(settings: Settings) -> tuple[CapabilitySpec, ...]:
         database(),
         http_clients(),
         redis_client(),
-        auth_jwks(),
         models(),
         assets(),
         scholar(),
@@ -583,7 +547,6 @@ def bind_to_app_state(app: Any, ctx: Context) -> None:
     app.state.settings = ctx.get(SETTINGS)
     app.state.db_engine = ctx.get(DB_ENGINE)
     app.state.session_maker = ctx.get(DB_SESSIONS)
-    app.state.jwks_cache = ctx.get(JWKS)
     app.state.litellm = ctx.get(LITELLM)
     app.state.pricing = ctx.get(PRICING)
     app.state.gateway_catalog = ctx.get(GATEWAY_CATALOG)
@@ -605,7 +568,6 @@ BOUND_KEYS = frozenset(
         SETTINGS,
         DB_ENGINE,
         DB_SESSIONS,
-        JWKS,
         LITELLM,
         PRICING,
         GATEWAY_CATALOG,
@@ -634,7 +596,6 @@ __all__ = [
     "HTTP_AUTH",
     "HTTP_CONSENSUS",
     "HTTP_GATEWAY",
-    "JWKS",
     "LITELLM",
     "NOTIFY_LISTENER",
     "PRICING",

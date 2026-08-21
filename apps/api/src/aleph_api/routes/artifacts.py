@@ -171,7 +171,6 @@ async def post_build(
             "artifact_kind": body.artifact_kind,
         },
         created_by=principal.user_id,
-        access_scope="project",
     )
     session.add(run)
     await session.flush()

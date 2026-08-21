@@ -60,5 +60,4 @@ def new_project_profile(
         is_template=False,
         bindings_jsonb=dict(template.bindings_jsonb),
         created_by=created_by,
-        access_scope="project",
     )

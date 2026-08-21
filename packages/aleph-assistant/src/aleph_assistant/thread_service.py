@@ -33,7 +33,6 @@ async def create_session(
         title=title[:255] or "New session",
         last_activity_at=utcnow(),
         created_by=created_by,
-        access_scope="project",
     )
     session.add(s)
     await session.flush()
@@ -44,7 +43,6 @@ async def create_session(
         parent_thread_id=None,
         title=None,
         created_by=created_by,
-        access_scope="project",
     )
     session.add(t)
     await session.flush()
@@ -101,7 +99,6 @@ async def fork_thread(
         parent_thread_id=parent.id,
         title=parent.title,
         created_by=created_by,
-        access_scope="project",
     )
     session.add(new_thread)
     await session.flush()
@@ -127,7 +124,6 @@ async def fork_thread(
                 retrieval_jsonb=dict(m.retrieval_jsonb),
                 attached_cards_jsonb=list(m.attached_cards_jsonb),
                 created_by=created_by,
-                access_scope="project",
             )
         )
     await session.flush()

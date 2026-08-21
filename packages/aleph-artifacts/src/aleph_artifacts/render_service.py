@@ -67,7 +67,6 @@ async def record_render(
         sha256=sha,
         render_spec_jsonb=render_spec,
         created_by=principal.user_id,
-        access_scope="project",
     )
     session.add(asset)
     await session.flush()

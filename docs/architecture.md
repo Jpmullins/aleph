@@ -170,8 +170,8 @@ under a sandboxing CSP.
 - **`local`** (compose default) — JWT verification skipped; every non-public request maps to a fixed
   `dev@aleph.local` principal, JIT-provisioned and ledgered as `user.create`. Agent tokens (HS256,
   internal) are still verified. No IdP runs locally.
-- **`oidc`** — full JWT/JWKS verification against any OIDC IdP (Cognito, Auth0, Authentik, Keycloak,
-  ALB OIDC), via `ALEPH_AUTH_ISSUER`, `ALEPH_AUTH_AUDIENCE`, `ALEPH_AUTH_JWKS_URL`. Dormant in local
+- **`local`** — full JWT/JWKS verification against any single-user auth IdP (Cognito, Auth0, Authentik, Keycloak,
+  ALB single-user auth), via `ALEPH_AUTH_ISSUER`, `ALEPH_AUTH_AUDIENCE`, `ALEPH_AUTH_JWKS_URL`. Dormant in local
   mode but kept intact, so deploying is a config flip.
 
 Only `/healthz`, `/readyz`, `/docs`, `/redoc`, `/openapi.json` and `/static/` bypass the middleware.
@@ -285,14 +285,12 @@ stripping invisible/bidi control characters and folding U+2028/U+2029 — and fl
 
 ## Known gaps
 
-Both are the same class, both are out of scope until OIDC deployment is taken up as a whole, and
+Both are the same class, both are out of scope until single-user auth deployment is taken up as a whole, and
 **`local` mode — the only deployed mode — is unaffected by either.**
 
 - **The runtime bridge does not forward the caller's credential.** `copilot-runtime/src/server.ts`
-  builds `new HttpAgent({ url })` with no headers, so in `oidc` mode the chat path now correctly
   demands a credential it never receives. Closing it means per-request header propagation from
   browser → runtime → API.
 - **SSE cannot carry a bearer token.** `EventSource` cannot set an `Authorization` header, so the SSE
   streams (agent-events, surfaces, assistant, `changes`) and the `<iframe>`-consumed asset route have
-  no token transport in `oidc` mode. Closing it means a short-lived query-param or cookie exchange for
   stream endpoints.

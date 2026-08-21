@@ -88,7 +88,6 @@ async def wiki_ingest_job(
                     "source_id": str(source.id),
                 },
                 created_by=principal.user_id,
-                access_scope="project",
             )
             session.add(agent_run)
             await session.flush()
@@ -193,7 +192,6 @@ async def wiki_ingest_job(
                             "page_id": str(rev.page_id),
                         },
                         created_by=principal.user_id,
-                        access_scope="project",
                     )
                     session.add(review_run)
                 await session.commit()

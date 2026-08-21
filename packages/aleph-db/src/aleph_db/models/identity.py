@@ -14,7 +14,7 @@ class User(CommonColumns, Base):
     __tablename__ = "users"
 
     subject: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    """OIDC `sub` claim. Identity boundary."""
+    """Stable subject identifier. Identity boundary."""
     email: Mapped[str] = mapped_column(String(320), nullable=False)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")

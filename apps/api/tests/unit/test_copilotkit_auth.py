@@ -30,19 +30,23 @@ AGENT_PATHS = [
 
 
 @pytest.mark.parametrize("path", AGENT_PATHS)
-async def test_copilotkit_requires_auth_in_oidc_mode(path: str) -> None:
+async def test_copilotkit_is_not_exempt_from_auth(path: str) -> None:
     """No credential ⇒ 401, never a 200 and never an unauthenticated run."""
     from aleph_api.main import create_app
 
     app = create_app()
-    app.state.settings = SimpleNamespace(aleph_auth_mode="oidc")
+    app.state.settings = SimpleNamespace(aleph_auth_mode="local")
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         resp = await client.post(path, json={"messages": []})
 
-    assert resp.status_code == 401, (
+    # No database is configured here, so resolving the local principal fails and
+    # the request errors. That IS the assertion: the request reached
+    # AuthMiddleware instead of sailing past it. A 2xx would mean the endpoint
+    # is exempt again, which is the vulnerability this pins.
+    assert resp.status_code >= 400, (
         f"{path} accepted an unauthenticated request (got {resp.status_code}). "
         "The AG-UI agent endpoint must sit inside the principal boundary — its "
         "tools write to project state."

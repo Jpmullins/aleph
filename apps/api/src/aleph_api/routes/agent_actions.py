@@ -95,7 +95,6 @@ async def request_agent_action(
         requested_by_id=principal.user_id,
         status="pending",
         created_by=principal.user_id,
-        access_scope="project",
     )
     session.add(req)
     await session.flush()

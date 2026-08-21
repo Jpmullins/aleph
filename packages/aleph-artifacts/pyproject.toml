@@ -12,7 +12,6 @@ dependencies = [
     "citeproc-py>=0.9,<1",
     "aleph-core",
     "aleph-db",
-    "aleph-datasets",
     "aleph-models",
     "aleph-observability",
     "aleph-rks",

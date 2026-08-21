@@ -60,13 +60,10 @@ class Settings(BaseSettings):
     litellm_base_url: str
     insights_litellm_api_key: str
 
-    # Auth mode. `local` injects a hardcoded dev principal; `oidc` runs
-    # the JWT/JWKS path. The OIDC fields below are required only when
-    # `aleph_auth_mode == "oidc"`.
-    aleph_auth_mode: Literal["local", "oidc"] = "local"
-    aleph_auth_issuer: str | None = None
-    aleph_auth_audience: str = "aleph"
-    aleph_auth_jwks_url: str | None = None
+    # Aleph runs single-user. The OIDC mode was removed — see
+    # docs/decisions.md D6. Kept as a literal so an old .env that still
+    # sets ALEPH_AUTH_MODE=local keeps working.
+    aleph_auth_mode: Literal["local"] = "local"
 
     # Local-mode dev principal. Fixed identity that the auth middleware
     # JIT-provisions on first sight so the User row exists and gets a

@@ -46,7 +46,6 @@ async def write_feedback(
         rejected_at=utcnow(),
         addressed_in_revision_id=None,
         created_by=rejected_by,
-        access_scope="project",
     )
     session.add(fb)
     await session.flush()

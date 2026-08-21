@@ -178,7 +178,6 @@ async def normalize_job(
                 structure_jsonb=result.structure,
                 quality_flags_jsonb=result.quality_flags,
                 created_by=principal.user_id,
-                access_scope="project",
             )
             session.add(normalized)
             await session.flush()

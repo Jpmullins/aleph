@@ -38,7 +38,6 @@ async def start_run(
         finding_count=0,
         started_at=utcnow(),
         created_by=created_by,
-        access_scope="project",
     )
     session.add(run)
     await session.flush()
@@ -82,7 +81,6 @@ async def add_finding(
         auto_resolvable=auto_resolvable,
         status="open",
         created_by=created_by,
-        access_scope="project",
     )
     session.add(f)
     await session.flush()

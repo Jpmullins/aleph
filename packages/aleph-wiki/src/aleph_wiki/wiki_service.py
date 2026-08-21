@@ -330,7 +330,6 @@ class WikiService:
                     confidence=c.confidence,
                     status="active",
                     created_by=principal.user_id,
-                    access_scope="project",
                 )
                 self._session.add(claim)
                 await self._session.flush()
@@ -469,7 +468,6 @@ class WikiService:
             status=(schema_mod.STUB_STATUS if page_kind == "stub" else schema_mod.REVIEW_QUEUE),
             last_compiled_at=None,
             created_by=created_by,
-            access_scope="project",
         )
         self._session.add(new_page)
         await self._session.flush()

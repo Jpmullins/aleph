@@ -27,7 +27,6 @@ async def create_note(
         project_id=project_id,
         title=title[:255] or "Untitled",
         created_by=created_by,
-        access_scope="project",
     )
     session.add(n)
     await session.flush()
@@ -103,7 +102,6 @@ async def create_section(
         body_md=body_md,
         anchor=anchor,
         created_by=created_by,
-        access_scope="project",
     )
     session.add(s)
     await session.flush()

@@ -268,7 +268,6 @@ async def _node_commit_revision(state: SynthesisState) -> dict:
                 status="pending",
                 approval_decision_id=None,
                 created_by=ctx.principal.user_id,
-                access_scope="project",
             )
             session.add(proposal)
             await session.flush()

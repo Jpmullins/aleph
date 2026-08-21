@@ -67,7 +67,6 @@ async def curate_page_job(ctx: dict[str, Any], project_id: str, page_id: str) ->
                     status="running",
                     input_payload={"page_id": page_id},
                     created_by=owner,
-                    access_scope="project",
                 )
             )
             await session.commit()

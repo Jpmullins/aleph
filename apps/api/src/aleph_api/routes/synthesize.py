@@ -166,7 +166,6 @@ async def approve(
         decided_by=principal.user_id,
         decided_at=utcnow(),
         created_by=principal.user_id,
-        access_scope="project",
     )
     session.add(decision)
     p.status = "approved"
@@ -227,7 +226,6 @@ async def reject(
         decided_by=principal.user_id,
         decided_at=utcnow(),
         created_by=principal.user_id,
-        access_scope="project",
     )
     session.add(decision)
     p.status = "rejected"

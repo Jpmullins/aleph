@@ -616,7 +616,6 @@ async def _kick_normalize(
                 "source_version_id": str(created.version.id),
             },
             created_by=ctx.principal.user_id,
-            access_scope="project",
         )
     )
     await session.flush()

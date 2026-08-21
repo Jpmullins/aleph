@@ -244,7 +244,6 @@ async def wiki_refresh_job(
                         status="running",
                         input_payload={"page_id": page_id},
                         created_by=principal.user_id,
-                        access_scope="project",
                     )
                 )
             else:

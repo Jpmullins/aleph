@@ -33,6 +33,5 @@ class CommonColumns:
         onupdate=func.now(),
     )
     created_by: Mapped[UUID] = mapped_column(nullable=False)
-    access_scope: Mapped[str] = mapped_column(String(64), nullable=False, server_default="project")
     trace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     ledger_event_id: Mapped[UUID | None] = mapped_column(nullable=True)

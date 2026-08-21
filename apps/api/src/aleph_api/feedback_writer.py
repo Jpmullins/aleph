@@ -62,7 +62,6 @@ async def record_feedback(
         context_jsonb=context or {},
         promoted_to_eval_case_id=None,
         created_by=actor_id,
-        access_scope="project",
     )
     session.add(fb)
     await session.flush()
@@ -98,7 +97,6 @@ async def _promote_to_eval_case(session: AsyncSession, fb: UserFeedback) -> None
             gate_thresholds_jsonb={},
             introduced_in_increment=8,
             created_by=fb.created_by,
-            access_scope="project",
         )
         session.add(existing)
         await session.flush()

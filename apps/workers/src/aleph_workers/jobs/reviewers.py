@@ -63,7 +63,6 @@ async def mechanical_review_job(
                     "page_id": str(page_id),
                 },
                 created_by=principal.user_id,
-                access_scope="project",
             )
             session.add(run)
             await session.flush()
@@ -128,7 +127,6 @@ async def editorial_review_job(
             started_at=utcnow(),
             input_payload={"trigger": trigger},
             created_by=principal.user_id,
-            access_scope="project",
         )
         session.add(run)
         await session.commit()

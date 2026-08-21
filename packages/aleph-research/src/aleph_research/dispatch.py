@@ -89,7 +89,6 @@ async def dispatch_research(
             "allowed_connectors": enabled,
         },
         created_by=principal_user_id,
-        access_scope="project",
     )
     session.add(run)
     await session.flush()

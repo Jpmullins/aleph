@@ -290,15 +290,10 @@ below only with a test that would have caught them.
   labels skips rather than hiding them, but a run over an empty stack exercises almost nothing while
   reporting no failures. `scripts/acceptance.sh` — which counts skips separately and can verify its
   own checks fail (`--self-check`) — is the gate to trust.
-- **The runtime bridge does not forward the caller's credential.** `apps/copilot-runtime/src/server.ts`
-  constructs `new HttpAgent({ url: AGENT_URL })` with no headers. In `oidc` mode the agent endpoint
-  now correctly demands a credential it never receives, so the chat path is unusable there until
-  browser → runtime → API header propagation lands. `local` mode — the only deployed mode — is
-  unaffected. Same class as the SSE gap below.
-- **SSE cannot carry a bearer token.** `EventSource` cannot set an `Authorization` header, so in
-  `oidc` mode the SSE streams (agent-events, surfaces, assistant, `changes`) and the `<iframe>`-consumed
-  asset route have no token transport. Deliberately out of scope until OIDC deployment is taken up as
-  a whole; `local` mode is unaffected.
+- **The Node runtime bridge is an open proxy on port 4000.**
+  `apps/copilot-runtime/src/server.ts` constructs `new HttpAgent({ url: AGENT_URL })` with no
+  headers, and the port is published. Anything that can reach it can drive the agent. This is a
+  real problem in the only mode Aleph runs, and is `WS-D3` in `docs/plan.md`.
 
 ### Fixed, with the test that pins each
 
@@ -308,7 +303,7 @@ below only with a test that would have caught them.
   comment promising the handler verified callers; it performed no verification, and the agent's tools
   took their project scope from a client-supplied thread id. Two independent defences now stand:
   `_SELF_AUTH_PREFIXES` is empty, so the endpoint is authenticated like every other route
-  (`test_copilotkit_auth.py::test_copilotkit_requires_auth_in_oidc_mode`,
+  (`test_copilotkit_auth.py::test_copilotkit_is_not_exempt_from_auth`,
   `::test_no_blanket_auth_exemption_prefixes`); and the project a request names is checked at both
   ends — at the HTTP boundary by `middleware/agent_scope.py` (`test_agent_thread_scope.py`, incl.
   `test_thread_parsers_agree`, which pins the extractor to the agent's own thread-id parser) and

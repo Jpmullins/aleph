@@ -12,7 +12,6 @@ members = [
     "aleph-code-runner",
     "aleph-connectors",
     "aleph-core",
-    "aleph-datasets",
     "aleph-db",
     "aleph-evals",
     "aleph-hypotheses",
@@ -122,7 +121,6 @@ dependencies = [
     { name = "aleph-assistant" },
     { name = "aleph-connectors" },
     { name = "aleph-core" },
-    { name = "aleph-datasets" },
     { name = "aleph-db" },
     { name = "aleph-evals" },
     { name = "aleph-hypotheses" },
@@ -163,7 +161,6 @@ requires-dist = [
     { name = "aleph-assistant", editable = "packages/aleph-assistant" },
     { name = "aleph-connectors", editable = "packages/aleph-connectors" },
     { name = "aleph-core", editable = "packages/aleph-core" },
-    { name = "aleph-datasets", editable = "packages/aleph-datasets" },
     { name = "aleph-db", editable = "packages/aleph-db" },
     { name = "aleph-evals", editable = "packages/aleph-evals" },
     { name = "aleph-hypotheses", editable = "packages/aleph-hypotheses" },
@@ -201,7 +198,6 @@ version = "0.1.0"
 source = { editable = "packages/aleph-artifacts" }
 dependencies = [
     { name = "aleph-core" },
-    { name = "aleph-datasets" },
     { name = "aleph-db" },
     { name = "aleph-models" },
     { name = "aleph-observability" },
@@ -219,7 +215,6 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aleph-core", editable = "packages/aleph-core" },
-    { name = "aleph-datasets", editable = "packages/aleph-datasets" },
     { name = "aleph-db", editable = "packages/aleph-db" },
     { name = "aleph-models", editable = "packages/aleph-models" },
     { name = "aleph-observability", editable = "packages/aleph-observability" },
@@ -345,27 +340,6 @@ dependencies = [
 requires-dist = [
     { name = "orjson", specifier = "==3.11.9" },
     { name = "pydantic", specifier = "==2.13.4" },
-]
-
-[[package]]
-name = "aleph-datasets"
-version = "0.1.0"
-source = { editable = "packages/aleph-datasets" }
-dependencies = [
-    { name = "aleph-core" },
-    { name = "aleph-db" },
-    { name = "aleph-rks" },
-    { name = "pydantic" },
-    { name = "sqlalchemy", extra = ["asyncio"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aleph-core", editable = "packages/aleph-core" },
-    { name = "aleph-db", editable = "packages/aleph-db" },
-    { name = "aleph-rks", editable = "packages/aleph-rks" },
-    { name = "pydantic", specifier = "==2.13.4" },
-    { name = "sqlalchemy", extras = ["asyncio"], specifier = "==2.0.50" },
 ]
 
 [[package]]

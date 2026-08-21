@@ -44,7 +44,6 @@ async def pin_card(
         title=title[:255] or None,
         pinned_to=pinned_to,
         created_by=author_id,
-        access_scope="project",
     )
     session.add(card)
     version = InteractiveCardVersion(

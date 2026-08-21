@@ -145,7 +145,6 @@ async def _kick_off_normalize(
             "source_version_id": str(created.version.id),
         },
         created_by=principal.user_id,
-        access_scope="project",
     )
     session.add(run)
     await session.flush()

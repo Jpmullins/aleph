@@ -764,7 +764,6 @@ class CuratorService:
                         confidence=c.confidence,
                         status="active",
                         created_by=principal.user_id,
-                        access_scope="project",
                     )
                     self._session.add(claim)
                     await self._session.flush()

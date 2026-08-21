@@ -29,11 +29,6 @@ factory = "aleph_runtime.capabilities:redis_client"
 protected = true
 
 [[capability]]
-name = "auth"
-factory = "aleph_runtime.capabilities:auth_jwks"
-protected = true
-
-[[capability]]
 name = "models"
 factory = "aleph_runtime.capabilities:models"
 protected = true

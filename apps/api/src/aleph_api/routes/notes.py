@@ -260,7 +260,6 @@ async def promote_note(
         status="succeeded",
         input_payload={"note_id": str(note_id)},
         created_by=principal.user_id,
-        access_scope="project",
         completed_at=utcnow(),
     )
     session.add(run)
@@ -292,7 +291,6 @@ async def promote_note(
         status="pending",
         approval_decision_id=None,
         created_by=principal.user_id,
-        access_scope="project",
     )
     session.add(proposal)
     await session.flush()

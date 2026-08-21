@@ -55,7 +55,6 @@ def _page(
         contested=contested,
         contradictions=contradictions or [],
         created_by=ACTOR,
-        access_scope="project",
     )
 
 

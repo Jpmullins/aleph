@@ -78,7 +78,6 @@ async def mint_token(
         status="pending",
         input_payload=body.input_payload,
         created_by=principal.user_id,
-        access_scope="project",
     )
     session.add(run)
     await session.flush()

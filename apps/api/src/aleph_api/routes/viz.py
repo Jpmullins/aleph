@@ -66,7 +66,6 @@ async def post_render_code(
         status="pending",
         input_payload={"output_kind": body.output_kind, "title": body.title},
         created_by=principal.user_id,
-        access_scope="project",
     )
     session.add(run)
     await session.flush()

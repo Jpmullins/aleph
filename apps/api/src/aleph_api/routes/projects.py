@@ -136,7 +136,6 @@ async def create_project(
                 enabled=enabled,
                 config_jsonb={},
                 created_by=principal.user_id,
-                access_scope="project",
             )
         )
         seeded.append({"kind": connector.kind, "enabled": enabled})
@@ -172,7 +171,6 @@ async def create_project(
                 status="pending",
                 input_payload={"title": body.title, "description": body.description},
                 created_by=principal.user_id,
-                access_scope="project",
             )
         )
         await session.flush()

@@ -2569,176 +2569,41 @@ one workstream, because they are the same job — removing a second, unread
 concept — and because a promise with no owner is how the last round of
 "review-held rules" became this backlog.
 
-#### WS-X1 · Delete the three unread concepts
+#### WS-X1 · Delete the three unread concepts — **DONE 2026-08-21**
 
-**What it is.** Three things exist, are maintained, and are read by nothing.
-`access_scope` is a column on every table with **70 assignment sites and zero
-query filters**. `audit/` is a second acceptance gate whose id set already
-disagrees with `docs/acceptance.md` in both directions and whose `claims.yaml`
-asserts a defect that is no longer true. `aleph-datasets` is a workspace package
-whose only importers are `alembic/env.py` and a consistency test.
+All three are removed from the tree and the database. `docs/decisions.md` D7
+records why.
 
-**Why.** Each is the defect class CLAUDE.md names as dominant, and
-`access_scope` is the largest single instance of it in the codebase. Keeping an
-unread authorization concept in every table is worse than having none, because
-it reads as a control that is not there.
+| | Was | Now |
+|---|---|---|
+| `access_scope` | 70 write sites, 0 query filters, on 41 tables | 0 references; column dropped from all 41 |
+| `audit/` | a second acceptance gate disagreeing with the first | *pending* — its 7 browser specs are harvested by `WS-P4` first |
+| `aleph-datasets` | a package whose only importers were the migration runner and a consistency test | package deleted, 3 empty tables dropped, workspace count 21 → 20 |
 
-**Note the conflict this resolves.** `WS-A1b` adds a *new* `access_scope` column
-to its plugins table, following the existing project-scope rule — correctly, as
-the rule stands. So this workstream must land **before** A1b, or A1b is adding a
-column this one removes. That ordering was invisible while the deletion had no
-workstream.
+**OIDC went with them** (`docs/decisions.md` D6). The half-built code-flow is
+gone: `aleph_security/jwt.py`, the JWKS kernel capability, the middleware
+branch, four settings, `oidc-client-ts`, and the frontend's issuer/client/audience
+configuration. `apps/web/src/lib/auth.ts` is now 55 lines and returns a sentinel.
 
-**Criteria:**
-- No column, no assignment, no rule
-  <br>`grep -rn 'access_scope' apps packages --include='*.py' | wc -l` returns 0, and a migration drops it from every table
-- Role checks still hold, so the deletion removed nothing real
-  <br>`uv run pytest -m integration -k 'role or permission' -q` passes, and mutating one `require_at_least` call to a no-op makes it fail
-- One acceptance gate, not two
-  <br>`test -d audit && exit 1` — and the seven real `.spec.ts` files under `audit/checks/e2e/` are harvested into `tests/playwright/` by `WS-P4` first, not deleted with the directory
-- The package count goes down
-  <br>`grep -c 'members' pyproject.toml` unchanged but `aleph-datasets` absent from `[tool.uv.workspace]`, and `docs/acceptance.md` E4's ceiling drops from ≤21 to ≤20
-- Nothing silently depended on any of it
-  <br>`uv sync --all-packages && uv run pytest -q` passes, and the API and workers both boot — `curl -s localhost:8000/readyz` returns `ready`
+**Two workstreams changed as a result:**
 
-**Review.** For `access_scope` specifically, the review is the mutation: confirm
-that route-side `require_at_least` is genuinely the control by breaking one call
-site and watching an integration test go red. If nothing goes red, the column
-was not the only thing that was decorative.
-**Iterate.** Add a sweep that fails on any new write-only column — a field
-assigned in `apps`/`packages` and never read in a filter — so the class does not
-return under a different name.
-**Depends on:** `WS-P4` (harvest the specs first).
-**Risk.** `access_scope` may turn out to be read somewhere the grep misses — raw
-SQL, a JSONB path, or a string-built query. The first criterion is a grep;
-before running the migration, also check `grep -rn 'access_scope' --include='*.sql'`
-and the Alembic history for a functional index.
-- **No Enterprise Intelligence (C1).** Evaluated and declined — Deep Agents gives
-  the same primitives with no licence, no Kubernetes, and nothing leaving the
-  deployment.
+- `WS-D4` (SSE token transport) is **withdrawn**. It existed because every live
+  surface was dark in `oidc` mode. There is no `oidc` mode.
+- `WS-D3` **survives and is more important than it looked**. Its OIDC framing
+  was never the real problem: `apps/copilot-runtime/src/server.ts` builds
+  `new HttpAgent({ url: AGENT_URL })` with no headers on a **published port**,
+  so anything that can reach port 4000 can drive the agent. That is a live
+  problem in the only mode Aleph runs.
 
-  **Correction (21 Aug):** an earlier draft of this section also listed *"no
-  async subagents, no MCP client"*. That was wrong on both counts and it
-  contradicted the plan's own body. `WS-H6` (async subagents) is a scheduled
-  workstream — 6 criteria, behind `WS-C3a`/`WS-C3b`. The line came
-  from lifting the completeness critic's list wholesale; the critic was
-  reasoning from the *backlog's* suggested order, where H6 sat tenth, not from
-  the cluster plans that had already scheduled it. Both are now stated properly
-  below.
-- **No multi-tenancy, no collaboration, no presence, no mobile layout.** One
-  user, three projects.
-- **No new workspace package.** The count holds at ≤21 and should ratchet down.
+Six tests were re-expressed rather than deleted. They had used `oidc` mode to
+get a deterministic 401 without a database; they now assert the invariant that
+actually matters — an unauthenticated request must never return 2xx — which is
+what pinned the original vulnerability and still does.
 
-### A contradiction this plan inherits, and does not resolve
-
-`CLAUDE.md:71` says: *"Treat wiki code as **legacy under removal**. Do not extend
-it, do not fix its cosmetics, do not add tests to it."* It points at
-`docs/decisions.md` D1 for the reasoning — a file that does not exist, so the
-reasoning is gone.
-
-**That rule has been comprehensively violated, by me, in the sessions
-immediately preceding this plan.** The wiki gained a schema governance layer,
-sixteen lint checks, derived hubs and an index, LLM classification, link
-resolution and a test suite. `packages/aleph-wiki` is the single most-invested
-package in recent history.
-
-The horizon scan flagged it independently: *"Reconcile CLAUDE.md with the tree:
-the wiki is being invested in, not removed."*
-
-So one of two things is true, and nobody has written down which:
-
-1. **The removal decision is stale.** The Claim Spine was going to replace the
-   wiki as the retrieval surface; it has 786 claims, zero edges, zero callers and
-   has never run (Part 2). If the replacement never arrived and the wiki is now
-   the working knowledge layer, `CLAUDE.md:71` should be deleted and D1 rewritten.
-2. **The removal decision stands**, in which case a large amount of recent work
-   went into a subsystem scheduled for deletion, and `WS-RS10`'s measurement is
-   the thing that decides when it goes.
-
-`WS-RS10` produces the deciding number — claim-level retrieval measured against
-chunk-level on the same eval — which is the honest version of "does the
-replacement actually beat what it replaces". **But the decision itself is not
-scheduled, and it should be made before more is invested either way.** It
-belongs in the `docs/decisions.md` that Part 0 creates.
-
-### Backlog coverage
-
-Checked item by item against the 57 workstreams. **28 of the 30 backlog items
-have a workstream**; several are covered under a differently-named one, which is
-why a naive id match undercounts:
-
-| Backlog | Owned by |
-|---|---|
-| B2 model endpoint | `WS-MEP-4`, `WS-MEP-5` |
-| E4 unpriced calls | `WS-MEP-1` |
-| E5 rate limiting | `WS-MEP-2` |
-| H4 `HarnessProfile` | `WS-MEP-7` |
-| H2 dead kernel skills | `WS-A1b` |
-| H7 `stream.subagents` | decided inside `WS-C3a` |
-| E6 Lit dev warning | `WS-UI-2` (console-clean browser smoke) |
-
-`WS-C3a` is worth reading on H7, because it corrects the backlog. The backlog
-says the Inspector "can be rebuilt on data Aleph already has". It cannot —
-`grep -rn 'AgentRun(' apps packages` finds 17 producers and **none in
-`copilot_agent.py` or `subagents/`**, and the only `AgentEvent` writers are
-called exclusively from worker jobs. So nothing about a chat turn is recorded at
-all. `WS-C3a` creates that record first, and decides H7 on the evidence rather
-than on the assumption.
-
-**Two items are not scheduled, and only one of them is a deliberate decline:**
-
-- **C1 Enterprise Intelligence — declined**, for the reasons above.
-- **C2 MCP Apps — deferred, not declined.** See `WS-C2` below.
-
-#### WS-C2 · MCP: a half-day spike, and a decision that changes WS-A1b
-
-**What it is.** Two different things share the name. **MCP Apps** lets an MCP
-server ship its own interactive UI — the agent calls a tool that carries a UI
-resource, and the runtime renders it in a sandboxed iframe with zero frontend
-code. A **general MCP client** would let Aleph mount any MCP server's tools as a
-tool source.
-
-**Why it is here and not in the "not doing" list.** The horizon scan marked both
-`TRIAL`, and the second one carries an argument this plan has to answer rather
-than skip: **a general MCP client may be a cheaper plugin system than the
-bespoke one `WS-A1b` describes.** Deciding that after building A1b is deciding
-it too late. The middleware is already in `node_modules`
-(`grep -rn 'mcpApps\|mcpServers' apps/copilot-runtime/src` → 0, so it is
-config, not code).
-
-**Approach.** Timebox it hard, and land it before `WS-A1b` starts. Stand up one public
-reference MCP server, set the config key, and answer two questions in
-`docs/decisions.md`: does an MCP App render in a Block, and would mounting MCP
-tool sources satisfy what A1's plugin registry is actually for?
-
-**Criteria:**
-- A sandboxed iframe from a third-party MCP server renders in the workspace
-  <br>`a Playwright spec against a local reference MCP App server: 0 → 1 passing`
-- The decision is written down before A1b starts
-  <br>`grep -c 'MCP' docs/decisions.md` returns ≥ 1, dated before the first WS-A1b commit
-- The spike does not become the work
-  <br>`git log --oneline -- apps/copilot-runtime/` shows ≤ 3 commits from the spike unless the decision was "adopt"
-
-**Review.** The output is a decision, not a feature. If the spike ships code
-without a written decision, it failed.
-**Iterate.** If adopted, MCP Apps becomes the third trust tier in `WS-A4`'s
-settings contract — a plugin whose UI Aleph never wrote and does not vouch for.
-**Depends on:** nothing — it must come
-*before* `WS-A1b`.
-**Risk.** The spike is interesting enough to sprawl. The third criterion
-exists to catch that.
-
-### On async subagents (WS-H6)
-
-Scheduled, but deliberately late and behind `WS-C3a`/`WS-C3b`, for a reason
-worth stating: the horizon scan marked it `hold` because **there is no measured
-problem yet**. The research loop blocking is a real shape, but nobody has
-measured how long an analyst actually waits. `WS-C3a` produces that number — it
-is what records how long a turn takes and where it goes — so H6 becomes
-*arguable* rather than assumed once C3a lands.
-
-If the number says analysts wait a long time, H6 earns its place. If it says
-seconds, it does not, and the honest outcome is to drop it and say so here.
+**Verification:** `grep -rn 'access_scope' apps packages --include='*.py'`
+returns 0 · `select count(*) from information_schema.columns where
+column_name='access_scope'` returns 0 · `alembic check` reports no drift ·
+779 unit + 36 integration passing · all five sweeps green.
 
 ### And one open question worth taking seriously
 

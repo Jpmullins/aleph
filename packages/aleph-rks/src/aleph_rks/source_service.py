@@ -104,7 +104,6 @@ async def register_uploaded_source(
         size_bytes=stored.size_bytes,
         sha256=sha,
         created_by=principal.user_id,
-        access_scope="project",
     )
     session.add(asset)
     await session.flush()
@@ -127,7 +126,6 @@ async def register_uploaded_source(
         status="normalizing",
         current_version_id=None,
         created_by=principal.user_id,
-        access_scope="project",
     )
     session.add(source)
     await session.flush()
@@ -142,7 +140,6 @@ async def register_uploaded_source(
         parser_version=None,
         normalized_document_id=None,
         created_by=principal.user_id,
-        access_scope="project",
     )
     session.add(version)
     source.current_version_id = version.id

@@ -112,7 +112,6 @@ async def set_binding(
             enabled=body.enabled,
             config_jsonb=body.config_jsonb,
             created_by=principal.user_id,
-            access_scope="project",
         )
         session.add(binding)
         await session.flush()
