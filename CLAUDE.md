@@ -44,7 +44,15 @@ surface; being removed. See `docs/decisions.md` D1.
   reconciler are in `packages/aleph-belief`.
 - **Why the wiki is still here:** deleting it means replacing the ingest→compile pipeline with claim
   extraction, and that extractor does not exist yet. `docs/acceptance.md` §E states the condition that
-  unblocks the deletion. Until then the wiki stays and nothing new is built on it.
+  unblocks the deletion. Until then the wiki stays.
+- **The wiki now has a schema** (`docs/wiki-schema.md`). Ported from the hermes-agent `llm-wiki`
+  skill — the harness that built `~/wiki/ai-research` — and stored as data, not as a document, so
+  `WikiSchema.validate_page` runs on the write path. Per-project domain, category list, controlled
+  tag taxonomy, page thresholds. `POST /wiki/schema/propose` derives one from the corpus that
+  actually exists, because the shipped default describes AI/ML research and is the wrong taxonomy
+  for any project that is about something else. A wrong taxonomy is worse than none: it gives every
+  page a plausible-looking home, so nothing reports a problem while the categories stop meaning
+  anything. This is governance for the wiki as it stands, not new capability built on it.
 
 **Axis 2 — the harness.** Aleph is being rebuilt on an own-implemented kernel modelled on the
 spatiotemporal-composability paper (revertible effects, reactive coeffects, scoped capability access).
@@ -76,6 +84,14 @@ tests to it. Migrate callers off it.
 - **One canonical A2UI catalog.** `packages/aleph-a2ui/src/aleph_a2ui/catalog.json` is the only
   editable copy; `apps/web/src/a2ui/catalog.ts` and `apps/copilot-runtime/src/catalog.generated.ts`
   are generated from it by `scripts/gen_catalog.py`.
+- **Four page statuses, two of which are queues for a person — and they are not the same queue.**
+  `stub` is a red link: something linked to a title nobody wrote, nobody proposed it, it is not work.
+  `planned` is a title that earned a page by being cited enough — a queue for WRITING, allowed to be
+  long. `draft` has content and is a queue for REVIEW. `approved` is settled. Filing stubs as `draft`
+  put 235 empty pages in front of an approver alongside 15 real ones; "approve this" is not a question
+  you can ask about a page with no content. The promotion threshold is 5, not the hermes 2, because
+  Aleph extracts links mechanically from compiled prose where a mention is free — measured on the real
+  corpus, 2 selects 477 of 600 linked stubs, which counts how common a phrase is.
 - **Claim → chunk grounding.** `aleph_rks.claim_grounding.chunks_for_claim` (deterministic token
   overlap, no LLM) fills `Citation.chunk_ids` at commit time, so the claim → chunk → char-span chain
   is populated on the real write path instead of only in fixtures. The span at the bottom of that
@@ -196,11 +212,16 @@ depend on apps; no cycles. `aleph-scholar` carries no workspace deps.
    `scripts/gen_catalog.py`; `scripts/check-catalog-generated.sh` fails on a hand-edited generated
    copy or a regenerated-but-not-committed one. Three hand-maintained copies previously disagreed
    about `ClaimCard.confidence` in ways no test noticed.
-6. **Every key a LangGraph node writes is declared on its state `TypedDict`.**
+6. **Every surface prop a producer binds is declared in the client's zod schema.**
+   `scripts/check-surface-bindings.sh`. The A2UI binder resolves ONLY declared props, so a producer
+   binding the client never declares is dropped in silence — the SSE payload is correct, the view
+   reads `undefined`, nothing raises. The wiki surface shipped ten categories and a health summary
+   this way and rendered as though the project had no categories.
+7. **Every key a LangGraph node writes is declared on its state `TypedDict`.**
    `scripts/check-graph-state-keys.sh`. Undeclared writes are discarded silently, so the reader's
    `state.get(k, [])` returns empty and the feature is inert while every step reports success; four
    shipped defects had exactly this shape.
-7. **The agent path talks to the gateway and nothing else.** Every agent `ChatOpenAI` — orchestrator
+8. **The agent path talks to the gateway and nothing else.** Every agent `ChatOpenAI` — orchestrator
    and every subagent — is built by the one constructor `copilot_agent._gateway_chat_model`, pointed
    at the LiteLLM gateway. `test_subagents.py::test_subagent_model_points_at_gateway` asserts the
    built model's `base_url` is the configured gateway, and `test_agent_gateway_base_url.py` pins the
@@ -361,6 +382,7 @@ Distribution `aleph-xxx` · module `aleph_xxx` · tables plural snake_case · ac
 - `docs/architecture.md` — what exists today, honestly, including the security posture
 - `docs/acceptance.md` — the refactor decomposed into parts, each with a check that can fail
 - `docs/belief-engine.md` — the Claim Spine design being built
+- `docs/wiki-schema.md` — the wiki's governance: schema, statuses, thresholds, lint, links
 - `docs/decisions.md` — why the wiki is being removed, and what was borrowed from where
 - `docs/operations.md` — stack, migrations, gates, running against local models
 - `docs/update/` — pre-refactor audit reports (dated 2026-07-26, written against `bcc478a`). Useful as

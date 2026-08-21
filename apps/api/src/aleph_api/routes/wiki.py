@@ -27,6 +27,7 @@ from aleph_wiki.classify import classify_pages, propose_schema
 from aleph_wiki.feedback_service import write_feedback
 from aleph_wiki.html_compiler import compile_page_html
 from aleph_wiki.index_service import IndexService
+from aleph_wiki.links import resolve_broken_links
 from aleph_wiki.lint import lint_wiki
 from aleph_wiki.models import WikiClaim, WikiLink, WikiPage, WikiRevision
 from aleph_wiki.navigation import HubPlan, build_index, plan_hubs, sync_hubs
@@ -953,4 +954,44 @@ async def sync_wiki_hubs(
         updated=outcome.updated,
         unchanged=outcome.unchanged,
         summary=outcome.summary(),
+    )
+
+
+class LinkRepairOut(BaseModel):
+    resolved: int
+    still_broken: int
+    by_title: int
+    by_slug: int
+    summary: str
+
+
+@router.post("/{project_id}/wiki/links/resolve", response_model=LinkRepairOut)
+async def resolve_wiki_links(
+    project_id: ProjectScopeDep,
+    session: SessionDep,
+    principal: PrincipalDep,
+    dry_run: Annotated[bool, Query()] = False,
+) -> LinkRepairOut:
+    """Point every resolvable `[[wikilink]]` at the page it means.
+
+    Matches on exact title, then case-insensitively, then on slug — the last
+    because the vault schema makes slugs globally unique so `[[slug]]` resolves
+    wherever the page lives, which is how Obsidian's shortest-path linking
+    works. The pre-existing repair path went only through the legacy alias
+    table, so a link matching a page's title exactly still did not resolve.
+
+    A link still unresolved after this genuinely names a page nobody has
+    written, which is what makes the lint's `broken-wikilink` count mean
+    something.
+    """
+    require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
+    result = await resolve_broken_links(session, project_id=project_id, dry_run=dry_run)
+    if not dry_run:
+        await session.commit()
+    return LinkRepairOut(
+        resolved=result.resolved,
+        still_broken=result.still_broken,
+        by_title=result.by_title,
+        by_slug=result.by_slug,
+        summary=result.summary(),
     )

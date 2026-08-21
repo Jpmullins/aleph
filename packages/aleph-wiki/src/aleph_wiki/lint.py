@@ -31,6 +31,7 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aleph_wiki.frontmatter import extract_wikilinks, parse
+from aleph_wiki.links import slugify_link
 from aleph_wiki.models import WikiLink, WikiPage, WikiRevision
 from aleph_wiki.schema import EXEMPT_TYPES, WRITING_QUEUE, WikiSchema
 
@@ -217,8 +218,9 @@ async def lint_wiki(
         return report
 
     by_id = {p.id: p for p in pages}
-    titles = {p.title.lower() for p in pages}
-    slugs = {p.slug for p in pages}
+    title_index = {p.title.lower(): p.id for p in pages}
+    slug_index = {p.slug: p.id for p in pages}
+    slugs = set(slug_index)
 
     bodies: dict[UUID, str] = dict(
         (await session.execute(_current_bodies(project_id))).all()  # type: ignore[arg-type]
@@ -235,10 +237,21 @@ async def lint_wiki(
             .group_by(WikiLink.dst_title, WikiLink.src_page_id)
         )
     ).all()
+    # Resolve with exactly the rules `links.resolve_broken_links` uses — title,
+    # case-insensitive title, then slug. Anything less makes the lint and the
+    # repair disagree: `[[Source:S0002]]` reads as broken here while the repair
+    # resolves it by slug, so the report names a problem that repairing cannot
+    # remove and the count never goes down.
+    #
+    # A self-link is not broken either. The repair refuses to point a link at
+    # its own page, so reporting one as broken is reporting something no repair
+    # will ever fix.
     truly_broken: dict[str, set[UUID]] = defaultdict(set)
     for dst_title, src_page_id, _count in broken:
-        if str(dst_title).lower() not in titles:
-            truly_broken[str(dst_title)].add(src_page_id)
+        text = str(dst_title)
+        target = title_index.get(text.lower()) or slug_index.get(slugify_link(text))
+        if target is None:
+            truly_broken[text].add(src_page_id)
     for dst_title, srcs in truly_broken.items():
         report.findings.append(
             Finding(

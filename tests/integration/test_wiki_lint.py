@@ -401,3 +401,81 @@ class TestNearDuplicates:
         )
         await session.flush()
         assert "near-duplicate" not in _checks(await _lint(session, project))
+
+
+class TestLintAgreesWithRepair:
+    """What the lint calls broken must be what the repair cannot fix.
+
+    They resolved links by different rules: the repair matched title, then
+    case-insensitive title, then slug; the lint matched title only. So
+    `[[Source:S0002]]` read as broken forever while the repair resolved it by
+    slug on every run — a report naming a problem that repairing could not
+    remove, and a count that never went down.
+    """
+
+    async def test_a_slug_form_link_is_not_reported_as_broken(
+        self, session: AsyncSession, project: uuid.UUID
+    ) -> None:
+        target = _page(project, "Source: How to Write to SSDs", slug="source-s0002")
+        src = _page(project, "Citing Page", slug="citing-page")
+        session.add_all([target, src])
+        await session.flush()
+        session.add(
+            WikiLink(
+                id=uuid.uuid4(),
+                project_id=project,
+                src_page_id=src.id,
+                src_revision_id=uuid.uuid4(),
+                dst_page_id=None,
+                dst_title="Source:S0002",  # the slug form the compiler emits
+                occurrences=1,
+            )
+        )
+        await session.flush()
+        report = await _lint(session, project)
+        assert not any(f.check == "broken-wikilink" for f in report.findings)
+
+    async def test_a_self_link_is_not_reported_as_broken(
+        self, session: AsyncSession, project: uuid.UUID
+    ) -> None:
+        """The repair refuses to point a link at its own page, so reporting one
+        as broken names something no repair will ever fix."""
+        page = _page(project, "Checkpointing", slug="checkpointing")
+        session.add(page)
+        await session.flush()
+        session.add(
+            WikiLink(
+                id=uuid.uuid4(),
+                project_id=project,
+                src_page_id=page.id,
+                src_revision_id=uuid.uuid4(),
+                dst_page_id=None,
+                dst_title="Checkpointing",
+                occurrences=1,
+            )
+        )
+        await session.flush()
+        report = await _lint(session, project)
+        assert not any(f.check == "broken-wikilink" for f in report.findings)
+
+    async def test_a_link_to_nothing_is_still_broken(
+        self, session: AsyncSession, project: uuid.UUID
+    ) -> None:
+        """Guard the guard: the two exemptions must not swallow real breakage."""
+        src = _page(project, "Citing Page", slug="citing-page")
+        session.add(src)
+        await session.flush()
+        session.add(
+            WikiLink(
+                id=uuid.uuid4(),
+                project_id=project,
+                src_page_id=src.id,
+                src_revision_id=uuid.uuid4(),
+                dst_page_id=None,
+                dst_title="Genuinely Absent",
+                occurrences=1,
+            )
+        )
+        await session.flush()
+        report = await _lint(session, project)
+        assert any(f.check == "broken-wikilink" for f in report.findings)
