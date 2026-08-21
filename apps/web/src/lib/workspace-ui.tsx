@@ -150,7 +150,17 @@ export interface Pane {
 }
 
 /** Tiling gets unreadable past three columns at any realistic window width. */
-export const MAX_PANES = 3;
+/**
+ * Kept as a runaway guard, not a layout constraint.
+ *
+ * It was 3 because three columns fitted, and a fourth made every pane too
+ * narrow to read. The Board is a canvas — blocks have positions, not columns —
+ * so that reason is gone. The transport reason is gone too: panes share one
+ * multiplexed SSE connection, so N panes is one connection, not N.
+ *
+ * A ceiling still exists only so a stuck loop cannot open blocks forever.
+ */
+export const MAX_PANES = 24;
 
 function paneKey(kind: SurfaceTab, params?: Record<string, string>): string {
   const p = params ? Object.entries(params).sort().map(([k, v]) => `${k}=${v}`).join("&") : "";
@@ -228,17 +238,18 @@ export function WorkspaceUIProvider({ children }: { children: ReactNode }) {
    */
   const setOpenPageId = (id: string | null) => {
     setOpenPageIdState(id);
-    setPanes((prev) => {
-      const idx = prev.findIndex((p) => p.kind === "Wiki");
-      if (idx === -1) return prev;
-      const params = id ? { page_id: id } : undefined;
-      const nextId = paneKey("Wiki", params);
-      if (prev[idx].id === nextId) return prev;
-      const next = [...prev];
-      next[idx] = { ...next[idx], id: nextId, params };
-      setFocusedPaneId(nextId);
-      return next;
-    });
+    if (!id) return;
+    // Open the document as its OWN block, beside the index.
+    //
+    // This used to re-key the Wiki pane in place, so reading a page destroyed
+    // the list you found it in: one moment you have an index of 251 pages, the
+    // next you have one document and no way back except the rail. On a canvas
+    // that is simply wrong — the index and the document are two things, and
+    // wanting both on screen is the normal case, not an advanced one.
+    //
+    // As a side effect the Board draws a provenance thread from the index to
+    // the document, because the index is what was focused when it opened.
+    openPane("Wiki", { params: { page_id: id } });
   };
   const [selection, setSelection] = useState<WorkspaceSelection | null>(null);
   const [highlightedClaimId, setHighlightedClaimId] = useState<string | null>(null);

@@ -112,6 +112,23 @@ function BoardCanvas({ projectId }: { projectId: string }) {
   }, [focusedPaneId, panes]);
 
   const drag = useRef<{ id: string; dx: number; dy: number } | null>(null);
+  /** Resize is the same gesture as drag with the opposite arithmetic. */
+  const resize = useRef<{ id: string; x0: number; y0: number; w0: number; h0: number } | null>(
+    null,
+  );
+
+  const onResizeDown = useCallback(
+    (id: string) => (e: React.PointerEvent) => {
+      const r = rects[id];
+      if (!r) return;
+      setFocusedPaneId(id);
+      resize.current = { id, x0: e.clientX, y0: e.clientY, w0: r.w, h0: r.h };
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      e.stopPropagation();
+      e.preventDefault();
+    },
+    [rects, setFocusedPaneId],
+  );
 
   const onHeaderDown = useCallback(
     (pane: Pane) => (e: React.PointerEvent) => {
@@ -128,6 +145,25 @@ function BoardCanvas({ projectId }: { projectId: string }) {
   );
 
   const onMove = useCallback((e: React.PointerEvent) => {
+    const z = resize.current;
+    if (z) {
+      setRects((prev) => {
+        const r = prev[z.id];
+        if (!r) return prev;
+        return {
+          ...prev,
+          [z.id]: {
+            ...r,
+            // Floors, not clamps to a grid: a block holding a long document
+            // and a block holding a two-line claim want very different sizes,
+            // and the person reading them knows which is which.
+            w: Math.max(260, z.w0 + (e.clientX - z.x0)),
+            h: Math.max(160, z.h0 + (e.clientY - z.y0)),
+          },
+        };
+      });
+      return;
+    }
     const d = drag.current;
     if (!d) return;
     setRects((prev) => {
@@ -142,6 +178,7 @@ function BoardCanvas({ projectId }: { projectId: string }) {
 
   const onUp = useCallback(() => {
     drag.current = null;
+    resize.current = null;
   }, []);
 
   const threads = useMemo(
@@ -233,6 +270,16 @@ function BoardCanvas({ projectId }: { projectId: string }) {
                 </p>
               )}
             </Block>
+            <span
+              role="separator"
+              aria-label={`Resize ${pane.title || pane.kind}`}
+              onPointerDown={onResizeDown(pane.id)}
+              className="absolute bottom-0 right-0 h-3.5 w-3.5 cursor-se-resize"
+              style={{
+                background:
+                  "linear-gradient(135deg, transparent 0 55%, var(--border-strong) 55% 70%, transparent 70% 80%, var(--border-strong) 80% 95%, transparent 95%)",
+              }}
+            />
           </div>
         );
       })}
