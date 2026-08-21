@@ -110,6 +110,24 @@ system has never once done — and a human edit survives the next compile.
 
 The product thesis: an agent that authors plugins for itself.
 
+> **⚠ These six rows are not trustworthy, and they certify the product thesis.**
+>
+> Every one resolves against `packages/aleph-kernel/tests/` — a module the
+> running product does not load. Verified 2026-08-21: the agent-facing kernel
+> API has exactly **one** non-test importer in the whole tree
+> (`scripts/_acceptance/kernel_boot.py:77`). No HTTP route, no agent tool and no
+> graph node constructs or calls it.
+>
+> D3 in particular — *"an agent authors a skill end to end"* — is marked done
+> and is not reachable from the application at all. D6 asserts a ported skill
+> "loads and works"; that skill lives at repo-root `skills/literature-review/`,
+> while the agent reads `apps/api/src/aleph_api/skills/`, which does not contain
+> it.
+>
+> The kernel itself is real and mostly works — this is a gap between the kernel
+> and the product, not a broken kernel. `docs/plan.md` Part 0 repairs the gate;
+> `WS-A1a`, `WS-A1b` and `WS-A2` close the gap.
+
 | # | part | check | status |
 |---|---|---|---|
 | D1 | A skill is prompt + code, loaded under an AST gate | unit: a skill whose module top level has a side effect (import-time network, exec, open) is **refused**; a definition-only module loads | ✅ |

@@ -547,6 +547,38 @@ at the right file and the wrong row.
 ### The kernel, plugins, and agent self-improvement
 
 
+**Everything is a plugin, and the plugin machinery is the Aleph kernel.** That
+is not aspirational — the kernel already has `register_dynamic`, `activate`,
+`replace`, `deactivate` and `reprobe`, and the guardrail (blast radius: *what
+else stops if I turn this off*) is fully implemented in
+`AgentPluginAPI.inspect()`.
+
+**The backlog was wrong about the important half.** It said the guardrail was
+"missing: entirely". It is built and *completely unreachable* — no HTTP route,
+no agent tool, no graph node calls it. Its only non-test importer in the whole
+tree is `scripts/_acceptance/kernel_boot.py:77`.
+
+So this cluster is not "build a plugin system". It is: fix two kernel bugs that
+break the first agent-authored plugin (`WS-A1a`), give plugins a durable record
+so they survive a restart and reach the worker (`WS-A1b`), and connect the
+agent to the machinery that already exists (`WS-A2`).
+
+**Two constraints hold throughout.** The kernel must not gain a database
+dependency — `aleph-kernel` depends on exactly `aleph-core` and
+`aleph-observability`, and the plugin service lives in `aleph-runtime`, the
+composition root. And agent-authored code runs in `code-runner` —
+cap-dropped, read-only rootfs, network-partitioned — never through `exec()` in
+the FastAPI process, which is what the kernel's current skill loader does.
+
+**One open question, and it should be decided before `WS-A1b` starts.** The
+`thesis-risk` scan argues the dynamic half of the kernel — 2,120 lines, 12 test
+files — has **zero production callers**, and that `aleph.toml`'s claim that the
+research suite is "a plugin suite an operator may legitimately run without" is
+false in code. Its recommendation is to prove that with a failing test
+(`test_api_boots_without_the_research_suite`) before building more on top. That
+is the cheapest possible way to find out whether the abstraction is real, and it
+belongs in `docs/decisions.md` either way.
+
 #### WS-K0 · Make the acceptance gate tell the truth, and run it in CI
 
 **What it is.** Aleph has a script, `scripts/acceptance.sh`, that CLAUDE.md calls "the gate to trust" — it runs one named check per feature and prints pass/fail/skip. Two things are wrong with it. First, some of its checks describe something they do not actually do: the doc says check D2 proves "a skill provides a tool and shows up in the agent's tool set", but the test behind it (`packages/aleph-kernel/tests/test_skills.py:117`) only asserts a key is registered in the kernel and never touches a tool set at all;
@@ -636,7 +668,7 @@ at the right file and the wrong row.
 
 **Why.** This is the missing half of "everything is a plugin". Without it, an agent that improves itself forgets the improvement at the next deploy and the worker process never learns it at all. It also settles backlog H2 honestly. H2 frames `aleph_kernel/skills.py` as dead code to "wire or delete" — it is neither.
 
-**How.** A new `plugins` table in `aleph-db`: `id`, `project_id`, `name`, `major_version`, `source_kind` (`skill` | `capability`), `instructions`, `code`, `provides`/`requires` (jsonb), `config_schema` (jsonb), `state`, `installed_by`, plus `access_scope`/`created_at`/`updated_at`/`created_by` per the project-scope rule. Alembic revision under `apps/api/alembic/versions/` following the existing `YYYYMMDD_HHMM_<slug>_<message>.py` naming. The service goes in `packages/aleph-runtime` (the composition root, which already depends on aleph-db and aleph-kernel); the kernel itself must NOT gain a database dependency — `packages/aleph-kernel/pyproject.toml` lists exactly `aleph-core` and `aleph-observability` and that stays true.
+**How.** A new `plugins` table in `aleph-db`: `id`, `project_id`, `name`, `major_version`, `source_kind` (`skill` | `capability`), `instructions`, `code`, `provides`/`requires` (jsonb), `config_schema` (jsonb), `state`, `installed_by`, plus `created_at`/`updated_at`/`created_by` per the project-scope rule (NOT `access_scope` — deleted, `decisions.md` D7). Alembic revision under `apps/api/alembic/versions/` following the existing `YYYYMMDD_HHMM_<slug>_<message>.py` naming. The service goes in `packages/aleph-runtime` (the composition root, which already depends on aleph-db and aleph-kernel); the kernel itself must NOT gain a database dependency — `packages/aleph-kernel/pyproject.toml` lists exactly `aleph-core` and `aleph-observability` and that stays true.
 
 **Criteria:**
 
@@ -1133,7 +1165,7 @@ at the right file and the wrong row.
 
 **Why.** This is the item the backlog itself calls 'the one that blocks using Aleph against anything but the currently configured gateway' (docs/backlog.md:91-92). The product thesis is a harness whose abilities are added and swapped at runtime; a harness that cannot change which model serves it without a redeploy is not that harness.
 
-**How.** 1. Schema. A gateway_endpoints table in packages/aleph-db/src/aleph_db/models/, carrying CommonColumns per the project_id + access_scope rule: name, base_url, cipher_blob, cipher_scheme, key_id, is_default, last_probe_at, last_probe_ok, last_probe_error. Alembic migration under apps/api/alembic/versions/ following the YYYYMMDD_HHMM_<slug>_<message>.py pattern; `alembic check` must stay clean. ModelProfile (packages/aleph-db/src/aleph_db/models/model_profile.py:24-27 — today only name/project_id/is_template/bindings_jsonb) gains an endpoint_id, and ModelBindingIn drops the provider field pinned by regex to the literal 'litellm' (packages/aleph-core/src/aleph_core/schemas/model_profile.py:55) in favour of the endpoint reference. Note extra='forbid' at :52 means every schema consumer must be updated together. 2. Secrets, done properly this time.
+**How.** 1. Schema. A gateway_endpoints table in packages/aleph-db/src/aleph_db/models/, carrying CommonColumns per the project_id rule: name, base_url, cipher_blob, cipher_scheme, key_id, is_default, last_probe_at, last_probe_ok, last_probe_error. Alembic migration under apps/api/alembic/versions/ following the YYYYMMDD_HHMM_<slug>_<message>.py pattern; `alembic check` must stay clean. ModelProfile (packages/aleph-db/src/aleph_db/models/model_profile.py:24-27 — today only name/project_id/is_template/bindings_jsonb) gains an endpoint_id, and ModelBindingIn drops the provider field pinned by regex to the literal 'litellm' (packages/aleph-core/src/aleph_core/schemas/model_profile.py:55) in favour of the endpoint reference. Note extra='forbid' at :52 means every schema consumer must be updated together. 2. Secrets, done properly this time.
 
 **Criteria:**
 
@@ -1343,7 +1375,7 @@ at the right file and the wrong row.
 
 **Why.** The backlog files A4 as NOT BUILT; it is half built, and the built half is the expensive one. What is missing is precisely the 'ship a consumer with every producer' gap CLAUDE.md names as dominant. Beyond that, this is the mechanism that makes the plugin thesis visible to a person: an agent-authored capability nobody can configure is one you trust blindly or edit .env for.
 
-**How.** 1) Describe the plugin. Add a `UIContribution` dataclass in aleph-runtime carrying plugin_id, title, description, config_schema (JSON Schema), panes (tuple[PaneKind, ...]) and trust (Literal['core','verified','authored'] — the three tiers A4 asks for). Do NOT hang it on CapabilitySpec (packages/aleph-kernel/src/aleph_kernel/spec.py:75) if that forces aleph-kernel to know about A2UI; the strict DAG in CLAUDE.md is real and aleph-kernel is leaf-ward. A registry in aleph-runtime keyed by capability name is the safer shape. 2) Store the values. New `plugin_settings` table in aleph-db: project_id, plugin_id, values JSONB, plus CommonColumns (created_at, updated_at, created_by, access_scope) per the standing rule that every row carries them. Unique on (project_id, plugin_id). Alembic revision under apps/api/alembic/versions/; `cd apps/api && uv run alembic check` must show no drift.
+**How.** 1) Describe the plugin. Add a `UIContribution` dataclass in aleph-runtime carrying plugin_id, title, description, config_schema (JSON Schema), panes (tuple[PaneKind, ...]) and trust (Literal['core','verified','authored'] — the three tiers A4 asks for). Do NOT hang it on CapabilitySpec (packages/aleph-kernel/src/aleph_kernel/spec.py:75) if that forces aleph-kernel to know about A2UI; the strict DAG in CLAUDE.md is real and aleph-kernel is leaf-ward. A registry in aleph-runtime keyed by capability name is the safer shape. 2) Store the values. New `plugin_settings` table in aleph-db: project_id, plugin_id, values JSONB, plus CommonColumns (created_at, updated_at, created_by) per the standing rule that every row carries them — `access_scope` is gone (`decisions.md` D7). Unique on (project_id, plugin_id). Alembic revision under apps/api/alembic/versions/; `cd apps/api && uv run alembic check` must show no drift.
 
 **Criteria:**
 
@@ -1810,7 +1842,14 @@ at the right file and the wrong row.
 <br>**Risk.** Low. The one real trap is the sync/async mismatch: if the token is read once at mount and never refreshed, the chat works for an hour and then silently stops — a failure that looks like the agent being broken rather than the token expiring. The expiry test in the review step exists specifically to catch that.
 
 
-#### WS-D4 · SSE that can carry a credential — the four streams and the iframe asset route
+#### WS-D4 · ~~SSE that can carry a credential~~ — **WITHDRAWN**
+
+> Withdrawn 2026-08-21. This existed because every live surface was dark in
+> `oidc` mode. OIDC is removed (`decisions.md` D6), so there is no mode in which
+> these streams lack a credential. `WS-D3` survives — see below, it was never
+> really an OIDC problem.
+
+#### ~~WS-D4 original~~ · SSE that can carry a credential — the four streams and the iframe asset route
 
 **What it is.** Backlog D4 says EventSource cannot set an Authorization header, so in oidc mode every server-sent-event stream and the iframe-consumed asset route have no way to carry a token. I verified this and it holds completely. There are four EventSource construction sites, all with withCredentials: false — apps/web/src/a2ui/SurfaceStreamProvider.tsx:96 (the one multiplexed connection the whole reading region shares), apps/web/src/a2ui/A2UISurfaceView.tsx:169, apps/web/src/components/ActivityCard.tsx:129, apps/web/src/hooks/useWikiLiveSignals.ts:74. There is no fetch-based SSE fallback anywhere in apps/web/src.
 
