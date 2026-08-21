@@ -7,6 +7,10 @@ dependencies = [
     "sqlalchemy[asyncio]==2.0.50",
     "pydantic==2.13.4",
     "langgraph>=1.2,<2",
+    # Frontmatter. Available transitively today, declared here because
+    # `aleph_wiki.frontmatter` imports it directly — an undeclared transitive
+    # dependency disappears the moment the package that pulled it in drops it.
+    "pyyaml>=6,<7",
     "aleph-core",
     "aleph-db",
     "aleph-models",

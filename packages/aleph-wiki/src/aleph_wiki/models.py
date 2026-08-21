@@ -65,6 +65,59 @@ class WikiPage(CommonColumns, Base):
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     freshness: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
 
+    # --- schema governance (aleph_wiki.schema) ------------------------------
+    #
+    # These mirror the hermes `llm-wiki` frontmatter field-for-field so a vault
+    # round-trips through Obsidian without translation. They are stored as
+    # columns rather than left in the markdown because every one of them is
+    # something the system has to filter, group or lint on, and parsing 251
+    # bodies to answer "which pages are contested" is not a query.
+    #
+    # `page_type` is NOT `page_kind`. `page_kind` records how Aleph produced
+    # the page (source ingest, stub minted from a link, synthesis run);
+    # `page_type` records what kind of knowledge it holds (concept, entity,
+    # comparison, query, hub). A page is routinely both `page_kind="source"`
+    # and `page_type="entity"`.
+    category: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    page_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Tag order is meaningful to a reader (most specific first), so this is a
+    # list, not a set. Membership is constrained by the project's taxonomy at
+    # write time, not by the column.
+    tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    # Curated "see also", distinct from `wiki_links` — links are extracted from
+    # the body, `related` is what the author chose to foreground.
+    related: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    # How well-supported the page's claims are. NULL means nobody has judged;
+    # that is different from `low`, and the lint treats it as a finding rather
+    # than assuming the best.
+    confidence: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # Set when the page holds unresolved contradictions. `contradictions` names
+    # the slugs it conflicts with — a contested page that cannot say what it
+    # conflicts with is an assertion a reader cannot check, so the schema
+    # rejects the pair.
+    contested: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    contradictions: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
+
+
+class WikiSchemaRow(CommonColumns, Base):
+    """One project's wiki governance — SCHEMA.md as a row.
+
+    Per-project because a tag taxonomy is a claim about a domain. A project
+    studying reactor metallurgy and one studying transformers should not be
+    forced to share a vocabulary, and a shared one degrades into the union of
+    both, which constrains neither.
+
+    The payload is the JSON form of `aleph_wiki.schema.WikiSchema`; it is
+    written whole, never patched field-by-field, so an edit is one auditable
+    ledger event rather than a drift of small ones.
+    """
+
+    __tablename__ = "wiki_schemas"
+    __table_args__ = (UniqueConstraint("project_id", name="uq_wiki_schemas_project"),)
+
+    project_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    payload_jsonb: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+
 
 class WikiRevision(Base):
     """Immutable wiki revision. Triggers in the Inc 1 migration reject UPDATE/DELETE."""

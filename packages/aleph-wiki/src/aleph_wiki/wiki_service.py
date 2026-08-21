@@ -20,6 +20,7 @@ from aleph_core.errors import NotFound
 from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
 from aleph_observability.tracing import current_trace_id, start_span
+from aleph_wiki import schema as schema_mod
 from aleph_wiki.handedit_service import list_active_for_page
 from aleph_wiki.index_service import IndexService
 from aleph_wiki.models import (
@@ -462,10 +463,10 @@ class WikiService:
             #
             # The reference design (hermes-agent's llm-wiki skill, which built
             # ~/wiki/ai-research) treats these as RED LINKS: allowed to be
-            # unresolved, listed as planned, and only promoted to a real page
-            # when they meet a threshold — 2+ source mentions, or central to
-            # one source. `promote_stub_if_earned` below is that rule.
-            status="stub" if page_kind == "stub" else "draft",
+            # unresolved until enough separate pages cite them.
+            # `promote_stub_if_earned` below is that rule, and it moves them to
+            # `planned` (a writing queue), never to `draft` (a review queue).
+            status=(schema_mod.STUB_STATUS if page_kind == "stub" else schema_mod.REVIEW_QUEUE),
             last_compiled_at=None,
             created_by=created_by,
             access_scope="project",
@@ -477,40 +478,54 @@ class WikiService:
     #: A stub becomes a real page when this many distinct sources mention it.
     #: One mention is a passing reference; two is a topic the corpus keeps
     #: returning to. Taken from the reference wiki's Page Thresholds.
-    STUB_PROMOTION_MENTIONS = 2
+    async def promote_stub_if_earned(
+        self, *, project_id: UUID, page_id: UUID, threshold: int | None = None
+    ) -> bool:
+        """Move a red link into the writing queue once the corpus earns it.
 
-    async def promote_stub_if_earned(self, *, project_id: UUID, page_id: UUID) -> bool:
-        """Turn a red link into a real page once the corpus keeps returning to it.
+        Creating a page for every mention is what produced hundreds of empty
+        stubs from eleven sources. Creating one only when enough separate pages
+        cite it moves the decision from the owner's queue, where it is hundreds
+        of clicks, to ingest, where it is arithmetic.
 
-        Creating a page for every mention is what produced 235 empty stubs from
-        11 sources. Creating one only when the corpus earns it is the same rule
-        the reference wiki applies, and it moves the decision from the owner's
-        review queue (where it is 235 clicks) to ingest (where it is arithmetic).
+        Promotion lands on `planned` — the 🚧 state — and NOT on `draft`.
+        `draft` is the review queue, and "approve this" is not a question you
+        can ask about a page with no content; that mistake is what put 235 empty
+        pages in front of an approver. `planned` is a queue for *writing*, which
+        is allowed to be long.
 
-        Returns True if the page was promoted.
+        `is_stub` stays true until something actually writes a body. The page
+        has earned attention, not acquired content, and clearing the flag here
+        would make it indistinguishable from a written page in every count.
+
+        Returns True if the page moved.
         """
         page = (
             await self._session.execute(
                 select(WikiPage).where(WikiPage.id == page_id, WikiPage.project_id == project_id)
             )
         ).scalar_one_or_none()
-        if page is None or not page.is_stub:
+        if page is None or not page.is_stub or page.status == schema_mod.WRITING_QUEUE:
             return False
 
+        # Distinct source PAGES, not distinct revisions. Counting revisions lets
+        # one page that was edited five times clear a threshold of five on its
+        # own, which measures editing activity rather than how many separate
+        # places in the corpus needed this topic to exist.
         mentions = (
             await self._session.execute(
-                select(func.count(func.distinct(WikiLink.src_revision_id))).where(
+                select(func.count(func.distinct(WikiLink.src_page_id))).where(
                     WikiLink.project_id == project_id,
                     WikiLink.dst_page_id == page_id,
                 )
             )
         ).scalar_one()
 
-        if (mentions or 0) < self.STUB_PROMOTION_MENTIONS:
+        bar = threshold if threshold is not None else schema_mod.STUB_PROMOTION_MENTIONS
+        if (mentions or 0) < bar:
             return False
 
-        page.is_stub = False
-        page.status = "draft"  # now a genuine proposal, so it joins the queue
+        page.status = schema_mod.WRITING_QUEUE
         await self._session.flush()
         return True
 
