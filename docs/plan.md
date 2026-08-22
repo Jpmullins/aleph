@@ -822,7 +822,7 @@ belongs in `docs/decisions.md` either way.
 **Criteria:**
 
 - A rubric reaches the graph with no browser change
-  <br>``uv run pytest -m integration tests/integration/test_rubric.py::test_a_configured_rubric_lands_on_state -q`: invoke the compiled graph with no rubric in the input and assert `agent.get_state(config).values["rubric"]` equals the project's configured rubric. FAILS TODAY.`
+  <br>``uv run pytest apps/api/tests/unit/test_rubric_grading.py::test_a_configured_rubric_lands_on_state -q` (**CORRECTED 2026-08-22:** the plan pointed at `tests/integration/test_rubric.py`, where that node id does not exist — only criterion 4's cost assertion lives in the integration file, and pytest cannot collect the id as written)`: invoke the compiled graph with no rubric in the input and assert `agent.get_state(config).values["rubric"]` equals the project's configured rubric. FAILS TODAY.`
 - A failing criterion causes exactly one revision
   <br>``::test_a_failing_criterion_triggers_one_revision` with a stubbed grader returning `needs_revision` once then `satisfied`; asserts two agent turns and `_rubric_status == "satisfied"`.`
 - Hitting the cap is reported, not mistaken for success
@@ -912,7 +912,7 @@ belongs in `docs/decisions.md` either way.
 - The agent's Postgres pool is no longer single-connection. FAILS TODAY (max_size resolves to 1).
   <br>``uv run pytest apps/api/tests/unit/test_agent_store_pool.py::test_pool_max_size_is_not_one -q` — calls `build_agent_store(...)` and asserts `pool.max_size >= 8` and `pool.max_size > pool.min_size`.`
 - Model timeout and retry budget are configuration, not literals.
-  <br>``grep -n 'timeout=60\|max_retries=2' apps/api/src/aleph_api/copilot_agent.py | wc -l` returns 0 (returns 2 today at :1504-1505), and `uv run pytest apps/api/tests/unit/test_agent_model_resolution.py::test_timeout_comes_from_settings -q` asserts the built model's `request_timeout` equals the settings value when that val…`
+  <br>``grep -n 'timeout=60\|max_retries=2' apps/api/src/aleph_api/copilot_agent.py | wc -l` returns 0 (returns 2 today at :1504-1505), and `uv run pytest apps/api/tests/unit/test_agent_store_pool.py::test_no_model_timeout_or_retry_literal_remains -q` asserts the built model's `request_timeout` equals the settings value when that val…`
 - A rate-limit response is retried with backoff instead of killing the turn. FAILS TODAY.
   <br>``uv run pytest apps/api/tests/unit/test_agent_model_retry.py::test_rate_limit_is_retried_with_backoff -q` — the middleware's `awrap_model_call` is driven with a handler that raises a rate-limit error twice then succeeds;`
 - Exhausting the retry budget produces a typed, reportable failure — not a bare exception.
@@ -968,15 +968,15 @@ belongs in `docs/decisions.md` either way.
 - Every recorded agent ModelCall carries a non-null agent_run_id. FAILS TODAY — the column is unconditionally NULL.
   <br>``uv run pytest -m integration tests/integration/test_agent_cost_attribution.py::test_run_id_is_populated -q` — runs a turn, then asserts `select count(*) from model_calls where agent_run_id is null and purpose like 'assistant%'` is 0 for rows created during the turn.`
 - A model call that fails after producing usage is still costed. FAILS TODAY — `on_llm_error` records nothing.
-  <br>``uv run pytest apps/api/tests/unit/test_agent_cost_callback.py::test_failed_call_is_still_recorded -q` — drives `awrap_model_call` with a handler that raises after a partial response carrying usage; asserts one ModelCall row was written.`
+  <br>``uv run pytest apps/api/tests/unit/test_agent_cost_callback.py::test_a_failed_call_is_recorded_not_dropped -q` — drives `awrap_model_call` with a handler that raises after a partial response carrying usage; asserts one ModelCall row was written.`
 - The recorded model name is the model that answered, not the one resolved at boot.
-  <br>``uv run pytest apps/api/tests/unit/test_agent_cost_callback.py::test_model_name_comes_from_the_request -q` — builds a request whose `.model` differs from the handler's construction-time model and asserts the written row names the request's model.`
+  <br>``uv run pytest apps/api/tests/unit/test_agent_cost_callback.py::test_the_recorded_model_is_the_one_that_answered -q` — builds a request whose `.model` differs from the handler's construction-time model and asserts the written row names the request's model.`
 - A usage-free response produces a visible unpriced row, never an absence.
   <br>`Same file, `::test_no_usage_writes_unknown_row` — asserts a row exists with `pricing_source='unknown'` and a populated reason. This replaces `test_skips_when_no_usage` (:262), which pins the defect.`
 - Retrieval spend is attributed to the real caller, not to a synthetic dev user.
   <br>``grep -n '_dev_principal' apps/api/src/aleph_api/copilot_agent.py | wc -l` returns 0 outside the local-auth-mode fallback path (returns a hit at :660 today), and `uv run pytest -m integration tests/integration/test_agent_cost_attribution.py::test_retrieval_attributed_to_caller -q` asserts the ModelCall's actor matches…`
 - Cache-write tokens stop being a column nothing writes.
-  <br>``uv run pytest apps/api/tests/unit/test_agent_cost_callback.py::test_cache_write_tokens_are_passed -q` asserts a response carrying cache-creation tokens produces a row with `cache_write_tokens > 0`.`
+  <br>``uv run pytest apps/api/tests/unit/test_agent_cost_callback.py::test_cache_write_tokens_are_extracted -q` asserts a response carrying cache-creation tokens produces a row with `cache_write_tokens > 0`.`
 
 **Review.** Mutation testing against the exact failure shape that produced this hole. (a) Revert the `agent_run_id` read back to `metadata.get('agent_run_id')` and confirm `test_run_id_is_populated` fails — this proves the test catches the configurable/metadata distinction that made the field NULL for the whole life of the feature. (b) Delete the failed-call recording and confirm `test_failed_call_is_still_recorded` fails.
 <br>**Iterate.** Second pass turns attribution into a budget: a per-project spend ceiling checked in `awrap_model_call` before the call, which refuses (or downgrades the model) rather than silently overspending, and surfaces remaining budget on the Inspector's run header. That is the thing the recorded data is actually for; recording without a control loop is bookkeeping.

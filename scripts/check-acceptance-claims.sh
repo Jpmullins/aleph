@@ -113,8 +113,41 @@ if node_ids:
                 + blob.strip().splitlines()[-1]
             )
 
+# ---------------------------------------------------------------------------
+# docs/plan.md, under a WEAKER rule
+# ---------------------------------------------------------------------------
+#
+# The plan describes work that has not been done, so it legitimately names test
+# files that do not exist yet — requiring every citation to resolve would make
+# it impossible to write a criterion about future work.
+#
+# But a node id whose FILE exists and which that file does not contain is a
+# different thing: the criterion points at the wrong place, and running it as
+# written reports "no tests ran" rather than a pass or a fail. WS-H3 cited
+# `tests/integration/test_rubric.py::test_a_configured_rubric_lands_on_state`
+# for five of its six criteria; the file exists, the test lives in
+# `apps/api/tests/unit/test_rubric_grading.py`, and nothing noticed because
+# this sweep read only the scoreboard.
+PLAN = pathlib.Path("docs/plan.md")
+plan_ids: list[str] = []
+if PLAN.is_file():
+    for span in CODE_SPAN.findall(PLAN.read_text(encoding="utf-8")):
+        for token in TOKEN.findall(span):
+            if "::" not in token:
+                continue
+            path_part, _, name = token.partition("::")
+            target = pathlib.Path(path_part)
+            # Only when the file is really there. A criterion about a test
+            # nobody has written yet is the normal state of a plan.
+            if target.is_file() and name not in target.read_text(encoding="utf-8"):
+                problems.append(
+                    f"docs/plan.md: cites {token}, and {path_part} exists but does "
+                    f"not define {name} — the criterion runs as 'no tests ran'"
+                )
+            plan_ids.append(token)
+
 if problems:
-    print("✗ acceptance rows citing something that is not there:", file=sys.stderr)
+    print("✗ rows citing something that is not there:", file=sys.stderr)
     for problem in problems:
         print(f"    {problem}", file=sys.stderr)
     print(

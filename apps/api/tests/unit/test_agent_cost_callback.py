@@ -542,3 +542,96 @@ def test_cache_write_tokens_cost_more_than_plain_input() -> None:
         cache_write_tokens=1000,
     )
     assert written.cost_usd > plain.cost_usd
+
+
+def _llm_result(*, input_tokens: int, output_tokens: int) -> Any:
+    """The shape LangChain hands `on_llm_end`, with usage attached."""
+    from langchain_core.messages import AIMessage
+    from langchain_core.outputs import ChatGeneration, LLMResult
+
+    return LLMResult(
+        generations=[
+            [
+                ChatGeneration(
+                    message=AIMessage(
+                        content="hi",
+                        usage_metadata={
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens,
+                            "total_tokens": input_tokens + output_tokens,
+                        },
+                    )
+                )
+            ]
+        ]
+    )
+
+
+async def test_the_recorded_model_is_the_one_that_answered() -> None:
+    """`ModelCall.model` names the model the REQUEST used, not the one the
+    handler was constructed with.
+
+    The handler is built once, at boot, with whatever the profile bound then.
+    A turn that resolves a different model — a capability override, a fallback
+    after a failure, a profile switched mid-session — is still costed through
+    that same handler, and pricing resolves off this exact field. Recording the
+    construction-time name would price every such call against the wrong model:
+    a recorded fact that is quietly wrong, which is worse than an absent one.
+
+    The scope is set by `awrap_model_call`, which runs in the same task as the
+    callback it wraps; `current_model_call_scope()` is the bridge.
+    """
+    from aleph_api.chat_runs import ModelCallScope, model_call_scope
+
+    answered = "some-other-model-the-profile-did-not-bind"
+    assert answered != MODEL, "the fixture must differ from the boot model"
+
+    session = _FakeSession()
+    handler = AgentCostCallbackHandler(
+        session_maker=_FakeSessionMaker(session),
+        pricing=_priced(),
+        model=MODEL,
+    )
+    run_id = uuid.uuid4()
+    with model_call_scope(ModelCallScope(agent_run_id=None, model=answered)):
+        await handler.on_chat_model_start(
+            serialized={},
+            messages=[[]],
+            run_id=run_id,
+            metadata={"projectId": str(PROJECT_ID)},
+        )
+        await handler.on_llm_end(_llm_result(input_tokens=10, output_tokens=5), run_id=run_id)
+
+    calls = [obj for obj in session.added if type(obj).__name__ == "ModelCall"]
+    assert len(calls) == 1
+    assert calls[0].model == answered, (
+        f"the row names {calls[0].model!r}, the model bound at BOOT, not "
+        f"{answered!r}, the model that actually answered — so its cost is "
+        "priced against the wrong rate card"
+    )
+
+
+async def test_with_no_scope_the_construction_time_model_is_used() -> None:
+    """The fallback, so the fix above cannot be "always write None".
+
+    Not every call arrives through `awrap_model_call` — the retrieval router
+    makes three of its own a layer below the middleware — and a row with no
+    model at all cannot be priced by anything.
+    """
+    session = _FakeSession()
+    handler = AgentCostCallbackHandler(
+        session_maker=_FakeSessionMaker(session),
+        pricing=_priced(),
+        model=MODEL,
+    )
+    run_id = uuid.uuid4()
+    await handler.on_chat_model_start(
+        serialized={},
+        messages=[[]],
+        run_id=run_id,
+        metadata={"projectId": str(PROJECT_ID)},
+    )
+    await handler.on_llm_end(_llm_result(input_tokens=10, output_tokens=5), run_id=run_id)
+
+    calls = [obj for obj in session.added if type(obj).__name__ == "ModelCall"]
+    assert calls[0].model == MODEL
