@@ -68,9 +68,7 @@ def _is_project_status_change(request: Request) -> bool:
 #: Kept as an explicit list, not a naming convention: "any route with 'export'
 #: in it is safe" is the kind of rule that admits the first route somebody names
 #: `export_and_purge`.
-_NON_MUTATING_POSTS: frozenset[str] = frozenset(
-    {"/v1/projects/{project_id}/export/vault"}
-)
+_NON_MUTATING_POSTS: frozenset[str] = frozenset({"/v1/projects/{project_id}/export/vault"})
 
 
 def _assert_project_writable(request: Request, project_id: UUID, status: str) -> None:
