@@ -35,8 +35,12 @@ from typing import Any, Final
 import jsonschema
 
 CATALOG_PATH: Final[pathlib.Path] = pathlib.Path(__file__).with_name("catalog.json")
+RENDER_CATALOG_PATH: Final[pathlib.Path] = pathlib.Path(__file__).with_name(
+    "render_catalog.generated.json"
+)
 
 _RAW: Final[dict[str, Any]] = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+_RENDER: Final[dict[str, Any]] = json.loads(RENDER_CATALOG_PATH.read_text(encoding="utf-8"))
 
 CATALOG_VERSION: Final[str] = _RAW["version"]
 CATALOG_ID: Final[str] = _RAW["catalogId"]
@@ -47,6 +51,29 @@ CATALOG_ID: Final[str] = _RAW["catalogId"]
 _COMPONENTS: Final[dict[str, Any]] = {
     name: entry["schema"] for name, entry in _RAW["components"].items()
 }
+
+#: `name -> JSON Schema` over the A2UI v0.9 INLINE wire shape,
+#: `{"id": ..., "component": ..., <props>}` — the shape `updateComponents`
+#: carries and the shape `aleph_a2ui.messages` builds. Extracted from the zod
+#: schemas the browser renders against (see
+#: `packages/aleph-a2ui/tools/extract_render_catalog.mjs`), so this validator
+#: and the renderer cannot disagree about what a component accepts.
+#:
+#: This is a DIFFERENT wire shape from `_COMPONENTS` above, not a wider or
+#: narrower version of it. `_COMPONENTS` validates Aleph's own card envelope
+#: (`{"type", "id", "props"}`) as written by `pin_card` and `compose_dossier`.
+#: Both are real and both are in use; a payload is dispatched on which key it
+#: carries. Before this existed, `validate_component` was the envelope
+#: validator only, so every inline component — including every component the
+#: plugin settings generator emits — was rejected as "unknown component type:
+#: None", and nothing in the tree ever called it with an inline payload to find
+#: that out.
+_RENDER_COMPONENTS: Final[dict[str, Any]] = _RENDER["components"]
+
+#: Shared `$defs` the extracted schemas reference (`DynamicString`, `Action`,
+#: `DataBinding`, ...). Merged into each component schema at validation time so
+#: a component can be validated standalone.
+_RENDER_DEFS: Final[dict[str, Any]] = _RENDER["$defs"]
 
 _ACTIONS: Final[dict[str, Any]] = _RAW["actions"]
 
@@ -75,11 +102,41 @@ class CatalogValidationError(Exception):
 
 
 def validate_component(payload: dict) -> None:
-    """Raise CatalogValidationError if `payload` does not match the catalog component
-    schema indicated by `payload["type"]`."""
+    """Raise `CatalogValidationError` unless `payload` matches its catalog schema.
+
+    Two wire shapes reach this function and both are legitimate:
+
+    * Aleph's card envelope, `{"type": ..., "id": ..., "props": {...}}` — what
+      `pin_card` and `compose_dossier` persist. Validated against
+      `catalog.json`.
+    * A2UI v0.9's inline shape, `{"id": ..., "component": ..., <props inline>}`
+      — what `updateComponents` carries and what `aleph_a2ui.messages` and
+      `aleph_a2ui.settings_card` build. Validated against the schemas extracted
+      from the renderer.
+
+    Dispatch is on the key present, because the two are distinguishable and
+    guessing is what produced the bug this docstring exists for: the inline
+    shape used to fall through the `payload["type"]` lookup as `None` and come
+    back "unknown A2UI component type: None", which reads as "you sent a bad
+    component" and means "this validator does not know that wire format".
+    """
     if not isinstance(payload, dict):
         msg = "component payload must be a dict"
         raise CatalogValidationError(msg)
+
+    if "component" in payload and "type" not in payload:
+        name = payload.get("component")
+        schema = _RENDER_COMPONENTS.get(name) if isinstance(name, str) else None
+        if schema is None:
+            msg = f"unknown A2UI component: {name!r}"
+            raise CatalogValidationError(msg)
+        try:
+            jsonschema.validate(payload, {**schema, "$defs": _RENDER_DEFS})
+        except jsonschema.ValidationError as exc:
+            msg = f"A2UI component {name} failed schema: {exc.message}"
+            raise CatalogValidationError(msg) from exc
+        return
+
     type_name = payload.get("type")
     if type_name not in _COMPONENTS:
         msg = f"unknown A2UI component type: {type_name!r}"

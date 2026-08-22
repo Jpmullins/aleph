@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID, uuid4
 
+from aleph_core.confidence import Confidence
+
 
 def _card(type_name: str, *, card_id: str | None, props: dict[str, Any]) -> dict[str, Any]:
     return {
@@ -24,7 +26,10 @@ def _card(type_name: str, *, card_id: str | None, props: dict[str, Any]) -> dict
 class ClaimCardProps:
     claim_id: UUID
     text: str
-    confidence: str = "cited"
+    #: One of `aleph_core.confidence.Confidence`, and checked against the
+    #: catalog enum by `scripts/check-confidence-vocabulary.sh`. The default was
+    #: "cited" — a seventh word, in the catalog and nowhere else.
+    confidence: str = Confidence.UNDER_INVESTIGATION.value
     citations: list[dict[str, Any]] = field(default_factory=list)
 
 

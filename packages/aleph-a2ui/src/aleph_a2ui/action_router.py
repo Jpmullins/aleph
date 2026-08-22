@@ -32,6 +32,65 @@ if TYPE_CHECKING:
     from aleph_security.principal import Principal
 
 
+#: Field names whose VALUE must never reach an append-only table.
+#:
+#: Every dispatched action's params are persisted to `card_actions.params_jsonb`
+#: AND to the ledger payload, and the handler's result is persisted too. Both
+#: are append-only, so a secret written there cannot be deleted — only the
+#: encryption key can be rotated, and these values are not encrypted.
+#:
+#: `_CONNECTOR_CONFIG_SCHEMA` avoids the problem by not declaring a credential
+#: field, and a comment there explains why. That is a comment, not a check: the
+#: moment a PLUGIN declares its own config schema (WS-A1b) nothing stops it
+#: carrying an api_key — and `settings_card.py` advertises support for exactly
+#: that, emitting `variant: "obscured"` for `format: "password"`. Obscured on
+#: screen; plaintext in two permanent tables.
+#:
+#: Matched on the KEY, conservatively and by substring, because the alternative
+#: is trusting whoever wrote the schema to have thought about it. A false
+#: positive costs a redacted audit field; a false negative is unrecoverable.
+_SECRET_KEY_MARKERS = (
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "credential",
+    "private_key",
+    "client_secret",
+    "access_key",
+    "auth",
+)
+
+#: What a redacted value is replaced with. A marker, not an empty string: an
+#: auditor has to be able to tell "a secret was submitted and withheld" from
+#: "the field was blank".
+REDACTED = "[redacted]"
+
+
+def redact_secrets(value: object, *, _depth: int = 0) -> object:
+    """A copy of `value` with anything secret-shaped replaced by `REDACTED`.
+
+    Recursive, because a settings payload nests. Depth-bounded because a
+    hand-built dict can be cyclic and an audit write must not hang.
+    """
+    if _depth > 8:
+        return value
+    if isinstance(value, dict):
+        out: dict[str, object] = {}
+        for k, v in value.items():
+            key = str(k).lower()
+            if any(marker in key for marker in _SECRET_KEY_MARKERS):
+                out[k] = REDACTED
+            else:
+                out[k] = redact_secrets(v, _depth=_depth + 1)
+        return out
+    if isinstance(value, list):
+        return [redact_secrets(v, _depth=_depth + 1) for v in value]
+    return value
+
+
 @dataclass(frozen=True)
 class CardActionRequest:
     surface_kind: str
@@ -127,8 +186,11 @@ class ActionRouter:
                 payload={
                     "surface_kind": request.surface_kind,
                     "card_id": str(request.card_id) if request.card_id else None,
-                    "params": request.params,
-                    "result": result,
+                    # Redacted on the way INTO the ledger, not on the way out.
+                    # The ledger is append-only and hash-chained: a secret
+                    # written here cannot be removed afterwards.
+                    "params": redact_secrets(request.params),
+                    "result": redact_secrets(result),
                 },
                 trace_id=current_trace_id(),
             )
@@ -142,8 +204,8 @@ class ActionRouter:
                     action_kind=request.action_kind,
                     target_id=request.target_id,
                     target_kind=request.target_kind,
-                    params_jsonb=request.params,
-                    result_jsonb=result,
+                    params_jsonb=redact_secrets(request.params),
+                    result_jsonb=redact_secrets(result),
                     actor_id=principal.user_id,
                     actor_kind=principal.actor_kind,
                     ledger_event_id=event.id,

@@ -23,6 +23,7 @@ from aleph_a2ui.components.cards import (
     source_card,
     table_card,
 )
+from aleph_core.confidence import CONFIDENCE_VALUES, Confidence
 
 
 def test_claim_card_shape_and_stringified_uuid() -> None:
@@ -33,7 +34,11 @@ def test_claim_card_shape_and_stringified_uuid() -> None:
     props = card["props"]
     assert props["claim_id"] == str(cid)  # UUID serialised to str
     assert props["text"] == "The sky is blue"
-    assert props["confidence"] == "cited"  # default
+    # WS-RS9: the default was "cited", which the catalog permitted and nothing
+    # else in the tree recognised. A card built with no confidence stated has
+    # had none derived.
+    assert props["confidence"] == Confidence.UNDER_INVESTIGATION.value
+    assert props["confidence"] in CONFIDENCE_VALUES
     assert props["citations"] == []
     assert props["open_action"] == "open"
 

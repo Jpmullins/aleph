@@ -17,15 +17,21 @@ from __future__ import annotations
 
 import json
 import pathlib
+import uuid
 from typing import Any
 
+import jsonschema
 import pytest
 
+from aleph_a2ui.catalog import CATALOG, CatalogValidationError, validate_component
 from aleph_a2ui.settings_card import (
     SETTINGS_SAVE_ACTION,
+    SETTINGS_VALUE_PREFIX,
+    SecretFieldRefused,
     settings_components,
     settings_data_model,
     settings_surface,
+    submitted_values,
 )
 
 CATALOG_ID = "aleph://v1"
@@ -38,7 +44,6 @@ SCHEMA: dict[str, Any] = {
             "title": "Gateway endpoint",
             "description": "Where Aleph reaches your models.",
         },
-        "api_key": {"type": "string", "format": "password"},
         "enabled": {"type": "boolean", "default": True},
         "max_concurrent_runs": {"type": "integer", "minimum": 1, "maximum": 16, "default": 4},
         "timeout_seconds": {"type": "integer", "default": 30},
@@ -97,17 +102,102 @@ def test_save_carries_every_field_plus_the_plugin_id() -> None:
     context = action["event"]["context"]
 
     assert action["event"]["name"] == SETTINGS_SAVE_ACTION
-    assert context["pluginId"] == "gateway"
+    assert context["plugin_id"] == "gateway"
+    assert context["plugin_kind"] == "plugin"
     for key in SCHEMA["properties"]:
-        assert key in context, f"{key} would never reach the server"
-        assert context[key] == {"path": f"/{key}"}
+        bound = f"{SETTINGS_VALUE_PREFIX}{key}"
+        assert bound in context, f"{key} would never reach the server"
+        assert context[bound] == {"path": f"/{key}"}
+
+
+def test_a_field_named_plugin_id_cannot_shadow_the_target() -> None:
+    """The flat context is why the `field:` prefix exists.
+
+    An A2UI action context has no nesting, so an unprefixed value keyed `plugin_id`
+    would replace the id the server dispatches on and the save would land on
+    whichever plugin the string happened to name — with nothing raised anywhere.
+    """
+    schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {"plugin_id": {"type": "string"}, "plugin_kind": {"type": "string"}},
+    }
+    context = _by_id(settings_components(plugin_title="P", config_schema=schema, plugin_id="real"))[
+        "save"
+    ]["action"]["event"]["context"]
+
+    assert context["plugin_id"] == "real"
+    assert context["plugin_kind"] == "plugin"
+    assert context[f"{SETTINGS_VALUE_PREFIX}plugin_id"] == {"path": "/plugin_id"}
+    assert submitted_values(context) == {
+        "plugin_id": {"path": "/plugin_id"},
+        "plugin_kind": {"path": "/plugin_kind"},
+    }
+
+
+def test_the_save_context_validates_against_the_catalog_action() -> None:
+    """`ActionRouter.dispatch` rejects params the catalog action schema refuses.
+
+    The generator and the action schema are two files; a screen whose save
+    button emits a shape the router will not accept is a button that reports
+    nothing and does nothing.
+    """
+    context = _by_id(_components())["save"]["action"]["event"]["context"]
+    params = {
+        k: (True if isinstance(v, dict) else v) for k, v in context.items()
+    }  # bindings resolve to values before dispatch
+    params["plugin_id"] = str(uuid.uuid4())
+    jsonschema.validate(params, CATALOG["actions"][SETTINGS_SAVE_ACTION]["params"])
+
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(
+            {**params, "stray": 1}, CATALOG["actions"][SETTINGS_SAVE_ACTION]["params"]
+        )
+
+
+def test_every_emitted_component_is_in_the_catalog() -> None:
+    """Every control the generator emits must be one the server admits.
+
+    This is the check that was impossible before the agent-facing catalog was
+    derived from the renderer: `validate_component` knew Aleph's twenty-odd
+    card envelopes and none of the A2UI primitives, so all nine component types
+    a settings screen is built from — Text, Divider, Column, Button and every
+    input control — came back "unknown A2UI component type: None". A generator
+    whose entire output the validator rejects is not a generator anybody can
+    ship a plugin on.
+    """
+    schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {**SCHEMA["properties"], "weird": {"type": "object"}},
+    }
+    components = settings_components(
+        plugin_title="Model gateway", config_schema=schema, plugin_id="gateway"
+    )
+    emitted = {c["component"] for c in components}
+    assert emitted >= {
+        "TextField",
+        "CheckBox",
+        "ChoicePicker",
+        "Slider",
+        "DateTimeInput",
+        "Text",
+        "Divider",
+        "Button",
+        "Column",
+    }, f"the exercise schema stopped covering the control set: {sorted(emitted)}"
+
+    rejected: list[str] = []
+    for comp in components:
+        try:
+            validate_component(comp)
+        except CatalogValidationError as exc:
+            rejected.append(f"{comp['id']} ({comp['component']}): {exc}")
+    assert rejected == [], "components the catalog rejects:\n  " + "\n  ".join(rejected)
 
 
 @pytest.mark.parametrize(
     ("field_key", "expected"),
     [
         ("endpoint", "TextField"),
-        ("api_key", "TextField"),
         ("enabled", "CheckBox"),
         ("max_concurrent_runs", "Slider"),
         ("timeout_seconds", "TextField"),
@@ -124,11 +214,36 @@ def test_schema_type_picks_the_right_control(field_key: str, expected: str) -> N
     assert match[0]["component"] == expected
 
 
-def test_password_is_obscured_and_long_text_is_long() -> None:
+def test_long_text_is_long_and_short_text_is_short() -> None:
     comps = _by_id(_components())
-    assert comps["f1-api_key"]["variant"] == "obscured"
-    assert comps["f7-notes"]["variant"] == "longText"
+    assert comps["f6-notes"]["variant"] == "longText"
     assert comps["f0-endpoint"]["variant"] == "shortText"
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        {"type": "string", "format": "password"},
+        {"type": "string", "writeOnly": True},
+    ],
+)
+def test_a_secret_field_is_refused_not_obscured(field: dict[str, Any]) -> None:
+    """`variant: "obscured"` hides it on screen and changes nothing else.
+
+    A settings value travels in the action context, and `ActionRouter.dispatch`
+    persists both the params and the result to `card_actions` and to the
+    hash-chained ledger. Both are APPEND-ONLY: a secret written there cannot be
+    removed, only regretted.
+
+    `_CONNECTOR_CONFIG_SCHEMA` avoids this by not declaring a credential field,
+    with a comment explaining why — but that is a comment, and it protects the
+    one schema Aleph happens to ship. The moment a plugin brings its own
+    (WS-A1b), nothing stopped it, and this generator ADVERTISED support by
+    emitting an obscured variant for exactly that shape.
+    """
+    schema: dict[str, Any] = {"type": "object", "properties": {"api_key": field}}
+    with pytest.raises(SecretFieldRefused, match="ConnectorCredential"):
+        settings_components(plugin_title="P", config_schema=schema, plugin_id="p")
 
 
 def test_an_unrenderable_field_is_stated_not_dropped() -> None:
@@ -150,7 +265,7 @@ def test_defaults_and_stored_values_both_land() -> None:
     assert model["endpoint"] == "http://x"  # stored wins
     assert model["enabled"] is True  # schema default
     assert model["capabilities"] == []  # empty list, not missing
-    assert model["api_key"] == ""  # seeded even with no default
+    assert model["notes"] == ""  # seeded even with no default
 
 
 def test_surface_emits_create_then_components_then_data() -> None:

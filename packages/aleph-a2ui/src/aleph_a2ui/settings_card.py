@@ -31,9 +31,39 @@ from typing import Any
 
 from aleph_a2ui.messages import full_surface
 
-__all__ = ["SETTINGS_SAVE_ACTION", "settings_components", "settings_surface"]
+
+class SecretFieldRefused(ValueError):
+    """A settings schema declared a field that must not be rendered as one.
+
+    Raised rather than skipped. Skipping would produce a settings screen missing
+    a field the plugin author expected to see, with no explanation — they would
+    add it back under a different name, which is worse than the original
+    mistake because the router's key-name redaction would then miss it too.
+    """
+
+
+__all__ = [
+    "SETTINGS_SAVE_ACTION",
+    "SETTINGS_VALUE_PREFIX",
+    "SecretFieldRefused",
+    "settings_components",
+    "settings_surface",
+    "submitted_values",
+]
 
 SETTINGS_SAVE_ACTION = "plugin.settings.save"
+
+#: Every submitted value is carried under this prefix in the save action's
+#: context.
+#:
+#: An A2UI action context is a FLAT object — `DynamicValue` admits strings,
+#: numbers, booleans, arrays and bindings, but not a nested object of bindings,
+#: so the values cannot be grouped under a key. Without a prefix a plugin whose
+#: config declares a field called `plugin_id` silently overwrites the only key
+#: the server uses to decide WHICH plugin it is saving, and the save lands on
+#: another plugin with nothing raised. The prefix makes the two namespaces
+#: disjoint by construction rather than by hoping no plugin picks the name.
+SETTINGS_VALUE_PREFIX = "field:"
 
 _LONG_TEXT_MIN = 200
 
@@ -123,7 +153,28 @@ def _field_component(*, cid: str, key: str, field: dict[str, Any]) -> dict[str, 
                 "value": bind,
             }
         if fmt == "password" or field.get("writeOnly") is True:
-            variant = "obscured"
+            # REFUSED, not obscured.
+            #
+            # `variant: "obscured"` hides the value on screen and changes
+            # nothing about where it goes: a settings field's value travels in
+            # the action context, and `ActionRouter.dispatch` persists params
+            # AND the result to `card_actions` and to the hash-chained ledger.
+            # Both are append-only. Obscured on screen, permanent in two tables.
+            #
+            # `redact_secrets` in the router is the backstop and it matches on
+            # key NAME, so a field called `token_for_service` is caught and one
+            # called `x` is not. This is the half that cannot be fooled by a
+            # name: the schema SAID it was a secret.
+            #
+            # Secrets belong in `ConnectorCredential`, which encrypts them.
+            msg = (
+                f"settings field {key!r} declares itself a secret "
+                f"({'format: password' if fmt == 'password' else 'writeOnly: true'}), "
+                "and a settings value is persisted in plaintext to card_actions "
+                "and to the append-only ledger. Store it as a ConnectorCredential "
+                "instead — that path encrypts."
+            )
+            raise SecretFieldRefused(msg)
         elif fmt == "textarea":
             variant = "longText"
         else:
@@ -160,6 +211,7 @@ def settings_components(
     plugin_title: str,
     config_schema: dict[str, Any],
     plugin_id: str,
+    plugin_kind: str = "plugin",
     description: str | None = None,
 ) -> list[dict[str, Any]]:
     """Build the component list for a plugin's settings surface.
@@ -186,7 +238,9 @@ def settings_components(
 
     # `context` carries every field as a path binding, so the button hands the
     # server the values as they stand at click time. No client code involved.
-    context: dict[str, Any] = {"pluginId": plugin_id}
+    # `plugin_kind` rides along because the server has more than one kind of
+    # thing with settings and the id alone does not say which table to write.
+    context: dict[str, Any] = {"plugin_id": plugin_id, "plugin_kind": plugin_kind}
 
     for index, (key, raw) in enumerate(properties.items()):
         field: dict[str, Any] = raw if isinstance(raw, dict) else {}
@@ -202,7 +256,7 @@ def settings_components(
             )
             children.append(help_id)
 
-        context[key] = {"path": f"/{key}"}
+        context[f"{SETTINGS_VALUE_PREFIX}{key}"] = {"path": f"/{key}"}
 
     components.append({"id": "rule-bottom", "component": "Divider", "axis": "horizontal"})
     children.append("rule-bottom")
@@ -261,6 +315,7 @@ def settings_surface(
     plugin_title: str,
     config_schema: dict[str, Any],
     catalog_id: str,
+    plugin_kind: str = "plugin",
     surface_id: str | None = None,
     current: dict[str, Any] | None = None,
     description: str | None = None,
@@ -273,7 +328,22 @@ def settings_surface(
             plugin_title=plugin_title,
             config_schema=config_schema,
             plugin_id=plugin_id,
+            plugin_kind=plugin_kind,
             description=description,
         ),
         data_model=settings_data_model(config_schema=config_schema, current=current),
     )
+
+
+def submitted_values(params: dict[str, Any]) -> dict[str, Any]:
+    """Pull the settings values back out of a `plugin.settings.save` context.
+
+    The inverse of the `field:` prefixing done above, and the only place that
+    inverse is written — a handler doing its own `k.split(":")` would be a
+    second, silently divergent reader of the same convention.
+    """
+    return {
+        key[len(SETTINGS_VALUE_PREFIX) :]: value
+        for key, value in params.items()
+        if key.startswith(SETTINGS_VALUE_PREFIX)
+    }

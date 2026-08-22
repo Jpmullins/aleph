@@ -448,6 +448,14 @@ run_pytest F1 "agent endpoint is authenticated; project scope is authorized" \
 run_pytest F2 "untrusted ingested text is defanged at the boundary" \
   packages/aleph-rks/tests/test_ingest_defang.py packages/aleph-core/tests/test_grounding.py
 run_pytest F3 "agent token scoping" packages/aleph-security/tests
+run_pytest F7 "a secret submitted through a settings screen is refused or redacted" \
+  packages/aleph-a2ui/tests/test_secret_redaction.py
+if [ $NEEDS_SERVICES -eq 1 ]; then
+  run_shell F8 "and dispatch actually redacts before writing the append-only tables" \
+    "uv run pytest -m integration tests/integration/test_action_params_are_redacted.py -q -p no:randomly 2>&1 | tail -1"
+else
+  skip F8 "needs postgres"
+fi
 # F6 is RED on purpose. Four of six Dockerfiles still run as root
 # (`apps/web/Dockerfile.dev`, `apps/workers/Dockerfile`, and two more the sweep
 # names), so this check exits 1 today and goes green when they are fixed.

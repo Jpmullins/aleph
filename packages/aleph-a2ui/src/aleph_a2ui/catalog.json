@@ -115,7 +115,7 @@
         "additionalProperties": false
       },
       "agent": {
-        "description": "An approve/reject gate for a consequential action (an agent_action build/connector change, a synthesis proposal, a review finding). Render this when a tool result asks you to surface an approval \u2014 the analyst clicks Approve/Reject and the ActionRouter executes. `target_id` + `target_kind` come from the tool result; do not fabricate them.",
+        "description": "An approve/reject gate for a consequential action (an agent_action build/connector change, a synthesis proposal, a review finding). Render this when a tool result asks you to surface an approval — the analyst clicks Approve/Reject and the ActionRouter executes. `target_id` + `target_kind` come from the tool result; do not fabricate them.",
         "props": {
           "type": "object",
           "properties": {
@@ -434,12 +434,12 @@
               },
               "confidence": {
                 "enum": [
-                  "cited",
-                  "well-supported",
-                  "weakly-supported",
+                  "under_investigation",
+                  "weakly_supported",
+                  "well_supported",
                   "contested",
-                  "uncited",
-                  "retracted"
+                  "refuted",
+                  "abandoned"
                 ]
               },
               "citations": {
@@ -508,12 +508,12 @@
             "confidence": {
               "type": "string",
               "enum": [
-                "cited",
-                "well-supported",
-                "weakly-supported",
+                "under_investigation",
+                "weakly_supported",
+                "well_supported",
                 "contested",
-                "uncited",
-                "retracted"
+                "refuted",
+                "abandoned"
               ]
             },
             "citations": {
@@ -605,7 +605,7 @@
         "additionalProperties": false
       },
       "agent": {
-        "description": "A revision diff for a wiki page (from_revision_id \u2192 to_revision_id). Render when showing what changed between two wiki revisions. Supply `from_body_md`/`to_body_md` to render a real line diff.",
+        "description": "A revision diff for a wiki page (from_revision_id → to_revision_id). Render when showing what changed between two wiki revisions. Supply `from_body_md`/`to_body_md` to render a real line diff.",
         "props": {
           "type": "object",
           "properties": {
@@ -1046,10 +1046,12 @@
               },
               "confidence": {
                 "enum": [
-                  "initial",
-                  "weakly-supported",
-                  "well-supported",
-                  "rejected"
+                  "under_investigation",
+                  "weakly_supported",
+                  "well_supported",
+                  "contested",
+                  "refuted",
+                  "abandoned"
                 ]
               },
               "evidence_count": {
@@ -1659,124 +1661,24 @@
     }
   },
   "primitives": {
-    "Button": {
-      "description": "A clickable button. `child` is the id of its label component.",
-      "props": {
-        "type": "object",
-        "properties": {
-          "child": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": true
-      }
-    },
-    "Card": {
-      "description": "A bordered container wrapping one child component (id in `child`).",
-      "props": {
-        "type": "object",
-        "properties": {
-          "child": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": true
-      }
-    },
-    "Column": {
-      "description": "A vertical stack of child components (referenced by id in `children`).",
-      "props": {
-        "type": "object",
-        "properties": {
-          "children": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "additionalProperties": true
-      }
-    },
-    "Divider": {
-      "description": "A separator between sections.",
-      "props": {
-        "type": "object",
-        "additionalProperties": true
-      }
-    },
-    "Icon": {
-      "description": "A named icon (`name`).",
-      "props": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": true
-      }
-    },
-    "Image": {
-      "description": "An image. `url` is the source.",
-      "props": {
-        "type": "object",
-        "properties": {
-          "url": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": true
-      }
-    },
-    "List": {
-      "description": "A list of child components (ids in `children`).",
-      "props": {
-        "type": "object",
-        "properties": {
-          "children": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "additionalProperties": true
-      }
-    },
-    "Row": {
-      "description": "A horizontal arrangement of child components (ids in `children`).",
-      "props": {
-        "type": "object",
-        "properties": {
-          "children": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "additionalProperties": true
-      }
-    },
-    "Text": {
-      "description": "A run of text. `text` is the string; `variant` sets heading/body style.",
-      "props": {
-        "type": "object",
-        "properties": {
-          "text": {
-            "type": "string"
-          },
-          "variant": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "text"
-        ],
-        "additionalProperties": true
-      }
-    }
+    "AudioPlayer": "An audio player for a `url`. Use for a recording or a spoken source; for anything visual use Video or Image.",
+    "Button": "A clickable button. `child` is the id of its label component.",
+    "Card": "A bordered container wrapping one child component (id in `child`).",
+    "CheckBox": "A single on/off switch with a `label`. Bind `value` to a boolean in the data model. For a set of choices use ChoicePicker, not a row of these.",
+    "ChoicePicker": "Pick from a fixed list of `options` ({label, value}). `variant: mutuallyExclusive` is a radio group / dropdown, `multipleSelection` is a multi-select; `value` binds to an ARRAY of the selected values in both cases. Use this rather than free text whenever the accepted values are known.",
+    "Column": "A vertical stack of child components (referenced by id in `children`).",
+    "DateTimeInput": "A date and/or time picker. Set `enableDate` / `enableTime` for which halves are offered; `value` is an ISO 8601 string, seeded with \"\" when unset.",
+    "Divider": "A separator between sections.",
+    "Icon": "A named icon (`name`).",
+    "Image": "An image. `url` is the source.",
+    "List": "A list of child components (ids in `children`).",
+    "Modal": "A dialog: `trigger` is the id of the component that opens it, `content` the id of what it shows. Both must be defined as separate components — a Modal holds ids, never inline children.",
+    "Row": "A horizontal arrangement of child components (ids in `children`).",
+    "Slider": "A bounded numeric input. `max` is REQUIRED — without a ceiling there is no track to drag along. Use a TextField with `variant: number` for an unbounded number.",
+    "Tabs": "A tabbed container; each entry in `tabs` names a title and a content id.",
+    "Text": "A run of text. `text` is the string; `variant` sets heading/body style.",
+    "TextField": "A text input with a `label`. `variant` picks the kind: `shortText`, `longText` (multi-line), `number`, or `obscured` (a secret — note that anything typed here travels in the action context and is recorded, so never ask for a credential this way). `value` binds to the data model.",
+    "Video": "A video player for a `url`."
   },
   "actions": {
     "approve": {
@@ -2029,6 +1931,28 @@
           "target_id",
           "target_kind"
         ]
+      }
+    },
+    "plugin.settings.save": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "plugin_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "plugin_kind": {
+            "type": "string"
+          }
+        },
+        "patternProperties": {
+          "^field:": {}
+        },
+        "required": [
+          "plugin_id",
+          "plugin_kind"
+        ],
+        "additionalProperties": false
       }
     },
     "promote_note": {
