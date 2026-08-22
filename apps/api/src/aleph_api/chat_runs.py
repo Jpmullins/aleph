@@ -209,7 +209,10 @@ def current_config() -> dict[str, Any] | None:
     except Exception:
         config = None
     if isinstance(config, dict) and isinstance(config.get("configurable"), dict):
-        return config
+        # `get_config()` is typed `RunnableConfig` — a TypedDict, so pyright
+        # will not narrow it to `dict[str, Any]` on its own even though that is
+        # exactly what it is at runtime.
+        return dict(config)
     return None
 
 

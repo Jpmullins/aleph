@@ -49,10 +49,22 @@ def _sha256(path: pathlib.Path) -> str:
 
 
 def _production_permissions() -> list[FilesystemPermission]:
-    """The `permissions=` list the real `create_deep_agent` call passes.
+    """The rules the real `create_deep_agent` call passes.
 
-    Read out of the source rather than re-typed: the point of these tests is
-    that PRODUCTION is closed, so the rule under test has to be production's.
+    The point of these tests is that PRODUCTION is closed, so the rules under
+    test have to be production's — never re-typed here.
+
+    This used to `eval` the `permissions=` literal out of the AST in a sandbox
+    namespace. WS-H1 moved the rules into `_agent_filesystem_permissions()`
+    because the tests needed to read them from more than one file, and the eval
+    then died with `NameError` — a real signal that the wiring had changed,
+    delivered as a crash.
+
+    So it now checks BOTH halves, which the literal version could not:
+    `create_deep_agent` is passed exactly that function's result, and the rules
+    are whatever the function returns. Previously the list could have been
+    moved out of the call and the test would have gone on happily evaluating a
+    literal nothing used.
     """
     import ast
 
@@ -67,13 +79,14 @@ def _production_permissions() -> list[FilesystemPermission]:
             continue
         for kw in node.keywords:
             if kw.arg == "permissions":
-                # Evaluate the literal rule list in a namespace holding only the
-                # dataclass — so this can never execute anything else.
-                return eval(
-                    compile(ast.Expression(kw.value), "<permissions>", "eval"),
-                    {"FilesystemPermission": FilesystemPermission},
-                    {},
+                expression = ast.unparse(kw.value)
+                assert expression == "_agent_filesystem_permissions()", (
+                    "the agent's filesystem rules no longer come from "
+                    f"_agent_filesystem_permissions(): {expression}"
                 )
+                from aleph_api.copilot_agent import _agent_filesystem_permissions
+
+                return list(_agent_filesystem_permissions())
     msg = "create_deep_agent is called with no permissions= argument"
     raise AssertionError(msg)
 
