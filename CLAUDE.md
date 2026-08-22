@@ -367,6 +367,22 @@ These are genuine design commitments with no automated enforcement. Do not descr
 Verified against the tree as merged. Fix or delete; do not build on top of. Entries move to *Fixed*
 below only with a test that would have caught them.
 
+- **`normalize_job` is not idempotent, and the health number reads the wreckage as
+  lost documents.** It builds `NormalizedDocument(...)` unconditionally
+  (`jobs/normalize.py:168`) — no upsert, no uniqueness on `source_version_id` — so
+  re-normalizing a source, which is exactly what a parser change requires, leaves the
+  previous row behind with no chunks. Measured 2026-08-22 after the docling rollout:
+  12 source versions in `[RS11] docling ingest`, each with **two** normalized
+  documents, one chunked and one dead. `status.sh`'s `unindexed_documents` counts
+  those 12 and calls them *"ingested documents with no chunks at all"* — which reads
+  as twelve sources nothing can find, and all twelve are searchable through their
+  sibling. So there are two defects here and they should not be conflated: the write
+  path has no idempotency, and the number does not measure what its sentence says.
+  Neither is fixed. The number should count SOURCE VERSIONS with no chunked
+  normalization, and print the superseded count beside it the way it already does for
+  fixtures; the write path needs a decision on whether normalization history is worth
+  keeping at all, which is not a decision to make while clearing a dashboard.
+
 - **`commit_revision` is not atomic on the path agents use.** It only row-locks when given a
   `page_id`; the by-title path (`_lock_or_create_page` with `page_id=None`) returns the page unlocked
   and computes `revision_no` as `max+1`.
