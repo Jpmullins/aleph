@@ -27,6 +27,7 @@ from uuid import UUID
 import structlog
 from langchain_core.callbacks import AsyncCallbackHandler
 
+from aleph_api.chat_runs import current_model_call_scope
 from aleph_core.time import utcnow
 
 _log = structlog.get_logger(__name__)
@@ -283,7 +284,17 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
     def _remember_project(self, run_id: UUID, metadata: dict[str, Any] | None) -> None:
         project_id = _project_id_from_metadata(metadata)
         if project_id is not None:
-            agent_run_id = _agent_run_id_from_metadata(metadata)
+            # `metadata` FIRST for the project (it carries the thread id), and
+            # the task-local scope first for the run id — because LangChain does
+            # not merge `configurable` into callback metadata, so
+            # `metadata["agent_run_id"]` is never populated by anything. That is
+            # why this column was unconditionally NULL: not a bug in the reader,
+            # a channel that does not carry the key. `AlephAgentMiddleware`
+            # publishes the scope around the call.
+            scope = current_model_call_scope()
+            agent_run_id = (
+                scope.agent_run_id if scope and scope.agent_run_id is not None else None
+            ) or _agent_run_id_from_metadata(metadata)
             self._pending[run_id] = (project_id, agent_run_id, time.monotonic())
             # Evict oldest entries left behind by CANCELLED runs (which fire
             # neither on_llm_end nor on_llm_error), keeping _pending bounded.
@@ -304,13 +315,21 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
         project_id, agent_run_id, t0 = entry
         usage = _extract_usage(response)
         if usage is None:
+            # A row with zero tokens and `pricing_source=unknown`, not silence.
+            #
+            # This used to `return`, so a response carrying no usage block — a
+            # provider that omits it, or `stream_usage` unset — produced no
+            # record at all. An absent row and a free call are indistinguishable
+            # once they are both nothing, and the whole point of the ledger is
+            # that spend is never invisible. Zero tokens with a stated reason is
+            # a claim someone can check; an absence is not.
             logger.warning(
-                "agent cost attribution skipped: no token usage on response "
-                "(run_id=%s, purpose=%s) — is stream_usage=True set?",
+                "agent model call reported no token usage (run_id=%s, purpose=%s) — "
+                "is stream_usage=True set? recorded as unpriced, not as absent",
                 run_id,
                 self._purpose,
             )
-            return
+            usage = (0, 0, 0, 0)
         input_tokens, cached_tokens, completion_tokens, cache_write_tokens = usage
         latency_ms = max(int((time.monotonic() - t0) * 1000), 0)
         try:
@@ -332,8 +351,39 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
             )
 
     async def on_llm_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
-        # Drop any pending scope for a failed call so it can't leak/double-write.
-        self._pending.pop(run_id, None)
+        """A call that failed after burning tokens is still spend.
+
+        This used to pop the pending entry and record NOTHING. A provider that
+        streams a partial response and then errors has already billed for what
+        it produced, and dropping it made a failing model look free — the exact
+        direction of error that hides a problem instead of surfacing it.
+
+        The token counts are usually unavailable on the error path, so the row
+        is written with what is known: the project, the run, the model, and
+        `pricing_source=unknown` with a reason. A row saying "this call
+        happened and we could not price it" is checkable; silence is not.
+        """
+        entry = self._pending.pop(run_id, None)
+        if entry is None:
+            return
+        project_id, agent_run_id, t0 = entry
+        try:
+            await self._write(
+                project_id=project_id,
+                agent_run_id=agent_run_id,
+                input_tokens=0,
+                cached_tokens=0,
+                completion_tokens=0,
+                latency_ms=max(int((time.monotonic() - t0) * 1000), 0),
+                failure=f"{type(error).__name__}: {error}",
+            )
+        except Exception:
+            logger.warning(
+                "agent cost attribution write failed on the error path (run_id=%s, purpose=%s)",
+                run_id,
+                self._purpose,
+                exc_info=True,
+            )
 
     # ---- the write ---------------------------------------------------------
 
@@ -347,6 +397,7 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
         completion_tokens: int,
         latency_ms: int,
         cache_write_tokens: int = 0,
+        failure: str | None = None,
     ) -> None:
         session_maker = self._resolve_session_maker()
         if session_maker is None:
@@ -356,21 +407,35 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
             )
             return
         pricing = self._resolve_pricing()
+        # The model the request actually named. `self._model` is resolved when
+        # the graph is built, so switching a project's profile mid-session
+        # mislabelled every row after it — a recorded fact that is quietly wrong
+        # is worse than an absent one.
+        scope = current_model_call_scope()
+        model = (scope.model if scope and scope.model else None) or self._model
         priced = pricing.breakdown(
-            model=self._model,
+            model=model,
             input_tokens=input_tokens,
             cached_tokens=cached_tokens,
             completion_tokens=completion_tokens,
             cache_write_tokens=cache_write_tokens,
         )
         cost, savings = priced.cost_usd, priced.cache_savings_usd
-        if not priced.priced:
+        if failure is not None:
+            logger.warning(
+                "agent model call failed after starting (model=%s purpose=%s): %s — "
+                "recorded as an unpriced call, not dropped",
+                model,
+                self._purpose,
+                failure,
+            )
+        elif not priced.priced:
             # Same failure as the transport path: recording $0 for a model we
             # cannot price makes a broken pricing table look like a cheap day.
             logger.error(
                 "agent model call could not be priced (model=%s purpose=%s); "
                 "recorded with pricing_source=unknown, not as free",
-                self._model,
+                model,
                 self._purpose,
             )
         trace_id: str | None
@@ -389,7 +454,7 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
             **{
                 "aleph.project_id": str(project_id),
                 "aleph.purpose": self._purpose,
-                "aleph.model": self._model,
+                "aleph.model": model,
             },
         ):
             async with session_maker() as session:
@@ -398,8 +463,12 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
                     project_id=project_id,
                     agent_run_id=agent_run_id,
                     capability="chat",
-                    model=self._model,
-                    purpose=self._purpose,
+                    model=model,
+                    # The purpose carries the failure marker so `select ... where
+                    # purpose like '%.failed'` finds every call that was billed
+                    # for nothing. Otherwise a failed call is indistinguishable
+                    # from a zero-token success.
+                    purpose=f"{self._purpose}.failed" if failure else self._purpose,
                     input_tokens=input_tokens,
                     cached_tokens=cached_tokens,
                     completion_tokens=completion_tokens,

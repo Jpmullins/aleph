@@ -39,7 +39,9 @@ from aleph_api.chat_runs import (
     TOOL_FAILED,
     TOOL_FINISHED,
     TOOL_STARTED,
+    ModelCallScope,
     ToolEventClock,
+    model_call_scope,
     record_tool_event,
     run_id_from_config,
     subagent_from_config,
@@ -89,6 +91,21 @@ def _truncate_args(args: object) -> dict[str, Any]:
         text = value if isinstance(value, str) else repr(value)
         out[str(key)] = text if len(text) <= _MAX_ARG_CHARS else text[:_MAX_ARG_CHARS] + "…"
     return out
+
+
+def _model_name(model: object) -> str | None:
+    """The model id off a `ModelRequest.model`, whatever shape it arrives in.
+
+    `ChatOpenAI` exposes `.model_name`; other integrations use `.model`. Read
+    both rather than importing a provider class, for the same reason
+    `classify_model_failure` matches on names: the gateway is whatever
+    OpenAI-compatible endpoint the operator pointed Aleph at.
+    """
+    for attr in ("model_name", "model"):
+        value = getattr(model, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    return model if isinstance(model, str) and model else None
 
 
 def describe_tool_failure(tool_name: str, exc: BaseException) -> str:
@@ -369,6 +386,19 @@ class AlephAgentMiddleware(AgentMiddleware):
         AG-UI route reports to the browser. A bare exception is what made the
         original failure untraceable.
         """
+        # Publish who this call belongs to and which model is answering it,
+        # for the cost callback that runs inside `handler`. LangChain does not
+        # merge `configurable` into callback `metadata`, so this is the only
+        # channel that carries the run id — and `request.model` is the model
+        # that ACTUALLY answers, rather than the one resolved when the process
+        # started, which is what made a mid-session profile change mislabel
+        # every row after it.
+        config = getattr(getattr(request, "runtime", None), "config", None)
+        scope = ModelCallScope(
+            agent_run_id=run_id_from_config(config),
+            model=_model_name(getattr(request, "model", None)),
+        )
+
         settings = self._settings()
         budget = max(1, settings.aleph_agent_max_retries)
         base = settings.aleph_agent_retry_base_delay_s
@@ -377,7 +407,8 @@ class AlephAgentMiddleware(AgentMiddleware):
         last: BaseException | None = None
         for attempt in range(budget):
             try:
-                return await handler(request)
+                with model_call_scope(scope):
+                    return await handler(request)
             except Exception as exc:
                 last = exc
                 code = classify_model_failure(exc)

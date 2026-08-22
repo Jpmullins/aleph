@@ -28,6 +28,8 @@ the column useless, and `test_subagent_attribution` exists to catch it.
 from __future__ import annotations
 
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -40,7 +42,7 @@ from aleph_db.models.agent import AgentEvent, AgentRun
 from aleph_db.repos.ledger import LedgerWriter
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
 _log = structlog.get_logger(__name__)
 
@@ -253,3 +255,45 @@ class ToolEventClock:
         if started is None:
             return 0
         return max(0, int((time.monotonic() - started) * 1000))
+
+
+# ---------------------------------------------------------------------------
+# Bridging `configurable` to the cost callback
+# ---------------------------------------------------------------------------
+#
+# LangChain does NOT merge `configurable` into the `metadata` it hands callback
+# hooks — verified: `ensure_config({"configurable": {...}})["metadata"]` is `{}`.
+# So `AgentCostCallbackHandler`, which reads `metadata["agent_run_id"]`, could
+# never see a run id no matter who set one. That is why
+# `model_calls.agent_run_id` was unconditionally NULL for the whole life of the
+# column, and it is not a bug in the callback: the channel simply does not
+# carry that key.
+#
+# `awrap_model_call` DOES see `runtime.config["configurable"]`, and it runs in
+# the same task as the callback it wraps. A context variable is therefore the
+# right bridge — narrow, task-scoped, and it disappears the moment the call
+# returns, so a pooled worker task cannot inherit the previous call's identity.
+
+
+@dataclass(frozen=True)
+class ModelCallScope:
+    """Who this model call belongs to, and which model is answering it."""
+
+    agent_run_id: UUID | None
+    model: str | None
+
+
+_SCOPE: ContextVar[ModelCallScope | None] = ContextVar("aleph_model_call_scope", default=None)
+
+
+@contextmanager
+def model_call_scope(scope: ModelCallScope) -> Iterator[None]:
+    token = _SCOPE.set(scope)
+    try:
+        yield
+    finally:
+        _SCOPE.reset(token)
+
+
+def current_model_call_scope() -> ModelCallScope | None:
+    return _SCOPE.get()

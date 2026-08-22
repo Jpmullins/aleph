@@ -264,7 +264,15 @@ def test_subagent_model_tags_purpose() -> None:
     assert "assistant.subagent.retriever" in purposes
 
 
-async def test_skips_when_no_usage() -> None:
+async def test_no_usage_writes_an_unpriced_row_rather_than_nothing() -> None:
+    """Replaces `test_skips_when_no_usage`, which pinned the defect.
+
+    A response carrying no usage block — a provider that omits it, or
+    `stream_usage` unset — used to produce NO record at all. An absent row and a
+    free call are indistinguishable once they are both nothing, and the point of
+    the ledger is that spend is never invisible. Zero tokens with a stated
+    reason is a claim someone can check; an absence is not.
+    """
     session = _FakeSession()
     handler = AgentCostCallbackHandler(
         session_maker=_FakeSessionMaker(session),
@@ -280,7 +288,93 @@ async def test_skips_when_no_usage() -> None:
     )
     gen = ChatGeneration(message=AIMessage(content="hi"))
     await handler.on_llm_end(LLMResult(generations=[[gen]]), run_id=run_id)
+
+    calls = [obj for obj in session.added if type(obj).__name__ == "ModelCall"]
+    assert len(calls) == 1, f"a usage-free response wrote {len(calls)} rows"
+    assert calls[0].input_tokens == 0
+    assert calls[0].completion_tokens == 0
+
+
+async def test_a_failed_call_is_recorded_not_dropped() -> None:
+    """`on_llm_error` popped the pending entry and recorded nothing.
+
+    A provider that streams a partial response and then errors has already
+    billed for what it produced, so dropping it made a failing model look free —
+    the direction of error that hides a problem instead of surfacing it.
+    """
+    session = _FakeSession()
+    handler = AgentCostCallbackHandler(
+        session_maker=_FakeSessionMaker(session),
+        pricing=_priced(),
+        model=MODEL,
+    )
+    run_id = uuid.uuid4()
+    await handler.on_chat_model_start(
+        serialized={},
+        messages=[[]],
+        run_id=run_id,
+        metadata={"projectId": str(PROJECT_ID)},
+    )
+    await handler.on_llm_error(RuntimeError("the gateway hung up"), run_id=run_id)
+
+    calls = [obj for obj in session.added if type(obj).__name__ == "ModelCall"]
+    assert len(calls) == 1, "a call that failed after starting was dropped"
+    # Findable without joining anything: `purpose like '%.failed'`.
+    assert calls[0].purpose.endswith(".failed")
+
+
+async def test_an_error_with_no_project_scope_writes_nothing() -> None:
+    """The error path must not invent a row it cannot attribute — the same rule
+    the success path follows."""
+    session = _FakeSession()
+    handler = AgentCostCallbackHandler(
+        session_maker=_FakeSessionMaker(session),
+        pricing=_priced(),
+        model=MODEL,
+    )
+    await handler.on_llm_error(RuntimeError("boom"), run_id=uuid.uuid4())
     assert session.added == []
+
+
+async def test_the_run_id_comes_from_the_task_scope_not_from_metadata() -> None:
+    """LangChain does not merge `configurable` into callback metadata.
+
+    Verified: `ensure_config({"configurable": {...}})["metadata"]` is `{}`. So
+    `metadata["agent_run_id"]` was never populated by anything, and the column
+    was NULL for the life of the feature — not a bug in the reader, a channel
+    that does not carry the key. `AlephAgentMiddleware` publishes a task-local
+    scope around the call instead.
+    """
+    from aleph_api.chat_runs import ModelCallScope, model_call_scope
+
+    session = _FakeSession()
+    handler = AgentCostCallbackHandler(
+        session_maker=_FakeSessionMaker(session),
+        pricing=_priced(),
+        model=MODEL,
+    )
+    run_id = uuid.uuid4()
+    agent_run_id = uuid.uuid4()
+    with model_call_scope(ModelCallScope(agent_run_id=agent_run_id, model="answering-model")):
+        await handler.on_chat_model_start(
+            serialized={},
+            messages=[[]],
+            run_id=run_id,
+            metadata={"projectId": str(PROJECT_ID)},
+        )
+        message = AIMessage(
+            content="hi",
+            usage_metadata={"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
+        )
+        await handler.on_llm_end(
+            LLMResult(generations=[[ChatGeneration(message=message)]]), run_id=run_id
+        )
+
+    calls = [obj for obj in session.added if type(obj).__name__ == "ModelCall"]
+    assert len(calls) == 1
+    assert calls[0].agent_run_id == agent_run_id, "the run id did not reach the row"
+    # And the model that ANSWERED, not the one resolved when the graph was built.
+    assert calls[0].model == "answering-model"
 
 
 # ---------------------------------------------------------------------------
