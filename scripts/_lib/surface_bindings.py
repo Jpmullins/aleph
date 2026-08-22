@@ -737,12 +737,20 @@ class Report:
     #: what a producer sends, what `catalog.json` declares, what the zod schema
     #: declares, and what the agent block offers. `bound_props` counts only the
     #: first of those four, which is why it reads far lower than the size of
-    #: the contract: the contract is 114 props and one of its copies is 77.
+    #: the contract.
     props_inspected: int = 0
     #: Catalog components with no producer at all, and why each has none. A
     #: bare "5 not compared" reads as work; a named list with a reason is
     #: either a gap somebody can close or a fact.
     no_producer: dict[str, str] = field(default_factory=dict)
+    #: For a component with no producer, the directions that DO examine it.
+    #: Without this the sentence in `_NO_PRODUCER_REASON` is an exemption:
+    #: `ArtifactCard` was reported "NOT compared" and its seven props left out
+    #: of `props_inspected`, while catalog↔zod, agent→zod and zod→view all
+    #: check it — renaming one of its props has always turned this sweep red.
+    #: A named component that NO direction examines is a mismatch, so the
+    #: coverage number cannot be raised by writing a sentence.
+    no_producer_directions: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def uncompared(self) -> int:
@@ -846,6 +854,30 @@ _NO_PRODUCER_REASON: dict[str, str] = {
 }
 
 
+def _unexamined_explained_gaps(catalog: set[str], examined: dict[str, set[str]]) -> list[Mismatch]:
+    """A component excused as producerless that no direction examines either.
+
+    `_NO_PRODUCER_REASON` exists so a coverage gap is NAMED rather than
+    footnoted. The moment a name in it stops being examined by any direction
+    the sentence becomes an exemption instead: the component counts as
+    compared, contributes its props to the coverage number, and is checked by
+    nothing. `ArtifactCard` is the only entry today and three directions check
+    it — delete its zod schema and this fires.
+    """
+    return [
+        Mismatch(
+            name,
+            "(component)",
+            "named in `_NO_PRODUCER_REASON` as having no producer, and no "
+            "direction of this sweep examines it either — the written reason "
+            "is an exemption, not coverage. Give it a producer, give it a "
+            "client zod schema, or take it out of catalog.json",
+        )
+        for name in sorted(set(_NO_PRODUCER_REASON) & catalog)
+        if not examined.get(name)
+    ]
+
+
 def _unexplained_gaps(catalog: set[str], emitted: set[str]) -> list[Mismatch]:
     """A catalog component nothing emits and nobody has explained."""
     return [
@@ -928,8 +960,29 @@ def run(repo_root: pathlib.Path) -> Report:
         if key in tsx_sources:
             views[component] = (key, tsx_sources[key])
 
-    compared = sorted(set(emitted) & set(clients))
-    sent = sum(len(emitted[name]) for name in compared)
+    # Which of the five directions actually examines each component. `compared`
+    # used to mean "has a Python producer AND a zod schema", which is the input
+    # to two of the five directions and undercounted the other three:
+    # `ArtifactCard` was printed as "NOT compared" and its seven props left out
+    # of the coverage number while catalog↔zod, agent→zod and zod→view all read
+    # them — renaming `artifact_kind` in `ArtifactCard.tsx` has always turned
+    # this sweep red. The key sets below are the same expressions the `compare_*`
+    # functions iterate, so a direction that starts skipping a component drops it
+    # out of the count instead of leaving a number that describes coverage the
+    # sweep no longer has.
+    examined: dict[str, set[str]] = {}
+    for direction, names in (
+        ("producer→zod", set(emitted) & set(clients)),
+        ("producer→bindable", set(producers) & set(bindable)),
+        ("catalog↔zod", set(declared) & set(clients)),
+        ("agent→zod", set(agent) & set(clients)),
+        ("zod→view", set(clients) & set(views)),
+    ):
+        for name in names:
+            examined.setdefault(name, set()).add(direction)
+
+    compared = sorted(set(examined) & catalog)
+    sent = sum(len(emitted.get(name, set())) for name in compared)
     inspected = sum(
         len(
             emitted.get(name, set())
@@ -952,6 +1005,7 @@ def run(repo_root: pathlib.Path) -> Report:
             + compare_view_reads(clients, catalog_const_props(catalog_source), views)
             + compare_actions(registered_actions(router_source), emitted_actions(view_sources))
             + _unexplained_gaps(catalog, set(emitted))
+            + _unexamined_explained_gaps(catalog, examined)
         ),
         compared=compared,
         catalog_total=len(catalog),
@@ -961,6 +1015,11 @@ def run(repo_root: pathlib.Path) -> Report:
         props_inspected=inspected,
         no_producer={
             name: _NO_PRODUCER_REASON[name]
+            for name in sorted(catalog - set(emitted))
+            if name in _NO_PRODUCER_REASON
+        },
+        no_producer_directions={
+            name: sorted(examined.get(name, set()))
             for name in sorted(catalog - set(emitted))
             if name in _NO_PRODUCER_REASON
         },

@@ -184,7 +184,32 @@ async def _run() -> int:
         print("okf-export: no DATABASE_URL — cannot export a real vault")
         return 2
 
-    engine = create_async_engine(url)
+    # REPEATABLE READ, and this is the load-bearing half of the determinism fix.
+    #
+    # Under Postgres's default READ COMMITTED every statement takes a FRESH
+    # snapshot, so this probe picked its subject with one query and then
+    # exported it with several more — against a database other people are
+    # writing to. `tests/e2e/test_belief_spine.py` creates a project with one
+    # non-stub page and two anchored citations, which makes it the
+    # most-anchored project in this corpus, and then HARD-DELETES the rows in
+    # teardown (`DELETE FROM wiki_pages ... DELETE FROM projects`). Land in that
+    # window and the subject query returns a project whose pages are gone by the
+    # time `_vault_pages` runs, so the export is empty and the gate reports
+    #
+    #   most-anchored ('belief spine 01a02b7e'): the export produced no
+    #   concept documents
+    #
+    # Measured 2026-08-22: six probe runs against a quiet database were
+    # byte-identical, and the sixth run of the same loop with the belief-spine
+    # suite running beside it failed exactly that way. Requiring the subject to
+    # have non-stub pages — the previous fix — narrows the window to the
+    # milliseconds between the two queries; it cannot close it, because the
+    # condition it checks can stop being true after it is checked.
+    #
+    # One snapshot for the whole probe closes it: the rows the subject query
+    # chose from are the rows the export reads, whatever anybody else commits
+    # meanwhile. A gate grading live data has to grade ONE state of it.
+    engine = create_async_engine(url, isolation_level="REPEATABLE READ")
     try:
         maker = async_sessionmaker(engine, expire_on_commit=False)
         async with maker() as session:
@@ -209,7 +234,16 @@ async def _run() -> int:
                         JOIN wiki_pages w ON w.project_id = p.id
                         WHERE p.status <> 'deleted' AND NOT w.is_stub
                         GROUP BY p.id, p.title
-                        ORDER BY pages DESC
+                        -- p.id breaks the tie. `ORDER BY <metric> DESC LIMIT 1`
+                        -- over a tie lets Postgres return whichever row the plan
+                        -- happens to reach first, so the gate's SUBJECT can change
+                        -- between two runs with identical data — the same class of
+                        -- non-determinism as the arm below, one step subtler
+                        -- because it needs no new row to appear. Six projects
+                        -- already tie at one non-stub page and two at one anchored
+                        -- citation, so this is not hypothetical; it is one
+                        -- integration run away from being the top of the list.
+                        ORDER BY pages DESC, p.id
                         LIMIT 1
                     """)
                 )
@@ -240,7 +274,8 @@ async def _run() -> int:
                             WHERE w.project_id = p.id AND NOT w.is_stub
                           )
                         GROUP BY p.id, p.title
-                        ORDER BY anchored DESC
+                        -- p.id again, for the reason spelled out on the query above.
+                        ORDER BY anchored DESC, p.id
                         LIMIT 1
                     """)
                 )

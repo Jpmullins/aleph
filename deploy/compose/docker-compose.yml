@@ -107,6 +107,15 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
     ports: ["${POSTGRES_PORT:-5432}:5432"]
+    # Docker gives every container a 64 MB /dev/shm, and Postgres puts the
+    # shared memory a parallel worker needs there. That default is what made
+    # this instance's backup UNRESTORABLE: pg_restore died building
+    # ix_chunks_embedding_hnsw with "could not resize shared memory segment to
+    # 64000896 bytes: No space left on device" — with 40 GB free on the host,
+    # which is the most misreadable form the message can take. Not restore-only
+    # either: any parallel index build, parallel VACUUM or parallel seq scan on
+    # the live database hits the same tmpfs.
+    shm_size: ${POSTGRES_SHM_SIZE:-1g}
     healthcheck:
       # -U/-d because the default `pg_isready` probes the `postgres` role,
       # which does not exist here and would report healthy against a database

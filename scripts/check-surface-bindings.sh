@@ -117,8 +117,18 @@ for name, why in report.no_producer.items():
     # Stated every run, on purpose — the difference between a coverage gap
     # somebody can act on and a completeness claim nobody questions. A gap that
     # is not named here is a MISMATCH, not a footnote, so this list cannot
-    # quietly grow.
-    print(f"  {name} is emitted by no producer and is NOT compared: {why}")
+    # quietly grow. And the directions that DO cover it are printed beside the
+    # reason, because "is NOT compared" was wrong: three of the five directions
+    # read ArtifactCard's props and go red when one is renamed. What it has is
+    # no PRODUCER, which costs it the two producer directions and nothing else.
+    covered = report.no_producer_directions.get(name, [])
+    if covered:
+        print(
+            f"  {name} has no producer, so {len(covered)} of 5 directions cover it "
+            f"({', '.join(covered)}): {why}"
+        )
+    else:  # unreachable while `_unexamined_explained_gaps` is in the mismatch list
+        print(f"  {name} is emitted by no producer and is NOT compared: {why}")
 if report.unknown_to_client:
     # The basic-catalog primitives (`Text`, `Button`, `TextField`, …) come from
     # @a2ui/react's own catalog, not from Aleph's zod file, so their props

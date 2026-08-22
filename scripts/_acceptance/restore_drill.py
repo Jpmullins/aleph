@@ -236,20 +236,47 @@ def main() -> int:
                 ]
             )
             print(step.stdout, end="")
-            if step.returncode != 0:
+            restore_ok = step.returncode == 0
+            if not restore_ok:
                 print(step.stderr, file=sys.stderr)
                 failures.append("restore.sh reported the restore does not match the backup")
 
             # 3 — the hash chain, recomputed by the production verifier on
             # both sides. See the module docstring for why the criterion is
             # "the two agree" rather than "the restore verifies".
-            async_scratch = scratch_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-            async_source = admin_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-            restored_state = asyncio.run(_chain_state(async_scratch))
-            source_state = asyncio.run(_chain_state(async_source))
-            problems, projects, events, reproduced = _compare_chains(source_state, restored_state)
+            #
+            # SKIPPED when step 2 failed, and that guard is the whole reason
+            # this branch exists. A failed pg_restore leaves the scratch
+            # database EMPTY, so the verifier's first statement raised
+            # `UndefinedTableError: relation "action_ledger_events" does not
+            # exist` — an unhandled traceback that propagated out of main(),
+            # replaced the drill's own diagnosis with sixty lines of SQLAlchemy
+            # frames, and told the operator nothing about the backup. The
+            # process still exited nonzero, so nothing was silently green; it
+            # was silently ILLEGIBLE, which is how a drill stops being run.
+            if not restore_ok:
+                print(
+                    "  \033[33mskip\033[0m   ledger hash chain: the restore failed, so the "
+                    "scratch database has no tables to verify"
+                )
+                problems, projects, events, reproduced = [], 0, 0, 0
+            else:
+                async_scratch = scratch_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+                async_source = admin_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+                try:
+                    restored_state = asyncio.run(_chain_state(async_scratch))
+                    source_state = asyncio.run(_chain_state(async_source))
+                except Exception as exc:
+                    problems = [f"the ledger hash chain could not be recomputed: {exc}"]
+                    projects = events = reproduced = 0
+                else:
+                    problems, projects, events, reproduced = _compare_chains(
+                        source_state, restored_state
+                    )
             failures.extend(problems)
-            if problems:
+            if not restore_ok:
+                pass  # the skip above already said why, and said it once
+            elif problems:
                 print(f"  \033[31mFAIL\033[0m   ledger hash chain: {problems[0]}")
             elif projects == 0:
                 # Not a pass. An empty ledger verifies trivially, and a drill

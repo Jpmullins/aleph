@@ -308,6 +308,53 @@ probe "check-pane-registry notices a hardcoded pane list in the client" \
   "./scripts/check-pane-registry.sh"
 
 # ---------------------------------------------------------------------------
+# The sweeps that had no probe at all. Six of the twenty-six were named by no
+# probe for three consecutive audits, and one of them is WS-P6's OWN sweep —
+# the routing half of the tenant boundary, with nothing checking it can still
+# see an unscoped route.
+# ---------------------------------------------------------------------------
+
+# The one-character version of the defect. `project_id: UUID` is a perfectly
+# ordinary FastAPI path parameter and reads as the normal case; it is exactly
+# what an unscoped handler looks like.
+probe "check-project-scope notices a route that stopped resolving its project" \
+  apps/api/src/aleph_api/routes/notes.py \
+  's/project_id: ProjectScopeDep/project_id: UUID/g' \
+  "./scripts/check-project-scope.sh"
+
+# NOT "delete mem_limit" — that is the version anybody catches in review. The
+# dangerous shape is a cap that LOOKS set and lets the container swap at the
+# limit instead of failing, turning a fast death into a host-wide stall.
+probe "check-compose-hardening notices a memory cap that swaps instead of failing" \
+  deploy/compose/docker-compose.yml \
+  's/    memswap_limit: \$\{API_MEM_LIMIT:-2g\}/    memswap_limit: \${API_MEM_LIMIT:-4g}/' \
+  "./scripts/check-compose-hardening.sh"
+
+# A hyphenated spelling of a state the engine has — one of the four real
+# disagreements this sweep was written for. Anchored on the neighbouring array
+# entries so it cannot also hit `case "well_supported":` in the switch below.
+probe "check-confidence-vocabulary notices a reader spelling a state its own way" \
+  apps/web/src/a2ui/confidence.ts \
+  's/\n  "well_supported",\n  "contested",/\n  "well-supported",\n  "contested",/' \
+  "./scripts/check-confidence-vocabulary.sh"
+
+# The CODE side, not the doc side: two findings accidentally sharing a `check=`
+# name drops the distinct count while the doc still says 16. Mutating the doc
+# instead would only prove the doc disagrees with itself.
+probe "check-lint-count notices a lint check the doc never heard about" \
+  packages/aleph-wiki/src/aleph_wiki/lint.py \
+  's/check="unjudged"/check="unknown-category"/' \
+  "./scripts/check-lint-count.sh"
+
+# TextField by name, because it is the concrete regression: the five input
+# controls were the components on the wrong side of the old filter, so the
+# assistant could not ask for a form and nothing reported a problem.
+probe "check-agent-catalog-covers-renderer notices a component the agent is not shown" \
+  apps/copilot-runtime/src/catalog.generated.ts \
+  's/\n    "TextField": \{/\n    "ProbeRenamedField": {/' \
+  "./scripts/check-agent-catalog-covers-renderer.sh"
+
+# ---------------------------------------------------------------------------
 # Retrieval, after WS-RS1. Each of these mutations recreates a specific half of
 # the outage that left `document_chunks` empty against 75 ingested sources.
 # ---------------------------------------------------------------------------

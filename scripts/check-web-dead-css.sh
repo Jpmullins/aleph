@@ -108,7 +108,16 @@ for sheet in STYLESHEETS:
     # Selector text only — everything before the `{` of each rule. Without this
     # a declaration like `--color-canvas: var(--surface-bg)` contributes
     # nothing, but a content string or a url() could.
-    for selector in re.findall(r"([^{}]*)\{", body):
+    for before_brace in re.findall(r"([^{}]*)\{", body):
+        # Everything since the last brace, which at the top of a file is the
+        # whole run of `@import ...;` statements glued to the first selector.
+        # `.zombie` written directly under the imports was skipped for having
+        # an `@` in it — a rule the sweep could not see, in the one file it
+        # exists to read. At-rule STATEMENTS end in `;`; only what follows the
+        # last one is a selector. Block at-rules (`@media`, `@layer`,
+        # `@font-face`) carry no `;`, so they still contain their `@` here and
+        # are still skipped.
+        selector = before_brace.rsplit(";", 1)[-1]
         if "@" in selector:
             continue
         for cls in re.findall(r"\.(-?[A-Za-z_][A-Za-z0-9_-]*)", selector):

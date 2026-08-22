@@ -171,6 +171,52 @@ for name in sorted(MEM_CAPPED):
 if len(failures) == before:
     print(f"✓ memory caps: {len(MEM_CAPPED)} services capped with swap disabled")
 
+# --- 3b. postgres has more than the default /dev/shm -------------------------
+#
+# Docker's default is a 64 MB tmpfs at /dev/shm, and Postgres puts the shared
+# memory a PARALLEL worker needs there. On 2026-08-22 that default made this
+# instance's own backup unrestorable: `scripts/_acceptance/restore_drill.py`
+# ran `scripts/backup.sh` and `scripts/restore.sh` against the live database
+# and pg_restore died on
+#
+#   CREATE INDEX ix_chunks_embedding_hnsw ON document_chunks USING hnsw (...)
+#     ERROR: could not resize shared memory segment to 64000896 bytes:
+#            No space left on device
+#
+# with 40 GB free on the host. "No space left on device" naming a 61 MB
+# allocation on an empty disk is the single most misread Postgres-in-Docker
+# error there is, which is why the floor is asserted here rather than left to
+# whoever next tries a restore at 3am.
+#
+# A FLOOR, not an equality: raising the cap is always safe (it is a ceiling on a
+# tmpfs, not an allocation), lowering it back to the default is the regression.
+# 256 MiB is the floor rather than 1 GiB so a smaller deployment can size it
+# down deliberately; the compose default is 1g.
+SHM_FLOOR = 256 * 1024 * 1024
+before = len(failures)
+raw_shm = services.get("postgres", {}).get("shm_size")
+if raw_shm is None:
+    fail(
+        "postgres: no shm_size, so it gets Docker's 64 MB default",
+        "a parallel index build — including the one every restore performs —",
+        "fails with 'No space left on device' while the disk is nearly empty",
+    )
+else:
+    try:
+        shm = int(raw_shm)
+    except (TypeError, ValueError):
+        shm = -1
+        fail(f"postgres: shm_size={raw_shm!r} did not render as a byte count")
+    if 0 <= shm < SHM_FLOOR:
+        fail(
+            f"postgres: shm_size={shm} is below the {SHM_FLOOR}-byte floor",
+            "a parallel index build needs more shared memory than this and fails",
+            "with 'No space left on device' on an empty disk",
+        )
+if len(failures) == before:
+    print(f"✓ shared memory: postgres /dev/shm is {int(raw_shm) // (1024 * 1024)} MiB, "
+          f"above the {SHM_FLOOR // (1024 * 1024)} MiB floor a parallel index build needs")
+
 # --- 4. the gateway URL is interpolatable -----------------------------------
 #
 # The behavioural form of the check, not a grep for the key. Compose merges
