@@ -387,30 +387,53 @@ CI (`.github/workflows/ci.yml`) runs four jobs, and each one can genuinely fail:
 
 Run them locally with the commands in [`CLAUDE.md`](../CLAUDE.md#commands).
 
-### On what is deliberately absent
+### The sweeps
 
-There is **no eval gate**. There was one; it graded a fixture against itself — scorers read both
-`expected` and `actual` out of the same JSONL line, so the system under test was never invoked and the
-job was green regardless of the code. The datasets and the gate have been deleted. The scorers in
-`packages/aleph-evals/src/aleph_evals/scorers/` are kept because the metrics themselves are correct;
-they need a harness that actually calls Aleph plus a real dataset before they mean anything.
+A **sweep** is `scripts/check-*.sh`: a shell check that asserts one invariant across the whole tree,
+for invariants a unit test cannot reach because they are about *absence* — a producer with no
+consumer, a route with no scope check, a generated file nobody regenerated. There are 21, every one
+of them is wired into `ci.yml`, and `check-sweeps-are-wired.sh` fails the build if a 22nd is added
+without a consumer.
 
-The five `scripts/check-*.sh` "living invariant" sweeps have also been deleted. Two of them read files
-that no longer exist, and the set was presented as equivalent invariants when one was a two-token
-grep. When a real invariant needs enforcing, add a check that can fail for a real reason.
+They are held to one rule rather than grandfathered past it: **a sweep must have a concrete failing
+input.** `./scripts/acceptance.sh --self-check` proves it, mutating the tree so each sweep is made to
+fail and restoring it afterwards — a check nobody has seen fail is an assumption wearing a green
+light.
 
-Two `scripts/check-*.sh` remain, and they are held to exactly that rule rather than grandfathered
-past it — each regenerates an artifact from its source and diffs, so each has a concrete failing
-input:
+*Generated artifacts must match their source*
 
 - `check-catalog-generated.sh` — `apps/web/src/a2ui/catalog.ts` and
   `apps/copilot-runtime/src/catalog.generated.ts` must match what `scripts/gen_catalog.py` renders
   from `catalog.json`. Fails on a hand-edit to a generated file, or on a `catalog.json` change
   committed without re-running the generator.
-- `check-graph-state-keys.sh` — every key a LangGraph node writes must be declared on its state
+- `check-single-catalog.sh` — one catalog per component id, not one catalog per copy.
+- `check-lint-count.sh` — the number of wiki lint checks the docs claim is the number `lint.py` runs.
+
+*A write with no reader is the dominant defect class here*
+
+- `check-graph-state-keys.sh` — every key a LangGraph node writes is declared on its state
   `TypedDict`; undeclared writes are discarded silently. It imports the analyzer from
   `tests/unit/test_graph_state_keys.py` rather than copying it, so the sweep and the behavioural
   tests cannot disagree.
+- `check-surface-bindings.sh` — every surface prop a Python producer binds is declared in the
+  client's zod schema. The binder resolves only declared props, so an undeclared one is dropped in
+  silence: correct SSE payload, `undefined` at the view, nothing raised.
+- `check-pane-registry.sh` — the client does not know what surfaces exist; the server names them.
+- `check-agent-catalog-covers-renderer.sh` — the agent is not shown a shorter component list than
+  the browser can draw.
+- `check-web-dead-code.sh` — a React module nothing imports still type-checks and still lints.
+- `check-web-dead-css.sh` — a CSS class nothing applies is invisible to every other gate here.
+- `check-confidence-vocabulary.sh` — a claim's confidence was spelled four ways that disagreed.
+
+*Security and scope*
+
+- `check-project-scope.sh` — a route whose URL names a project resolves that project's scope.
+- `check-agent-fs-permissions.sh` — the agent may read its standing orders and may not rewrite them.
+- `check-agent-middleware.sh` — a tool that throws must not kill the conversation, everywhere rather
+  than in the one place a test covers.
+- `check-page-lock.sh` — a wiki page read without a row lock is a lost commit waiting to happen.
+- `check-runtime-bridge.sh` — the Node bridge on `:4000` is not reachable from the whole network and
+  does not forward unauthenticated.
 - `check-compose-hardening.sh` — parses `docker compose config` (the merged, interpolated result the
   daemon is actually given, not the source text) and asserts: every long-running service restarts
   itself and every one-shot does not; every service bounds its logs; the five capped services cap
@@ -426,6 +449,29 @@ input:
   takes its ownership from the image the first time it is created, so adding `USER` alone breaks the
   asset store instead of securing it.
 
+*The documentation is part of the system*
+
+- `check-dead-refs.sh` — every path this repository names in prose resolves, and every sweep that
+  exists is named in this file. A sweep nobody documents is a sweep nobody runs deliberately.
+- `check-acceptance-claims.sh` — a ✅ row in `acceptance.md` names a test that exists and can be
+  collected.
+- `check-web-drift.sh` — the interface has a written specification and most of the app predates it;
+  this measures the gap rather than asserting it is zero.
+- `check-sweeps-are-wired.sh` — every `scripts/check-*.sh` is run by `ci.yml`, `acceptance.sh` or
+  `self_check.sh`. An unwired sweep is a file, not a gate.
+- `check-migration-roundtrip.sh` — every migration's downgrade actually runs, not merely exists.
+
+### On what is deliberately absent
+
+There is **no eval gate**. There was one; it graded a fixture against itself — scorers read both
+`expected` and `actual` out of the same JSONL line, so the system under test was never invoked and the
+job was green regardless of the code. The datasets and the gate have been deleted. The scorers in
+`packages/aleph-evals/src/aleph_evals/scorers/` are kept because the metrics themselves are correct;
+they need a harness that actually calls Aleph plus a real dataset before they mean anything.
+
+`aleph_evals.retrieval_eval` is now that harness for retrieval specifically — it calls
+`search_corpus`, the production path, and reports recall@k and nDCG@10 as numbers. It is not a CI
+gate because it needs a live gateway with an embedder; run it by hand and record the number.
 ## Observability
 
 OTEL spans are exported through `otel-collector`; traces land in Langfuse (`:3000`). Spans follow

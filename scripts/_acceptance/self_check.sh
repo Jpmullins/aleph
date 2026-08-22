@@ -181,6 +181,13 @@ probe "check-dead-refs notices a path that is not there" \
   's/^# Operations/# Operations\n\nSee `deploy\/definitely-not-a-real-directory\/README.md`./' \
   "./scripts/check-dead-refs.sh"
 
+# An undocumented sweep, which is how the inventory in operations.md drifted from
+# two to twenty-one without a single gate noticing.
+probe "check-dead-refs notices a sweep the operations doc stopped naming" \
+  docs/operations.md \
+  's/`check-page-lock\.sh`/`check-page-lock-renamed-so-the-doc-no-longer-names-it.sh`/' \
+  "./scripts/check-dead-refs.sh"
+
 probe "check-acceptance-claims notices a cited test that does not exist" \
   docs/acceptance.md \
   's/packages\/aleph-core\/tests\/test_rrf.py/packages\/aleph-core\/tests\/test_no_such_thing.py/' \

@@ -133,6 +133,26 @@ for root in ("audit", "tests", "scripts"):
         if link.is_symlink() and not link.exists():
             problems.append(f"{link}: dangling symlink → {link.readlink()}")
 
+# Every sweep that exists is named in docs/operations.md, and every sweep that
+# doc names exists. A sweep nobody documents is one nobody runs deliberately:
+# the section previously read "five were deleted, two remain" while nineteen
+# sweeps that postdate that sentence went unmentioned, so a reader consulting
+# the operations doc for what CI enforces got an inventory off by an order of
+# magnitude.
+OPS = ROOT / "docs" / "operations.md"
+if OPS.exists():
+    ops_text = OPS.read_text(encoding="utf-8")
+    named = set(re.findall(r"check-[a-z0-9-]+\.sh", ops_text))
+    on_disk = {path.name for path in (ROOT / "scripts").glob("check-*.sh")}
+    for sweep in sorted(on_disk - named):
+        problems.append(
+            f"docs/operations.md: scripts/{sweep} exists and the doc never names it"
+        )
+    for sweep in sorted(named - on_disk):
+        problems.append(
+            f"docs/operations.md: names scripts/{sweep}, which does not exist"
+        )
+
 if problems:
     print("✗ dead references:", file=sys.stderr)
     for problem in problems:
