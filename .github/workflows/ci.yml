@@ -271,6 +271,38 @@ jobs:
       DATABASE_URL: postgresql+asyncpg://aleph:aleph@localhost:5432/aleph
       REDIS_URL: redis://localhost:6379/0
       ALEPH_AUTH_MODE: local
+
+      # The eight below are every field `aleph_api.settings.Settings` declares
+      # with NO DEFAULT. Six integration files now boot the real app
+      # (test_route_smoke, test_route_upload_limit, test_route_storage_bytes,
+      # test_route_stage_metrics, test_plugin_routes, test_rubric) and each one
+      # raises `ValidationError: 8 validation errors for Settings` without them,
+      # before a single request is made. Measured under `env -i` with exactly
+      # the three variables above: 6 failed, 334 passed, 22 errors. With these
+      # eight added: 383 passed.
+      #
+      # Load-bearing one at a time, not assumed: dropping any SINGLE variable
+      # turns tests/integration/test_route_smoke.py from `7 passed` into
+      # `7 errors`, and the error names the missing field. That is the check to
+      # re-run if this block ever looks like dead weight.
+      #
+      # Empty, not a fake host, for the four observability values: an empty
+      # OTLP endpoint is the documented way to skip the exporter
+      # (aleph_observability/tracing.py), and the `acceptance` job below already
+      # does exactly this. Nothing in the integration suite calls out.
+      LANGFUSE_HOST: ""
+      LANGFUSE_PUBLIC_KEY: ""
+      LANGFUSE_SECRET_KEY: ""
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+      LITELLM_BASE_URL: http://127.0.0.1:1
+      INSIGHTS_LITELLM_API_KEY: ci-not-a-real-key
+      # 32+ bytes and NOT the .env.example placeholder: both fields run
+      # `master_key_bytes()` at construction, which refuses anything shorter and
+      # refuses `CHANGE-ME-run-openssl-rand-hex-32` by name. A CI-only literal
+      # is correct — it signs nothing that leaves the job and decrypts no row
+      # that exists.
+      ALEPH_AGENT_TOKEN_SECRET: ci-only-agent-token-secret-not-used-anywhere-else
+      ALEPH_CREDENTIAL_MASTER_KEY: ci-only-credential-master-key-not-used-elsewhere
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
