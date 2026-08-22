@@ -30,6 +30,7 @@ from uuid import UUID
 import structlog
 from sqlalchemy import select
 
+from aleph_core.errors import ValidationFailed
 from aleph_core.ids import uuid7
 from aleph_db.models.plugin import Plugin
 from aleph_kernel.skills import (
@@ -66,6 +67,39 @@ class PluginDraft:
     config_schema: dict[str, Any] | None = None
 
 
+def _refuse_catalog_collision(draft: PluginDraft) -> None:
+    """Refuse a plugin whose component or function name is already core's.
+
+    `assemble_catalogs`'s own docstring called this "the check that turns a
+    silent map overwrite into a rejected install" — and nothing called it at
+    install. Its only caller was the SERVE path (`GET /catalogs`), which drops
+    the offending plugin from the response, so a shadowing plugin installed
+    successfully, sat in the database looking healthy, and vanished from every
+    catalog request with the reason in a log line nobody reads.
+
+    Core wins by definition: it is what every surface in the product paints
+    with. Two PLUGINS both defining `Chart` is fine and is not refused — they
+    are in different catalogs and the surface names which one it means.
+
+    Raised BEFORE the row is written, next to the AST gate, for the same
+    reason: a refusal that leaves a row behind is a plugin the next boot will
+    try to mount.
+    """
+    from aleph_a2ui.plugin_catalogs import (
+        CatalogCollisionError,
+        assemble_catalogs,
+        plugin_catalog_from_provides,
+    )
+
+    catalog = plugin_catalog_from_provides(draft.name, draft.major_version, draft.provides)
+    if not catalog.components and not catalog.functions:
+        return
+    try:
+        assemble_catalogs([catalog])
+    except CatalogCollisionError as exc:
+        raise ValidationFailed(str(exc)) from exc
+
+
 class PluginService:
     """Durable installs. One transaction, one ledger row, one mount."""
 
@@ -94,6 +128,7 @@ class PluginService:
         boot to execute it.
         """
         skill = skill_from_source(draft.name, draft.instructions, draft.code)
+        _refuse_catalog_collision(draft)
 
         row = Plugin(
             id=uuid7(),

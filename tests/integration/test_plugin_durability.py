@@ -479,3 +479,70 @@ async def test_force_disables_a_depended_on_plugin_and_takes_its_dependents_down
     assert not kernel.is_provided("skill.review-pass"), (
         "the dependent is still mounted with its provider withdrawn"
     )
+
+
+async def test_a_plugin_that_would_shadow_a_core_component_is_refused_at_install(
+    maker: Callable[[], AsyncSession], committed_project: uuid.UUID
+) -> None:
+    """Refused before the row is written, not dropped at serve time.
+
+    `assemble_catalogs`'s own docstring called this "the check that turns a
+    silent map overwrite into a rejected install" — and its only caller was the
+    SERVE path. A shadowing plugin installed successfully, sat in the database
+    looking healthy, and vanished from every `GET /catalogs` response with the
+    reason in a log line nobody reads.
+    """
+    from aleph_core.errors import ValidationFailed
+
+    kernel = Kernel()
+    async with maker() as session:
+        with pytest.raises(ValidationFailed) as caught:
+            await PluginService(session).install(
+                project_id=committed_project,
+                actor_id=ACTOR,
+                draft=_draft(name="shadower", provides=("ui:component:ClaimCard",)),
+                ledger=LedgerWriter(session),
+                kernel=kernel,
+            )
+    message = str(caught.value)
+    assert "ClaimCard" in message, f"the refusal does not name the component: {message}"
+
+    # No row, and nothing mounted. A refusal that leaves either behind is a
+    # plugin the next boot will try to bring up.
+    async with maker() as session:
+        rows = list(
+            (
+                await session.execute(
+                    select(Plugin).where(
+                        Plugin.project_id == committed_project, Plugin.name == "shadower"
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert rows == [], "a refused install still wrote a plugin row"
+    assert not kernel.is_provided("skill.shadower")
+
+
+async def test_a_plugin_declaring_its_own_component_name_installs(
+    maker: Callable[[], AsyncSession], committed_project: uuid.UUID
+) -> None:
+    """The refusal above must not have closed the feature it guards.
+
+    Two plugins both defining `Chart` is explicitly allowed — they are in
+    different catalogs and the surface names which one it means. Only shadowing
+    CORE is refused.
+    """
+    kernel = Kernel()
+    async with maker() as session:
+        row = await PluginService(session).install(
+            project_id=committed_project,
+            actor_id=ACTOR,
+            draft=_draft(name="charter", provides=("ui:component:Chart",)),
+            ledger=LedgerWriter(session),
+            kernel=kernel,
+        )
+        await session.commit()
+    assert row.name == "charter"
+    assert "ui:component:Chart" in list(row.provides or ())

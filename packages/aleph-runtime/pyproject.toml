@@ -7,6 +7,7 @@ dependencies = [
     "httpx==0.28.1",
     "redis>=5,<6",
     "sqlalchemy[asyncio]==2.0.50",
+    "aleph-a2ui",
     "aleph-core",
     "aleph-db",
     "aleph-kernel",

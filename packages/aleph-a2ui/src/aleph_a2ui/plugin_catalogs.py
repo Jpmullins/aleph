@@ -254,8 +254,12 @@ def assemble_catalogs(
 
     * A plugin whose component or function name is already core's. Core wins by
       definition — it is what every surface in the product paints with — so the
-      plugin is refused at assembly, naming both sides. This is the check that
-      turns a silent map overwrite into a rejected install.
+      plugin is refused at assembly, naming both sides. `PluginService.install`
+      calls this BEFORE writing the row, so a shadowing plugin is a rejected
+      install and not a row that installs cleanly and then vanishes from every
+      `GET /catalogs` response with the reason in a log line. This docstring
+      claimed that outcome for months while the serve path was the only
+      caller.
     * Two plugins producing the same catalog id (same name, same major). One
       would replace the other in the array and `createSurface` would resolve to
       whichever came last, which is the same defect one level up.
