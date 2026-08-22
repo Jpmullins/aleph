@@ -28,6 +28,15 @@ ORM and no session. `export_service.load_page_evidence` does the query.
 That is the same round-trip discipline the vault format uses, for the same
 reason: a dropped field shows up as a diff instead of as silence.
 
+Byte-identity alone cannot see a field dropped from BOTH directions at once —
+the writer stops emitting it, the reader never asked for it, and the two agree
+about a file that is now missing something. `project_title` and `dialect` were
+in exactly that state: written by `evidence_document`, re-supplied by both call
+sites, read by nobody. So the header is a **required** shape under version 1:
+`parse_evidence_json` returns it as an `EvidenceHeader` and raises on a missing
+key rather than defaulting it. A sidecar whose header changed is a sidecar whose
+version should have changed.
+
 **Nothing here carries a timestamp.** An export stamped with "generated at" is
 never byte-identical to the next one, which destroys the round-trip check that
 is the only evidence the format loses nothing. When the export happened is a
@@ -45,13 +54,17 @@ from typing import Any, cast
 __all__ = [
     "EVIDENCE_FILENAME",
     "EVIDENCE_FORMAT_VERSION",
+    "HEADER_FIELDS",
     "ClaimEvidence",
     "EvidenceCitation",
     "EvidenceCounts",
+    "EvidenceHeader",
     "PageEvidence",
     "attach_evidence",
     "count_evidence",
+    "evidence_document",
     "evidence_files",
+    "normalize_marker",
     "parse_evidence_json",
     "render_evidence_json",
     "render_evidence_section",
@@ -195,6 +208,53 @@ class EvidenceCounts:
     pages_with_claims: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class EvidenceHeader:
+    """The sidecar's header, read back as values instead of as a raw dict.
+
+    Every field here corresponds to a key `evidence_document` writes, and that
+    is the entire point of the type: before it existed the header was written
+    and read by nobody, so `project_title` and `dialect` could be deleted from
+    the writer with 163 tests still green. A round trip cannot see a field that
+    both halves stopped carrying — only a reader that *requires* it can.
+
+    `dialect` is not decoration. It tells a consumer which link syntax the
+    markdown beside this file uses, which is the difference between `[[x]]`
+    being a link and being two brackets.
+    """
+
+    version: str
+    project_title: str
+    dialect: str
+    claim_count: int
+    citation_count: int
+    anchored_citation_count: int
+
+    @property
+    def counts(self) -> EvidenceCounts:
+        """The header's stated counts. `pages_with_claims` is not carried: the
+        sidecar only lists pages that have claims, so it is `len(pages)`."""
+        return EvidenceCounts(
+            claims=self.claim_count,
+            citations=self.citation_count,
+            anchored_citations=self.anchored_citation_count,
+        )
+
+
+#: The header keys version 1 declares. `parse_evidence_json` requires every one
+#: of them; a sidecar that has stopped carrying one is not a version 1 sidecar,
+#: and reading it as though it were is how a format loses a field in silence.
+HEADER_FIELDS: tuple[str, ...] = (
+    "aleph_evidence_version",
+    "project_title",
+    "dialect",
+    "claim_count",
+    "citation_count",
+    "anchored_citation_count",
+    "pages",
+)
+
+
 def count_evidence(pages: Iterable[PageEvidence]) -> EvidenceCounts:
     claims = citations = anchored = with_claims = 0
     for page in pages:
@@ -229,6 +289,72 @@ def _not_inlined(reason: str) -> str:
         f"  *(quote {reason} and is carried verbatim in "
         f"`{EVIDENCE_FILENAME}` rather than inlined here)*"
     )
+
+
+def _inline(value: str) -> str:
+    r"""Free text from the database, made safe to sit on a line of markdown.
+
+    The `## Evidence` section is assembled from four kinds of free text and
+    only one of them — the quote — was ever guarded. A claim's text and a
+    source's title are unbounded strings that reach this module straight out of
+    `wiki_claims.text` and `sources.title`, and both were interpolated raw.
+    Measured, before this existed:
+
+    * claim text `The paper called it [[Recurrent Networks]] throughout.`
+      exported as `[Recurrent Networks](./recurrent-networks.md)` in the okf
+      dialect and `[[recurrent-networks|Recurrent Networks]]` in obsidian. The
+      exporter had rewritten the claim's own words into a link the claim never
+      made, to a page it never named.
+    * a source title `A survey of [[wikilink]] syntax` reached the okf bundle
+      as `A survey of wikilink syntax` — the brackets deleted, because the link
+      resolver could not find the target and wrote the display text alone.
+    * a claim whose text contained a fenced block put ```` ```python ```` at
+      the start of a line inside the section. `render_vault` tracks fences line
+      by line to decide where NOT to rewrite links, so one leaked fence
+      switches link rewriting off for the whole rest of the page.
+
+    Two operations, and between them they close all three:
+
+    1. **Collapse whitespace.** The result is one line, so nothing inside it
+       can open a fence, a heading, a list or a block quote. This is also what
+       a markdown renderer already does to the soft line breaks inside a
+       paragraph, so the reading is unchanged.
+    2. **Escape `\`, `[` and `]`.** `\[\[x\]\]` renders as the literal
+       characters `[[x]]` for a person, matches neither dialect's link pattern,
+       and contains no `[[` for `scripts/check-okf.py` to report. The words
+       survive; only the syntax dies. Same rule, same reason, as
+       `aleph_artifacts.exporters.vault._escape_display`.
+
+    **What this deliberately does not do.** Emphasis and inline code inside
+    free text are still markdown — `*nix` italicises, and a backtick pair still
+    opens a code span — exactly as they do in the wiki's own prose. Escaping
+    every character CommonMark reads as punctuation would fill the file with
+    backslashes to defend against a rendering nuance. "Verbatim" is a claim
+    this module makes about **quotes**, which is why a quote is fenced instead
+    of escaped and is dropped from the section entirely when a fence cannot
+    hold it. `evidence.json` carries every one of these byte-exact regardless.
+    """
+    return " ".join(value.split()).replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+
+def _code(value: str) -> str:
+    """An identifier as an inline code span, delimited longer than its content.
+
+    `S0002`, a chunk UUID and `confidence: cited` are rendered in code spans,
+    and every one of those values comes out of a database column. A backtick in
+    any of them closes the span early and the rest of the line becomes code —
+    the same class of defect as the leaked fence above, one span down. Escaping
+    is not available inside a code span (a backslash there is a literal
+    backslash), so the delimiter is made longer than the longest run inside,
+    which is what CommonMark provides for exactly this.
+    """
+    flat = " ".join(value.split())
+    longest = max((len(m.group(0)) for m in _BACKTICKS.finditer(flat)), default=0)
+    ticks = "`" * (longest + 1)
+    # A span whose content starts or ends with a backtick needs one space of
+    # padding, which CommonMark strips again on render.
+    pad = " " if flat.startswith("`") or flat.endswith("`") else ""
+    return f"{ticks}{pad}{flat}{pad}{ticks}"
 
 
 def _quote_block(quote: str) -> list[str]:
@@ -282,11 +408,17 @@ def _source_label(citation: EvidenceCitation) -> str:
     """
     parts: list[str] = []
     if citation.source_short_id:
-        parts.append(f"`{citation.source_short_id}`")
+        parts.append(_code(citation.source_short_id))
     if citation.source_title:
-        parts.append(citation.source_title.strip())
+        # `_inline`, not `.strip()`: a source title is free text and one of
+        # them on this corpus reads `A survey of [[wikilink]] syntax`. Raw, the
+        # exporter treated that as a link and deleted the brackets from
+        # somebody's title.
+        parts.append(_inline(citation.source_title))
     if not parts:
-        parts.append(f"source `{citation.source_id}`" if citation.source_id else "source unknown")
+        parts.append(
+            f"source {_code(citation.source_id)}" if citation.source_id else "source unknown"
+        )
     return " ".join(parts)
 
 
@@ -304,11 +436,15 @@ def normalize_marker(raw: str | None) -> str:
 
 
 def _citation_line(citation: EvidenceCitation) -> str:
-    bits = [f"**[{citation.marker}]**", citation.stance, _source_label(citation)]
+    # The marker is a column too (`citations.citation_marker`), so it is
+    # inlined like every other stored string. The brackets around it are this
+    # module's own and are not escaped — see `normalize_marker` for why there
+    # is exactly one pair of them.
+    bits = [f"**[{_inline(citation.marker)}]**", _inline(citation.stance), _source_label(citation)]
     if citation.char_start is not None and citation.char_end is not None:
         bits.append(f"chars {citation.char_start}-{citation.char_end}")
     if citation.chunk_id:
-        bits.append(f"chunk `{citation.chunk_id}`")
+        bits.append(f"chunk {_code(citation.chunk_id)}")
     if not citation.verbatim:
         # A citation nobody located in its source. Said out loud, because the
         # rest of this section reads as though every quote was checked.
@@ -349,18 +485,18 @@ def render_evidence_section(page: PageEvidence) -> str:
     ]
     for claim in page.claims:
         meta = [
-            f"`confidence: {claim.confidence}`",
-            f"`evidence: {claim.evidence_tier}`",
-            f"`origin: {claim.origin}`",
+            _code(f"confidence: {claim.confidence}"),
+            _code(f"evidence: {claim.evidence_tier}"),
+            _code(f"origin: {claim.origin}"),
         ]
         if claim.status != "active":
             # A retracted claim stays in the export — "we believed this and
             # withdrew it" is knowledge — but it must never read as support.
-            meta.append(f"`status: {claim.status}`")
+            meta.append(_code(f"status: {claim.status}"))
         if claim.section_anchor:
-            meta.append(f"`section: {claim.section_anchor}`")
-        meta.append(f"`claim: {claim.claim_id}`")
-        lines += [f"**Claim.** {claim.text.strip()}", "", " · ".join(meta), ""]
+            meta.append(_code(f"section: {claim.section_anchor}"))
+        meta.append(_code(f"claim: {claim.claim_id}"))
+        lines += [f"**Claim.** {_inline(claim.text)}", "", " · ".join(meta), ""]
         for citation in claim.citations:
             lines += [_citation_line(citation), ""]
             if citation.quote:
@@ -489,7 +625,20 @@ def _as_str(value: Any) -> str | None:
     return None if value is None else str(value)
 
 
-def parse_evidence_json(text: str) -> tuple[Mapping[str, Any], tuple[PageEvidence, ...]]:
+def _as_int(value: Any) -> int:
+    """A header count, or 0 for a value that is not a number.
+
+    Presence is required (see `HEADER_FIELDS`); the type is not, because a
+    hand-edited `claim_count: "many"` should reach the validator as a
+    disagreement it can report rather than as a traceback from the reader.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def parse_evidence_json(text: str) -> tuple[EvidenceHeader, tuple[PageEvidence, ...]]:
     """Read a sidecar back into the view models.
 
     The import half of the round trip, and the reason the format is checkable:
@@ -497,9 +646,17 @@ def parse_evidence_json(text: str) -> tuple[Mapping[str, Any], tuple[PageEvidenc
     a field is written and not read, which is this codebase's dominant defect
     class applied to a file format.
 
-    A version this module does not know is refused rather than parsed on the
-    assumption the keys line up. Returns the raw header alongside the pages so
-    a caller can read `project_title` and the counts without re-deriving them.
+    Two refusals, and they cover the two ways a sidecar can be a shape this
+    reader does not actually know:
+
+    * a **version** it does not recognise, because parsing on the assumption
+      that the keys still line up is how a format loses a field across an
+      upgrade; and
+    * a **missing header key**, because byte-identity is blind to a field that
+      the writer stopped writing and the reader never asked for. Every key in
+      `HEADER_FIELDS` must be present. Their values are not otherwise
+      constrained here — an empty `project_title` is a project with no title,
+      which is data; an absent one is a format that changed.
     """
     raw: Any = json.loads(text)
     if not isinstance(raw, Mapping):
@@ -513,6 +670,22 @@ def parse_evidence_json(text: str) -> tuple[Mapping[str, Any], tuple[PageEvidenc
             f"this reader knows {EVIDENCE_FORMAT_VERSION!r}"
         )
         raise ValueError(msg)
+    missing = [key for key in HEADER_FIELDS if key not in document]
+    if missing:
+        msg = (
+            f"evidence sidecar declares version {EVIDENCE_FORMAT_VERSION!r} but is "
+            f"missing {', '.join(missing)}; a header that changed shape is a "
+            "version that should have been bumped"
+        )
+        raise ValueError(msg)
+    header = EvidenceHeader(
+        version=version,
+        project_title=str(document["project_title"] or ""),
+        dialect=str(document["dialect"] or ""),
+        claim_count=_as_int(document["claim_count"]),
+        citation_count=_as_int(document["citation_count"]),
+        anchored_citation_count=_as_int(document["anchored_citation_count"]),
+    )
     pages: list[PageEvidence] = []
     for page_raw in _mappings(document.get("pages")):
         pages.append(
@@ -522,7 +695,7 @@ def parse_evidence_json(text: str) -> tuple[Mapping[str, Any], tuple[PageEvidenc
                 claims=tuple(_parse_claim(c) for c in _mappings(page_raw.get("claims"))),
             )
         )
-    return document, tuple(pages)
+    return header, tuple(pages)
 
 
 def _mappings(value: Any) -> list[Mapping[str, Any]]:

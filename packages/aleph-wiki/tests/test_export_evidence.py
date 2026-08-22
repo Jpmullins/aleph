@@ -25,10 +25,12 @@ import pytest
 from aleph_wiki.export_evidence import (
     EVIDENCE_FILENAME,
     EVIDENCE_FORMAT_VERSION,
+    HEADER_FIELDS,
     MARKER_CLOSE,
     MARKER_OPEN,
     ClaimEvidence,
     EvidenceCitation,
+    EvidenceHeader,
     PageEvidence,
     _citation_line,
     attach_evidence,
@@ -419,3 +421,142 @@ def test_the_evidence_section_of_a_real_page_carries_no_invented_wikilink() -> N
     )
     for number in (1, 2, 10):
         assert f"**[c{number}]**" in section, f"c{number} is missing from the section"
+
+
+# ---------------------------------------------------------------------------
+# Free text that is not a quote
+#
+# `_quote_block` guarded the quote and nothing else, and the section is built
+# from four database strings. Claim text and source titles are unbounded free
+# text and were interpolated raw, so the exporter rewrote them: a claim reading
+# `The paper called it [[Recurrent Networks]] throughout.` left the okf bundle
+# as `[Recurrent Networks](./recurrent-networks.md)`. These pin the section
+# half; `tests/unit/test_vault_evidence_bundle.py` pins the same properties
+# after the real exporter has run over the page, which is where the rewrite
+# actually happened.
+# ---------------------------------------------------------------------------
+
+
+def test_a_claim_that_mentions_a_wikilink_does_not_become_one() -> None:
+    """The claim's words are the project's own sentence. Nothing between the
+    row and the reader may turn part of it into a link to somewhere else."""
+    text = "The paper called it [[Recurrent Networks]] throughout."
+    section = render_evidence_section(_page(claims=(_claim(text=text),)))
+    assert "[[" not in section
+    # The words survive: `\[\[` renders as the literal characters `[[`.
+    assert "The paper called it \\[\\[Recurrent Networks\\]\\] throughout." in section
+
+
+def test_a_source_title_that_mentions_a_wikilink_does_not_become_one() -> None:
+    """Measured before the fix: `A survey of [[wikilink]] syntax` reached the
+    okf bundle as `A survey of wikilink syntax` — the exporter could not
+    resolve the invented target, so it wrote the display text and deleted the
+    brackets from somebody's title."""
+    section = render_evidence_section(
+        _page(
+            claims=(_claim(citations=(_citation(source_title="A survey of [[wikilink]] syntax"),)),)
+        )
+    )
+    assert "[[" not in section
+    assert "A survey of \\[\\[wikilink\\]\\] syntax" in section
+
+
+def test_a_claim_containing_a_code_fence_cannot_open_one() -> None:
+    """A fence line inside the claim text desyncs `render_vault`'s line-by-line
+    fence tracker, which switches off link rewriting for the rest of the page.
+    Whitespace is collapsed, so the claim occupies one line and the only fence
+    lines in the section are the pair this module emits around the quote."""
+    text = "before\n```python\nx = 1"
+    section = render_evidence_section(_page(claims=(_claim(text=text),)))
+    fences = [line for line in section.splitlines() if line.lstrip().startswith(("```", "~~~"))]
+    assert len(fences) == 2, fences
+    assert "**Claim.** before ```python x = 1" in section
+
+
+def test_a_backtick_in_an_identifier_cannot_escape_its_code_span() -> None:
+    """`S0002` and the chunk id are rendered as code spans and both are
+    columns. A backtick in one closes the span and the rest of the line — the
+    source, the offsets, the url — becomes code."""
+    section = render_evidence_section(
+        _page(claims=(_claim(citations=(_citation(source_short_id="S`0002"),)),))
+    )
+    line = next(line for line in section.splitlines() if "0002" in line)
+    assert "``S`0002``" in line, line
+    assert "supports" in line, "the rest of the citation line was swallowed by the code span"
+
+
+def test_the_summary_sentence_states_the_counts_it_measured() -> None:
+    """The sentence a person reads, checked against the page it describes.
+
+    `count_evidence` is covered on its own above; what is unpinned is that the
+    sentence reports *that* number. Reporting `EvidenceCounts()` here — a page
+    announcing "0 claims, 0 citations, 0 anchored" above twenty anchored
+    citations — left all 163 tests green.
+    """
+    page = PageEvidence(
+        slug="two",
+        title="Two",
+        claims=(
+            _claim(citations=(_citation(), _citation(quote=None, char_start=None, char_end=None))),
+            _claim(text="A second claim.", citations=(_citation(),)),
+        ),
+    )
+    assert "2 claims, 3 citations, 2 anchored" in render_evidence_section(page)
+
+
+def test_the_summary_sentence_is_singular_for_one_of_each() -> None:
+    assert "1 claim, 1 citation, 1 anchored" in render_evidence_section(_page())
+
+
+# --- the header -------------------------------------------------------------
+
+
+def test_the_header_is_read_back_as_values() -> None:
+    """`project_title` and `dialect` were written by `evidence_document`,
+    re-supplied by both call sites and read by nobody — deleting either from
+    the writer left every test green. They are read here."""
+    header, _ = parse_evidence_json(
+        render_evidence_json([_page()], project_title="Test Wiki", dialect="obsidian")
+    )
+    assert header == EvidenceHeader(
+        version=EVIDENCE_FORMAT_VERSION,
+        project_title="Test Wiki",
+        dialect="obsidian",
+        claim_count=1,
+        citation_count=1,
+        anchored_citation_count=1,
+    )
+
+
+def test_the_bytes_are_rebuilt_from_the_header_the_reader_returned() -> None:
+    """The round trip, driven by the parsed header rather than by the constants
+    the test passed in. A writer that stopped emitting `dialect` would produce
+    bytes this cannot reconstruct."""
+    once = render_evidence_json([_page()], project_title="Test Wiki", dialect="okf")
+    header, pages = parse_evidence_json(once)
+    twice = render_evidence_json(pages, project_title=header.project_title, dialect=header.dialect)
+    assert once == twice
+
+
+@pytest.mark.parametrize("field", HEADER_FIELDS)
+def test_a_sidecar_missing_a_header_field_is_refused(field: str) -> None:
+    """Byte-identity cannot see a field dropped from BOTH directions at once:
+    the writer stops writing it, the reader never asked, and the two agree
+    about a file that has lost something. Only a required key can."""
+    document = json.loads(render_evidence_json([_page()], project_title="T", dialect="okf"))
+    del document[field]
+    with pytest.raises(ValueError, match=r"version|missing"):
+        parse_evidence_json(json.dumps(document))
+
+
+def test_the_header_counts_are_the_counts_of_the_pages_it_carries() -> None:
+    """A header nobody re-derives is how "the export carries 8,056 claims"
+    becomes a number that is simply wrong."""
+    pages = [_page(), _page(slug="beta", title="Beta", claims=(_claim(citations=()),))]
+    header, parsed = parse_evidence_json(
+        render_evidence_json(pages, project_title="T", dialect="okf")
+    )
+    counted = count_evidence(parsed)
+    assert header.counts.claims == counted.claims == 2
+    assert header.counts.citations == counted.citations == 1
+    assert header.counts.anchored_citations == counted.anchored_citations == 1

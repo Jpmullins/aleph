@@ -44,6 +44,12 @@ They are here rather than in a second script because the criterion a person
 runs is "check-okf over the export exits 0", and a sidecar no command validates
 is a file format nobody is checking. They fire only when the sidecar is
 present, so an ordinary OKF bundle is judged by OKF's rules alone.
+
+The evidence rules are named in `EVIDENCE_RULES`, and
+`tests/unit/test_vault_evidence_bundle.py` asserts that list matches the rules
+this file can actually emit and that each one is driven by a test. Prose
+claiming "five evidence rules" over a file that shipped six is the kind of
+count nobody re-derives, and `evidence-claim` had no test anywhere.
 """
 
 from __future__ import annotations
@@ -72,6 +78,47 @@ RESERVED_STEMS = frozenset({"index", "log"})
 #: checkout, which is the whole point of validating bytes instead of code.
 EVIDENCE_FILENAME = "evidence.json"
 EVIDENCE_VERSION = "1"
+
+#: Header keys version 1 of the sidecar declares. Mirrors
+#: `aleph_wiki.export_evidence.HEADER_FIELDS` — restated rather than imported,
+#: for the same reason as the two constants above. A key that stopped being
+#: written is invisible to a round trip (both halves agree about a file that
+#: has lost something) and invisible to every rule below that reads it with
+#: `.get`, which is how `project_title` and `dialect` became write-only fields.
+EVIDENCE_HEADER_FIELDS = ("project_title", "dialect")
+
+#: The counts the sidecar states about itself, and the body key each is
+#: re-derived from. Absent or non-integer is a problem in its own right: the
+#: mismatch rule below used to run under `isinstance(stated, int)`, so deleting
+#: a count outright passed silently while changing it failed.
+EVIDENCE_COUNT_FIELDS = ("claim_count", "citation_count", "anchored_citation_count")
+
+#: Every rule name below whose scope is the Aleph sidecar rather than OKF v0.1.
+#: Declared so a reader — and a test — can check the list against the code
+#: instead of against a sentence in a report.
+EVIDENCE_RULES = (
+    "evidence-claim",
+    "evidence-count",
+    "evidence-header",
+    "evidence-page",
+    "evidence-parse",
+    "evidence-span",
+    "evidence-summary",
+    "evidence-version",
+)
+
+#: The generated block inside a page body, and the sentence at the top of it.
+#: `evidence-count` compares the sidecar's header against the sidecar's own
+#: body; this is the only rule that looks at the numbers a PERSON reads, which
+#: are rendered separately by `render_evidence_section` and were checked by
+#: nothing — a page could announce "0 claims, 0 citations, 0 anchored" above
+#: twenty anchored citations.
+_EVIDENCE_BLOCK = re.compile(
+    r"<!-- aleph:evidence -->(?P<body>.*?)<!-- /aleph:evidence -->", re.DOTALL
+)
+_EVIDENCE_SUMMARY = re.compile(
+    r"(?P<claims>\d+) claims?, (?P<citations>\d+) citations?, (?P<anchored>\d+) anchored"
+)
 
 #: Same fence rule as `aleph_wiki.frontmatter`: only a block that opens the
 #: file. A `---` further down is a horizontal rule, and treating it as a fence
@@ -251,11 +298,28 @@ def _check_evidence(files: dict[str, str], stems: set[str]) -> list[Problem]:
         # reporting field-level problems against them would be guesswork.
         return problems
 
+    # --- the header, which every rule below reads with `.get` ---------------
+    #
+    # A key that was never written reads as `None` and skips its rule in
+    # silence. `project_title` and `dialect` spent this workstream in exactly
+    # that state: written, re-supplied by both call sites, read by nothing.
+    for field in EVIDENCE_HEADER_FIELDS:
+        if field not in document:
+            problems.append(
+                Problem(
+                    name,
+                    "evidence-header",
+                    f"declares evidence format {EVIDENCE_VERSION} but carries no "
+                    f"`{field}` — a header that changed shape is a version that "
+                    "should have been bumped",
+                )
+            )
+
     pages = document.get("pages")
     if not isinstance(pages, list):
         return [*problems, Problem(name, "evidence-parse", "`pages` is not a list")]
 
-    claims = citations = 0
+    claims = citations = anchored = 0
     for entry in pages:
         if not isinstance(entry, dict):
             problems.append(Problem(name, "evidence-parse", "a page entry is not an object"))
@@ -268,19 +332,22 @@ def _check_evidence(files: dict[str, str], stems: set[str]) -> list[Problem]:
             problems.append(
                 Problem(name, "evidence-page", f"names {slug}.md, which is not in the bundle")
             )
+        page_claims = page_citations = page_anchored = 0
         for claim_raw in page.get("claims") or []:
             if not isinstance(claim_raw, dict):
                 continue
             claim: dict[str, Any] = claim_raw
-            claims += 1
+            page_claims += 1
             if not str(claim.get("text") or "").strip():
                 problems.append(Problem(name, "evidence-claim", f"{slug}: a claim carries no text"))
             for citation_raw in claim.get("citations") or []:
                 if not isinstance(citation_raw, dict):
                     continue
                 citation: dict[str, Any] = citation_raw
-                citations += 1
+                page_citations += 1
                 start, end = citation.get("char_start"), citation.get("char_end")
+                if _anchored(citation):
+                    page_anchored += 1
                 if isinstance(start, int) and isinstance(end, int) and end < start:
                     problems.append(
                         Problem(
@@ -297,15 +364,106 @@ def _check_evidence(files: dict[str, str], stems: set[str]) -> list[Problem]:
                             f"{slug}: a citation carries half a character span",
                         )
                     )
-    for key, counted in (("claim_count", claims), ("citation_count", citations)):
+        claims += page_claims
+        citations += page_citations
+        anchored += page_anchored
+        problems.extend(
+            _check_summary(
+                files,
+                slug=slug,
+                counts=(page_claims, page_citations, page_anchored),
+            )
+        )
+
+    for key, counted in zip(EVIDENCE_COUNT_FIELDS, (claims, citations, anchored), strict=True):
         stated = document.get(key)
-        if isinstance(stated, int) and stated != counted:
+        if not isinstance(stated, int):
+            problems.append(
+                Problem(
+                    name,
+                    "evidence-count",
+                    f"{key} is {stated!r}, not a number — the file holds {counted}",
+                )
+            )
+        elif stated != counted:
             # A header count that disagrees with the body is how "the export
             # carries 8,056 claims" becomes a number nobody re-derived.
             problems.append(
                 Problem(name, "evidence-count", f"{key} says {stated}; the file holds {counted}")
             )
     return problems
+
+
+def _anchored(citation: dict[str, Any]) -> bool:
+    """The whole chain: a source, a quote, and where in the source it sits.
+
+    Restated from `aleph_wiki.export_evidence.EvidenceCitation.anchored`, which
+    this script cannot import. `char_start is not None` rather than truthiness,
+    because offset 0 is the first character of a document and the
+    best-anchored citation in a corpus must not read as unanchored.
+    """
+    return bool(
+        citation.get("source_id")
+        and citation.get("quote")
+        and citation.get("char_start") is not None
+        and citation.get("char_end") is not None
+    )
+
+
+def _check_summary(
+    files: dict[str, str], *, slug: str, counts: tuple[int, int, int]
+) -> list[Problem]:
+    """The sentence a person reads, against the sidecar that page came from.
+
+    `evidence-count` checks the sidecar's header against the sidecar's body —
+    one file, talking to itself. The `## Evidence` block in the markdown states
+    the same three numbers to a human, is rendered by different code, and was
+    validated by nothing: `render_evidence_section` could report zeros above
+    twenty anchored citations with every test still green.
+
+    A block present with no recognisable sentence is a problem in its own
+    right. Otherwise a reworded summary would turn this rule off in silence,
+    which is the failure mode the rule exists to catch one level down.
+    """
+    if not slug:
+        return []
+    name = f"{slug}.md"
+    markdown = files.get(name)
+    if markdown is None:
+        # Already reported as `evidence-page`; one dangling slug is one problem.
+        return []
+    block = _EVIDENCE_BLOCK.search(markdown)
+    if block is None:
+        return [
+            Problem(
+                name,
+                "evidence-summary",
+                f"the sidecar carries {counts[0]} claim(s) for this page and the "
+                "page has no evidence block",
+            )
+        ]
+    match = _EVIDENCE_SUMMARY.search(block.group("body"))
+    if match is None:
+        return [
+            Problem(
+                name,
+                "evidence-summary",
+                "the evidence block states no claim/citation/anchored counts, so "
+                "nothing in the bundle checks the numbers a reader is shown",
+            )
+        ]
+    stated = (int(match["claims"]), int(match["citations"]), int(match["anchored"]))
+    if stated != counts:
+        return [
+            Problem(
+                name,
+                "evidence-summary",
+                f"the evidence block says {stated[0]} claim(s), {stated[1]} "
+                f"citation(s), {stated[2]} anchored; {EVIDENCE_FILENAME} holds "
+                f"{counts[0]}, {counts[1]}, {counts[2]}",
+            )
+        ]
+    return []
 
 
 def main(argv: list[str]) -> int:

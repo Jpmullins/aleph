@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 
 from aleph_rks.models import Source
 from aleph_wiki.export_evidence import (
@@ -34,7 +34,73 @@ from aleph_wiki.models import Citation, WikiClaim, WikiPage
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-__all__ = ["load_page_evidence"]
+__all__ = ["EVIDENCE_ORDER_BY", "evidence_query", "load_page_evidence"]
+
+#: The ordering the exported bytes rest on, named so it can be checked.
+#:
+#: Six of these seven are pinned behaviourally by
+#: `tests/integration/test_vault_evidence_export.py`, which stores a corpus
+#: back to front so the physical order is the *wrong* answer. `WikiClaim.id` is
+#: not, and cannot be from a test: the planner reaches `wiki_claims` through
+#: `ix_claims_live`, so two claims tying on `text` already arrive in id order
+#: and dropping the tiebreaker changes nothing observable. Pinning it needs the
+#: statement, which is what `packages/aleph-wiki/tests/test_export_query.py`
+#: reads. See that file for what a behavioural pin would require.
+EVIDENCE_ORDER_BY: tuple[str, ...] = (
+    "wiki_pages.slug",
+    "wiki_claims.text",
+    "wiki_claims.id",
+    "citations.citation_marker",
+    "citations.source_id",
+    "citations.char_start",
+    "citations.id",
+)
+
+
+def evidence_query(
+    project_id: UUID,
+) -> Select[tuple[UUID, str, str, WikiClaim, Citation, str, str, str | None]]:
+    """The statement `load_page_evidence` runs, built where a test can read it.
+
+    Separated from the execution for one reason: the ORDER BY below is the only
+    thing standing between this export and bytes that differ run to run, and
+    two consecutive reads in one process agree with each other whether or not
+    anything asked them to. Deleting the whole clause left thirteen integration
+    tests green. A statement a test can compile is a clause a test can count.
+    """
+    return (
+        select(
+            WikiPage.id,
+            WikiPage.slug,
+            WikiPage.title,
+            WikiClaim,
+            Citation,
+            Source.short_id,
+            Source.title.label("source_title"),
+            Source.url,
+        )
+        .join(WikiPage, WikiPage.id == WikiClaim.page_id)
+        .outerjoin(Citation, Citation.claim_id == WikiClaim.id)
+        # LEFT JOIN, not INNER: a citation whose source row was deleted
+        # still has to reach the export. An inner join would drop the
+        # evidence along with the source and report a claim as uncited,
+        # which is a stronger statement than "the source is gone".
+        .outerjoin(Source, Source.id == Citation.source_id)
+        .where(
+            WikiClaim.project_id == project_id,
+            WikiClaim.superseded_by.is_(None),
+            WikiPage.is_stub.is_(False),
+        )
+        .order_by(
+            WikiPage.slug,
+            WikiClaim.text,
+            WikiClaim.id,
+            Citation.citation_marker,
+            Citation.source_id,
+            Citation.char_start,
+            Citation.id,
+        )
+    )
 
 
 async def load_page_evidence(session: AsyncSession, project_id: UUID) -> dict[UUID, PageEvidence]:
@@ -61,41 +127,7 @@ async def load_page_evidence(session: AsyncSession, project_id: UUID) -> dict[UU
     rows collide on the keys that are there, which reads as a format bug and is
     a missing ORDER BY.
     """
-    rows = (
-        await session.execute(
-            select(
-                WikiPage.id,
-                WikiPage.slug,
-                WikiPage.title,
-                WikiClaim,
-                Citation,
-                Source.short_id,
-                Source.title.label("source_title"),
-                Source.url,
-            )
-            .join(WikiPage, WikiPage.id == WikiClaim.page_id)
-            .outerjoin(Citation, Citation.claim_id == WikiClaim.id)
-            # LEFT JOIN, not INNER: a citation whose source row was deleted
-            # still has to reach the export. An inner join would drop the
-            # evidence along with the source and report a claim as uncited,
-            # which is a stronger statement than "the source is gone".
-            .outerjoin(Source, Source.id == Citation.source_id)
-            .where(
-                WikiClaim.project_id == project_id,
-                WikiClaim.superseded_by.is_(None),
-                WikiPage.is_stub.is_(False),
-            )
-            .order_by(
-                WikiPage.slug,
-                WikiClaim.text,
-                WikiClaim.id,
-                Citation.citation_marker,
-                Citation.source_id,
-                Citation.char_start,
-                Citation.id,
-            )
-        )
-    ).all()
+    rows = (await session.execute(evidence_query(project_id))).all()
 
     pages: dict[UUID, tuple[str, str]] = {}
     citations: dict[UUID, list[EvidenceCitation]] = {}

@@ -283,25 +283,51 @@ async def test_a_shadowing_plugin_row_is_dropped_and_named(
     A 500 here would mean a single agent-authored plugin makes every pane in
     the project unrenderable; a silent drop would be the overwrite this
     workstream exists to prevent, moved one layer out.
+
+    **The row is inserted directly, not installed.** `PluginService.install`
+    refuses a shadowing plugin outright now, so it cannot produce this state —
+    and that is the right place for the refusal. This check remains
+    load-bearing for the case the install gate structurally cannot cover: a
+    plugin installs cleanly today defining `Foo`, and core gains a component
+    called `Foo` in a later release. The gate ran when the plugin was
+    admissible; nothing re-runs it, and the collision arrives without anybody
+    installing anything.
     """
+    from aleph_core.ids import uuid7
+    from aleph_db.models.plugin import Plugin
+
     project_id = uuid.uuid4()
     service = PluginService(session)
     ledger = LedgerWriter(session)
 
-    for name, provides in (
-        ("atlas", ("ui:component:Chart",)),
-        ("shadow", ("ui:component:ClaimCard",)),
-    ):
-        await service.install(
+    await service.install(
+        project_id=project_id,
+        actor_id=ACTOR,
+        draft=PluginDraft(
+            name="atlas",
+            instructions=INSTRUCTIONS,
+            provides=("ui:component:Chart",),
+        ),
+        ledger=ledger,
+    )
+    # The plugin core grew into. Written as a row because that is how it
+    # exists: admissible when installed, colliding now.
+    session.add(
+        Plugin(
+            id=uuid7(),
             project_id=project_id,
-            actor_id=ACTOR,
-            draft=PluginDraft(
-                name=name,
-                instructions=INSTRUCTIONS.replace("atlas", name),
-                provides=provides,
-            ),
-            ledger=ledger,
+            name="shadow",
+            major_version=1,
+            source_kind="skill",
+            instructions=INSTRUCTIONS.replace("atlas", "shadow"),
+            code="",
+            provides=["ui:component:ClaimCard"],
+            requires=[],
+            state="installed",
+            installed_by=ACTOR,
+            created_by=ACTOR,
         )
+    )
     await session.flush()
 
     catalogs, rejected = assemble_or_reject(await enabled_plugin_catalogs(session, project_id))

@@ -24,6 +24,13 @@ only be measured against a live corpus:
    page that does not exist, once per citation, 542 of them in one project.
    163 tests passed over a format corrupt in 100% of real exports.
 
+3. **The sidecar round trip has to run over real claim text.** A claim is
+   free text from a model and a source title is free text from a publisher;
+   both reach `evidence.json` and the `## Evidence` section. `parse_evidence_json`
+   reads the sidecar back and its bytes are re-rendered here, so a field the
+   writer emits and the reader ignores shows up as a diff on the live corpus,
+   not only over a fixture somebody chose.
+
 It goes through the library rather than the HTTP route on purpose: the API runs
 from a baked image, so a route-based probe measures whatever was current when
 that image was built.
@@ -65,6 +72,44 @@ async def _bundle(session: object, project_id: object, title: str) -> tuple[dict
     return {**export.files, **extra}, counts
 
 
+def _sidecar_round_trip(label: str, files: dict[str, str]) -> list[str]:
+    """Read `evidence.json` back and re-render it. Empty means no loss.
+
+    The sidecar's whole selling point is that a dropped field shows up as a
+    diff instead of as silence — and `parse_evidence_json` had no caller
+    anywhere, so nothing ever read one back. Run here rather than only in a
+    test because the strings that break a format are the ones a model wrote
+    and a publisher titled, not the ones a fixture chose: this corpus holds
+    claim text with brackets in it, quotes containing code fences, and titles
+    nobody sanitised.
+    """
+    from aleph_wiki.export_evidence import (
+        EVIDENCE_FILENAME,
+        evidence_files,
+        parse_evidence_json,
+    )
+
+    raw = files.get(EVIDENCE_FILENAME)
+    if raw is None:
+        return []
+    try:
+        header, pages = parse_evidence_json(raw)
+    except ValueError as exc:
+        return [f"{label}: {EVIDENCE_FILENAME} cannot be read back: {exc}"]
+    # Re-rendered from the header the READER returned, not from the title this
+    # process happens to be holding: that is what makes a header field the
+    # writer stopped emitting visible.
+    again = evidence_files(
+        list(pages), project_title=header.project_title, dialect=header.dialect
+    ).get(EVIDENCE_FILENAME)
+    if again != raw:
+        return [
+            f"{label}: {EVIDENCE_FILENAME} does not survive a read and a re-render — "
+            "a field is written and not read back"
+        ]
+    return []
+
+
 def _validate(label: str, files: dict[str, str], counts: object) -> list[str]:
     """Every problem with this bundle, as lines. Empty means it conforms."""
     import importlib.util
@@ -94,6 +139,7 @@ def _validate(label: str, files: dict[str, str], counts: object) -> list[str]:
         1 for n in files if n.endswith(".md") and check_okf._stem(n) not in check_okf.RESERVED_STEMS
     )
     out += [f"{label}: {problem}" for problem in check_okf.check_bundle(files)]
+    out += _sidecar_round_trip(label, files)
     if not concepts:
         out.append(f"{label}: the export produced no concept documents")
     return out
