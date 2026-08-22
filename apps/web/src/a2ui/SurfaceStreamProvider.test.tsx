@@ -20,9 +20,21 @@
 import { act, render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+/** Every catalog list a `MessageProcessor` was constructed with, in order.
+ *
+ *  Recorded because nothing asserted it. Changing
+ *  `buildAlephCatalogs(plugins)` to `buildAlephCatalogs()` — ignoring every
+ *  fetched plugin catalog, so a plugin's surfaces render as "Catalog not
+ *  found" — left `check-single-catalog.sh`, lint, build and all 172 vitest
+ *  tests green, because the fetch was mocked and never asserted on. */
+const processorCatalogs: { id: string }[][] = [];
+
 vi.mock("@a2ui/web_core/v0_9", () => {
   class FakeProcessor {
     model = { surfacesMap: new Map<string, unknown>() };
+    constructor(catalogs: { id: string }[] = []) {
+      processorCatalogs.push(catalogs);
+    }
     processMessages(messages: { surfaceId?: string; boom?: string }[]) {
       for (const msg of messages) {
         if (msg.boom) throw new Error(msg.boom);
@@ -82,6 +94,8 @@ class FakeEventSource {
 
 beforeEach(() => {
   sources = [];
+  processorCatalogs.length = 0;
+  catalogsResponse.mockResolvedValue({ catalogs: [] as unknown[] });
   // jsdom ships no EventSource at all, so this is not a convenience — without
   // it the provider throws on mount and the whole reading region is untestable.
   vi.stubGlobal("EventSource", FakeEventSource);
@@ -194,5 +208,70 @@ describe("SurfaceStreamProvider", () => {
 
   it("refuses to be read outside its provider instead of reporting an empty workspace", () => {
     expect(() => render(<Probe />)).toThrow(/SurfaceStreamProvider/);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// The plugin catalogs the server names must reach the renderer
+// ---------------------------------------------------------------------------
+//
+// `GET /v1/projects/{id}/catalogs`, the `Boolean(c.plugin)` filter, the
+// identity-stable `setPlugins`, and the array reaching `MessageProcessor` were
+// all untested. The fetch was mocked with a response nothing ever overrode and
+// nothing ever asserted on, so the whole path could be deleted silently.
+
+describe("plugin catalogs", () => {
+  it("hands a fetched plugin catalog to the message processor", async () => {
+    catalogsResponse.mockResolvedValue({
+      catalogs: [{ catalogId: "aleph://plugin/charts@1", plugin: "charts" }],
+    });
+
+    await act(async () => {
+      mount(["wiki"]);
+      await Promise.resolve();
+    });
+
+    const last = processorCatalogs.at(-1) ?? [];
+    expect(last.map((c) => c.id)).toContain("aleph://plugin/charts@1");
+  });
+
+  it("drops a catalog the server does not attribute to a plugin", async () => {
+    // `plugin` is what distinguishes a plugin's catalog from core's. Without
+    // the filter, core would be handed to the processor twice under two ids.
+    catalogsResponse.mockResolvedValue({
+      catalogs: [
+        { catalogId: "aleph://core@1" },
+        { catalogId: "aleph://plugin/charts@1", plugin: "charts" },
+      ],
+    });
+
+    await act(async () => {
+      mount(["wiki"]);
+      await Promise.resolve();
+    });
+
+    const ids = (processorCatalogs.at(-1) ?? []).map((c) => c.id);
+    expect(ids).toContain("aleph://plugin/charts@1");
+    // Exactly one core entry — the one `buildAlephCatalogs` always emits.
+    expect(ids.filter((id) => id === "aleph://core@1")).toHaveLength(1);
+  });
+
+  it("does not rebuild the stream when the catalog set is unchanged", async () => {
+    // `catalogs` is a dependency of the effect that opens the SSE connection,
+    // so handing back a fresh array with identical contents closes the stream
+    // and rebuilds every surface. The provider compares before replacing; this
+    // is what would notice if it stopped.
+    catalogsResponse.mockResolvedValue({
+      catalogs: [{ catalogId: "aleph://plugin/charts@1", plugin: "charts" }],
+    });
+
+    await act(async () => {
+      mount(["wiki"]);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(sources.filter((s) => !s.closed)).toHaveLength(1);
   });
 });

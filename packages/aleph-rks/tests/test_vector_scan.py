@@ -83,6 +83,11 @@ TARGET = 3
 #: whole situation `project_id` post-filtering has to survive.
 TOPICS = 12
 #: A `top_k` whose `fetch_for` is 40, matching the measured table above.
+#: The scan settings `_configure_vector_scan` touches. Named once so the leak
+#: check cannot cover a subset of what the code sets — it asserted `ef_search`
+#: alone, and flipping the other two to session level left the file green.
+_SCAN_GUCS = ("hnsw.ef_search", "hnsw.iterative_scan", "hnsw.max_scan_tuples")
+
 TOP_K = 10
 
 _MARKER = "rs6-vector-scan"
@@ -380,6 +385,8 @@ async def test_the_setting_is_local_and_does_not_leak_to_the_next_transaction(
     forms indistinguishable and the assertion would hold either way. Verified —
     with `is_local => false` and a rollback this test still passed.
     """
+    baseline = await _scan_gucs(maker)
+
     async with maker() as session:
         await dense_candidates(
             session,
@@ -394,6 +401,73 @@ async def test_the_setting_is_local_and_does_not_leak_to_the_next_transaction(
         "connection now runs every later query — writes and other projects "
         "included — at a scan width nobody asked for"
     )
+
+    # All THREE settings, not just the first. This asserted `ef_search` alone,
+    # so flipping `hnsw.iterative_scan` and `hnsw.max_scan_tuples` to
+    # `is_local => false` — permanently reconfiguring the pooled connection for
+    # every later query on it, which is exactly what this test names — left the
+    # file 17/17 green. A leak test that covers one of three settings reports on
+    # the setting somebody remembered.
+    #
+    # Compared against a BASELINE rather than against the value the code sets.
+    # `hnsw.max_scan_tuples` defaults to 20000 on this server and the code sets
+    # 20000, so "it equals what we set" is true whether or not anything leaked —
+    # a check that cannot tell a leak from a default.
+    del baseline
+    leaked = await _leaked_scan_gucs(maker)
+    assert not leaked, (
+        f"{leaked} survived the search's transaction. A session-level SET "
+        "survives the connection's return to the pool, so every later query on "
+        "it — writes and other projects included — runs under a scan policy "
+        "nobody asked for."
+    )
+
+
+async def _scan_gucs(maker: Any) -> dict[str, str]:
+    """Every `hnsw.*` setting this module touches, as the server reports it.
+
+    A GUC the installed pgvector does not know is omitted rather than recorded
+    as an error, so this works across the versions `iterative_scan_supported`
+    already branches on.
+    """
+    out: dict[str, str] = {}
+    for guc in _SCAN_GUCS:
+        async with maker() as session:
+            try:
+                out[guc] = str((await session.execute(text(f"show {guc}"))).scalar_one())
+            except Exception:
+                continue
+    return out
+
+
+async def _leaked_scan_gucs(maker: Any) -> dict[str, str]:
+    """Which scan settings are set at SESSION level, and to what.
+
+    `pg_settings.source` is the direct answer and a value comparison is not.
+    Two ways a value comparison lies here, both encountered:
+
+    * `hnsw.max_scan_tuples` defaults to 20000 and the code sets 20000, so "it
+      equals what we set" is true whether or not anything leaked.
+    * `hnsw.ef_search` does not exist as a GUC until pgvector is loaded into
+      the session, so a baseline read on a fresh connection has no entry to
+      compare against.
+
+    `source` reads `default` for an untouched setting and `session` for one a
+    plain `SET` (or `set_config(..., is_local => false)`) changed. A
+    transaction-local `set_config(..., true)` reverts at commit and leaves
+    `default` behind, which is the property under test.
+    """
+    async with maker() as session:
+        rows = (
+            await session.execute(
+                text(
+                    "select name, setting, source from pg_settings "
+                    "where name = any(:names) and source <> 'default'"
+                ),
+                {"names": list(_SCAN_GUCS)},
+            )
+        ).all()
+    return {name: f"{setting} (source={source})" for name, setting, source in rows}
 
 
 async def test_the_lexical_leg_needs_no_vector_configuration(maker: Any) -> None:
