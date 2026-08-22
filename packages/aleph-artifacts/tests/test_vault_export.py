@@ -61,6 +61,17 @@ def _corpus() -> list[VaultPage]:
             confidence="high",
             created=date(2026, 1, 2),
             updated=date(2026, 3, 4),
+            # `sources`, `contested` and `contradictions` are here because the
+            # round trip was blind to all three: `_corpus()` never populated
+            # them, so `parse_vault` could discard all three at once and the
+            # byte-identity test plus
+            # `test_the_round_trip_preserves_the_governance_fields` both stayed
+            # green — 123 passed with three of thirteen fields dropped. A
+            # round trip over a value the fixture never sets proves nothing
+            # about that value.
+            sources=("10.48550/arXiv.1706.03762", "https://example.org/notes"),
+            contested=True,
+            contradictions=("Sequence to Sequence Learning",),
         ),
         VaultPage(
             title="Sequence to Sequence Learning",
