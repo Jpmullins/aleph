@@ -325,9 +325,42 @@ async def _node_commit_revision(state: SynthesisState) -> dict:
         async with ctx.session_maker() as session:
             from aleph_connectors.models import SynthesisProposal
             from aleph_db.repos.ledger import LedgerWriter
+            from aleph_wiki.belief_service import claim_embedder_for
 
             ledger = LedgerWriter(session)
             svc = WikiService(session)
+            # The vectors, in ONE gateway round trip for the whole page.
+            #
+            # This is the second of the two claim writers. The first
+            # (`curator_service.recurate_overview`) was wired when claim
+            # embedding landed and this one was not, so every claim a synthesis
+            # run produced went in with a NULL embedding and was invisible to
+            # `search_claims` — the HNSW index on `wiki_claims.embedding` had
+            # nothing to index for the entire research path.
+            #
+            # A failure here costs the vectors, never the claims:
+            # `claim_embedder_for` returns a `dict.get` over whatever it managed
+            # to embed, and `upsert_claim` writes the claim either way.
+            # `.get`, not `[...]`. `SynthesisState` is `total=False` and a
+            # caller that never bound a model profile does not carry one — a
+            # missing key here would raise a `KeyError` INSIDE the commit and
+            # lose the page, which is the opposite of the trade this embedder
+            # exists to make. No bindings means no vectors, and the claims are
+            # still written.
+            bindings = state.get("profile_bindings") or {}
+            embed = (
+                await claim_embedder_for(
+                    client=ctx.litellm,
+                    principal=ctx.principal,
+                    project_id=state["project_id"],
+                    agent_run_id=state.get("agent_run_id"),
+                    profile_bindings=bindings,
+                    texts=[c.text for c in claim_drafts],
+                    purpose="synthesis.claim_embed",
+                )
+                if bindings and claim_drafts
+                else None
+            )
             result = await svc.commit_revision(
                 principal=ctx.principal,
                 ledger=ledger,
@@ -342,6 +375,7 @@ async def _node_commit_revision(state: SynthesisState) -> dict:
                 wikilinks=wikilinks,
                 commit_message=f"Synthesis: {state.get('normalized_topic') or report.topic}",
                 respect_hand_edits=True,
+                embed=embed,
             )
 
             # Pages land as 'draft' status until approved. wiki_service

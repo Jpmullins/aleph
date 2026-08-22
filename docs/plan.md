@@ -1176,7 +1176,7 @@ belongs in `docs/decisions.md` either way.
 - A call made under project B's scope reaches B's endpoint and never A's
   <br>`Integration test asserting each fake's request counter — B's incremented, A's unchanged.`
 - A rotated encryption key produces a detectable failure, not a silent wrong answer
-  <br>`Test writing a row under key_id=1, rotating to key_id=2, asserting the read reports undecryptable-with-key-id rather than raising an opaque error or returning garbage. FAILS TODAY: grep -c key_id packages/aleph-connectors/src/aleph_connectors/credentials.py returns 0.`
+  <br>`Test writing a row under key_version=1, rotating to key_version=2, asserting the read reports undecryptable-with-key-version rather than raising an opaque error.` **CORRECTED 2026-08-22:** the column is `key_version`, not `key_id`, and it already exists — `packages/aleph-connectors/src/aleph_connectors/credentials.py` plus migration `20260822_0030_p7_credential_key_version.py`. This workstream reuses the `ConnectorCredential` cipher and its versioning rather than inventing a second one, so the secret half of MEP-4 is much cheaper than the plan assumed.
 - The test-connection route reports what the endpoint actually said
   <br>`Against a fake that 403s /model/info it returns 200 with model_info_allowed false and a non-empty model list; against an unreachable URL it returns the transport error verbatim in the body. Asserted on response content, not status alone.`
 - No code reads a single process-wide model client any more

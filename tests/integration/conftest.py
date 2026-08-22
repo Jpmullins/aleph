@@ -91,6 +91,7 @@ _TEARDOWN_SQL = (
     " (SELECT id FROM agent_runs WHERE project_id = :pid)",
     "DELETE FROM model_calls WHERE project_id = :pid",
     "DELETE FROM cost_ledger_events WHERE project_id = :pid",
+    "DELETE FROM gateway_endpoints WHERE project_id = :pid",
     "DELETE FROM agent_runs WHERE project_id = :pid",
     # `action_ledger_events` and its head are deliberately NOT deleted. The
     # table carries an append-only trigger, and `aleph` is a superuser in the

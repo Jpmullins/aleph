@@ -1555,6 +1555,33 @@ def _resolve_agent_model(capability: Any) -> str:
         return _AGENT_MODEL
 
 
+def _resolve_agent_context_window(capability: Any) -> int | None:
+    """The bound model's input window, or None when nothing is bound.
+
+    WS-MEP-7 c1. Without it every agent model is built with `profile=None`, and
+    `deepagents.compute_summarization_defaults` falls back to a FIXED
+    `("tokens", 170000)` trigger for every model on every gateway. On a 32k
+    local model the context is blown long before summarisation fires; on a 1M
+    model it summarises at 17% of the window for no reason. With a profile the
+    defaults become fractional — trigger at 0.85 of the real window, keep 0.10 —
+    which is the same policy expressed against the model actually bound.
+
+    Separate from `_resolve_agent_model` rather than folded into it because the
+    two have different fallbacks: an unbound capability still gets a model id,
+    but it must NOT get an invented context window — a guessed 200k is exactly
+    the fixed number this exists to remove.
+    """
+    from aleph_models.profile import resolve_binding
+
+    bindings = _runtime.get("agent_bindings")
+    if not bindings:
+        return None
+    try:
+        return resolve_binding(bindings, capability).max_input_tokens
+    except Exception:
+        return None
+
+
 # SKILL.md skills live in `skills/<name>/SKILL.md` alongside this module. The
 # Deep Agent reads them through its backend, so a FilesystemBackend rooted here
 # is routed under the in-backend `/skills/` prefix (see `_memory_backend`); the
@@ -1595,7 +1622,9 @@ def _gateway_chat_model(settings: Settings, *, purpose: str, capability: Any = N
     from aleph_core.schemas.model_profile import Capability
     from aleph_models.limiter import shared_gateway_client
 
-    model = _resolve_agent_model(capability or Capability.SYNTHESIS)
+    resolved_capability = capability or Capability.SYNTHESIS
+    model = _resolve_agent_model(resolved_capability)
+    window = _resolve_agent_context_window(resolved_capability)
     base_url = _openai_base_url(settings.litellm_base_url)
     return ChatOpenAI(
         model=model,
@@ -1632,6 +1661,12 @@ def _gateway_chat_model(settings: Settings, *, purpose: str, capability: Any = N
         # to record (rule #5 gap). `stream_usage=True` makes ChatOpenAI request +
         # aggregate the usage into the final chunk.
         stream_usage=True,
+        # The model's real input window, from the binding this model came from.
+        # `deepagents.compute_summarization_defaults` reads `model.profile`; with
+        # no profile it uses a fixed 170k-token trigger for every model on every
+        # gateway. `None` is passed deliberately when nothing is bound: the
+        # fallback for "we do not know the window" is not "assume 200k".
+        profile={"max_input_tokens": window} if window else None,
     )
 
 
