@@ -1317,6 +1317,49 @@ async def connector_settings_surface(
     )
 
 
+def _refuse_invalid_settings(
+    plugin_id: str, schema: dict[str, Any], values: dict[str, Any]
+) -> None:
+    """Refuse a value the plugin's own schema does not allow.
+
+    The schema was fetched here and never used. A plugin declaring
+    `{"depth": {"type": "integer"}}` accepted the string "banana", stored it,
+    and ledgered the change — and the plugin found out when it read its own
+    configuration and crashed, a process boundary and some hours away from the
+    person who typed it.
+
+    The declared schema is the ONLY description of what a plugin's settings
+    mean. Generating a form from it and then not enforcing it makes the schema
+    decorative: the form is a suggestion, and every plugin has to re-validate
+    input it was promised was already checked.
+
+    Refused rather than coerced. Coercion here would be Aleph guessing what
+    somebody meant — `"3"` into `3` is easy and `"true"` into `False` is a bug
+    waiting to be blamed on the plugin.
+
+    A schema that is itself invalid is a defect in the PLUGIN, not in the
+    operator's input, so it is reported as such rather than silently skipped —
+    skipping would turn a broken schema into "no validation at all", which is
+    the state this function exists to end.
+    """
+    if not schema:
+        return
+    import jsonschema
+
+    try:
+        jsonschema.validate(instance=values, schema=schema)
+    except jsonschema.SchemaError as exc:
+        msg = (
+            f"plugin {plugin_id!r} declares an invalid settings schema, so its "
+            f"values cannot be checked: {exc.message}"
+        )
+        raise ValidationFailed(msg) from exc
+    except jsonschema.ValidationError as exc:
+        where = ".".join(str(p) for p in exc.absolute_path) or "(top level)"
+        msg = f"{plugin_id} settings rejected at {where}: {exc.message}"
+        raise ValidationFailed(msg) from exc
+
+
 async def _generic_plugin_settings_save(
     *,
     session: AsyncSession,
@@ -1358,6 +1401,7 @@ async def _generic_plugin_settings_save(
         raise NotFound(msg)
 
     values = submitted_values(request.params)
+    _refuse_invalid_settings(plugin_id, contribution.config_schema, values)
 
     row = (
         await session.execute(

@@ -509,3 +509,154 @@ def _draft(**over: object) -> PluginDraft:
     base: dict[str, object] = {"name": name, "instructions": _instructions(name), "code": ""}
     base.update(over)
     return PluginDraft(**base)  # ty: ignore[invalid-argument-type]
+
+
+# ---------------------------------------------------------------------------
+# The declared schema is enforced, not decorative
+# ---------------------------------------------------------------------------
+#
+# `_generic_plugin_settings_save` fetched `contribution.config_schema` and never
+# used it. A plugin declaring `{"depth": {"type": "integer"}}` accepted the
+# string "banana", stored it, and ledgered the change — and the plugin found out
+# when it read its own configuration and crashed, a process boundary and some
+# hours away from the person who typed it.
+
+
+_TYPED_SCHEMA = {
+    "type": "object",
+    "properties": {"depth": {"type": "integer", "minimum": 1, "maximum": 10}},
+    "required": ["depth"],
+}
+
+
+async def _save_settings(
+    session: AsyncSession, project_id: uuid.UUID, plugin_id: str, **values: Any
+) -> Any:
+    """Drive the real save handler, the way the rest of this file does.
+
+    Named apart from this file's existing `_save`: defining a second one
+    later in the module silently rebound the name for every test above,
+    which failed as `no plugin has declared a settings screen for "{...}"`
+    — a message about a plugin id that was actually a params dict.
+    """
+    from aleph_a2ui.action_router import CardActionRequest
+    from aleph_api.a2ui_handlers import _generic_plugin_settings_save
+
+    return await _generic_plugin_settings_save(
+        session=session,
+        ledger=LedgerWriter(session),
+        principal=_principal(),
+        project_id=project_id,
+        request=CardActionRequest(
+            action_kind="plugin.settings.save",
+            surface_kind="settings",
+            card_id=None,
+            target_id=None,
+            target_kind=None,
+            params={
+                "plugin_id": plugin_id,
+                "plugin_kind": "plugin",
+                # `submitted_values` reads only `field:`-prefixed keys — that
+                # prefix IS the convention, and a test that skipped it would
+                # submit an empty settings object and validate nothing.
+                **{f"field:{k}": v for k, v in values.items()},
+            },
+        ),
+    )
+
+
+async def test_a_value_the_schema_forbids_is_refused_and_stored_nowhere(
+    maker: Callable[[], AsyncSession], committed_project: uuid.UUID
+) -> None:
+    from aleph_core.errors import ValidationFailed
+
+    UI_CONTRIBUTIONS.remove("typed-plugin")
+    UI_CONTRIBUTIONS.register(
+        UIContribution(plugin_id="typed-plugin", title="Typed", config_schema=_TYPED_SCHEMA)
+    )
+    try:
+        async with maker() as session:
+            with pytest.raises(ValidationFailed) as caught:
+                await _save_settings(session, committed_project, "typed-plugin", depth="banana")
+            await session.rollback()
+        assert "depth" in str(caught.value), str(caught.value)
+
+        # And nothing was written. A refusal that leaves the row behind is worse
+        # than no refusal: the operator is told it failed and the plugin reads
+        # the bad value anyway.
+        async with maker() as session:
+            rows = list(
+                (
+                    await session.execute(
+                        select(PluginSettings).where(
+                            PluginSettings.project_id == committed_project,
+                            PluginSettings.plugin_id == "typed-plugin",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        assert rows == [], "a refused save still wrote a settings row"
+    finally:
+        UI_CONTRIBUTIONS.remove("typed-plugin")
+
+
+async def test_a_value_the_schema_allows_is_stored(
+    maker: Callable[[], AsyncSession], committed_project: uuid.UUID
+) -> None:
+    """The refusal must not have closed the feature it guards."""
+    UI_CONTRIBUTIONS.remove("typed-plugin")
+    UI_CONTRIBUTIONS.register(
+        UIContribution(plugin_id="typed-plugin", title="Typed", config_schema=_TYPED_SCHEMA)
+    )
+    try:
+        async with maker() as session:
+            await _save_settings(session, committed_project, "typed-plugin", depth=4)
+            await session.commit()
+        async with maker() as session:
+            row = (
+                await session.execute(
+                    select(PluginSettings).where(
+                        PluginSettings.project_id == committed_project,
+                        PluginSettings.plugin_id == "typed-plugin",
+                    )
+                )
+            ).scalar_one()
+        assert row.values["depth"] == 4
+    finally:
+        UI_CONTRIBUTIONS.remove("typed-plugin")
+
+
+async def test_a_plugin_with_an_invalid_schema_is_reported_as_the_defect_it_is(
+    maker: Callable[[], AsyncSession], committed_project: uuid.UUID
+) -> None:
+    """A broken schema must not degrade to "no validation at all".
+
+    Skipping validation when the schema will not compile is the state this
+    whole function exists to end, arrived at by a different door.
+    """
+    from aleph_core.errors import ValidationFailed
+
+    UI_CONTRIBUTIONS.remove("broken-schema")
+    UI_CONTRIBUTIONS.register(
+        UIContribution(
+            plugin_id="broken-schema",
+            title="Broken",
+            config_schema={"type": "object", "properties": {"n": {"type": "not-a-json-type"}}},
+        )
+    )
+    try:
+        async with maker() as session:
+            with pytest.raises(ValidationFailed) as caught:
+                await _save_settings(session, committed_project, "broken-schema", n=1)
+            await session.rollback()
+        assert "invalid settings schema" in str(caught.value)
+    finally:
+        UI_CONTRIBUTIONS.remove("broken-schema")
+
+
+def _principal() -> Any:
+    from aleph_security.principal import Principal
+
+    return Principal(user_id=ACTOR, subject="local-dev", email="dev@example.com", actor_kind="user")
