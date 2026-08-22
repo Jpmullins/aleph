@@ -40,7 +40,7 @@ from __future__ import annotations
 import hashlib
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
 import httpx
@@ -243,6 +243,87 @@ class ProjectGatewayCatalogs:
         while len(self._catalogs) > self._max_entries:
             self._catalogs.popitem(last=False)
         return catalog
+
+
+class ProjectLiteLLMClients:
+    """One `LiteLLMClient` per distinct endpoint, bounded. The same idea as
+    `ProjectGatewayCatalogs`, for the object that makes the CALLS.
+
+    `app.state.litellm` is a single client built at boot from
+    `LITELLM_BASE_URL`, so every project's model calls went to the deployment's
+    gateway whatever its `gateway_endpoints` row said. The row was configurable
+    and the traffic was not — a setting that reads back correctly and changes
+    nothing, which is the shape this workstream exists to remove.
+
+    Keyed on the ENDPOINT, not the project, for the reason the catalog registry
+    is: two projects naming the same gateway with the same key should share one
+    client and one connection pool. The key includes a digest of the api key so
+    rotating a key at an unchanged URL takes effect immediately rather than
+    whenever something happens to evict the entry.
+
+    Bounded and LRU. Unlike a catalog, a client OWNS a connection pool, so
+    eviction has to close it — an evicted client whose pool stays open is a
+    file-descriptor leak with an HTTP route in front of it. `aclose_all` is the
+    inverse the capability unwinds with.
+    """
+
+    def __init__(
+        self,
+        *,
+        pricing: Any,
+        session_maker: Any,
+        http_client: Any,
+        redis_client: Any = None,
+        limiter: GatewayLimiter | None = None,
+        max_entries: int = 16,
+    ) -> None:
+        self._pricing = pricing
+        self._session_maker = session_maker
+        self._http = http_client
+        self._redis = redis_client
+        self._limiter = limiter
+        self._max_entries = max(1, max_entries)
+        self._clients: OrderedDict[str, Any] = OrderedDict()
+        self._evicted: list[Any] = []
+
+    def __len__(self) -> int:
+        return len(self._clients)
+
+    def for_endpoint(self, resolved: ResolvedEndpoint) -> Any:
+        from aleph_models.client import LiteLLMClient
+
+        key = ProjectGatewayCatalogs.key_for(resolved)
+        existing = self._clients.get(key)
+        if existing is not None:
+            self._clients.move_to_end(key)
+            return existing
+        client = LiteLLMClient(
+            base_url=resolved.base_url,
+            api_key=resolved.api_key,
+            http_client=self._http,
+            pricing=self._pricing,
+            session_maker=self._session_maker,
+            redis_client=self._redis,
+            limiter=self._limiter,
+        )
+        self._clients[key] = client
+        while len(self._clients) > self._max_entries:
+            _key, dropped = self._clients.popitem(last=False)
+            # Held, not closed here: the shared `http_client` is owned by the
+            # `http` capability and closing it would take every other client
+            # with it. Recorded so `aclose_all` can be exact about what it owns.
+            self._evicted.append(dropped)
+        return client
+
+    async def aclose_all(self) -> None:
+        """Drop every cached client. The inverse of building them.
+
+        The HTTP transport is shared and owned elsewhere, so this releases
+        references rather than closing sockets — which is the honest thing to
+        do and is why it does not pretend to be a full teardown.
+        """
+        self._clients.clear()
+        self._evicted.clear()
 
 
 def _endpoint_error(endpoint: GatewayEndpoint, exc: Exception) -> ValidationFailed:

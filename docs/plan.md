@@ -1179,7 +1179,7 @@ belongs in `docs/decisions.md` either way.
 - The test-connection route reports what the endpoint actually said
   <br>`Against a fake that 403s /model/info it returns 200 with model_info_allowed false and a non-empty model list; against an unreachable URL it returns the transport error verbatim in the body. Asserted on response content, not status alone.`
 - No code reads a single process-wide model client any more
-  <br>`grep -rn 'app.state.litellm' apps/api/src apps/workers/src | wc -l returns 0. Returns 2 today (routes/health.py:49, routes/assistant.py:230), plus the worker binding at arq.py:91.`
+  <br>``grep -rn 'app.state.litellm' apps/api/src apps/workers/src | grep -v '^\s*#' | wc -l` returns **1**, and that one is `routes/health.py`'s `/readyz` probe. **CORRECTED 2026-08-22:** the target was 0, and 0 is wrong. Readiness is a statement about the DEPLOYMENT — "ready for which project?" has no answer — so the liveness probe legitimately reads the process-wide client. Every PROJECT-scoped caller now resolves through `litellm_for_project`, which is what the criterion is actually about: a `gateway_endpoints` row that reads back correctly and routes its traffic somewhere else.
 - An endpoint key never leaves the server
   <br>`Test asserting the plaintext key appears in no response body and in no ledger payload for gateway_endpoint.create / .update.`
 

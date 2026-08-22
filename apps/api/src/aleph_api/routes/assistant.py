@@ -223,11 +223,16 @@ async def retrieval_debug(
     if profile is None:
         msg = "project has no model profile"
         raise ValidationFailed(msg)
+    # This project's client, not the deployment's. `app.state.litellm` is built
+    # once at boot from `LITELLM_BASE_URL`, so a project with its own
+    # `gateway_endpoints` row got a setting that read back correctly and routed
+    # its traffic somewhere else — which is the defect MEP-4 exists to close.
+    from aleph_api.routes.gateway_endpoints import litellm_for_project
     from aleph_assistant.retrieval.router import WikiFirstRetrievalRouter
 
     router_obj = WikiFirstRetrievalRouter(
         session_maker=request.app.state.session_maker,
-        litellm=request.app.state.litellm,
+        litellm=await litellm_for_project(request, session, project_id),
     )
     result = await router_obj.retrieve(
         principal=principal,

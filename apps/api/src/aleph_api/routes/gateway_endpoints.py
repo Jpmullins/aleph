@@ -36,11 +36,11 @@ its own list the same way for the same reason.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Body, Request, status
+from fastapi import APIRouter, Body, Depends, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
@@ -51,6 +51,7 @@ from aleph_models.discovery import DiscoveredModel, capabilities_for
 from aleph_models.endpoints import (
     GatewayEndpointService,
     ProjectGatewayCatalogs,
+    ProjectLiteLLMClients,
     ResolvedEndpoint,
 )
 from aleph_security.roles import ProjectRole, require_at_least
@@ -198,6 +199,43 @@ def gateway_catalogs(request: Request) -> ProjectGatewayCatalogs:
     return catalogs
 
 
+def gateway_clients(request: Request) -> ProjectLiteLLMClients:
+    """The process's per-endpoint `LiteLLMClient` cache, created on first use.
+
+    The sibling of `gateway_catalogs`, for the object that makes the CALLS
+    rather than the one that lists the models. `app.state.litellm` is a single
+    client built at boot from `LITELLM_BASE_URL`, so a project with its own
+    `gateway_endpoints` row had a configurable setting and unconfigurable
+    traffic — it read back correctly and changed nothing.
+
+    Attached lazily for the same reason: it owns no resource of its own. The
+    connection pool it hands each client is `gateway_http`, owned and closed by
+    the `http` capability, so this is a bounded dict and needs no inverse.
+    """
+    existing = getattr(request.app.state, "project_litellm_clients", None)
+    if isinstance(existing, ProjectLiteLLMClients):
+        return existing
+    clients = ProjectLiteLLMClients(
+        pricing=request.app.state.pricing,
+        session_maker=request.app.state.session_maker,
+        http_client=request.app.state.gateway_http,
+        redis_client=getattr(request.app.state, "redis", None),
+    )
+    request.app.state.project_litellm_clients = clients
+    return clients
+
+
+async def litellm_for_project(
+    request: Request, session: AsyncSession, project_id: UUID
+) -> Any:
+    """The model client THIS project's calls should go through.
+
+    What `request.app.state.litellm` was standing in for, resolved properly.
+    """
+    resolved = await resolve_for_project(request, session, project_id)
+    return gateway_clients(request).for_endpoint(resolved)
+
+
 async def resolve_for_project(
     request: Request, session: AsyncSession, project_id: UUID
 ) -> ResolvedEndpoint:
@@ -214,6 +252,25 @@ async def resolve_for_project(
         fallback_base_url=s.litellm_base_url,
         fallback_api_key=s.insights_litellm_api_key,
     )
+
+
+async def _litellm_dep(
+    request: Request, project_id: ProjectScopeDep, session: SessionDep
+) -> Any:
+    """The model client for THIS project. See `deps.py`'s note on why it is here."""
+    return await litellm_for_project(request, session, project_id)
+
+
+#: A model client resolved from the caller's project, for routes that make model
+#: calls. Every consumer is already project-scoped, so this costs them nothing
+#: and cannot be forgotten at a new one: a route that wants a client now has to
+#: say whose.
+#:
+#: `/readyz` deliberately does not use it — readiness is a statement about the
+#: DEPLOYMENT, and "ready for which project?" has no answer. It reads
+#: `app.state.litellm` directly, and that is the one honest use of a
+#: process-wide model client left in the tree.
+LiteLLMDep = Annotated[Any, Depends(_litellm_dep)]
 
 
 def _out(row: GatewayEndpoint) -> GatewayEndpointOut:

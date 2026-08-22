@@ -9,7 +9,6 @@ from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from aleph_db.repos.ledger import LedgerWriter
-from aleph_models.client import LiteLLMClient
 from aleph_security.principal import Principal
 
 
@@ -39,11 +38,18 @@ def ledger_dep(session: SessionDep) -> LedgerWriter:
 LedgerDep = Annotated[LedgerWriter, Depends(ledger_dep)]
 
 
-def litellm_dep(request: Request) -> LiteLLMClient:
-    return request.app.state.litellm
-
-
-LiteLLMDep = Annotated[LiteLLMClient, Depends(litellm_dep)]
+# `LiteLLMDep` lives in `routes/gateway_endpoints.py`, not here.
+#
+# It must resolve the caller's PROJECT — `app.state.litellm` is one client built
+# at boot from `LITELLM_BASE_URL`, so a project with its own `gateway_endpoints`
+# row had a setting that read back correctly and routed its traffic elsewhere.
+# Resolving the project needs `project_scope_dep`, and `middleware/project_scope`
+# imports from this module, so defining it here is an import cycle. FastAPI
+# evaluates the annotation at definition time, so deferring the import inside a
+# helper does not break it either.
+#
+# It is one import line at each of its three call sites, and it sits next to the
+# resolver it uses.
 
 
 def principal_dep(request: Request) -> Principal:

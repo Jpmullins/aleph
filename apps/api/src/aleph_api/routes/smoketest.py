@@ -11,8 +11,9 @@ from typing import Annotated
 from fastapi import APIRouter, Body
 from pydantic import BaseModel
 
-from aleph_api.deps import LiteLLMDep, PrincipalDep, SessionDep
+from aleph_api.deps import PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
+from aleph_api.routes.gateway_endpoints import LiteLLMDep
 from aleph_core.errors import NotFound
 from aleph_core.schemas.model_profile import Capability
 from aleph_db.repos import model_profile as profile_repo

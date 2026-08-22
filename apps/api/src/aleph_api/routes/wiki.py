@@ -14,8 +14,9 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 
-from aleph_api.deps import LedgerDep, LiteLLMDep, PrincipalDep, SessionDep
+from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
+from aleph_api.routes.gateway_endpoints import LiteLLMDep
 from aleph_artifacts.exporters.vault import VaultExport, VaultPage, render_vault
 from aleph_artifacts.models import RenderedAsset
 from aleph_artifacts.render_service import record_render
