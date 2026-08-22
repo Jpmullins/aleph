@@ -125,7 +125,7 @@ comprehensively and correctly. `docs/decisions.md` D1 records why.
 - **The workspace shell** — `Rail`, `ContextBar`, `PipelineStrip`, `ReadingRegion`, `AssistantDock`,
   `GroundingSurface` under `apps/web/src/components` and `apps/web/src/a2ui/components`. The pipeline
   strip is fed by `GET /v1/projects/{id}/pipeline`. The right-hand strip of surface **tabs** is gone:
-  the reading region tiles up to three **panes** (`MAX_PANES` in `apps/web/src/lib/workspace-ui.tsx`),
+  the reading region tiles **panes** (`MAX_PANES` is 24, in `apps/web/src/lib/workspace-ui.tsx`),
   and `SurfaceStreamProvider` gives the whole region one multiplexed SSE connection, so a pane is
   purely a renderer for one `surfaceId` and owns no transport of its own.
 - **One canonical A2UI catalog.** `packages/aleph-a2ui/src/aleph_a2ui/catalog.json` is the only

@@ -205,7 +205,7 @@ at the right file and the wrong row.
 **Criteria:**
 
 - No ingested document is left without chunks on the live stack
-  <br>`docker exec aleph-postgres-1 psql -U aleph -d aleph -tAc "select count(*) from normalized_documents nd where not exists (select 1 from document_chunks c where c.normalized_document_id = nd.id)" returns 0. FAILS TODAY: returns 45.`
+  <br>`uv run python scripts/_acceptance/status_numbers.py` reports `unindexed_documents 0`. **CORRECTED 2026-08-22:** the original counted every row, including in-flight `[e2e]` ingests from the browser suite — 81 of them on the day this was audited, 0 of them in a real project. A health number a test run can turn red is one people learn to skim, so it carries the same `p.title not ilike '[e2e]%' and not ilike 'smoke test%'` exclusion the health script already applies, and prints `unindexed_documents_fixtures` beside it so the scope cannot hide anything.`
 - No ModelProfile binds a model the gateway does not serve
   <br>`uv run python scripts/_acceptance/gateway_serves_bound_models.py exits 0. FAILS TODAY: exits 1, because titan-embed-v2 is absent from /v1/models (confirmed: gateway returns 26 model ids, embedding ones are titan-embed-text-v2, cohere-embed-v4, bedrock-titan-embed-text).`
 - A dead embedder degrades to keyword-only search instead of no search
@@ -292,12 +292,12 @@ at the right file and the wrong row.
 - The eval CLI runs the real path and can fail
   <br>`uv run python -m aleph_evals exits non-zero when recall@1 is below baseline. FAILS TODAY: the same command prints selected_datasets: [] and exits 0.`
 - No scorer reads its answer from the fixture it is grading
-  <br>`grep -rn 'case.get("actual")' packages/aleph-evals/src returns 0 hits. Returns 6 today.`
+  <br>`uv run pytest packages/aleph-evals/tests -q` includes a test that a case carrying its own `actual` is counted as **errored**, not passed. **CORRECTED 2026-08-22:** the original grep now matches the FIX rather than the defect — `scorers.score()` takes `actual=` as a separate argument and raises `SelfGradingFixture` when the case supplies one (`scorers/__init__.py`), and `_run_dataset` counts that as errored (`runner.py`). Seven hits, all correct. A grep that forbids the name of the thing that fixed it is a criterion that can only be satisfied by undoing the fix.`
 - CI runs the eval
   <br>`grep -c 'aleph_evals' .github/workflows/ci.yml is >= 1. Returns 0 today.`
 - Every acceptance check can be shown to fail
   <br>`./scripts/acceptance.sh --self-check exits 0 with the newly added and repaired parts included.`
-- E5 goes honestly red again
+- ~~E5 goes honestly red again~~ — **WITHDRAWN 2026-08-22.** It conditioned E5's redness on "until RS8 lands". RS8 landed: `aleph_belief` has four consumers outside its own package (`confidence.py`, `belief_service.py`, `claim_search.py`, and a test), so `run_expected_red_shell E5` correctly reports `PASS FIXED`. There is nothing left to go red.
   <br>`The acceptance run reports E5 as a known, unfixed defect until RS8 lands, rather than 'FIXED'. Today it reports FIXED for a module with no callers.`
 
 **Review.** Mutation across three layers. Flip `or_tsquery` back to `plainto_tsquery` at retrieval.py:98 and confirm the CI eval job fails on the recall floor; restore. Delete one tests/e2e file and confirm acceptance reports FAIL, not SKIP; restore.
@@ -317,7 +317,7 @@ at the right file and the wrong row.
 **Criteria:**
 
 - The set is large enough to resolve small changes
-  <br>`wc -l packages/aleph-evals/datasets/retrieval/corpus.jsonl >= 300 (12 today) and questions.jsonl >= 150 (45 today).`
+  <br>`uv run python -m aleph_evals.build_retrieval_set` emits >= 300 documents and >= 150 questions to the directory `ALEPH_RETRIEVAL_DATASET` names, and the eval run against it reports its size. **CORRECTED 2026-08-22:** the original required the COMMITTED set to grow, which contradicts this workstream's own Risk paragraph — the corpus is published papers and redistributing them is not the eval's call. The committed set stays small and CI measures it lexical-only; the large set is generated per instance.`
 - The eval reports ranking-quality metrics, not just recall
   <br>`uv run python -m aleph_evals prints ndcg@10, mrr, recall@1/3/8/20 and a per-category breakdown including 'unanswerable'. Today it prints recall only.`
 - The measurement has headroom
@@ -470,7 +470,7 @@ at the right file and the wrong row.
 - Claims are embedded at write time
   <br>`psql -tAc "select count(*) from wiki_claims where embedding is null and created_at > '<RS8 landing date>'" returns 0. All 786 existing rows are NULL today.`
 - The wiki-deletion gate is a single decidable command
-  <br>`uv run python -m aleph_evals --surface both prints chunks vs claims side by side and exits non-zero when claims do not beat chunks on nDCG@10 — so 'E unblocks' becomes a boolean rather than a judgement.`
+  <br>`uv run python -m aleph_evals.retrieval_eval --surface both` prints chunks vs claims side by side and the delta is recorded. **CORRECTED 2026-08-22:** it is a MEASUREMENT, not a gate. The original made it a boolean gating the wiki deletion, and `docs/decisions.md` D1 reversed that deletion — both knowledge plugins stay, so there is nothing for claims-beating-chunks to unblock. Exiting non-zero because one retrieval surface scores lower than another would fail the build over a fact about the corpus.`
 - The acceptance document names a real command
   <br>`The command quoted at docs/acceptance.md:158 runs and its flags appear in --help. Fails today: the named command has no belief mode at all.`
 - Claim retrieval has a caller
@@ -497,7 +497,7 @@ at the right file and the wrong row.
 - PDF passages carry section labels
   <br>`On a 20-PDF fixture set: psql -tAc "select count(*) filter (where section_path is null)::float / count(*) from document_chunks c join sources s on ... where s.kind='pdf'" is below 0.10. It is 1.00 today, for every PDF, by construction.`
 - Structure metadata is measured, not hardcoded
-  <br>`psql -tAc "select count(*) from normalized_documents where (structure->>'heading_count')::int > 0" > 0. Returns 0 today — the value is a literal 0 in the source.`
+  <br>`psql -tAc "select count(*) from normalized_documents where (structure_jsonb->>'heading_count')::int > 0 and parser like 'docling%'" > 0`. **CORRECTED 2026-08-22:** the column is `structure_jsonb`; as written the query errors rather than returning a number, so the criterion could never be evaluated at all. Scoped to the docling parser, since a pypdf row legitimately has no headings.`
 - Tables are detected
   <br>`Same query on table_count > 0 returns non-zero for a fixture PDF known to contain a table.`
 - The parser choice is made on numbers
@@ -1562,7 +1562,7 @@ belongs in `docs/decisions.md` either way.
 
 **Criteria:**
 
-- Every test file CLAUDE.md and the route docstrings name as a defect pin actually exists
+- Every test file CLAUDE.md and the route docstrings name as a defect pin actually exists — **CORRECTED 2026-08-22:** the original command's regex matched path SUFFIXES, so eleven real files reported MISSING and it could never exit 0. `./scripts/check-dead-refs.sh` already resolves every path named in CLAUDE.md, the gates and the source docstrings, and it exits 0.
   <br>`grep -ohE 'tests/[a-z0-9_/]+\.py' CLAUDE.md apps/api/src/aleph_api/routes/assets.py | sort -u | while read f; do test -f "$f" || { echo "MISSING $f"; exit 1; }; done — exits 0. FAILS TODAY: four paths are missing (tests/e2e/ was deleted in 483816d).`
 - The integration suite covers more than the wiki linter
   <br>`uv run pytest -m integration -q --collect-only 2>&1 | tail -1 reports >= 90 collected. FAILS TODAY: 36 collected, 19 of which are tests/integration/test_wiki_lint.py.`
@@ -1658,7 +1658,7 @@ belongs in `docs/decisions.md` either way.
 - No dead test references remain in the repo
   <br>`a new scripts/check-dead-refs.sh asserting every pnpm-workspace.yaml member directory exists and every symlink under audit/ and tests/ resolves; exits 0. FAILS TODAY: pnpm-workspace.yaml:3 names a deleted directory and audit/checks/e2e/node_modules is dangling.`
 - A real UI invariant is defended
-  <br>`change MAX_PANES in apps/web/src/lib/workspace-ui.tsx from 3 to 4 → pnpm -C apps/web test:run exits nonzero. Restore → exits 0.`
+  <br>`change MAX_PANES in apps/web/src/lib/workspace-ui.tsx to any other value → pnpm -C apps/web test:run exits nonzero. Restore → exits 0.` **CORRECTED 2026-08-22:** it is 24, not 3, so "from 3 to 4" changes nothing and the mutation is a no-op. CLAUDE.md said three panes too, and now says 24.`
 - The seven recovered browser specs pass against a live stack
   <br>`docker compose up -d --wait && pnpm -C tests/playwright exec playwright test → 7 spec files, 0 failures.`
 
@@ -1805,7 +1805,7 @@ belongs in `docs/decisions.md` either way.
 - One id joins the log line, the span and the response
   <br>`an integration test asserting the response's x-request-id equals the request_id bound in the log record and equals the aleph.request_id attribute on the root span. FAILS TODAY on all three counts (P2 fixes the first two).`
 - Metrics are not published unauthenticated
-  <br>`a test asserting GET /metrics without a credential in oidc mode returns 401 — /metrics must not be added to _PUBLIC_PATHS in middleware/auth.py:45-53 alongside /healthz, /readyz, /docs, /redoc and /openapi.json.`
+  <br>`a test asserting GET /metrics from a NON-LOOPBACK peer with no ALEPH_METRICS_TOKEN returns 403` — and `/metrics` must not be added to `_PUBLIC_PATHS` in `middleware/auth.py` alongside `/healthz`, `/readyz`, `/docs`, `/redoc` and `/openapi.json`. **CORRECTED 2026-08-22:** the original said "in oidc mode … 401". There is no oidc mode — `docs/decisions.md` D6 removed OIDC — so the criterion named a configuration that cannot be selected. The gate that exists is loopback-or-token and it answers 403.`
 
 **Review.** Mutation with a question attached. Drive the stack, capture the counters, then deliberately break the model gateway and confirm the LLM failure counter rises and the success counter stops — a metric that does not move when the thing it measures breaks is decoration. Then use the new metrics to actually answer backlog E5: run one agent turn with subagent fan-out and read the per-turn request count off the counter.
 <br>**Iterate.** Turn the metrics into the kernel's degradation signal. acceptance D5 asserts "probation: a capability that degrades is retired automatically" and packages/aleph-kernel/tests/test_probation.py passes — but degrade is currently defined against the capability's own probe.
@@ -1826,7 +1826,7 @@ belongs in `docs/decisions.md` either way.
 - The browser attaches a credential to the runtime
   <br>`a vitest test asserting CopilotKitProvider is mounted with a headers function whose return value contains an Authorization bearer. FAILS TODAY: apps/web/src/lib/copilot.tsx:122-127 passes runtimeUrl, renderActivityMessages and openGenerativeUI, and no headers prop.`
 - The credential survives the bridge to the API
-  <br>`an integration test in oidc mode: request to the runtime with a valid bearer reaches /copilotkit/agent/assistant and returns 2xx; the same request without one returns 401. FAILS TODAY: the chat path is unusable in oidc mode.`
+  <br>`an integration test asserting the bridge FORWARDS the caller's Authorization header to /copilotkit/agent/assistant, and that a request arriving without one is not silently given the server's own credential.` **CORRECTED 2026-08-22:** the original was conditioned on oidc mode, which `docs/decisions.md` D6 removed. The forwarding behaviour is the part that outlives the auth mode — it is what makes the chat path authenticable under ANY mode — so that is what the criterion asserts now.`
 - Port 4000 is not an any-origin proxy
   <br>`curl -H 'Origin: https://evil.example' against the runtime returns no Access-Control-Allow-Origin for that origin. FAILS TODAY: server.ts:80 sets cors: true.`
 - The runtime's allowed origins are configuration, not a constant
@@ -1894,7 +1894,7 @@ belongs in `docs/decisions.md` either way.
   <br>`the new `security` job runs pip-audit and pnpm audit. Prove it can fail by pinning a package with a published high-severity advisory on a scratch branch and confirming the job goes red; revert.`
 - Images are scanned
   <br>`grep -c 'trivy\|codeql' .github/workflows/*.yml >= 2. FAILS TODAY: 0.`
-- Base images are pinned by digest
+- Base images are pinned by digest — **CORRECTED 2026-08-22:** the original asserted `== 5` against six Dockerfiles, one of which is multi-stage and carries two `FROM` lines. State it as a property instead: no `FROM` (or `COPY --from=`) in `apps/*/Dockerfile*` lacks an `@sha256:`.
   <br>`grep -c 'FROM .*@sha256:' apps/*/Dockerfile* == 5. FAILS TODAY: 0 of 5 (python:3.13-slim and node:22-alpine, unpinned).`
 - The deployed web container installs what CI verified
   <br>`the web image build uses a lockfile: grep -c 'npm ci\|--frozen-lockfile' apps/web/Dockerfile* >= 1. FAILS TODAY: apps/web/Dockerfile.dev:5 copies only package.json and :10 runs bare `npm install`.`
