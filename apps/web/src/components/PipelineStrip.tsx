@@ -53,13 +53,18 @@ export function PipelineStrip({ projectId }: { projectId: string }) {
             >
               <span
                 aria-hidden
+                // Three states, three colours. `done` and partial were both
+                // `bg-sunken` — an identical-arm ternary, so the strip drew
+                // "every source has reached this stage" and "some have"
+                // identically, and the only thing that ever changed was the
+                // number beside it.
                 className={
                   "inline-block h-1.5 w-1.5  " +
                   (stage.count === 0
                     ? "bg-line-strong"
                     : done
-                      ? "bg-sunken"
-                      : "bg-sunken")
+                      ? "bg-accent"
+                      : "bg-ink-muted")
                 }
               />
               <span className="text-ink-muted">{stage.label}</span>

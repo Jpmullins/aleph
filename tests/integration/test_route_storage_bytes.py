@@ -41,8 +41,6 @@ from aleph_api.routes.health import measure_storage, readyz
 from aleph_api.routes.metrics import _refresh_pull_gauges
 from aleph_observability.metrics import STORAGE_BYTES, sample_value
 from aleph_observability.storage import (
-    ASSET_STORED_BYTES_SQL,
-    DATABASE_STORED_BYTES_SQL,
     storage_body,
 )
 
@@ -85,8 +83,42 @@ async def _measure() -> Measured:
         await _refresh_pull_gauges(request)
         scraped = {key: sample_value(STORAGE_BYTES, store=key[0], measure=key[1]) for key in series}
         async with app.state.session_maker() as session:
-            database = int((await session.execute(text(DATABASE_STORED_BYTES_SQL))).scalar_one())
-            assets = int((await session.execute(text(ASSET_STORED_BYTES_SQL))).scalar_one())
+            # The truth is measured INDEPENDENTLY of the constants under test.
+            #
+            # It used to run `DATABASE_STORED_BYTES_SQL` and
+            # `ASSET_STORED_BYTES_SQL` themselves, so `_close(published, truth)`
+            # compared X to X and could only ever pass. The module docstring
+            # claimed the tolerance "catches a wrong column, a wrong table, a
+            # unit confusion, a store/measure mix-up, a zero" — only the zero
+            # was caught, by `published > 0`. Rewriting the constants to
+            # `pg_database_size('postgres')` and a MiB division left all 20
+            # tests green while the metric reported a number a million times
+            # too small, about the wrong database.
+            #
+            # Spelled out here on purpose: two expressions that must agree, and
+            # if somebody edits one they have to think about the other. A helper
+            # shared with the module under test would restore the tautology.
+            database = int(
+                (
+                    await session.execute(
+                        text("SELECT pg_catalog.pg_database_size(pg_catalog.current_database())")
+                    )
+                ).scalar_one()
+            )
+            assets = int(
+                (
+                    await session.execute(
+                        text(
+                            "SELECT COALESCE("
+                            "  (SELECT SUM(size_bytes) FROM source_assets), 0)"
+                            " + COALESCE("
+                            "  (SELECT SUM(bytes_size) FROM rendered_assets), 0)"
+                            " + COALESCE("
+                            "  (SELECT SUM(bytes_size) FROM artifact_versions), 0)"
+                        )
+                    )
+                ).scalar_one()
+            )
     return Measured(series, errors, body, scraped, (database, assets))
 
 

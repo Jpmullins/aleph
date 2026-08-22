@@ -58,10 +58,10 @@ export function Rail({ projectId, onBack }: Props) {
   const empty = panes.length === 0;
   useEffect(() => {
     if (!empty || !first) return;
+    // `openPane` is deliberately not a dependency: it is re-created on every
+    // render of the provider, so depending on it would re-run this effect for
+    // any unrelated state change anywhere in the workspace.
     openPane(first.id, { title: first.title });
-    // `openPane` is re-created every render; depending on it would re-run this
-    // on every keystroke elsewhere in the tree.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [empty, first?.id, first?.title]);
 
   return (

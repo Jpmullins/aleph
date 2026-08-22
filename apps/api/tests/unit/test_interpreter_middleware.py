@@ -17,9 +17,12 @@ which make the feature look like it works:
     every item the loop had already completed —
     `test_one_bad_item_does_not_lose_the_batch`.
 
-`langchain-quickjs` is the only new runtime dependency in `docs/plan.md`, and it
-is not in the pin yet. Until it is, the tests that need it skip and say so; the
-partition tests below do not need it and always run.
+`langchain-quickjs` is the only new runtime dependency `docs/plan.md` asks for,
+and it is now pinned (`apps/api/pyproject.toml`, `langchain-quickjs~=0.2.0` on
+`deepagents>=0.6.8,<0.7`; resolved to langchain-quickjs 0.2.0 + quickjs-rs 0.1.2
++ deepagents 0.6.12). These tests used to SKIP when it was absent, which is how
+seven of the ten reported green for a feature the API could not even start with.
+`_quickjs()` now asserts instead.
 """
 
 from __future__ import annotations
@@ -42,15 +45,29 @@ from aleph_api.interpreter import (
 )
 
 _PIN = (
-    "langchain-quickjs is not installed. Pin `langchain-quickjs~=0.2.0` in "
-    "apps/api/pyproject.toml (needs deepagents>=0.6.8, inside the existing <0.7 pin)."
+    "langchain-quickjs is missing from this environment. It is a pinned runtime "
+    "dependency of aleph-api (`langchain-quickjs~=0.2.0`, which requires "
+    "deepagents>=0.6.8 — both are in apps/api/pyproject.toml). Run "
+    "`uv sync --all-packages --all-extras`."
 )
 
 _THREAD_ID = "proj:11111111-1111-1111-1111-111111111111:t1"
 
 
 def _quickjs() -> None:
-    pytest.importorskip("langchain_quickjs", reason=_PIN)
+    """Fail — do not skip — when the interpreter is not installed.
+
+    This was `pytest.importorskip` while the dependency was still a proposal,
+    and it is the reason seven of the ten tests here reported green for a
+    feature that could not run: `build_interpreter_middleware` raises without
+    the package, so `build_assistant_deep_agent` cannot start the API, and the
+    suite said `7 skipped` rather than saying that. Now that the pin is real, a
+    missing package is a broken environment, and a broken environment must be a
+    red rather than a quieter green.
+    """
+    import importlib.util
+
+    assert importlib.util.find_spec("langchain_quickjs") is not None, _PIN
 
 
 # ---------------------------------------------------------------------------

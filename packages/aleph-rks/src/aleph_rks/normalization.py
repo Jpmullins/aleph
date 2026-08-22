@@ -26,6 +26,14 @@ import tiktoken
 
 from aleph_core.grounding import defang
 
+#: The quality flag every PDF normalizer here raises for a scan.
+#:
+#: Named rather than spelled out four times. Three producers set it, and until
+#: 2026-08-22 nothing read it — so a typo in any one of them would have been
+#: invisible, which is the same silence that let the flag sit unconsumed.
+#: `aleph_rks.indexing` is the reader.
+OCR_REQUIRED = "ocr-required"
+
 
 class NormalizationFailed(Exception):
     """Normalizer hard-failure. The worker records this as the failure_reason."""
@@ -138,7 +146,7 @@ class DoclingNormalizer:
         # parsers set it on a character-count heuristic; a layout parser that
         # returns almost nothing from a multi-page document is the real signal.
         if page_count and len(markdown) / max(page_count, 1) < 100:
-            flags.append("ocr-required")
+            flags.append(OCR_REQUIRED)
         if headings == 0:
             # Said out loud. A structure-aware parser that found no structure
             # is a fact about the document worth recording, and the difference
@@ -193,7 +201,7 @@ class PyPDFNormalizer:
         if total_chars == 0 or (
             len(reader.pages) > 0 and total_chars / max(len(reader.pages), 1) < 100
         ):
-            flags.append("ocr-required")
+            flags.append(OCR_REQUIRED)
 
         body = "\n\n".join(p.strip() for p in pages_text if p.strip())
         structure = {
@@ -231,7 +239,7 @@ class PDFMinerNormalizer:
 
         flags: list[str] = []
         if len(text.strip()) == 0:
-            flags.append("ocr-required")
+            flags.append(OCR_REQUIRED)
         return NormalizationResult(
             markdown=_canonicalize_text(text),
             parser=self.parser,

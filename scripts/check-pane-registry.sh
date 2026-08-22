@@ -65,8 +65,21 @@ for name in NAVIGATION:
         line for line in text.splitlines()
         if not line.lstrip().startswith(("*", "//", "/*"))
     )
-    hit = sorted(i for i in ids if re.search(rf'["\']{re.escape(i)}["\']', body))
-    if len(hit) >= 2:
+    # CASE-INSENSITIVE, and ONE is enough.
+    #
+    # It matched case-sensitively and only fired at two hits per file, so
+    # `setActiveSurface("Wiki")` twice in `CopilotChatSurface.tsx` and four
+    # `"Wiki"` literals in `workspace-ui.tsx` sat here for the whole life of the
+    # sweep whose one job is finding exactly that. "Wiki" lower-cases to the
+    # registry id `wiki` — which is the ONLY reason those literals worked, and
+    # is itself the WS-B1a defect: a title is not an id, and `dispute-queue`
+    # titled "Dispute Queue" does not survive the round trip.
+    #
+    # A threshold of two was a hedge against a coincidental word. The words in
+    # question are `wiki`, `notes`, `settings`, `profile` — quoted, in a
+    # navigation file. One is a copy of the server's list.
+    hit = sorted(i for i in ids if re.search(rf'["\']{re.escape(i)}["\']', body, re.IGNORECASE))
+    if hit:
         offenders.append((str(path), hit))
 
 # The rail must actually ASK. Without this, deleting the fetch and rendering

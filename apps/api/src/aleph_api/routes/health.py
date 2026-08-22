@@ -93,6 +93,7 @@ from aleph_observability.storage import (
     storage_series,
     volume_usage,
 )
+from aleph_observability.tracing import start_span
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -126,6 +127,40 @@ LEG_TIMEOUT_S = HEALTHCHECK_CLIENT_TIMEOUT_S - 1.5
 #: The legs whose failure means *Aleph* is not ready. Everything else in
 #: `checks` is reported and not voted on. See the module docstring.
 OWNED_LEGS = ("postgres", "redis", "asset_store")
+
+#: Span names, and therefore `aleph_stage_duration_seconds{stage=...}` labels.
+#:
+#: Literals, not `f"readyz.{name}"`: a span name becomes a metric label and the
+#: rule in `aleph_observability.metrics` is that the number of distinct values
+#: a label can take has to be a number written down somewhere. It is five.
+#:
+#: They exist because the automatic FastAPI instrumentation cannot see inside a
+#: request. It emits one server span for `GET /readyz` — measured: three
+#: requests produced 28 spans, three of them server spans named by route
+#: template — and these five legs run concurrently *inside* that one span, each
+#: under its own budget. Which leg was slow is exactly the question this
+#: endpoint was rebuilt to answer, and it is the question the route span cannot.
+#: On top of which the OTLP exporter is not installed at all unless
+#: `OTEL_EXPORTER_OTLP_ENDPOINT` is set (it is empty in `.env.example`; the
+#: collector sits behind `--profile tracing`), so on a default deployment the
+#: only thing that survives a span is the histogram `start_span` records.
+STAGE_POSTGRES = "readyz.postgres"
+STAGE_REDIS = "readyz.redis"
+STAGE_ASSET_STORE = "readyz.asset_store"
+STAGE_GATEWAY = "readyz.gateway"
+STAGE_STORED_BYTES = "readyz.stored_bytes"
+STAGE_ASSET_VOLUME = "readyz.asset_volume"
+
+#: Every stage this route can record. One tuple so a test can assert the set
+#: rather than five separate strings.
+READYZ_STAGES = (
+    STAGE_POSTGRES,
+    STAGE_REDIS,
+    STAGE_ASSET_STORE,
+    STAGE_GATEWAY,
+    STAGE_STORED_BYTES,
+    STAGE_ASSET_VOLUME,
+)
 
 
 def _describe(exc: BaseException) -> str:
@@ -199,7 +234,10 @@ class GatewayLeg:
 
     async def _probe(self, probe: Callable[[], Awaitable[bool]]) -> None:
         try:
-            ok = bool(await asyncio.wait_for(probe(), timeout=self.timeout_s))
+            # Spanned outside the `except` for the reason `_leg` documents: an
+            # outcome derived from a swallowed exception is always "ok".
+            with start_span(STAGE_GATEWAY):
+                ok = bool(await asyncio.wait_for(probe(), timeout=self.timeout_s))
             self._error = None
         except Exception as exc:  # any failure to answer is "not reachable"
             ok = False
@@ -223,24 +261,40 @@ def _gateway_leg(request: Request) -> GatewayLeg:
     return leg
 
 
-async def _leg(probe: Callable[[], Awaitable[bool]]) -> dict[str, Any]:
-    """Run one dependency probe under its own budget, never raising."""
+async def _leg(stage: str, probe: Callable[[], Awaitable[bool]]) -> dict[str, Any]:
+    """Run one dependency probe under its own budget, never raising.
+
+    The probe runs INSIDE the span and the `except` sits OUTSIDE it, which is
+    the whole point: `start_span` derives its outcome from whether the body
+    raised, so swallowing the exception first would record every timed-out
+    probe as `outcome="ok"`. `aleph_stage_duration_seconds{stage="readyz.*"}`
+    is then a series that answers "how often, and how slowly, does the asset
+    store fail to answer" — which is the failure this module's docstring
+    describes measuring by hand and which nothing has been counting.
+    """
     try:
-        return {"ok": bool(await asyncio.wait_for(probe(), timeout=LEG_TIMEOUT_S))}
+        with start_span(stage):
+            ok = bool(await asyncio.wait_for(probe(), timeout=LEG_TIMEOUT_S))
     except Exception as exc:  # any failure to answer is "not ready"
         return {"ok": False, "error": _describe(exc)}
+    return {"ok": ok}
 
 
-async def _measurement[T](probe: Callable[[], Awaitable[T]]) -> tuple[T | None, str | None]:
+async def _measurement[T](
+    stage: str, probe: Callable[[], Awaitable[T]]
+) -> tuple[T | None, str | None]:
     """Run one *reported* probe: it answers with a number, or with a reason.
 
     Deliberately not `_leg`. A leg votes, and a failure to read a byte count
     must not be able to vote — but it must also not be published as a zero,
     which is indistinguishable from an empty volume and would make any alert on
     "free bytes below X" fire permanently the first time the probe errored.
+
+    Spanned for the same reason `_leg` is, and with the same ordering.
     """
     try:
-        return await asyncio.wait_for(probe(), timeout=LEG_TIMEOUT_S), None
+        with start_span(stage):
+            return await asyncio.wait_for(probe(), timeout=LEG_TIMEOUT_S), None
     except Exception as exc:
         return None, _describe(exc)
 
@@ -298,8 +352,8 @@ async def measure_storage(request: Request) -> tuple[dict[tuple[str, str], int],
     be read is absent from the mapping, never zero.
     """
     (stored, stored_error), (volume, volume_error) = await asyncio.gather(
-        _measurement(lambda: _stored_bytes(request)),
-        _measurement(lambda: _asset_volume(request)),
+        _measurement(STAGE_STORED_BYTES, lambda: _stored_bytes(request)),
+        _measurement(STAGE_ASSET_VOLUME, lambda: _asset_volume(request)),
     )
     database_bytes, asset_bytes = stored if stored is not None else (None, None)
     series = storage_series(
@@ -346,9 +400,9 @@ async def readyz(request: Request, strict: bool = False) -> JSONResponse:
     The default answer is the container's gate and covers only what Aleph owns.
     """
     postgres, redis, asset_store, gateway, storage = await asyncio.gather(
-        _leg(lambda: _postgres(request)),
-        _leg(lambda: _redis(request)),
-        _leg(lambda: _asset_store(request)),
+        _leg(STAGE_POSTGRES, lambda: _postgres(request)),
+        _leg(STAGE_REDIS, lambda: _redis(request)),
+        _leg(STAGE_ASSET_STORE, lambda: _asset_store(request)),
         _gateway_leg(request).check(lambda: request.app.state.litellm.health()),
         _storage(request),
     )

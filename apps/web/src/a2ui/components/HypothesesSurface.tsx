@@ -147,7 +147,7 @@ function NewHypothesisModal({
             <button
               type="button"
               onClick={onClose}
-              className="border border-line-strong px-3 py-1.5 text-xs hover:border-line-strong"
+              className="border border-line-strong px-3 py-1.5 text-xs hover:border-accent"
             >
               Cancel
             </button>

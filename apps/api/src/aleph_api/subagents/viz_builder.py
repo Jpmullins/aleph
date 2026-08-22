@@ -77,12 +77,16 @@ def build_viz_builder_subagent(*, settings: Any) -> dict[str, Any]:
             pinned = await _pin_to_briefs_impl(
                 "ChartCard",
                 title,
+                # `dataset_version_id: None` and `_placeholder: True` used to
+                # sit here. Neither is declared anywhere or read by anything —
+                # and `_placeholder: True` beside a real `vega_lite_spec` was a
+                # contradiction that only survived because the value went
+                # nowhere. `ChartCard` renders its own empty state from the
+                # absence of a spec.
                 {
-                    "dataset_version_id": None,
                     "title": title,
                     "vega_lite_spec": spec,
                     "open_action": "open",
-                    "_placeholder": True,
                 },
                 config,
             )

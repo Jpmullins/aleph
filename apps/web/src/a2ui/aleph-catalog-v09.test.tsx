@@ -22,6 +22,7 @@ import {
   buildAlephCatalog,
   buildAlephCatalogs,
   buildAlephChatCatalog,
+  isPluginCatalog,
   pluginCatalogId,
   registerPluginComponents,
 } from "@/a2ui/aleph-catalog-v09";
@@ -153,5 +154,33 @@ describe("the chat merge", () => {
     // chat catalog under any other id resolves to `Catalog not found` on the
     // agent's first surface.
     expect(buildAlephChatCatalog().id).toBe(ALEPH_V09_CATALOG_ID);
+  });
+});
+
+/**
+ * Who drew this surface — the one signal the Board's trust meter has.
+ *
+ * `Block` shows band and trust on every block always, and both were hardcoded
+ * `declarative` / `signed`, so a core surface and a plugin's said exactly the
+ * same thing about their own provenance. The distinction now comes from the
+ * catalog a surface was created under, which means the recogniser and the
+ * builder must agree — they are two separate literals of the same string, and
+ * this is what stops them drifting. The builder's template is inline on purpose
+ * (`check-single-catalog.sh` greps it for the major version).
+ */
+describe("plugin provenance", () => {
+  it("recognises the ids its own builder produces, at any major", () => {
+    expect(isPluginCatalog(pluginCatalogId("atlas"))).toBe(true);
+    expect(isPluginCatalog(pluginCatalogId("atlas", 2))).toBe(true);
+    expect(isPluginCatalog(pluginCatalogId("dispute-queue", 11))).toBe(true);
+  });
+
+  it("does not mistake a core catalog for a plugin's", () => {
+    // Getting this backwards marks every surface the product itself draws as
+    // third-party, which is the same failure as marking none of them.
+    expect(isPluginCatalog(ALEPH_CORE_CATALOG_ID)).toBe(false);
+    expect(isPluginCatalog(ALEPH_V09_CATALOG_ID)).toBe(false);
+    expect(isPluginCatalog(undefined)).toBe(false);
+    expect(isPluginCatalog("")).toBe(false);
   });
 });

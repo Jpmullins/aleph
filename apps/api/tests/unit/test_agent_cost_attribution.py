@@ -102,6 +102,14 @@ def test_the_search_tool_threads_the_run_id() -> None:
 #
 # The two tests below drive the real impls — no fixture is asserted — and pin
 # that the principal reaching the service call is the one bound to the task.
+#
+# What that actually changes, stated precisely, because the plan overstates it:
+# `model_calls` has no actor column and `LiteLLMClient.chat/.embed` open with
+# `del principal`, so the router's principal reaches no cost row today. The rows
+# that change now are the hypothesis writers' `ActionLedgerEvent.actor_id`. And
+# the 32 rows counted above are `assistant.turn`, written by
+# `ChatRunRecorder(actor_id=_dev_actor_id())` in `copilotkit_endpoint.py` — the
+# same constant, a fourth call site, and one this change does not close.
 
 
 class _FakeMember:

@@ -41,7 +41,6 @@ from aleph_rks.models import Connector, ConnectorBinding
 from aleph_security.roles import ProjectRole, require_at_least
 from aleph_wiki.curator_service import CuratorService
 from aleph_wiki.feedback_service import write_feedback
-from aleph_wiki.handedit_service import clear_section, mark_section
 from aleph_wiki.models import PageMergeProposal, WikiClaim, WikiPage
 
 # Agent actions an approval may execute on approve. The approve handler
@@ -947,10 +946,13 @@ async def _compose_dossier(
             "page_meta": {"title": title},
             "derived": True,
             "read_only": True,
-            "dossier_refs": {
-                "page_ids": [str(p) for p in page_ids],
-                "card_ids": [str(c) for c in card_ids],
-            },
+            # `dossier_refs` used to be here: the page ids and card ids the
+            # dossier was composed from, serialised on every dossier and read by
+            # nothing. Declared in neither catalog.json nor the client zod
+            # schema, so `validate_component` waved it through on
+            # `additionalProperties` and the binder dropped it. The same ids are
+            # already in the body as wikilinks and card titles, which is the
+            # form a reader can actually follow.
         },
     }
     try:
@@ -1167,46 +1169,6 @@ async def _edit_note(
     return {"section_id": str(s.id), "ordinal": s.ordinal, "created": True}
 
 
-async def _mark_handedit(
-    *,
-    session: AsyncSession,
-    principal: Principal,
-    project_id: UUID,
-    request: CardActionRequest,
-    **_: Any,
-) -> dict[str, Any]:
-    page_id = UUID(request.params["page_id"])
-    anchor = request.params["section_anchor"]
-    m = await mark_section(
-        session,
-        project_id=project_id,
-        page_id=page_id,
-        section_anchor=anchor,
-        applied_by=principal.user_id,
-    )
-    return {"mark_id": str(m.id)}
-
-
-async def _clear_handedit(
-    *,
-    session: AsyncSession,
-    principal: Principal,
-    project_id: UUID,
-    request: CardActionRequest,
-    **_: Any,
-) -> dict[str, Any]:
-    page_id = UUID(request.params["page_id"])
-    anchor = request.params["section_anchor"]
-    n = await clear_section(
-        session,
-        project_id=project_id,
-        page_id=page_id,
-        section_anchor=anchor,
-        cleared_by=principal.user_id,
-    )
-    return {"cleared": n}
-
-
 async def _submit_form(*, request: CardActionRequest, **_: Any) -> dict[str, Any]:
     return {
         "form_id": request.params["form_id"],
@@ -1301,14 +1263,6 @@ async def _feedback(
         context=request.params.get("context") or {},
     )
     return {"feedback_id": str(fb.id), "signal": fb.signal}
-
-
-async def _clarify(*, request: CardActionRequest, **_: Any) -> dict[str, Any]:
-    # Inc 3 wired the research clarifier loop; this handler is the surface end.
-    return {
-        "agent_run_id": request.params["agent_run_id"],
-        "answer_length": len(request.params["answer"]),
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -1644,9 +1598,17 @@ def build_action_router() -> ActionRouter:
     r.register("create_note", _create_note)
     r.register("feedback", _feedback)
     r.register("edit_note", _edit_note)
-    r.register("clarify", _clarify)
-    r.register("mark_handedit", _mark_handedit)
-    r.register("clear_handedit", _clear_handedit)
+    # `clarify`, `mark_handedit` and `clear_handedit` used to be registered
+    # here, and nothing in the product could send any of the three.
+    #
+    # `clarify` was an echo — it returned `answer_length` and wrote nothing.
+    # The other two duplicated `routes/handedits.py`, which does the same work
+    # AND writes the ledger row these handlers omitted, so the card path was the
+    # poorer of two ways to do one thing. A registered action with no emitter is
+    # a contract with no caller: it reads as capability, cannot be exercised,
+    # and its first real caller would have found `mark_handedit` silently
+    # skipping the audit trail. `check-surface-bindings.sh` fails the build on
+    # the next one.
     r.register("repair_links", _repair_links)
     r.register("rename_note", _rename_note)
     r.register("promote_note", _promote_note)

@@ -47,7 +47,7 @@ export function ApprovalCard({ component, onAction }: RendererProps) {
         <button
           type="button"
           onClick={() => setShowReject(true)}
-          className="border border-line-strong px-3 py-1 text-xs font-medium hover:border-line-strong"
+          className="border border-line-strong px-3 py-1 text-xs font-medium hover:border-accent"
         >
           Reject
         </button>
@@ -77,7 +77,7 @@ export function ApprovalCard({ component, onAction }: RendererProps) {
                 setShowReject(false);
                 setReason("");
               }}
-              className="border border-line-strong px-2 py-1 text-xs hover:border-line-strong"
+              className="border border-line-strong px-2 py-1 text-xs hover:border-accent"
             >
               Cancel
             </button>

@@ -181,13 +181,19 @@ _DEV_USER_UUID = uuid.uuid5(uuid.NAMESPACE_DNS, "dev@aleph.local")
 
 
 def _dev_actor_id() -> uuid.UUID:
-    """Who a recorded chat turn is attributed to.
+    """Who a recorded chat turn is attributed to. STILL THE FABRICATED ID.
 
-    Aleph runs single-user in `local` mode, so this is the JIT-provisioned dev
-    principal — the same identity the auth middleware synthesizes, so the
-    `agent_runs.created_by` on a chat turn matches the `created_by` on
-    everything else that turn writes. `WS-D2` replaces it with the real
-    principal once the cost path carries one.
+    Read once at lifespan startup by `copilotkit_endpoint.setup_copilotkit`
+    (`ChatRunRecorder(actor_id=_dev_actor_id())`) and written to
+    `agent_runs.created_by` plus the `assistant.turn` ledger row on every turn.
+    It does NOT match the id the auth middleware synthesizes — see the note on
+    `_DEV_USER_UUID`, and the 32 measured rows are all of this kind.
+
+    `WS-D2` c5 closed the three `_dev_principal` call sites below, which had the
+    same defect and could read the task-local principal. This one cannot: it is
+    a synchronous call made before any request exists. Closing it means
+    `ChatRunRecorder` reading `current_principal()` per turn and keeping this as
+    the fallback, which is a change in `chat_runs.py`, not here.
     """
     return _DEV_USER_UUID
 
@@ -201,11 +207,17 @@ def _acting_principal(project_id: UUID) -> Principal:
     unbound principal raises rather than being substituted for.
 
     This replaces `_dev_principal`, which fabricated a `Principal` around
-    `_DEV_USER_UUID` at three call sites — the retrieval router (whose
-    `ModelCall`/`CostLedgerEvent` rows are the spend `WS-D2` is about) and both
-    hypothesis writers (whose `ActionLedgerEvent.actor_id` is that user). The
-    fabricated id is not the id the dev user actually has, so those rows named
-    nobody; see the note on `_DEV_USER_UUID`.
+    `_DEV_USER_UUID` at three call sites: the retrieval router and both
+    hypothesis writers.
+
+    Be precise about what that changed, because the plan's phrasing overstates
+    it. `ModelCall` has no actor column and `LiteLLMClient.chat/.embed` open
+    with `del principal`, so the router's principal reaches no cost row today —
+    threading the real one fixes the *interface* the router is handed and makes
+    the fix hold when a cost row does carry an actor. The rows that change now
+    are the hypothesis writers': `create_hypothesis` and `add_evidence` write
+    `ActionLedgerEvent.actor_id = principal.user_id`, and that was a user id
+    absent from `users`. See the note on `_DEV_USER_UUID`.
     """
     return require_project_access(project_id)
 

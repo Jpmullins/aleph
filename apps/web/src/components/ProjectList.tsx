@@ -299,7 +299,7 @@ function ProjectCreateModal({ onClose, onCreated }: CreateProps) {
             <button
               type="button"
               onClick={onClose}
-              className="border border-line-strong px-4 py-2 text-sm hover:border-line-strong"
+              className="border border-line-strong px-4 py-2 text-sm hover:border-accent"
             >
               Cancel
             </button>

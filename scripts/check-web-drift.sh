@@ -48,6 +48,7 @@ import pathlib
 import re
 import sys
 from collections import Counter
+from typing import Any
 
 MODE = os.environ["MODE"]
 SRC = pathlib.Path("apps/web/src")
@@ -124,6 +125,13 @@ PIN = {
     "palette-scale colour": 0,
     "var(--token, LITERAL)": 0,
     "raw hex / rgba()": 0,
+    # 2026-08-22 WS-UI-4 c3/c4. Both were counted by hand in the audit — 2 and
+    # 7 — driven to zero, and pinned here so they stay there. Neither is a
+    # design-token violation in the strict sense; both are the same FAILURE as
+    # one, a class written to express a distinction that the rendered page does
+    # not make.
+    "identical-arm ternary": 0,
+    "inert hover/focus class": 0,
 }
 
 PALETTE_PROPS = (
@@ -135,8 +143,33 @@ PALETTE_HUES = (
     "teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose"
 )
 
+class _InertStateClasses:
+    """A `hover:`/`focus:` utility whose bare form is already in the same list.
+
+    Not expressible as one regex: it is a relation between two tokens of the
+    SAME class list, and `re` cannot say "this group's value also appears
+    elsewhere in the match". The counter loop only needs `.findall(text)`, so
+    this satisfies that and does the membership test itself.
+
+    Scoped to class lists (see `CLASS_SCOPED`), which is what makes the
+    "same list" part meaningful — two utilities in two different `className`s
+    are two different elements.
+    """
+
+    _VARIANT = re.compile(r"(?<![\w:-])(hover|focus|active|group-hover|focus-visible):([\w\[\]./%-]+)")
+
+    def findall(self, text: str) -> list[str]:
+        out: list[str] = []
+        for line in text.splitlines():
+            bare = {tok.split(":")[-1] for tok in line.split() if ":" not in tok}
+            for match in self._VARIANT.finditer(line):
+                if match.group(2) in bare:
+                    out.append(match.group(0))
+        return out
+
+
 # Each counter says, in its name, what a reader should write instead.
-COUNTERS: dict[str, tuple[re.Pattern[str], str]] = {
+COUNTERS: dict[str, tuple[Any, str]] = {
     "rounded-* (any)": (
         re.compile(r"(?<![\w-])rounded(?:-(?!none(?![\w-]))[\w\[\]().%/-]+)(?![\w-])"),
         "tokens.css sets --radius: 0px; Aleph is squared",
@@ -165,6 +198,25 @@ COUNTERS: dict[str, tuple[re.Pattern[str], str]] = {
         re.compile(r"#[0-9a-fA-F]{3,8}\b|rgba?\([0-9]"),
         "raw colour in .tsx; move it to tokens.css",
     ),
+    # `error ? "building" : "building"` — the reader is told a distinction
+    # exists and the page does not make it. Two shipped: the Board's lifecycle,
+    # where `connected` decided nothing, and the pipeline strip's stage dot,
+    # where a stage every source had reached and one half of them had reached
+    # painted identically.
+    #
+    # A backreference, so it matches only when the arms are byte-identical.
+    # `re.S` because the formatter breaks a nested ternary across lines.
+    "identical-arm ternary": (
+        re.compile(r"\?\s*(\"[^\"\n]*\"|'[^'\n]*')\s*:\s*\1(?![\w-])", re.S),
+        "both arms are the same string; the distinction is not rendered",
+    ),
+    # `className="border border-line-strong … hover:border-line-strong"`. The
+    # state variant sets the value the element already has, so the affordance
+    # was written, reviewed, shipped, and never appears. Seven of these.
+    "inert hover/focus class": (
+        _InertStateClasses(),
+        "the state variant sets a value the base class already sets",
+    ),
 }
 
 files = sorted(p for p in SRC.rglob("*") if p.suffix in (".ts", ".tsx"))
@@ -185,7 +237,12 @@ if not files:
 # a plugin name. A className whose ONLY content is a bare `rounded`/`shadow`
 # and nothing else is therefore invisible here; it has never occurred, and the
 # built-stylesheet check below is what would catch it.
-CLASS_SCOPED = {"rounded-* (any)", "rounded (bare)", "shadow-* (any)"}
+CLASS_SCOPED = {
+    "rounded-* (any)",
+    "rounded (bare)",
+    "shadow-* (any)",
+    "inert hover/focus class",
+}
 
 #: Where a class list can actually live. Anything else in a .tsx file is prose,
 #: an identifier, or a model prompt.

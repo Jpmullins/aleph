@@ -214,7 +214,7 @@ export function WikiSurface({ component, onAction }: RendererProps) {
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder="Filter pages…"
-          className="w-full border border-line-strong px-2 py-1 text-xs focus:border-line-strong focus:outline-none"
+          className="w-full border border-line-strong px-2 py-1 text-xs focus:border-accent focus:outline-none"
           data-testid="wiki-filter"
         />
       </div>
@@ -287,7 +287,7 @@ export function WikiSurface({ component, onAction }: RendererProps) {
                   <button
                     type="button"
                     onClick={() => openPage(p.id)}
-                    className="block w-full truncate border-l border-line px-2 py-1 text-left text-xs text-ink-muted hover:border-line-strong hover:text-ink"
+                    className="block w-full truncate border-l border-line px-2 py-1 text-left text-xs text-ink-muted hover:border-accent hover:text-ink"
                     data-testid={`wiki-stub-${p.id}`}
                   >
                     {p.title}
@@ -337,7 +337,7 @@ function PageGroup({
             <button
               type="button"
               onClick={() => onSelect(p.id)}
-              className="block w-full border border-line bg-surface px-3 py-2 text-left transition-colors hover:border-line-strong"
+              className="block w-full border border-line bg-surface px-3 py-2 text-left transition-colors hover:border-accent"
               data-testid={`wiki-page-${p.id}`}
             >
               <div className="flex items-center justify-between gap-2">

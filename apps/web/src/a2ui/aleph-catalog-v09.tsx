@@ -725,6 +725,21 @@ export function pluginCatalogId(name: string, major = 1) {
   return `aleph://plugin/${name}@${major}`;
 }
 
+/** The shape `pluginCatalogId` builds, as a recogniser.
+ *
+ *  A second literal of the same string, and the pair is pinned by
+ *  `aleph-catalog-v09.test.tsx` — `isPluginCatalog(pluginCatalogId("atlas", 2))`
+ *  must be true, so the two cannot drift apart in a commit. The builder's
+ *  template is deliberately left inline: `check-single-catalog.sh` greps it to
+ *  assert the MAJOR is in the id, and an id that lost its major would silently
+ *  replace the catalog every already-open surface is painting with. */
+const PLUGIN_CATALOG_ID = /^aleph:\/\/plugin\/[^/@]+@\d+$/;
+
+/** Did a plugin draw this surface, or did the product? */
+export function isPluginCatalog(catalogId: string | undefined): boolean {
+  return Boolean(catalogId && PLUGIN_CATALOG_ID.test(catalogId));
+}
+
 /** What the server says exists: `GET /v1/projects/{id}/catalogs`. */
 export interface PluginCatalogDescriptor {
   catalogId: string;

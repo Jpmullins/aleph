@@ -37,6 +37,33 @@ Three defects this module's shape exists to prevent:
    is 10 req/s; the default here is deliberately half of that, and
    `POLITE_POOL_CEILING_PER_SECOND` clamps whatever an operator configures so
    the deployment's mailto cannot be configured into a block.
+
+**What the measured 429s actually were, 2026-08-22.** The comment that used to
+sit on `DEFAULT_RATE_PER_SECOND` said an undeliverable `ALEPH_SCHOLAR_MAILTO`
+was why this deployment got 429s, and the audit repeated it. It is wrong. Same
+URL, same User-Agent, same `mailto=`, same host, differing only in address
+family:
+
+    curl -4 …/works?search=long+context&mailto=dev@aleph.local
+        -> 429  remote=172.66.159.136          Retry-After: 25668
+    curl -6 …/works?search=long+context&mailto=dev@aleph.local
+        -> 200  remote=2606:4700:10::ac42:9f88
+
+Dropping the mailto and the User-Agent entirely changed nothing: `-4` still 429.
+Successive IPv4 calls returned 25667, 25665, 25663 — one fixed wall-clock
+deadline counting down on the ADDRESS, about 7.1 hours out. Crossref over the
+same IPv4 answered 200, so it is not the network and not this host generally.
+
+OpenAlex is blocking this deployment's **IPv4 egress**. The host escapes it only
+because it prefers IPv6; the API container is IPv4-only, which is exactly why
+the fan-out probe scored 0/8 from inside the container while the identical curl
+from the host scored 200. The remedy is IPv6 egress for the container, which is
+a compose concern, not anything in this module.
+
+A contactable mailto is still worth having — it is what the polite pool is
+granted on, and `is_contactable` below stops this client claiming one it does
+not have — but it is not what those 429s were, and this module must not say it
+is.
 """
 
 from __future__ import annotations
@@ -60,14 +87,15 @@ _log = logging.getLogger(__name__)
 POLITE_POOL_CEILING_PER_SECOND = 10.0
 
 #: The ceiling applied when the configured mailto is NOT a contactable address.
-#: A number Aleph chose, not one OpenAlex documents — which is the point: with
-#: no reachable contact there is no polite pool, so clamping to the POLITE
-#: ceiling clamps to a budget this deployment does not have. Measured
-#: 2026-08-22 against the running stack with `ALEPH_SCHOLAR_MAILTO` at its
-#: shipped placeholder: OpenAlex answered 429 to a single request with
-#: `Retry-After: 28409` — 7.9 hours, applied to the whole deployment. One
-#: request per second is the conservative side of a limit nobody has published.
+#: A number Aleph chose, not one any upstream documents — which is the point:
+#: with no reachable contact there is no polite pool, so clamping to the POLITE
+#: ceiling clamps to an allowance this deployment was never granted. One request
+#: per second is the conservative side of a limit nobody has published.
+#:
+#: This is an entitlement correction, NOT a fix for the 429s measured on this
+#: deployment. See the module docstring, *What the measured 429s actually were*.
 COMMON_POOL_CEILING_PER_SECOND = 1.0
+
 
 #: Domains and suffixes that cannot receive mail, so an address on one of them
 #: is a placeholder however well-formed it looks. `.local` is mDNS (RFC 6762);
@@ -94,13 +122,15 @@ _ENV_MAILTO = "ALEPH_SCHOLAR_MAILTO"
 #:
 #: MEASURED 2026-08-21, and it matters before anyone tunes this upward: against
 #: the running deployment, OpenAlex answered 429 to a SINGLE request, and six of
-#: eight concurrent searches, with no `Retry-After` header at all. So this
-#: number was not what was throttling that deployment. The mailto was
-#: `dev@aleph.local`, which is not a deliverable address — the polite pool is
-#: granted on a contactable mailto, and a fake one leaves you in the common
-#: pool. Setting a real `ALEPH_SCHOLAR_MAILTO` is the fix for those 429s; this
-#: rate is the fix for Aleph queueing behind itself. They are different
-#: problems and raising this one does not touch the other.
+#: eight concurrent searches. So this number was not what was throttling that
+#: deployment.
+#:
+#: An earlier version of this comment said the fix was a real
+#: `ALEPH_SCHOLAR_MAILTO`. RETRACTED 2026-08-22: an A/B differing only in IP
+#: address family reproduces the 429 with and without a mailto over IPv4 and
+#: cannot reproduce it at all over IPv6 — see the module docstring.
+#: A contactable mailto is still worth setting — it is what the polite pool is
+#: granted on — but it is not what those 429s were.
 DEFAULT_RATE_PER_SECOND = 5.0
 
 #: Burst allowance. A research `search` phase fans out in a clump and then
@@ -151,8 +181,11 @@ def is_contactable(mailto: str) -> bool:
     turns on: is this a *placeholder*. `dev@aleph.local`, which Aleph ships as
     its default, is well formed and undeliverable, and the polite pool is
     granted on a contactable address. So the deployment sent `mailto=` on every
-    request, behaved as though it were in the polite pool, and was in the common
-    pool the whole time, with nothing anywhere reporting the gap.
+    request, clamped its rate to the polite ceiling, and had been granted
+    neither — with nothing anywhere reporting the gap.
+
+    That gap is worth closing on its own terms. It is NOT what caused the 429s
+    measured on this deployment; see the module docstring.
     """
     address = mailto.strip().lower()
     if "@" not in address or address.startswith("@") or address.endswith("@"):
@@ -334,9 +367,10 @@ class ScholarHttp:
             if self.polite
             else (
                 f"{_ENV_MAILTO} is {mailto!r}, which is not a deliverable address, "
-                "so this deployment is in the common pool rather than the polite "
-                f"pool and is rate-limited to {COMMON_POOL_CEILING_PER_SECOND:g}/s. "
-                f"Set {_ENV_MAILTO} to a real contact address."
+                "so this deployment has not been granted the polite pool and is "
+                f"self-limited to {COMMON_POOL_CEILING_PER_SECOND:g}/s. Worth "
+                "checking, not a diagnosis: a 429 can equally be a block on the "
+                f"egress address. Set {_ENV_MAILTO} to a real contact address."
             )
         )
         # A placeholder contact is not claimed as a real one. Sending
@@ -525,11 +559,14 @@ class ScholarHttp:
             f"scholar upstream {host} unavailable after {attempts} attempt(s) "
             f"within a {budget:.1f}s budget: {last_detail}"
         )
-        # A throttled request whose deployment never had the polite pool is not
-        # an outage, and reporting it as one sends an operator to look at the
-        # network. Appended only on 429 — a 500 or a timeout says nothing about
-        # pool membership, and attaching the note there would train people to
-        # ignore it.
+        # A 429 against a deployment that never had the polite pool is worth one
+        # sentence naming that fact, because otherwise the only artefact is a
+        # 503 that reads as an outage. It is offered as something to check, not
+        # as the cause — on THIS deployment the cause turned out to be an
+        # OpenAlex block on the IPv4 egress address, unaffected by the mailto
+        # (see the module docstring). Appended only on 429: a 500 or a
+        # timeout says nothing about pool membership, and attaching the note
+        # there would train people to scroll past it.
         if last_status == 429 and self.degradation:
             msg = f"{msg}. {self.degradation}"
         raise ScholarUnavailable(msg, status_code=last_status, retry_after=last_retry_after)

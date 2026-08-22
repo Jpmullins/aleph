@@ -43,11 +43,14 @@ test("the rail offers exactly the launchable panes the server declares", async (
     expect(launchable.length).toBeGreaterThan(0);
 
     await openWorkspace(page, p.id);
+    // Addressed by ID, which is what the rail stamps now. The lower-cased
+    // TITLE agreed with the id for every core pane and for none of the ones
+    // this registry exists to make possible.
     for (const kind of launchable) {
-      await expect(page.getByTestId(`rail-${kind.title.toLowerCase()}`)).toBeVisible();
+      await expect(page.getByTestId(`rail-${kind.id}`)).toBeVisible();
     }
     for (const kind of panes.filter((k) => !k.launchable)) {
-      await expect(page.getByTestId(`rail-${kind.title.toLowerCase()}`)).toHaveCount(0);
+      await expect(page.getByTestId(`rail-${kind.id}`)).toHaveCount(0);
     }
   } finally {
     await deleteProject(request, p.id);

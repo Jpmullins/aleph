@@ -789,6 +789,11 @@ class CuratorService:
                     claims=source_claims,
                     origin="curator",
                     embed=None,
+                    # The merge moves the belief. Everywhere else a claim stays
+                    # on the page that first asserted it; here the source page
+                    # is soft-deleted three statements below, so a claim left
+                    # pointing at it is orphaned.
+                    reassign_page=True,
                 )
                 after = await self._page_claim_count(
                     project_id=proposal.project_id, page_id=target.id

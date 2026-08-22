@@ -145,7 +145,7 @@ async def test_the_key_is_not_in_the_row_and_not_in_the_ledger(
     payloads = (
         (
             await session.execute(
-                text("SELECT payload::text FROM action_ledger_events WHERE target_id = :id"),
+                text("SELECT payload_jsonb::text FROM action_ledger_events WHERE target_id = :id"),
                 {"id": endpoint_id},
             )
         )

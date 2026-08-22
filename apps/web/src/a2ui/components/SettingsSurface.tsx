@@ -535,7 +535,7 @@ function ConnectorItem({
                 placeholder={connector.key_state === "set" ? "New key…" : "Paste API key…"}
                 aria-label={`API key for ${connector.name}`}
                 autoComplete="off"
-                className="min-w-0 flex-1 border border-line-strong px-2 py-1 text-xs focus:border-line-strong focus:outline-none"
+                className="min-w-0 flex-1 border border-line-strong px-2 py-1 text-xs focus:border-accent focus:outline-none"
               />
               <button
                 type="button"

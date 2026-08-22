@@ -71,7 +71,11 @@ def test_approval_card_carries_target_and_severity() -> None:
     assert props["target_id"] == str(target)
     assert props["target_kind"] == "artifact"
     assert props["severity"] == "warn"
-    assert props["diff_card_id"] is None
+    # `diff_card_id` / `view_diff_action` used to be asserted here. They were
+    # emitted, declared in catalog.json, bound by nothing and read by nothing —
+    # the assertion pinned a value no caller ever set and no view ever saw.
+    assert "diff_card_id" not in props
+    assert "view_diff_action" not in props
 
 
 def test_auto_ids_are_unique_per_call() -> None:

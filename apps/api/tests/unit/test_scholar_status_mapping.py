@@ -156,13 +156,17 @@ async def test_persistent_429_is_503_with_retry_after(monkeypatch: pytest.Monkey
 async def test_a_throttled_search_tells_the_operator_why(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The 429 that produced `WS-E2` stops being silent about its cause.
+    """A 429 stops being a bare "the upstream is unavailable".
 
-    MEASURED 2026-08-22: eight concurrent searches, 0 of 8 succeeded, every one
-    a real OpenAlex 429 with `Retry-After: 28409` (7.9 hours, on the deployment
-    rather than the request). The same query from the host returned 200. The
-    difference was `ALEPH_SCHOLAR_MAILTO=dev@aleph.local`, an undeliverable
-    address, so the polite pool never applied — and nothing in the log said so.
+    MEASURED 2026-08-22: eight concurrent searches from the API container, 0 of
+    8 succeeded, every one a real OpenAlex 429 with a multi-hour `Retry-After`,
+    while the identical query from the host returned 200 — and the only artefact
+    anywhere was a 503. The deployment also runs with
+    `ALEPH_SCHOLAR_MAILTO=dev@aleph.local`, which is undeliverable, so it has
+    never been granted the polite pool. That is worth saying next to a 429; it
+    is NOT asserted as the cause, because it is not — an A/B differing only in
+    IP address family reproduces the 429 over IPv4 with and without a mailto and
+    cannot reproduce it over IPv6 (`aleph_scholar.http` module docstring).
 
     Asserted at the ROUTE, not at `ScholarHttp`, because the log record is where
     the sentence actually reaches a person: `_upstream_response` writes

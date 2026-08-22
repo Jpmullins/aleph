@@ -1,4 +1,4 @@
-import type { APIRequestContext, Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 const API_URL = process.env.ALEPH_API_BASE_URL ?? "http://localhost:8000";
 export const AUTH = { Authorization: "Bearer local-dev" } as const;
@@ -60,9 +60,48 @@ export async function cleanupE2EProjects(request: APIRequestContext): Promise<vo
  * markup fails as a 20-second timeout that reads as the app being slow.
  */
 export async function openWorkspace(page: Page, projectId: string): Promise<void> {
+  const complaints = watchConsole(page);
   await page.goto(`/projects/${projectId}`);
   await page.getByTestId("rail").waitFor({ state: "visible", timeout: 20_000 });
   await page.getByTestId("board").waitFor({ state: "visible", timeout: 20_000 });
+  expect(complaints(), "the browser complained while the workspace loaded").toEqual([]);
+}
+
+/**
+ * Fail the test on anything the browser complains about.
+ *
+ * The whole Playwright suite had no console listener — the only `console`
+ * reference anywhere in it was a `console.log` inside a spec. So every workspace
+ * load emitted `renderActivityMessages must be a stable array.` at error level,
+ * on every page, for as long as that prop was an inline array literal, and
+ * twenty-four green specs said nothing. A React key warning, an unhandled
+ * rejection, a failed dynamic import and a thrown render all arrive here and
+ * nowhere else.
+ *
+ * Scope, stated honestly: `openWorkspace` asserts on what was said UP TO the
+ * point the board became visible. Errors provoked by a later interaction are
+ * not covered unless the spec calls `watchConsole` itself and asserts. That is
+ * a real gap; it is also the difference between a listener that exists and one
+ * that does not.
+ *
+ * Two allowances, each because the message is about the harness rather than the
+ * app: Vite's HMR chatter, and the "Download the React DevTools" notice.
+ */
+const CONSOLE_ALLOWED = [/\[vite\]/i, /Download the React DevTools/i];
+
+export function watchConsole(page: Page): () => string[] {
+  const complaints: string[] = [];
+  page.on("console", (message) => {
+    const type = message.type();
+    if (type !== "error" && type !== "warning") return;
+    const text = message.text();
+    if (CONSOLE_ALLOWED.some((re) => re.test(text))) return;
+    complaints.push(`console.${type}: ${text}`);
+  });
+  // A thrown render never reaches `console`; it arrives as a page error, and it
+  // is the loudest thing that can happen to a pane.
+  page.on("pageerror", (error) => complaints.push(`pageerror: ${error.message}`));
+  return () => [...complaints];
 }
 
 /** The assistant's composer. CopilotKit owns the markup, so this is a role query. */

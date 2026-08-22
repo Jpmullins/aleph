@@ -83,3 +83,32 @@ describe("PipelineStrip", () => {
     expect(view.queryByTestId("pipeline-failed")).toBeNull();
   });
 });
+
+/**
+ * The dot has three states and must draw three.
+ *
+ * Both arms of the `done` ternary named the same background class, so a stage
+ * every source has reached and a stage half of them have reached painted the
+ * same dot, and only the number beside it ever changed. That is the whole
+ * point of a progress strip: the shape is supposed to be readable without
+ * reading the digits. `check-web-drift.sh` counts identical-arm ternaries now.
+ */
+describe("the stage dot", () => {
+  it("draws complete, partial and untouched stages differently", async () => {
+    const view = await mountStrip({
+      total: 12,
+      stages: [
+        { key: "fetched", label: "Fetched", count: 12 },
+        { key: "indexed", label: "Indexed", count: 7 },
+        { key: "embedded", label: "Embedded", count: 0 },
+      ],
+    });
+    await waitFor(() => expect(view.getByTestId("pipeline-stage-fetched")).toBeTruthy());
+    const dot = (key: string) =>
+      view.getByTestId(`pipeline-stage-${key}`).querySelector("span")?.className ?? "";
+    const complete = dot("fetched");
+    const partial = dot("indexed");
+    const untouched = dot("embedded");
+    expect(new Set([complete, partial, untouched]).size).toBe(3);
+  });
+});

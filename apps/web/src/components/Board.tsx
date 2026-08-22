@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { A2uiSurface } from "@a2ui/react/v0_9";
 
+import { isPluginCatalog } from "@/a2ui/aleph-catalog-v09";
 import { SurfaceStreamProvider, useSurfaceStream } from "@/a2ui/SurfaceStreamProvider";
 import { SurfaceProvider } from "@/a2ui/surface-context";
 import { Block, type BlockLifecycle } from "@/components/Block";
@@ -229,13 +230,31 @@ function BoardCanvas({ projectId }: { projectId: string }) {
         const r = rects[pane.id];
         if (!r) return null;
         const surface = surfaces.get(pane.id);
+        // The two arms of the last ternary were the same word — `connected`
+        // decided nothing and the reader was told a distinction existed. They
+        // ARE different states: a pane with no surface on a live connection is
+        // still arriving, and one with no surface and no connection is stale
+        // data with no way to refresh it, which is exactly what the Block's
+        // `stale` state means.
         const lifecycle: BlockLifecycle = error
           ? "failed"
           : surface
             ? "settled"
             : connected
               ? "building"
-              : "building";
+              : "stale";
+        // Who drew this, from the catalog the surface was created under —
+        // `band="declarative" trust="signed"` was hardcoded on every block, so
+        // the two things the frame always shows said the same thing about a
+        // core surface and a plugin's. A plugin's catalog id is
+        // `aleph://plugin/<name>@<major>`; core's is not.
+        //
+        // Before the first frame there is nothing to go on, and `unverified`
+        // is the honest reading of "nobody has told us yet" — the block is
+        // showing `building` at the same moment.
+        const fromPlugin = isPluginCatalog(surface?.catalog?.id);
+        const band = surface ? (fromPlugin ? "third-party" : "declarative") : "declarative";
+        const trust = surface ? (fromPlugin ? "asserted" : "signed") : "unverified";
         return (
           <div
             key={pane.id}
@@ -250,15 +269,23 @@ function BoardCanvas({ projectId }: { projectId: string }) {
           >
             <Block
               title={pane.title || pane.kind}
-              band="declarative"
-              trust="signed"
+              band={band}
+              trust={trust}
               lifecycle={lifecycle}
               selected={pane.id === focusedPaneId}
               onClose={panes.length > 1 ? () => closePane(pane.id) : undefined}
               onHeaderPointerDown={onHeaderDown(pane)}
-              onKeep={() => undefined}
-              onAgain={() => undefined}
-              onSources={() => undefined}
+              // Keep / Again / Sources are deliberately NOT passed.
+              //
+              // They were `() => undefined` — three buttons in the footer of
+              // every block that a person can click all day. `Block` renders a
+              // verb only when it is given a handler, so omitting them is how
+              // the frame says "this block has no such verb", and it is the
+              // only honest answer today: keeping a PANE has no meaning
+              // (`pin_card` pins a card), re-running one has no route, and
+              // "sources" is a claim-level question the grounding pane answers.
+              // A dead button is worse than an absent one: it teaches that the
+              // interface does not respond.
             >
               {surface ? (
                 // The card impls call `useSurface()` for project scope and to

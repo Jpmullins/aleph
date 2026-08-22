@@ -54,6 +54,18 @@ const alephA2UIMessageRenderer = createA2UIMessageRenderer({
 });
 
 /**
+ * The ARRAY has to be stable too, not just the renderer inside it.
+ *
+ * `renderActivityMessages={[alephA2UIMessageRenderer]}` built a fresh array on
+ * every render of this provider, and CopilotKit answered
+ * `renderActivityMessages must be a stable array` — an `error`-level console
+ * message on every single workspace load, in a codebase whose browser suite had
+ * no console listener at all, so nobody was told. Hoisted to module scope,
+ * which is where the renderer already lived.
+ */
+const ACTIVITY_MESSAGE_RENDERERS = [alephA2UIMessageRenderer];
+
+/**
  * How generated UI is allowed to look.
  *
  * The shipped default is shadcn-flavoured — rounded corners, white surfaces,
@@ -167,7 +179,7 @@ export function AlephCopilotProvider({ children }: { children: ReactNode }) {
     <CopilotKitProvider
       runtimeUrl={RUNTIME_URL}
       headers={headers}
-      renderActivityMessages={[alephA2UIMessageRenderer]}
+      renderActivityMessages={ACTIVITY_MESSAGE_RENDERERS}
       openGenerativeUI={{ sandboxFunctions, designSkill: ALEPH_DESIGN_SKILL }}
     >
       {children}

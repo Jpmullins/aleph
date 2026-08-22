@@ -15,11 +15,19 @@ import pathlib
 import pytest
 from surface_bindings import (
     catalog_components,
+    catalog_props,
     client_bindable_props,
     client_props,
     compare,
+    compare_actions,
+    compare_agent_props,
     compare_bindability,
+    compare_catalog_and_client,
+    compare_emitted,
+    emitted_actions,
+    emitted_props,
     producer_props,
+    registered_actions,
     run,
 )
 from sweep_subject import MissingSubject
@@ -232,3 +240,236 @@ def _messages():
     return [{"component": "ChartCard", "title": {"path": "/t"}}]
 """
     assert compare_bindability(producer_props(producer), client_bindable_props(client)) == []
+
+
+# ---------------------------------------------------------------------------
+# The other two copies of the contract
+# ---------------------------------------------------------------------------
+#
+# WS-UI-3. `producer_props` reads only `{"path": ...}` bindings, so the sweep
+# compared 7 of 23 catalog components for its whole life and printed the gap in
+# a footnote. The cards send LITERAL props and drop them in exactly the same
+# silence — `ApprovalCard.diff_card_id`, `ApprovalCard.view_diff_action`,
+# `ChartCard.dataset_version_id`, `ChartCard._placeholder` and
+# `WikiPageCard.dossier_refs` were all live when this was written.
+
+
+_CARDS = """
+def _card(type_name, *, card_id, props):
+    return {"type": type_name, "id": card_id, "props": props}
+
+
+def approval_card(p, *, card_id=None):
+    return _card(
+        "ApprovalCard",
+        card_id=card_id,
+        props={"title": p.title, "diff_card_id": p.diff_card_id},
+    )
+"""
+
+_CARDS_CLIENT = """
+export const ApprovalCardApi = {
+  name: "ApprovalCard",
+  schema: z3.object({
+    title: CommonSchemas.DynamicString,
+  }),
+};
+"""
+
+
+def test_a_literal_card_prop_the_client_never_declares_is_reported() -> None:
+    """The half of the contract the sweep could not see.
+
+    `_card(...)` sends plain values, not `{"path": ...}`, so `producer_props`
+    returns nothing at all for this file and `compare` had nothing to compare.
+    """
+    assert producer_props(_CARDS) == {}
+    found = compare_emitted(emitted_props(_CARDS), client_props(_CARDS_CLIENT))
+    assert [f"{m.component}.{m.prop}" for m in found] == ["ApprovalCard.diff_card_id"]
+
+
+def test_a_vega_encoding_is_not_mistaken_for_a_component() -> None:
+    """`{"field": "x", "type": "nominal"}` is not a component called `nominal`.
+
+    The `"type"` emission shape needs a sibling `props` dict or a Vega-Lite spec
+    inside a producer starts inventing components — and a sweep that reports
+    components which do not exist is a sweep somebody switches off.
+    """
+    spec = """
+def chart():
+    return {"mark": "bar", "encoding": {"x": {"field": "a", "type": "nominal"}}}
+"""
+    assert emitted_props(spec) == {}
+
+
+def test_a_surface_built_through_the_keyword_helper_is_seen() -> None:
+    """`briefs_surface_v09` names its component in a kwarg, not a dict key."""
+    source = """
+def briefs_surface_v09(*, badge_count=0, children=None, surface_id="briefs"):
+    return _surface_messages(
+        surface_id=surface_id,
+        component_name="BriefsSurface",
+        props={"badge_count": badge_count},
+        children=children or [],
+    )
+"""
+    assert emitted_props(source) == {"BriefsSurface": {"badge_count"}}
+
+
+_CATALOG_DRIFT = """
+{"components": {"WikiSurface": {"schema": {"properties": {"props": {"properties": {
+  "view_mode": {}, "pages": {}}}}}}}}
+"""
+
+_CATALOG_DRIFT_CLIENT = """
+export const WikiSurfaceApi = {
+  name: "WikiSurface",
+  schema: z3.object({
+    pages: CommonSchemas.DynamicValue.optional(),
+    health: CommonSchemas.DynamicValue.optional(),
+  }),
+};
+"""
+
+
+def test_catalog_and_renderer_drift_is_reported_in_both_directions() -> None:
+    """Nine props one way and fourteen the other were live when this was added.
+
+    Both directions matter. A catalog prop the renderer never declares is
+    offered to every producer and to the agent and then dropped; a renderer prop
+    the catalog omits survives only on `additionalProperties`, so the file that
+    is supposed to BE the contract does not contain it.
+    """
+    found = compare_catalog_and_client(
+        catalog_props(_CATALOG_DRIFT), client_props(_CATALOG_DRIFT_CLIENT)
+    )
+    assert sorted(f"{m.component}.{m.prop}" for m in found) == [
+        "WikiSurface.health",
+        "WikiSurface.view_mode",
+    ]
+
+
+def test_children_is_not_reported_as_drift() -> None:
+    """Structural, declared one level up in the catalog component schema.
+
+    Without the exemption every surface that forwards child components inline
+    reports a mismatch, which is four false positives out of the box.
+    """
+    catalog = (
+        '{"components": {"BriefsSurface": {"schema": {"properties":'
+        ' {"props": {"properties": {"badge_count": {}}}}}}}}'
+    )
+    client = """
+export const BriefsSurfaceApi = {
+  name: "BriefsSurface",
+  schema: z3.object({
+    badge_count: CommonSchemas.DynamicNumber.optional(),
+    children: z3.array(z3.any()).optional(),
+  }),
+};
+"""
+    assert compare_catalog_and_client(catalog_props(catalog), client_props(client)) == []
+
+
+def test_a_prop_offered_to_the_agent_that_reaches_no_view_is_reported() -> None:
+    """`ApprovalCard.diff_card_id` and `ChartCard.dataset_version_id`, exactly.
+
+    The agent block is a separate declaration and can name a prop the renderer
+    has never heard of. The model then sets it, correctly, forever, and sees
+    nothing.
+    """
+    agent = {"ChartCard": {"title", "vega_lite_spec", "dataset_version_id"}}
+    found = compare_agent_props(agent, client_props(_CHART_CLIENT))
+    assert [f"{m.component}.{m.prop}" for m in found] == ["ChartCard.dataset_version_id"]
+
+
+_CHART_CLIENT = """
+export const ChartCardApi = {
+  name: "ChartCard",
+  schema: z3.object({
+    title: CommonSchemas.DynamicString.optional(),
+    vega_lite_spec: z3.any().optional(),
+  }),
+};
+"""
+
+
+def test_an_agent_prop_declared_as_a_literal_is_NOT_reported() -> None:
+    """An agent supplies whole objects, so `z3.any()` is the right declaration.
+
+    Comparing the agent block against BINDABLE props instead of declared ones
+    reported all six whole-object props — a Vega-Lite spec, table rows and
+    columns, form fields, evidence refs, citations — and was wrong about every
+    one. That is the shape of false positive that gets a sweep switched off.
+    """
+    agent = {"ChartCard": {"vega_lite_spec"}}
+    assert compare_agent_props(agent, client_props(_CHART_CLIENT)) == []
+
+
+def test_the_sweep_now_covers_the_cards_it_never_looked_at() -> None:
+    """Coverage is a number this sweep states, and it must not silently fall.
+
+    7 of 23 when this was written, because only path bindings counted. The
+    floor is deliberately below today's 18 so that adding a component to the
+    catalog does not fail this test, and deliberately above 7 so that reverting
+    to path-bindings-only does.
+    """
+    root = pathlib.Path(__file__).resolve().parents[2]
+    report = run(root)
+    assert len(report.compared) >= 16, report.compared
+    assert report.bound_props >= 70, report.bound_props
+    # The card components specifically — the ones the old sweep could not see.
+    assert {"ApprovalCard", "ClaimCard", "SourceCard", "TableCard"} <= set(report.compared)
+
+
+# ---------------------------------------------------------------------------
+# The other half of the contract: the actions
+# ---------------------------------------------------------------------------
+
+
+def test_a_registered_action_nothing_can_send_is_reported() -> None:
+    """Three of twenty-one, when this was written.
+
+    `clarify` returned `answer_length` and wrote nothing; `mark_handedit` and
+    `clear_handedit` duplicated `routes/handedits.py` and skipped the ledger row
+    that route writes. All three were reachable only by hand-crafting a POST.
+    """
+    registered = registered_actions("""
+def build_action_router():
+    r.register("approve", _approve)
+    r.register("clarify", _clarify)
+""")
+    emitters = emitted_actions({"Card.tsx": 'onAction("approve", {x: 1})'})
+    found = compare_actions(registered, emitters)
+    assert [m.prop for m in found] == ["clarify"]
+
+
+def test_an_agent_dispatched_verb_counts_as_an_emitter() -> None:
+    """`compose_dossier` and `spotlight` are sent from PYTHON, not from a card.
+
+    Scanning only `.tsx` reported both, and both are live. A sweep that reports
+    working code is a sweep somebody switches off — which is why the emitter
+    set spans all three dispatchers.
+    """
+    registered = registered_actions('r.register("compose_dossier", _compose_dossier)')
+    emitters = emitted_actions(
+        {"copilot_agent.py": '_dispatch_card_action_impl("compose_dossier", {}, config)'}
+    )
+    assert compare_actions(registered, emitters) == []
+
+
+def test_a_prompt_mentioning_an_action_is_not_an_emitter() -> None:
+    """The agent is TOLD about `compose_dossier` in three prompts. Telling it is
+    not dispatching it, and a substring search would have counted all three."""
+    registered = registered_actions('r.register("compose_dossier", _compose_dossier)')
+    emitters = emitted_actions({"copilot_agent.py": '"`compose_dossier` groups pages"'})
+    assert [m.prop for m in compare_actions(registered, emitters)] == ["compose_dossier"]
+
+
+def test_every_registered_action_in_the_real_tree_has_an_emitter() -> None:
+    root = pathlib.Path(__file__).resolve().parents[2]
+    report = run(root)
+    assert [m for m in report.mismatches if m.component == "actions"] == []
+    # And the router still HAS actions — a router that registered nothing would
+    # satisfy the assertion above trivially.
+    assert report.actions_total >= 15, report.actions_total

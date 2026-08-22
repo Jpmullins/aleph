@@ -1,11 +1,33 @@
 #!/usr/bin/env bash
-# Every surface prop a Python producer binds must be declared in the client's
-# zod schema, or the A2UI binder drops it silently: the payload is correct, the
-# view reads `undefined`, and nothing reports an error.
+# One prop contract, three copies, four ways for them to disagree in silence.
 #
-# This shipped: the wiki surface sent ten categories and a health summary, the
-# data model carried both, and the wiki rendered as though the project had no
-# categories. Both halves looked right in isolation.
+# The copies are the Python PRODUCER that sends the prop, `catalog.json` (which
+# the server validates against, and which tells the agent what it may set), and
+# the client zod schema the A2UI binder resolves against. The binder resolves
+# ONLY what the zod schema names, so a prop missing from that copy is discarded:
+# the payload is correct, the view reads `undefined`, nothing raises.
+#
+# All four directions have failed here:
+#
+#   * a bound prop the client never declares — the wiki surface sent ten
+#     categories and a health summary and rendered as though the project had
+#     none;
+#   * a bound prop the client declares as a `z3.*` literal, which the binder
+#     passes through VERBATIM — `runs.map` on `{path: "/runs"}` threw and React
+#     unmounted the pane;
+#   * a LITERAL prop no schema names — `ApprovalCard.diff_card_id`,
+#     `ChartCard._placeholder`, `WikiPageCard.dossier_refs`. This one was
+#     invisible to the sweep for its whole life, because it only read
+#     `{"path": ...}` bindings and every card sends plain values;
+#   * `catalog.json` and the renderer disagreeing — nine props declared in the
+#     catalog the renderer had never heard of, fourteen the renderer resolves
+#     that the catalog did not mention, and `WikiSurface.view_mode` REQUIRED and
+#     never sent by anybody.
+#
+# And one direction over the other half of the same contract, the ACTIONS: three
+# of twenty-one verbs the ActionRouter would dispatch had no emitter anywhere in
+# the product. `clarify` was an echo that wrote nothing; `mark_handedit` and
+# `clear_handedit` were a second, ledger-poorer copy of `routes/handedits.py`.
 #
 # Two properties this wrapper is responsible for, beyond running the analyzer:
 #
@@ -15,13 +37,12 @@
 #     the same path below — so the analyzer was answering "no mismatches" about
 #     a file it had never opened;
 #   * the success line states COVERAGE, not a bare count. `5 components` reads
-#     as "the catalog is clean"; `5 of N catalog components compared` reads as
-#     what it is, and counts the ones nobody is checking. Those are the card
-#     components: `cards.py` declares no `{"path": ...}` bindings at all, so
-#     this sweep has never had anything to compare for them.
+#     as "the catalog is clean"; `18 of N catalog components compared` reads as
+#     what it is, and names what is still uncovered.
 #
-# CI-wired. Fails on: a bound prop the client never declares, or a subject file
-# that has moved.
+# CI-wired. Fails on: a prop no client schema declares, a bound prop declared
+# unresolvably, catalog/renderer drift, an agent-offered prop that reaches no
+# view, a registered action nothing can send, or a subject file that has moved.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 python3 - <<'PY'
@@ -54,6 +75,12 @@ if report.mismatches:
         print(f"   {mismatch}", file=sys.stderr)
     print(file=sys.stderr)
     print(
+        "   An `actions.<kind>` row is different: register it only when "
+        "something can send it, or delete the registration and its catalog "
+        "entry. A verb nothing dispatches reads as capability and is not.",
+        file=sys.stderr,
+    )
+    print(
         "   Declare the prop in its `*Api.schema` in "
         "apps/web/src/a2ui/aleph-catalog-v09.tsx, as `CommonSchemas.Dynamic*` "
         "or `CommonSchemas.Action`. A `z3.*` declaration is a LITERAL the "
@@ -65,17 +92,25 @@ if report.mismatches:
 
 print(
     f"✓ surface bindings: {len(report.compared)} of {report.catalog_total} catalog "
-    f"components compared, {report.bound_props} bound props, all declared "
-    "client-side AND resolvable by the binder"
+    f"components compared, {report.bound_props} props, all declared client-side, "
+    "resolvable by the binder, and matching catalog.json in both directions; "
+    f"{report.actions_total} action kinds, every one with an emitter"
 )
 if report.uncompared:
-    # Stated every run, on purpose. The uncovered components are the ones bound
-    # from `cards.py`, which declares no `{"path": ...}` bindings at all, so this
-    # sweep has never had anything to compare for them. Printing the number is
-    # the difference between a coverage gap somebody can act on and a completeness
-    # claim nobody questions.
+    # Stated every run, on purpose — the difference between a coverage gap
+    # somebody can act on and a completeness claim nobody questions. What is
+    # left are the components no Python producer emits: they are built in the
+    # browser, or by a worker, or only ever by the agent.
     print(
-        f"  {report.uncompared} catalog component(s) have no path-binding producer and "
-        f"are NOT checked by this sweep (see packages/aleph-a2ui/.../components/cards.py)"
+        f"  {report.uncompared} catalog component(s) are emitted by no Python producer "
+        "in the subject list and are NOT compared"
+    )
+if report.unknown_to_client:
+    # The basic-catalog primitives (`Text`, `Button`, `TextField`, …) come from
+    # @a2ui/react's own catalog, not from Aleph's zod file, so their props
+    # cannot be checked here. Named rather than silently skipped.
+    print(
+        f"  {len(report.unknown_to_client)} emitted component(s) are upstream "
+        f"primitives with no Aleph zod schema: {', '.join(report.unknown_to_client)}"
     )
 PY

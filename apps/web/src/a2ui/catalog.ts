@@ -36,8 +36,6 @@ export type ComponentName = (typeof COMPONENT_NAMES)[number];
 
 export const ACTION_NAMES = [
   "approve",
-  "clarify",
-  "clear_handedit",
   "compose_dossier",
   "create_hypothesis",
   "create_note",
@@ -45,7 +43,6 @@ export const ACTION_NAMES = [
   "feedback",
   "focus_tab",
   "highlight_claim",
-  "mark_handedit",
   "navigate_wiki",
   "open",
   "plugin.settings.save",

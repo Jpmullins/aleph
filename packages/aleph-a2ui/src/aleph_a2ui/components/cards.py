@@ -49,7 +49,6 @@ class SourceCardProps:
 
 @dataclass
 class ChartCardProps:
-    dataset_version_id: UUID | None
     title: str = ""
     vega_lite_spec: dict[str, Any] = field(default_factory=dict)
 
@@ -70,7 +69,12 @@ class ApprovalCardProps:
     summary: str
     severity: str = "info"
     evidence_refs: list[dict[str, Any]] = field(default_factory=list)
-    diff_card_id: str | None = None
+    # `diff_card_id` and its companion `view_diff_action` were here, emitted on
+    # every approval card, declared in catalog.json, and read by NOTHING: no
+    # zod entry, so the binder dropped them, and no branch in ApprovalCard.tsx
+    # to read them if it had not. No caller ever set the field either — one
+    # test asserted it was None. Deleted rather than wired, because wiring an
+    # unrequested diff viewer is a feature and this is a sweep fix.
 
 
 @dataclass
@@ -146,17 +150,19 @@ def source_card(p: SourceCardProps, *, card_id: str | None = None) -> dict[str, 
 
 
 def chart_card(p: ChartCardProps, *, card_id: str | None = None) -> dict[str, Any]:
+    # No `dataset_version_id` and no `_placeholder`. Both were emitted here,
+    # declared in neither catalog.json nor the client zod schema, and read
+    # nowhere: `ChartCard.tsx` renders its own "no chart data" state from the
+    # ABSENCE of a spec, and it may not self-fetch a dataset, so a dataset id
+    # has nothing to do. `TableCard` has real ones — same two names, a
+    # different card, and the reason this looked wired.
     return _card(
         "ChartCard",
         card_id=card_id,
         props={
-            "dataset_version_id": str(p.dataset_version_id) if p.dataset_version_id else None,
             "title": p.title,
             "vega_lite_spec": p.vega_lite_spec,
             "open_action": "open",
-            # Placeholder only when there is nothing to render at all — an
-            # inline vega_lite_spec renders without a dataset binding.
-            "_placeholder": p.dataset_version_id is None and not p.vega_lite_spec,
         },
     )
 
@@ -186,10 +192,8 @@ def approval_card(p: ApprovalCardProps, *, card_id: str | None = None) -> dict[s
             "summary": p.summary,
             "severity": p.severity,
             "evidence_refs": p.evidence_refs,
-            "diff_card_id": p.diff_card_id,
             "approve_action": "approve",
             "reject_action": "reject",
-            "view_diff_action": "open",
         },
     )
 

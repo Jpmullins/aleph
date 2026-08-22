@@ -127,11 +127,13 @@ test("every surface the server declares renders differently in light and dark", 
     const measured: string[] = [];
 
     for (const pane of launchable) {
-      await page.getByTestId(`rail-${pane.title.toLowerCase()}`).click();
+      // By ID. The rail's testid used to be the lower-cased TITLE, which is
+      // the same string only for a single-word title.
+      await page.getByTestId(`rail-${pane.id}`).click();
       // By kind, not by position. `data-testid="block"` is on every block and
       // `.last()` quietly addresses a different pane once MAX_PANES starts
       // closing the oldest one.
-      const block = page.locator(`[data-pane-kind="${pane.title}"]`).last();
+      const block = page.locator(`[data-pane-kind="${pane.id}"]`).last();
       await expect(block).toBeVisible();
 
       await setTheme(page, "light");

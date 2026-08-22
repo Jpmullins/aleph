@@ -49,6 +49,7 @@ from aleph_rks.models import (
     RetrievalIndexRecord,
     Source,
 )
+from aleph_rks.normalization import OCR_REQUIRED
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -74,6 +75,13 @@ class AssetReader(Protocol):
 REASON_UNBOUND = "no embedding capability is bound on this project's model profile"
 REASON_DIM = "the bound embedding model's output width does not fit the store"
 REASON_UNAVAILABLE = "the embedding model did not answer"
+
+REASON_OCR = (
+    "the parser flagged 'ocr-required': this document is a scan with no "
+    "extractable text layer, so there is nothing to chunk. Re-ingest it "
+    "through OCR"
+)
+REASON_NO_TEXT = "the document produced no text, so there are no passages to search"
 
 
 @dataclass(frozen=True)
@@ -322,18 +330,39 @@ async def index_normalized_document(
         ).scalar_one()
         chunk_count = await _write_chunks(session, normalized=normalized, markdown=markdown)
         if chunk_count == 0:
+            # A document that produced no passages is NOT a successful index,
+            # and it used to be recorded as one: `state="embedded"`,
+            # `chunk_count=0`, no reason — a green row on the pipeline strip
+            # for a source that nothing can ever find.
+            #
+            # `ocr-required` is why, when the parser said so. Three normalizers
+            # set that flag, the column it lands in is read by exactly one HTTP
+            # response, and NOTHING in the tree has ever branched on it — so a
+            # scanned PDF and a genuinely empty file were the same row. This is
+            # the reader.
+            reason = (
+                REASON_OCR
+                if OCR_REQUIRED in (normalized.quality_flags_jsonb or [])
+                else REASON_NO_TEXT
+            )
             await _upsert_index_record(
                 session,
                 project_id=project_id,
                 source_id=source_id,
                 chunk_count=0,
-                state="embedded",
+                state="lexical_only",
                 embedder_model=None,
-                degraded_reason=None,
+                degraded_reason=reason,
                 created_by=principal.user_id,
             )
             await session.commit()
-            return IndexOutcome(0, "embedded", None, None)
+            _log.warning(
+                "rks.index.no_passages",
+                source_id=str(source_id),
+                project_id=str(project_id),
+                reason=reason,
+            )
+            return IndexOutcome(0, "lexical_only", None, reason)
         await _upsert_index_record(
             session,
             project_id=project_id,

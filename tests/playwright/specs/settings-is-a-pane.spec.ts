@@ -54,7 +54,10 @@ test("opening Settings tiles a second block beside the wiki, covering nothing", 
       .locator("[data-pane-kind]")
       .evaluateAll((nodes) => nodes.map((n) => n.getAttribute("data-pane-kind")));
     expect(new Set(kinds).size).toBe(2);
-    expect(kinds).toContain("Settings");
+    // The pane's registered ID. `data-pane-kind` used to carry the TITLE,
+    // because the rail passed `kind.title` into `openPane` — which is the
+    // WS-B1a defect: a title that is two words mints an id the server drops.
+    expect(kinds).toContain("settings");
 
     // Nothing covers the workspace. Any `position: fixed` element that fills
     // the viewport is a drawer or a modal backdrop by another name; the wiki

@@ -540,6 +540,7 @@ class WikiService:
         claims: list[ClaimDraft],
         origin: str,
         embed: ClaimEmbedder | None,
+        reassign_page: bool = False,
     ) -> None:
         """Write a revision's claims THROUGH the belief layer.
 
@@ -578,6 +579,11 @@ class WikiService:
         it. With durable claim identity that is not optional: the rows now land
         on the SAME claim every time.
 
+        ``reassign_page`` is off here and on for the curator's merge fold. A
+        page re-asserting a proposition another page already holds does not
+        take the belief off that page; a merge does, because the source page is
+        soft-deleted moments later.
+
         A ``PermissionDenied`` from a user-authored claim is deliberately left
         to propagate. The commit fails, loudly, rather than an agent silently
         rewriting a belief a human owns — which is the whole point of having
@@ -602,6 +608,7 @@ class WikiService:
                     revision_id=revision_id,
                     section_anchor=c.section_anchor,
                     origin=origin[:16],
+                    reassign_page=reassign_page,
                     # No `evidence=`: an `EvidenceDraft` is grounded against
                     # the source text at write time, and this path's producers
                     # have already done that (the research composer grounds

@@ -71,20 +71,11 @@
                   }
                 }
               },
-              "diff_card_id": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
               "approve_action": {
                 "const": "approve"
               },
               "reject_action": {
                 "const": "reject"
-              },
-              "view_diff_action": {
-                "const": "open"
               }
             },
             "required": [
@@ -140,9 +131,6 @@
               "items": {
                 "type": "object"
               }
-            },
-            "diff_card_id": {
-              "type": "string"
             }
           },
           "required": [
@@ -261,11 +249,11 @@
           "props": {
             "type": "object",
             "properties": {
-              "current_artifact_id": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+              "artifacts": {
+                "type": "array"
+              },
+              "sources": {
+                "type": "array"
               }
             },
             "required": [],
@@ -403,9 +391,6 @@
             "vega_lite_spec": {
               "type": "object",
               "description": "A complete Vega-Lite spec with embedded data."
-            },
-            "dataset_version_id": {
-              "type": "string"
             }
           }
         }
@@ -996,11 +981,14 @@
           "props": {
             "type": "object",
             "properties": {
-              "current_hypothesis_id": {
+              "ach": {
                 "type": [
-                  "string",
+                  "object",
                   "null"
                 ]
+              },
+              "items": {
+                "type": "array"
               }
             },
             "required": [],
@@ -1237,17 +1225,8 @@
           "props": {
             "type": "object",
             "properties": {
-              "current_note_id": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "current_section_id": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+              "notes": {
+                "type": "array"
               }
             },
             "required": [],
@@ -1409,6 +1388,9 @@
               },
               "open_action": {
                 "const": "open"
+              },
+              "_placeholder": {
+                "type": "boolean"
               }
             },
             "required": [],
@@ -1571,27 +1553,23 @@
           "props": {
             "type": "object",
             "properties": {
-              "current_page_id": {
+              "categories": {
+                "type": "array"
+              },
+              "health": {
+                "type": "object"
+              },
+              "open": {
                 "type": [
-                  "string",
+                  "object",
                   "null"
                 ]
               },
-              "view_mode": {
-                "enum": [
-                  "page",
-                  "graph",
-                  "list",
-                  "recent"
-                ]
-              },
-              "filters": {
-                "type": "object"
+              "pages": {
+                "type": "array"
               }
             },
-            "required": [
-              "view_mode"
-            ],
+            "required": [],
             "additionalProperties": true
           },
           "data_bindings": {
@@ -1737,42 +1715,6 @@
         "required": [
           "target_id",
           "target_kind"
-        ]
-      }
-    },
-    "clarify": {
-      "params": {
-        "type": "object",
-        "properties": {
-          "agent_run_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "answer": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "agent_run_id",
-          "answer"
-        ]
-      }
-    },
-    "clear_handedit": {
-      "params": {
-        "type": "object",
-        "properties": {
-          "page_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "section_anchor": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "page_id",
-          "section_anchor"
         ]
       }
     },
@@ -1924,24 +1866,6 @@
         },
         "required": [
           "claim_id"
-        ]
-      }
-    },
-    "mark_handedit": {
-      "params": {
-        "type": "object",
-        "properties": {
-          "page_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "section_anchor": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "page_id",
-          "section_anchor"
         ]
       }
     },
