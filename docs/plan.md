@@ -860,7 +860,7 @@ belongs in `docs/decisions.md` either way.
 - No event is ever emitted after a terminal event, in either direction. FAILS TODAY — upstream falls through from RUN_ERROR to RUN_FINISHED.
   <br>``uv run pytest apps/api/tests/unit/test_agent_endpoint_errors.py::test_no_events_after_terminal -q` — drives the encoder with a synthetic generator that yields RUN_ERROR then TOOL_CALL_START then RUN_FINISHED; asserts exactly one of {RUN_ERROR, RUN_FINISHED} appears in the body and it is the last frame.`
 - The upstream endpoint helper has no call sites left in Aleph.
-  <br>``grep -rn 'add_langgraph_fastapi_endpoint' apps/ packages/ | wc -l` returns 0 (returns 1 today, at copilotkit_endpoint.py:45).`
+  <br>``grep -rn 'add_langgraph_fastapi_endpoint(' apps/ packages/ | wc -l` returns 0 — a CALL, note the paren. **CORRECTED 2026-08-22:** without it the grep counts Aleph's own docstrings, which name the helper to explain why it is not used. It returns 3 mentions and **0 calls**, so the criterion is met and the command said otherwise. A grep that forbids naming the thing you replaced can only be satisfied by deleting the explanation.
 - The failure the browser is shown and the traceback in the log carry the same searchable id.
   <br>``uv run pytest apps/api/tests/unit/test_agent_endpoint_errors.py::test_run_id_links_error_to_log -q` — uses `caplog`; extracts the uuid out of the RUN_ERROR message and asserts the same string appears in a captured ERROR record and in the `X-Aleph-Run-Id` header.`
 - The quality gates stay clean.
@@ -903,7 +903,7 @@ belongs in `docs/decisions.md` either way.
 
 **What it is.** Three settings currently make the assistant fragile under any load at all. First, the database connection pool the agent uses holds exactly one connection — every saved checkpoint, every memory read and every concurrent subagent queues behind the same single connection, and after 30 seconds of waiting the call fails. Second, every model call gives up after 60 seconds with only two retries; a slow turn or a rate-limit response from the gateway becomes an exception that (before E1b) killed the run. Third, there is no backoff — the retries are immediate, which is the worst possible response to being rate limited.
 
-**Why.** This is the mechanical link between the owner's two live defects: E5 ('weirdly rate limited') and E1 (the untraced RUN_ERROR) are the same event seen from two ends. `ChatOpenAI(timeout=60, max_retries=2)` at copilot_agent.py:1504-1505 is used by the orchestrator AND, via `subagent_model` (:1516-1526), by all six subagents, so a fan-out turn multiplies the request rate exactly when a slow gateway is least able to serve it.
+  <br>``uv run pytest apps/api/tests/unit/test_agent_store_pool.py::test_no_model_timeout_or_retry_literal_remains -q` passes — it walks the AST and asserts no `ChatOpenAI(...)` call node carries a literal `timeout` or `max_retries`. **CORRECTED 2026-08-22:** the original grepped the whole file for `timeout=60|max_retries=2`, which also matches `httpx.AsyncClient(timeout=60.0)` at :1164 — an HTTP client timeout in a tool, nothing to do with the model budget. Driving it to 0 would mean deleting an unrelated and correct line.
 
 **How.** Three concrete changes plus one measurement. (1) Give the agent pool a real `max_size` and a settable timeout in `build_agent_store` (copilot_agent.py:1375-1406), defaulting to something comparable to the SQLAlchemy engine and reading from `apps/api/src/aleph_api/settings.py` so an operator can size it. Keep the langgraph-mandated kwargs (autocommit, prepare_threshold=0, dict_row) untouched. (2) Move the request timeout and retry count off the literals in `_gateway_chat_model` and onto settings, and raise the default — 60s is below the p99 of a tool-heavy turn against a shared gateway. (3) Implement `awrap_model_call` on the `AlephAgentMiddleware` built in E1b (hook verified at langchain/agents/middleware/types.py:586-635;
 
@@ -974,7 +974,7 @@ belongs in `docs/decisions.md` either way.
 - A usage-free response produces a visible unpriced row, never an absence.
   <br>`Same file, `::test_no_usage_writes_unknown_row` — asserts a row exists with `pricing_source='unknown'` and a populated reason. This replaces `test_skips_when_no_usage` (:262), which pins the defect.`
 - Retrieval spend is attributed to the real caller, not to a synthetic dev user.
-  <br>``grep -n '_dev_principal' apps/api/src/aleph_api/copilot_agent.py | wc -l` returns 0 outside the local-auth-mode fallback path (returns a hit at :660 today), and `uv run pytest -m integration tests/integration/test_agent_cost_attribution.py::test_retrieval_attributed_to_caller -q` asserts the ModelCall's actor matches…`
+  <br>``grep -n '_dev_principal(' apps/api/src/aleph_api/copilot_agent.py | wc -l` returns 0 — again a CALL. **CORRECTED 2026-08-22:** 2 mentions, **0 call sites**; both remaining hits are the definition and the comment recording that retrieval spend used to be billed to a synthetic user.
 - Cache-write tokens stop being a column nothing writes.
   <br>``uv run pytest apps/api/tests/unit/test_agent_cost_callback.py::test_cache_write_tokens_are_extracted -q` asserts a response carrying cache-creation tokens produces a row with `cache_write_tokens > 0`.`
 
@@ -1659,7 +1659,7 @@ belongs in `docs/decisions.md` either way.
   <br>`a new scripts/check-dead-refs.sh asserting every pnpm-workspace.yaml member directory exists and every symlink under audit/ and tests/ resolves; exits 0. FAILS TODAY: pnpm-workspace.yaml:3 names a deleted directory and audit/checks/e2e/node_modules is dangling.`
 - A real UI invariant is defended
   <br>`change MAX_PANES in apps/web/src/lib/workspace-ui.tsx to any other value → pnpm -C apps/web test:run exits nonzero. Restore → exits 0.` **CORRECTED 2026-08-22:** it is 24, not 3, so "from 3 to 4" changes nothing and the mutation is a no-op. CLAUDE.md said three panes too, and now says 24.`
-- The seven recovered browser specs pass against a live stack
+- Every browser spec passes against a live stack — **CORRECTED 2026-08-22:** "the seven recovered" is now 13, and naming a count makes the criterion go stale every time a spec is added. `pnpm -C tests/playwright test` against the compose stack: every spec passes, 0 failures, no retries (`retries: 0` is deliberate — a test that needs a retry is a defect in the test).
   <br>`docker compose up -d --wait && pnpm -C tests/playwright exec playwright test → 7 spec files, 0 failures.`
 
 **Review.** Three mutations across three layers, each restored: MAX_PANES (unit, tests the reducer), the SSE URL builder in SurfaceStreamProvider.tsx:96 (unit, tests the transport the whole reading region shares), and the rail's launchable filter driven by GET /v1/projects/{id}/panes (playwright, tests the server-driven pane registry end to end).
@@ -1739,7 +1739,7 @@ belongs in `docs/decisions.md` either way.
 - The signing key and the credential-encryption key are different settings
   <br>`grep -rn 'aleph_agent_token_secret' apps/api/src/aleph_api/routes/ packages/aleph-research/src | wc -l == 0 (no route or tool derives an encryption key from the token secret). FAILS TODAY: 3 sites do (scholar.py:204, connector_credentials.py:47, tools.py:89 via master_secret_bytes).`
 - The key derivation exists exactly once
-  <br>`grep -rn 'ljust(32' apps packages --include='*.py' | wc -l == 0 and grep -rn 'sha256(.*master' apps packages --include='*.py' | wc -l == 1. FAILS TODAY: 3 and 2 respectively.`
+  <br>`uv run pytest packages/aleph-connectors/tests/test_key_derivation_is_single.py -q` passes — it asserts over the CODE (one derivation, no padding) rather than over the text of the repository. **CORRECTED 2026-08-22:** the original greps count prose. All three `ljust(32` hits are docstrings describing the removed defect — one of them is this criterion quoted verbatim inside the very test that enforces it — and two of the three `sha256(.*master` hits are the same. As written it can only be satisfied by deleting the explanations of why the rule exists.`
 - Rotating the token secret does not destroy credentials
   <br>`an integration test that stores a credential, rotates ALEPH_AGENT_TOKEN_SECRET, and asserts the credential still decrypts and a freshly minted agent token verifies. FAILS TODAY: rotation makes every stored credential permanently undecryptable.`
 - A short master key is refused at boot, not tolerated by padding
@@ -1766,9 +1766,9 @@ belongs in `docs/decisions.md` either way.
 **Criteria:**
 
 - A backup can be taken and restored into an empty stack
-  <br>`./scripts/backup.sh && docker compose down -v && ./scripts/restore.sh <dump> && ./scripts/restore-drill.sh exits 0. FAILS TODAY: none of these scripts exist.`
+  <br>`./scripts/backup.sh && docker compose down -v && ./scripts/restore.sh <dump> && uv run python scripts/_acceptance/restore_drill.py` exits 0. **CORRECTED 2026-08-22:** the drill is `scripts/_acceptance/restore_drill.py`, not `scripts/restore-drill.sh`, which has never existed. It restores into a scratch database, compares per-table row counts against the source and re-runs the ledger hash-chain verification. It is still invoked by no gate — that half is UNMET, not stale.`
 - The restored database is verified, not assumed
-  <br>`restore-drill.sh asserts per-table row counts match the pre-backup counts and re-runs the ledger hash-chain verification; it exits nonzero if any table lost rows. Prove it can fail by deleting one row from the dump's restore target before verification.`
+  <br>`scripts/_acceptance/restore_drill.py` asserts per-table row counts match the pre-backup counts and re-runs the ledger hash-chain verification; it exits nonzero if any table lost rows. Prove it can fail by deleting one row from the dump's restore target before verification. **CORRECTED 2026-08-22:** the filename. `restore-drill.sh` does not exist.`
 - The newest migration's downgrade actually runs
   <br>`a CI step: cd apps/api && uv run alembic upgrade head && uv run alembic downgrade -1 && uv run alembic upgrade head && uv run alembic check — exits 0. FAILS TODAY: no CI job ever invokes downgrade (grep -c downgrade .github/workflows/ci.yml = 0).`
 - A broken downgrade fails CI
