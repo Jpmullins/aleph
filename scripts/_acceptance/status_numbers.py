@@ -55,10 +55,30 @@ QUERIES: list[tuple[str, str, str, str]] = [
         # run to attribute to. Deleting or backfilling them would make the
         # append-only ledger say something nobody knows to be true, so the
         # measurement moves rather than the data.
-        "select count(*) from model_calls where (pricing_source = 'unknown' "
-        "or agent_run_id is null) and timestamp >= :cutoff",
+        #
+        # TWO defects, not one, and they are not the same defect.
+        #
+        # An UNPRICED call is always wrong: it records $0 for money that was
+        # spent, so a broken pricing table reads as a cheap day. That applies to
+        # every call, whoever made it.
+        #
+        # An UNATTRIBUTED call is only wrong on the AGENT path. `assistant.*`
+        # runs inside a turn and there is always a run to name; the diagnostic
+        # smoke route and the non-agent chat route are HTTP requests, and there
+        # is no agent run for them to belong to. Requiring one there would mean
+        # minting a fake run so a number could be zero, which is the shape of
+        # thing this file exists to stop.
+        #
+        # So: unpriced anywhere, or unattributed on a purpose that names the
+        # agent. The prefix is the honest discriminator — `purpose` is what the
+        # call site declares itself to be.
+        "select count(*) from model_calls where timestamp >= :cutoff and ("
+        "  pricing_source = 'unknown'"
+        "  or (agent_run_id is null and purpose like 'assistant%')"
+        ")",
         "== 0",
-        "model calls since the cutoff with no price or no run (number 5, measured forward)",
+        "model calls since the cutoff: unpriced anywhere, or unattributed on the "
+        "agent path (number 5, measured forward)",
     ),
     (
         "uncosted_model_calls_legacy",

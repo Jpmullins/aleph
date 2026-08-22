@@ -1,4 +1,4 @@
-2026-08-22T01:04:00Z
+2026-08-22T01:30:00Z
 
 # The moment the deployed stack started recording model calls with BOTH a price
 # and a run to attribute them to.
@@ -13,9 +13,21 @@
 # not. Reading a channel that does not carry the key is the same mistake as
 # reading `metadata`, made twice, two hours apart.
 #
-# The second deploy (01:04) reads `get_config()`. Verified on the live stack:
-# `assistant.turn` rows since carry `pricing_source=gateway` and a non-null
-# `agent_run_id`.
+# The second deploy (01:04) reads `get_config()`. `assistant.turn` and
+# `assistant.subagent.*` rows since carry `pricing_source=gateway` and a
+# non-null `agent_run_id`.
+#
+# It took a THIRD (01:30), and the probe found it rather than a reader. Driving
+# real turns produced 13 attributed rows next to 9 orphans:
+# `assistant.corpus_search.query_embed`, `assistant.page_selection` and
+# `assistant.compose` — all three from inside ONE tool. `search_knowledge`
+# called the retrieval router with `agent_run_id=None`, and the router makes
+# three further model calls of its own. The agent middleware never sees them:
+# it wraps the ORCHESTRATOR's model call, and these happen a layer down.
+#
+# Three deploys to attribute one turn, each fixing a real and different gap,
+# and the cutoff is the last of them because that is when the claim "every
+# model call a turn makes belongs to that turn" first became true.
 #
 # `docs/plan.md` number 5 is measured FORWARD from here. `docs/decisions.md` D9
 # says why: the 159 rows before it are true records of calls that really were
