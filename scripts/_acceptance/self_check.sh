@@ -31,11 +31,39 @@ trap restore_all EXIT INT TERM
 # expression anchored with `^` needs the /m modifier or it matches only the very
 # start of the file — and a mutation that silently fails to apply is reported as
 # "this check cannot fail", which sends you to fix a check that is fine.
+#: Set by `mutate` when the substitution changed nothing. A no-op mutation is a
+#: HARD failure, not a quiet pass — see `mutate`.
+MUTATION_WAS_NOOP=0
+
 mutate() { # mutate FILE PERL_EXPR
-  local f="$1" expr="$2"
-  cp "$f" "$BACKUP_DIR/$(echo "$f" | tr / _)"
+  local f="$1" expr="$2" backup
+  backup="$BACKUP_DIR/$(echo "$f" | tr / _)"
+  cp "$f" "$backup"
   MUTATED+=("$f")
   perl -0pi -e "$expr" "$f"
+
+  # A mutation that changes nothing proves nothing — and it reports "can fail".
+  #
+  # This has happened three times in this repository and every instance looked
+  # fine in review:
+  #   * a `^` anchor under `perl -0` (slurp mode) matching only the file's first
+  #     line, so two probes silently patched nothing;
+  #   * a probe targeting the `permissions=[` literal after WS-H1 moved those
+  #     rules into a function, so the pattern matched no text at all;
+  #   * a probe naming a specific migration file that a newer migration had
+  #     displaced, so the check it drove no longer executed that file.
+  #
+  # In each case the probe printed "can fail" having broken nothing, which is
+  # strictly worse than no probe: it occupies the slot where a real one would
+  # go, and it makes the self-check's own count of caught mutations a lie.
+  #
+  # The green-first rule below catches a check that is already red. This catches
+  # the other half — a mutation that never happened.
+  if cmp -s "$f" "$backup"; then
+    MUTATION_WAS_NOOP=1
+  else
+    MUTATION_WAS_NOOP=0
+  fi
 }
 
 unmutate() { # unmutate FILE
@@ -69,6 +97,13 @@ probe() {
   fi
 
   mutate "$file" "$expr"
+  if [ "$MUTATION_WAS_NOOP" -eq 1 ]; then
+    printf '  \033[31m%-8s\033[0m %s — the mutation changed NOTHING, so this proves nothing\n' \
+      "NO-OP" "$name"
+    BAD=$((BAD+1))
+    unmutate "$file"
+    return
+  fi
   if bash -c "$cmd" >/dev/null 2>&1; then
     printf '  \033[31m%-8s\033[0m %s — check stayed GREEN while broken\n' "CANNOT" "$name"
     BAD=$((BAD+1))
