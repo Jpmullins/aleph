@@ -749,3 +749,64 @@ async def test_a_genuine_abstention_still_empties_the_result() -> None:
     reranker, _fake = llm_reranker('{"relevant": []}')
     out = await reranker.rank(query="q", hits=hits(10), top_k=5)
     assert out == [], "a well-formed empty judgement must still abstain"
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_reply_is_visible_on_the_span_not_only_in_the_log(
+    exporter: InMemorySpanExporter, fused: list[ChunkHit]
+) -> None:
+    """A degraded rerank must not look identical to a working one on the trace.
+
+    Measured before the fix, three searches through production `search_corpus`:
+
+        A. real judgement      backend=llm-listwise returned=5 abstained=False
+        B. unreadable reply    backend=llm-listwise returned=5 abstained=False
+        C. reranker found none backend=cross-encoder returned=5 abstained=False
+
+    B and C carried no `retrieval.rerank.skipped` and were byte-identical in
+    shape to A, so an operator reading the trace could not tell "it reordered my
+    results" from "its reply was garbage and I got fusion order". Both logged a
+    warning; the criterion is about the span, and the log is not what a trace
+    viewer shows.
+
+    Not hypothetical: `_loads_lenient`'s own docstring records that a strict
+    `json.loads` "failed on the large majority of replies" on this deployment.
+    """
+    del fused
+    reranker, _fake = llm_reranker('{"results": [{"index": 3, "relevance": 0.9}]}')
+    await search_corpus(
+        cast("Any", object()),
+        project_id=PROJECT,
+        query_text="q",
+        query_embedding=None,
+        top_k=5,
+        reranker=reranker,
+    )
+    attrs = _search_span(exporter).attributes or {}
+    skipped = attrs.get("retrieval.rerank.skipped")
+    assert isinstance(skipped, str), (
+        "a search whose reranker could not be read carries no skip reason, so "
+        f"it is indistinguishable from one that reranked. attrs: {dict(attrs)}"
+    )
+    assert "unreadable" in skipped, skipped
+
+
+@pytest.mark.asyncio
+async def test_a_real_judgement_still_carries_no_skip_reason(
+    exporter: InMemorySpanExporter, fused: list[ChunkHit]
+) -> None:
+    """The other half. Without it, always setting the attribute would pass the
+    test above and make the attribute meaningless."""
+    del fused
+    reranker, _fake = llm_reranker('{"relevant": [{"id": 7, "score": 3}]}')
+    ranked = await search_corpus(
+        cast("Any", object()),
+        project_id=PROJECT,
+        query_text="q",
+        query_embedding=None,
+        top_k=5,
+        reranker=reranker,
+    )
+    attrs = _search_span(exporter).attributes or {}
+    assert "retrieval.rerank.skipped" not in attrs
+    assert ranked[0].text == "passage 7"

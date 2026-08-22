@@ -34,6 +34,7 @@ from aleph_wiki.export_evidence import (
     PageEvidence,
     attach_evidence,
     evidence_files,
+    parse_evidence_json,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -48,14 +49,25 @@ QUOTE_WITH_BRACKETS = "the page linked it as [[Attention]] in the body"
 QUOTE_PLAIN = "We propose a new simple network architecture, the Transformer"
 
 
-def _evidence(quote: str, *, slug: str = "attention", title: str = "Attention") -> PageEvidence:
+CLAIM_TEXT = "The transformer removed recurrence entirely."
+SOURCE_TITLE = "Attention Is All You Need"
+
+
+def _evidence(
+    quote: str,
+    *,
+    slug: str = "attention",
+    title: str = "Attention",
+    claim_text: str = CLAIM_TEXT,
+    source_title: str = SOURCE_TITLE,
+) -> PageEvidence:
     return PageEvidence(
         slug=slug,
         title=title,
         claims=(
             ClaimEvidence(
                 claim_id="01a02799-6486-7f4c-8a26-a58cc2a01999",
-                text="The transformer removed recurrence entirely.",
+                text=claim_text,
                 confidence="weakly_supported",
                 evidence_tier="cited",
                 origin="agent",
@@ -68,7 +80,7 @@ def _evidence(quote: str, *, slug: str = "attention", title: str = "Attention") 
                         verbatim=True,
                         source_id="01a02790-c0e6-7eea-a5f1-ca3c87b89f0d",
                         source_short_id="S0002",
-                        source_title="Attention Is All You Need",
+                        source_title=source_title,
                         source_url="https://arxiv.org/abs/1706.03762",
                         chunk_id="01a02791-2c83-76a1-823f-e2907e99eb40",
                         quote=quote,
@@ -81,8 +93,10 @@ def _evidence(quote: str, *, slug: str = "attention", title: str = "Attention") 
     )
 
 
-def _pages(quote: str) -> list[VaultPage]:
-    evidence = _evidence(quote)
+def _pages(
+    quote: str, *, claim_text: str = CLAIM_TEXT, source_title: str = SOURCE_TITLE
+) -> list[VaultPage]:
+    evidence = _evidence(quote, claim_text=claim_text, source_title=source_title)
     return [
         VaultPage(
             title="Attention",
@@ -110,9 +124,19 @@ def _write(tmp_path: Path, files: dict[str, str]) -> Path:
     return out
 
 
-def _bundle(dialect: str, quote: str) -> dict[str, str]:
-    export = render_vault(_pages(quote), dialect=dialect, project_title="Test Wiki")
-    extra = evidence_files([_evidence(quote)], project_title="Test Wiki", dialect=export.dialect)
+def _bundle(
+    dialect: str, quote: str, *, claim_text: str = CLAIM_TEXT, source_title: str = SOURCE_TITLE
+) -> dict[str, str]:
+    export = render_vault(
+        _pages(quote, claim_text=claim_text, source_title=source_title),
+        dialect=dialect,
+        project_title="Test Wiki",
+    )
+    extra = evidence_files(
+        [_evidence(quote, claim_text=claim_text, source_title=source_title)],
+        project_title="Test Wiki",
+        dialect=export.dialect,
+    )
     return {**export.files, **extra}
 
 
@@ -323,3 +347,263 @@ def test_an_unparseable_sidecar_is_reported(tmp_path: Path) -> None:
     result = _okf(_write(tmp_path, files))
     assert result.returncode == 1
     assert "evidence-parse" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Free text that is not a quote, through the real exporter
+#
+# `_quote_block` guarded the quote and only the quote. Claim text and source
+# titles reach the section straight out of `wiki_claims.text` and
+# `sources.title`, and both are unbounded. Reproduced before the fix: a claim
+# reading `The paper called it [[Recurrent Networks]] throughout.` left the okf
+# bundle as `[Recurrent Networks](./recurrent-networks.md)` and the obsidian
+# bundle as `[[recurrent-networks|Recurrent Networks]]`. The exporter had
+# rewritten the claim's own words into a link the project never wrote.
+#
+# These run the REAL exporter over the section, which is where the rewrite
+# happened — the section-level pins live in
+# `packages/aleph-wiki/tests/test_export_evidence.py`.
+# ---------------------------------------------------------------------------
+
+CLAIM_WITH_WIKILINK = "The paper called it [[Recurrent Networks]] throughout."
+TITLE_WITH_WIKILINK = "A survey of [[wikilink]] syntax"
+
+#: One fence line, deliberately unbalanced. Two would toggle `render_vault`'s
+#: line-by-line fence tracker back to where it started and the corruption would
+#: hide; one leaves every link below it unrewritten for the rest of the page.
+CLAIM_WITH_FENCE = "the example reads\n```python\nx = 1"
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+def test_a_claim_is_not_turned_into_a_link_by_the_exporter(dialect: str) -> None:
+    """The words of the claim, after the exporter has run over the page.
+
+    `recurrent-networks.md` IS in this bundle, so the link would resolve and
+    look entirely correct — which is what makes it the bad case rather than a
+    dangling-link report somebody would notice.
+    """
+    page = _bundle(dialect, QUOTE_PLAIN, claim_text=CLAIM_WITH_WIKILINK)["attention.md"]
+    block = page.split("## Evidence", 1)[1]
+    assert "[Recurrent Networks](./recurrent-networks.md)" not in block
+    assert "[[recurrent-networks|Recurrent Networks]]" not in block
+    assert "The paper called it \\[\\[Recurrent Networks\\]\\] throughout." in block
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+def test_a_source_title_is_not_turned_into_a_link_by_the_exporter(dialect: str) -> None:
+    """In okf the exporter could not resolve the invented target, so it wrote
+    the display text alone: `A survey of wikilink syntax`, brackets deleted
+    from somebody else's title. In obsidian it emitted a working wikilink to a
+    page the title never named."""
+    page = _bundle(dialect, QUOTE_PLAIN, source_title=TITLE_WITH_WIKILINK)["attention.md"]
+    block = page.split("## Evidence", 1)[1]
+    assert "A survey of wikilink syntax" not in block
+    assert "A survey of \\[\\[wikilink\\]\\] syntax" in block
+
+
+def test_a_fence_in_a_claim_does_not_switch_off_link_rewriting(tmp_path: Path) -> None:
+    """The canary is the ordinary wikilink in the prose ABOVE the section.
+
+    `render_vault` decides where not to rewrite links by counting fence lines,
+    so one leaked from a claim leaves the tracker inside a fence that never
+    opened — and every link from there to the end of the page silently stops
+    being a link. Asserted on a link that must still be rewritten, and on the
+    validator, which sees the residual `[[`.
+    """
+    pages = _pages(QUOTE_PLAIN, claim_text=CLAIM_WITH_FENCE)
+    # A second wikilink AFTER the evidence section: the one above it is
+    # rewritten before the tracker can desync, so it proves nothing.
+    pages[0] = VaultPage(
+        title=pages[0].title,
+        slug=pages[0].slug,
+        body_md=pages[0].body_md + "\nAnd afterwards, see [[Recurrent Networks]].\n",
+        page_type=pages[0].page_type,
+        category=pages[0].category,
+    )
+    export = render_vault(pages, dialect="okf", project_title="Test Wiki")
+    page = export.files["attention.md"]
+    assert page.count("[Recurrent Networks](./recurrent-networks.md)") == 2, page
+    assert "[[" not in page
+    files = {
+        **export.files,
+        **evidence_files(
+            [_evidence(QUOTE_PLAIN, claim_text=CLAIM_WITH_FENCE)],
+            project_title="Test Wiki",
+            dialect="okf",
+        ),
+    }
+    result = _okf(_write(tmp_path, files))
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "claim_text",
+    [CLAIM_WITH_WIKILINK, CLAIM_WITH_FENCE, "plain"],
+    ids=["wikilink", "fence", "plain"],
+)
+def test_the_sidecar_still_carries_the_claim_byte_exact(claim_text: str) -> None:
+    """Whatever the section does to make a string safe to render, the lossless
+    copy is unchanged. Otherwise "safe" would mean "edited everywhere"."""
+    files = _bundle("okf", QUOTE_PLAIN, claim_text=claim_text)
+    _, pages = parse_evidence_json(files[EVIDENCE_FILENAME])
+    assert pages[0].claims[0].text == claim_text
+
+
+# ---------------------------------------------------------------------------
+# The whole bundle round-trips, sidecar included
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dialect", DIALECTS)
+def test_the_whole_bundle_including_the_sidecar_round_trips(dialect: str) -> None:
+    """`parse_vault` reads `.md` only, so `evidence.json` sat outside the round
+    trip that is supposed to prove no field is dropped in silence — the sidecar
+    had a writer and, anywhere in Aleph, no reader at all.
+
+    Both halves are read back and re-rendered here: the markdown through
+    `parse_vault`, the sidecar through `parse_evidence_json`, and the header
+    the second one returns is what supplies `project_title` and `dialect` to
+    the re-render rather than the constants this test started from.
+    """
+    first = _bundle(dialect, QUOTE_PLAIN)
+    header, pages = parse_evidence_json(first[EVIDENCE_FILENAME])
+    assert (header.project_title, header.dialect) == ("Test Wiki", dialect)
+    second = {
+        **render_vault(
+            parse_vault(first), dialect=header.dialect, project_title=header.project_title
+        ).files,
+        **evidence_files(list(pages), project_title=header.project_title, dialect=header.dialect),
+    }
+    assert second == first
+
+
+# ---------------------------------------------------------------------------
+# The rules that had no test
+# ---------------------------------------------------------------------------
+
+
+def test_every_evidence_rule_is_declared_and_driven_by_a_test() -> None:
+    """The count in the report said five; the code shipped six; `evidence-claim`
+    had no test anywhere.
+
+    Two assertions, because the list and the tests can drift apart
+    independently: `EVIDENCE_RULES` must name every `evidence-*` rule the
+    script can emit, and every rule in it must appear in this file. The second
+    is a naming check, not a proof that the test drives the rule — but it makes
+    adding a rule with no test a build failure rather than a thing somebody
+    counts by hand.
+    """
+    import re
+
+    source = CHECK_OKF.read_text(encoding="utf-8")
+    emitted = set(re.findall(r'"(evidence-[a-z-]+)"', source))
+    declared = set(re.findall(r'^    "(evidence-[a-z-]+)",$', source, re.MULTILINE))
+    assert declared, "EVIDENCE_RULES no longer parses — this check has stopped checking"
+    assert emitted == declared, f"undeclared: {emitted - declared}; stale: {declared - emitted}"
+    here = Path(__file__).read_text(encoding="utf-8")
+    for rule in sorted(declared):
+        assert rule in here, f"{rule} is emitted by check-okf.py and named by no test here"
+
+
+def test_a_claim_with_no_text_is_reported(tmp_path: Path) -> None:
+    """A claim is a sentence somebody can check. An empty one exports a
+    citation chain anchoring nothing, and the page above it renders
+    `**Claim.** ` followed by a blank."""
+    files = _bundle_with_sidecar(lambda d: d["pages"][0]["claims"][0].update(text="   "))
+    result = _okf(_write(tmp_path, files))
+    assert result.returncode == 1
+    assert "evidence-claim" in result.stdout
+
+
+def test_a_page_entry_with_no_slug_is_reported(tmp_path: Path) -> None:
+    """Distinct from a slug that names a missing file: an entry with no slug
+    names nothing at all, so its claims cannot be attached to any page in the
+    bundle and the `slug not in stems` branch never even runs."""
+    files = _bundle_with_sidecar(lambda d: d["pages"][0].update(slug=""))
+    result = _okf(_write(tmp_path, files))
+    assert result.returncode == 1
+    assert "evidence-page" in result.stdout
+    assert "carries no slug" in result.stdout
+
+
+@pytest.mark.parametrize("field", ["project_title", "dialect"])
+def test_a_sidecar_that_dropped_a_header_field_is_reported(tmp_path: Path, field: str) -> None:
+    """Both were write-only: written by `evidence_document`, re-supplied by
+    both call sites, read by nobody. Deleting either left 163 tests green,
+    because a round trip cannot see a field neither half carries."""
+    files = _bundle_with_sidecar(lambda d: d.pop(field))
+    result = _okf(_write(tmp_path, files))
+    assert result.returncode == 1
+    assert "evidence-header" in result.stdout
+    assert field in result.stdout
+
+
+@pytest.mark.parametrize("field", ["claim_count", "citation_count", "anchored_citation_count"])
+def test_a_sidecar_that_dropped_a_count_is_reported(tmp_path: Path, field: str) -> None:
+    """The mismatch rule ran under `isinstance(stated, int)`, so *changing* a
+    count failed and *deleting* it passed."""
+    files = _bundle_with_sidecar(lambda d: d.pop(field))
+    result = _okf(_write(tmp_path, files))
+    assert result.returncode == 1
+    assert "evidence-count" in result.stdout
+    assert field in result.stdout
+
+
+def test_an_anchored_count_that_disagrees_with_the_body_is_reported(tmp_path: Path) -> None:
+    """`anchored_citation_count` was the one count nothing re-derived — the
+    rule only ever looped over claims and citations, so the number that
+    separates "cites a paper" from "quotes it at an offset" was unchecked."""
+    files = _bundle_with_sidecar(lambda d: d.update(anchored_citation_count=7))
+    result = _okf(_write(tmp_path, files))
+    assert result.returncode == 1
+    assert "evidence-count" in result.stdout
+    assert "anchored_citation_count" in result.stdout
+
+
+def test_a_page_whose_summary_sentence_disagrees_with_the_sidecar_is_reported(
+    tmp_path: Path,
+) -> None:
+    """The numbers a PERSON reads, which no rule looked at.
+
+    `render_evidence_section` could report `EvidenceCounts()` — "0 claims, 0
+    citations, 0 anchored" over twenty anchored citations — and every test
+    stayed green, because `evidence-count` compares the sidecar's header to the
+    sidecar's body and never opens the markdown.
+    """
+    files = _bundle("okf", QUOTE_PLAIN)
+    mutated = files["attention.md"].replace(
+        "1 claim, 1 citation, 1 anchored", "0 claims, 0 citations, 0 anchored", 1
+    )
+    assert mutated != files["attention.md"], "the mutation changed nothing"
+    files["attention.md"] = mutated
+    result = _okf(_write(tmp_path, files))
+    assert result.returncode == 1
+    assert "evidence-summary" in result.stdout
+
+
+def test_a_page_whose_summary_sentence_is_gone_is_reported(tmp_path: Path) -> None:
+    """The guard on the guard. The rule finds the sentence by its wording, so a
+    reworded summary would switch it off in silence — which is the exact
+    failure it exists to catch, one level up."""
+    files = _bundle("okf", QUOTE_PLAIN)
+    mutated = files["attention.md"].replace("1 claim, 1 citation, 1 anchored", "some evidence", 1)
+    assert mutated != files["attention.md"], "the mutation changed nothing"
+    files["attention.md"] = mutated
+    result = _okf(_write(tmp_path, files))
+    assert result.returncode == 1
+    assert "evidence-summary" in result.stdout
+
+
+def test_a_page_with_no_evidence_block_at_all_is_reported(tmp_path: Path) -> None:
+    """The sidecar says this page has a claim; the page shows the reader
+    nothing. That is the export shipping the conclusion with the reasoning
+    deleted from the half a person actually opens."""
+    files = _bundle("okf", QUOTE_PLAIN)
+    body = files["attention.md"]
+    start = body.index("<!-- aleph:evidence -->")
+    end = body.index("<!-- /aleph:evidence -->") + len("<!-- /aleph:evidence -->")
+    files["attention.md"] = body[:start] + body[end:]
+    assert "<!-- aleph:evidence -->" not in files["attention.md"], "the mutation changed nothing"
+    result = _okf(_write(tmp_path, files))
+    assert result.returncode == 1
+    assert "evidence-summary" in result.stdout

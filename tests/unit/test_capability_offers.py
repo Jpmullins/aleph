@@ -1,4 +1,4 @@
-"""The capability sweep must model reality, and its parsers must see the trap.
+"""The capability sweep must model reality, and its parsers must read the source.
 
 `rerank` was offered in the Settings picker, had a `CAPABILITY_POLICIES` entry,
 had a help string — and nothing in Aleph resolves that capability, so every
@@ -6,10 +6,21 @@ had a help string — and nothing in Aleph resolves that capability, so every
 would never have been called.
 
 The obvious check was ``grep -rn '"rerank"' | grep -v tests | wc -l == 1``. It
-would have gone green with the orphan help text still shipping, because
-`CAPABILITY_HELP` spells the key **unquoted** (``rerank: "Reorders retrieved
-chunks",``) and the grep never matched it. `test_the_help_parser_sees_an_unquoted_key`
-is that specific defect, pinned.
+would have gone green with the orphan help text still shipping, because when the
+picker was TypeScript `CAPABILITY_HELP` spelled the key **unquoted**
+(``rerank: "Reorders retrieved chunks",``) and the grep never matched it.
+
+**WS-B1 moved the picker's two lists from `apps/web/src/components/Drawers.tsx`
+to `apps/api/src/aleph_api/routes/surfaces.py`** — the drawer became a pane, and
+a pane renders what the server sends, so a capability list living in the browser
+was a client-side copy of something only the server knows. The parser tests
+below moved with it, and the unquoted-key trap is gone by construction rather
+than by vigilance: a Python dict key is a string literal or it is a syntax
+error. The reason the trap existed is preserved in
+`test_the_parsers_ignore_the_prose_that_names_the_same_lists`, which is the same
+defect in the form it can still take here — the module's own docstring names
+both constants, so a text search would match the explanation as well as the
+code.
 
 `KNOWN_UNRESOLVED` is asserted to be exactly right in both directions: an entry
 that is no longer needed fails as loudly as a missing one, so it cannot quietly
@@ -63,13 +74,13 @@ def test_rerank_is_in_all_three_lists_now_that_it_has_a_consumer() -> None:
     and_a_caller` enforces it generally. This names `rerank` specifically
     because it is the capability that has now been wrong in both directions.
     """
-    drawers = (ROOT / "apps/web/src/components/Drawers.tsx").read_text(encoding="utf-8")
+    offers = (ROOT / "apps/api/src/aleph_api/routes/surfaces.py").read_text(encoding="utf-8")
     discovery = (ROOT / "packages/aleph-models/src/aleph_models/discovery.py").read_text(
         encoding="utf-8"
     )
     members = {"RERANK": "rerank"}
-    assert "rerank" in offered_capabilities(drawers), "the Settings picker does not offer it"
-    assert "rerank" in help_capabilities(drawers), "offered with no help string"
+    assert "rerank" in offered_capabilities(offers), "the Settings picker does not offer it"
+    assert "rerank" in help_capabilities(offers), "offered with no help string"
     assert "rerank" in policy_capabilities(discovery, members), (
         "no CAPABILITY_POLICIES entry, so autoconfigure can never bind it"
     )
@@ -95,40 +106,58 @@ def test_the_rerank_policy_asks_for_a_chat_model() -> None:
 
 # --- the parsers, against synthetic sources -------------------------------
 
-_DRAWERS = """
-const CAPABILITIES = [
-  "synthesis",
-  "rerank",
-] as const;
+_OFFERS = """
+CAPABILITIES: tuple[str, ...] = (
+    "synthesis",
+    "rerank",
+)
 
-const CAPABILITY_HELP: Record<string, string> = {
-  synthesis: "Composes briefs and wiki pages",
-  rerank: "Reorders retrieved chunks",
-};
+CAPABILITY_HELP: dict[str, str] = {
+    "synthesis": "Composes briefs and wiki pages",
+    "rerank": "Reorders retrieved passages before they reach the answer",
+}
 """
 
 
-def test_the_offer_parser_reads_the_array() -> None:
-    assert offered_capabilities(_DRAWERS) == ["synthesis", "rerank"]
+def test_the_offer_parser_reads_the_tuple_in_order() -> None:
+    """Order matters: it is the order the capabilities are listed to a person."""
+    assert offered_capabilities(_OFFERS) == ["synthesis", "rerank"]
 
 
-def test_the_help_parser_sees_an_unquoted_key() -> None:
-    """The exact reason the grep in the original criterion could not fail."""
-    assert help_capabilities(_DRAWERS) == ["synthesis", "rerank"]
-    help_block = _DRAWERS.split("CAPABILITY_HELP", 1)[1]
-    assert '"rerank"' not in help_block, (
-        "the trap is that the help key is NOT quoted — if this sample quotes it, "
-        "the test is no longer reproducing the defect"
-    )
+def test_the_help_parser_reads_the_dict_keys() -> None:
+    assert help_capabilities(_OFFERS) == ["synthesis", "rerank"]
 
 
-def test_the_help_parser_also_reads_a_quoted_key() -> None:
-    source = """
-const CAPABILITY_HELP: Record<string, string> = {
-  "synthesis": "Composes briefs",
-};
-"""
+def test_the_parsers_ignore_the_prose_that_names_the_same_lists() -> None:
+    """The successor to the unquoted-key trap, and the same failure shape.
+
+    A regex over the source would match the docstring and the comments, which
+    name both constants and quote example capability values while explaining
+    why the lists are not derived from each other. That is not a hypothetical:
+    the real `routes/surfaces.py` carries exactly such a comment above
+    `CAPABILITIES`, and it mentions `rerank` by name.
+
+    Reading the module-level ASSIGNMENT is what makes the parser answer a
+    question about the code rather than about the file's text.
+    """
+    source = '''
+"""A docstring naming CAPABILITIES and CAPABILITY_HELP and quoting "vision"."""
+
+# CAPABILITIES used to include "rerank" — see the comment about CAPABILITY_HELP.
+
+CAPABILITIES: tuple[str, ...] = ("synthesis",)
+
+CAPABILITY_HELP: dict[str, str] = {"synthesis": "Composes briefs"}
+'''
+    assert offered_capabilities(source) == ["synthesis"]
     assert help_capabilities(source) == ["synthesis"]
+
+
+def test_the_parsers_report_nothing_rather_than_guessing_when_the_lists_are_gone() -> None:
+    """An empty answer is a `not-offered` problem for every policy, which is
+    loud. A parser that raised here would take the whole sweep down instead."""
+    assert offered_capabilities("x = 1\n") == []
+    assert help_capabilities("x = 1\n") == []
 
 
 def test_the_policy_parser_reads_enum_attribute_keys() -> None:

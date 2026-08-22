@@ -466,6 +466,16 @@ class ListwiseLlmReranker:
                 error=judgement.malformed,
                 impact="fused order kept; this is NOT read as an abstention",
             )
+            # Recorded on the RERANKER, not only in the log, so `search_corpus`
+            # can put it on the span. Without this, a search whose reranker
+            # produced garbage is byte-identical on the trace to one whose
+            # reranker did real work: same `backend`, same `returned`,
+            # `abstained=False`, no `skipped` attribute. An operator reading the
+            # trace cannot tell "it reordered my results" from "its reply was
+            # unreadable and I got fusion order" — and `_loads_lenient`'s own
+            # docstring says a strict parse "failed on the large majority of
+            # replies" on this deployment, so it is the common case.
+            self.skipped_reason = f"{self.name} reply unreadable: {judgement.malformed}"
             return list(hits[:top_k])
         return apply_ranking(hits, judgement.scores, top_k=top_k, keep_unranked=self.keep_unranked)
 

@@ -459,6 +459,14 @@ async def _fuse_then_rerank(
             return fused[:top_k]
         span.set_attribute("retrieval.rerank.backend", reranker.name)
         span.set_attribute("retrieval.rerank.returned", len(ranked))
+        # Read AGAIN, after the call. A reranker that degraded DURING `rank` —
+        # an unreadable reply, a cross-encoder that answered with nothing — sets
+        # its own reason on the way out, and reading `skipped_reason` only
+        # before the call could never see it. Without this, those searches are
+        # byte-identical on the span to one where the reranker did real work.
+        degraded = getattr(reranker, "skipped_reason", None)
+        if degraded:
+            span.set_attribute("retrieval.rerank.skipped", str(degraded)[:500])
         # Zero results after a non-empty candidate list is the reranker saying
         # "none of this answers the question". Recorded as its own attribute
         # because it is the one outcome that looks like a broken retriever and
