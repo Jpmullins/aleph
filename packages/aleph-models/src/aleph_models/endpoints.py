@@ -30,9 +30,17 @@ built once at boot. `resolve`'s `fallback_*` arguments are what makes that
 adoption safe without a flag day: a project with no row keeps the deployment
 default, and `source` says which of the two it got.
 
-**Still on Settings, and not by choice:** the agent path
-(`copilot_agent._gateway_chat_model`), `app.state.litellm`, and the workers'
-`ctx["litellm_client"]`. Those are MEP-6 and they are outside this module.
+**Who else calls this.** `apps/workers/src/aleph_workers/gateway.py` builds one
+:class:`ProjectLiteLLMClients` and one :class:`ProjectGatewayCatalogs` per
+worker process and resolves per job, so ingest, embedding, research, curation
+and the reviewers reach the project's endpoint rather than the deployment's;
+and `copilot_agent.resolve_agent` resolves the assistant's endpoint the same
+way, which is what puts the endpoint half of its graph-cache signature under a
+project's control instead of a boot setting.
+
+**Still on Settings, and honestly so:** `app.state.litellm`, read by `/readyz`.
+Readiness is a statement about the DEPLOYMENT — "ready for which project?" has
+no answer — so the liveness probe legitimately reads a process-wide client.
 """
 
 from __future__ import annotations
@@ -64,6 +72,7 @@ __all__ = [
     "EndpointProbe",
     "GatewayEndpointService",
     "ProjectGatewayCatalogs",
+    "ProjectLiteLLMClients",
     "ResolvedEndpoint",
     "redact_secret",
     "settings_endpoint",

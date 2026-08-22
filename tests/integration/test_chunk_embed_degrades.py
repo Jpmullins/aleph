@@ -149,12 +149,31 @@ def _token(project_id: uuid.UUID) -> str:
     )
 
 
+class _OneGateway:
+    """Stands in for `aleph_workers.gateway.WorkerGateways`.
+
+    WS-MEP-4 moved the job's model client from `ctx["litellm_client"]` — one
+    client for every project — to a per-project resolution, so the seam a test
+    injects at moved with it. Substituting the RESOLVER rather than the client
+    keeps this file about embedding degradation: which gateway a project talks
+    to is `test_worker_gateway_endpoints.py`, and it uses two real fakes.
+    """
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+        self.asked_for: list[uuid.UUID] = []
+
+    async def litellm(self, project_id: uuid.UUID) -> Any:
+        self.asked_for.append(project_id)
+        return self._client
+
+
 def _ctx(maker: Callable[[], AsyncSession], embedder: Any) -> dict[str, Any]:
     return {
         "agent_token_secret": SECRET,
         "session_maker": maker,
         "asset_store": _AssetStore(MARKDOWN.encode()),
-        "litellm_client": embedder,
+        "gateways": _OneGateway(embedder),
     }
 
 

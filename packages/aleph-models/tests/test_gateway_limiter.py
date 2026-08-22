@@ -49,7 +49,7 @@ from aleph_models.limiter import (
     shared_gateway_client,
 )
 from aleph_models.pricing import PricingTable
-from aleph_models.testing import FakeGateway, GatewayConfig, RecordingSessions
+from aleph_models.testing import FakeGateway, FakeModel, GatewayConfig, RecordingSessions
 from aleph_security.principal import Principal
 
 CHAT = "/v1/chat/completions"
@@ -141,6 +141,54 @@ class TestTheCeilingHolds:
         )
         assert fake.count(CHAT) >= 20, "the chats did not actually reach the gateway"
         assert len(sessions.model_calls()) == 20, "a limited call must still be costed"
+
+    @pytest.mark.parametrize("ceiling", [3, 8])
+    async def test_a_forty_model_gateway_is_probed_within_the_ceiling(self, ceiling: int) -> None:
+        """WS-MEP-2 c4. The largest single burst Aleph produces, at real scale.
+
+        `autoconfigure_bindings` probes EVERY advertised model in one
+        `asyncio.gather`, and the fake serves four by default — so the existing
+        mixed fan-out test above reaches its ceiling on the chat calls and would
+        pass whether the probe sweep were metered or not. Forty is the number
+        the plan names because it is the shape of a real LiteLLM deployment,
+        and forty unmetered probes against a gateway with a ten-request ceiling
+        is the burst that gets an application rate-limited at configuration
+        time — before it has done any work at all.
+
+        The measure is `fake.peak_in_flight`, counted inside the gateway's own
+        in-flight window, not elapsed time: a wall-clock assertion turns a
+        contended CI machine into a red build and says nothing about
+        concurrency.
+        """
+        configure_limits(LimiterConfig(max_concurrency=ceiling, queue_timeout_s=30.0))
+        # Invented ids: `aleph_models.hints` recognises real names and would
+        # fill in metadata this gateway never reported. Alternating modes so
+        # the sweep is not accidentally a single-capability special case.
+        models = tuple(
+            FakeModel(
+                id=f"vllm-local-{i:02d}",
+                mode="embedding" if i % 5 == 4 else "chat",
+                supports_function_calling=i % 2 == 0,
+                input_per_token="1e-6",
+                output_per_token="2e-6",
+            )
+            for i in range(40)
+        )
+        fake = FakeGateway(GatewayConfig.well_behaved(models=models, latency_s=0.02))
+        async with fake.client() as http:
+            await _probe_sweep(fake, http)
+
+        probes = fake.request_count - fake.count("/model/info") - fake.count("/v1/models")
+        assert probes == 40, f"expected one probe per advertised model, saw {probes}"
+        assert fake.peak_in_flight <= ceiling, (
+            f"{fake.peak_in_flight} of 40 probes were in flight at once against a "
+            f"gateway limited to {ceiling}: the autoconfigure sweep is not metered"
+        )
+        assert fake.peak_in_flight == ceiling, (
+            "the ceiling was never reached during a 40-model sweep: the limiter is "
+            "serialising rather than saturating, which makes configuration slow "
+            "instead of making it safe"
+        )
 
     async def test_the_limiter_and_the_gateway_agree_on_the_peak(self) -> None:
         """The limiter's own counter is the number `/readyz` would report.
