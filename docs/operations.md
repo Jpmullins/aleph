@@ -374,6 +374,36 @@ Both are one-shots rather than `/docker-entrypoint-initdb.d` scripts on purpose:
 initdb runs only on a first-boot empty data directory, so an initdb hook fixes a
 fresh volume and leaves every existing stack unable to turn tracing on.
 
+### When scholarship stops answering
+
+`api.openalex.org` returning **429 with a multi-hour `Retry-After`** is not
+throttling and is not a mailto problem. It is your **egress IP address** being
+blocked, and no configuration changes it — wait it out, or give the container a
+different route.
+
+This was diagnosed as a missing `ALEPH_SCHOLAR_MAILTO` twice, and both times
+that was wrong. Measured 2026-08-22 with the production `ScholarHttp` — same
+code, same URL, same `mailto=`, differing only in `local_address`:
+
+```
+IPv4  ->  HTTP 429, Retry-After 9035s
+IPv6  ->  HTTP 200
+```
+
+`Retry-After` across four readings counted down 25668 → 12309 → 10069 → 9035:
+one fixed deadline against the address, not a rate that resets. Aleph now says
+so — `aleph_scholar.http.egress_block_note` labels a `Retry-After` at or above
+900s as an egress block, and puts that note **before** the mailto note, because
+leading with the weaker explanation is how "set a real mailto" became the
+accepted answer.
+
+`ALEPH_SCHOLAR_MAILTO` still matters, for a different reason: Crossref and
+OpenAlex give a better rate to a request that carries a contact address a human
+reads. It defaults to **empty**, not to a placeholder — `is_contactable` refuses
+`dev@aleph.local` anyway, so the old default bought nothing and made an unset
+value look configured. Unset, Aleph suppresses the `mailto` parameter, clamps
+itself to the common-pool rate, and warns at construction.
+
 ## Gates
 
 CI (`.github/workflows/ci.yml`) runs four jobs, and each one can genuinely fail:
