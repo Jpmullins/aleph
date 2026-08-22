@@ -703,7 +703,7 @@ belongs in `docs/decisions.md` either way.
 **Criteria:**
 
 - The agent surface has a caller in product code
-  <br>``grep -rn "AgentPluginAPI" apps/api/src | wc -l` returns ≥ 1. Today it returns 0.`
+  <br>``grep -rn "AgentPluginAPI(" apps/api/src | wc -l` returns ≥ 1. Today it returns 0. The open paren is load-bearing: without it the grep counts the docstrings that describe the fix, so it passes whether or not anything constructs the class.`
 - The kernel on app state is read, not just written
   <br>``grep -rn "state\.kernel" apps/api/src | wc -l` returns ≥ 2. Today it returns 1 — the write at lifespan.py:80.`
 - A refusal is predictable from the preview
@@ -771,7 +771,7 @@ belongs in `docs/decisions.md` either way.
 - The save action has a registered handler
   <br>``uv run python -c "from aleph_api.a2ui_handlers import build_action_router; assert 'plugin.settings.save' in build_action_router().registered_actions()"` exits 0. FAILS TODAY — `register` raises because the action is not in the catalog.`
 - `settings_card.py` has a caller in product code
-  <br>``grep -rn "settings_surface" apps/api/src | wc -l` returns ≥ 1. Today it returns 0.`
+  <br>``grep -rn "from aleph_a2ui.settings_card import" apps/api/src | wc -l` returns ≥ 1. Today it returns 0. Not a grep for `settings_surface`, which also matches the unrelated `settings_surface_v09` already imported by `routes/surfaces.py` — that check is green today and would stay green if this workstream were never done.`
 - The generated catalogs and the web build stay consistent
   <br>``./scripts/check-catalog-generated.sh`, `./scripts/check-surface-bindings.sh` and `pnpm -C apps/web build` all exit 0.`
 
@@ -1387,7 +1387,7 @@ belongs in `docs/decisions.md` either way.
 - A password-format field never reaches plugin_settings.values.
   <br>`Submit a schema with a format: password field; assert the JSONB holds a credential reference and the encrypted store holds the secret; `SELECT values::text FROM plugin_settings` contains no plaintext`
 - settings_card.py has a non-test importer. FAILS TODAY: returns 0.
-  <br>``grep -rn 'settings_card' --include='*.py' apps packages | grep -v tests | grep -v __pycache__ | grep -v 'settings_card.py:' | wc -l` returns ≥1`
+  <br>``grep -rn 'from aleph_a2ui.settings_card import' --include='*.py' apps packages | grep -v tests | wc -l` returns ≥1. The import form, not the bare name: twelve of the twenty bare-name hits are docstrings explaining what `settings_card.py` is, so the loose grep counts the prose documenting the fix`
 - The three trust tiers are observable at the API and change behaviour.
   <br>`GET /v1/projects/{id}/plugins returns each contribution's trust value; an 'authored'-tier save returns requires_approval: true while a 'core' save does not`
 - No schema drift is introduced.
