@@ -67,6 +67,43 @@ class PluginDraft:
     config_schema: dict[str, Any] | None = None
 
 
+def _contribute_ui(row: Plugin) -> None:
+    """Give a plugin that declared a config schema its settings screen.
+
+    `UIContributionRegistry` had three read sites and ZERO writes: nothing
+    outside tests ever called `register`, so `GET .../surfaces/settings`
+    reported `plugins: 0` on every project, the "Open" button never rendered,
+    and `_plugin_settings_messages` — the whole generated-settings path A4 and
+    B1 exist to provide — had no reachable entry point.
+
+    A plugin with no `config_schema` gets no contribution: an empty settings
+    screen is worse than none, because it invites somebody to look for the
+    setting that is not there.
+
+    Idempotent by construction. `register` raises on a duplicate id, which is
+    right for two DIFFERENT plugins claiming one name and wrong for the same
+    plugin being reconstituted at boot, so the existing entry is withdrawn
+    first.
+    """
+    from aleph_runtime.ui_contributions import UI_CONTRIBUTIONS, UIContribution
+
+    schema = row.config_schema or {}
+    if not schema:
+        return
+    UI_CONTRIBUTIONS.remove(row.name)
+    UI_CONTRIBUTIONS.register(
+        UIContribution(
+            plugin_id=row.name,
+            title=row.name.replace("-", " ").replace("_", " ").title(),
+            description=(row.instructions or "").strip().splitlines()[0][:200]
+            if row.instructions
+            else "",
+            config_schema=schema,
+            trust="authored",
+        )
+    )
+
+
 def _refuse_catalog_collision(draft: PluginDraft) -> None:
     """Refuse a plugin whose component or function name is already core's.
 
@@ -147,6 +184,7 @@ class PluginService:
         )
         self._session.add(row)
         await self._session.flush()
+        _contribute_ui(row)
 
         await ledger.append(
             project_id=project_id,
@@ -224,6 +262,11 @@ class PluginService:
                 failed.append((row.name, reason))
                 _log.warning("plugin.reconstitute_failed", name=row.name, reason=reason)
                 continue
+            # The settings screen has to come back with the plugin. Without
+            # this a restart mounts the capability and silently loses its
+            # configuration UI, which looks like the plugin working and its
+            # settings having been removed.
+            _contribute_ui(row)
             mounted.append(row.name)
         return mounted, failed
 
@@ -293,6 +336,12 @@ class PluginService:
                 await kernel.deactivate(plugin_id, force=force)
 
         row.state = "disabled"
+        # Withdrawn, which is what `remove` exists for. A settings screen for a
+        # plugin that is not running is a form whose Save writes into a
+        # capability nobody will read.
+        from aleph_runtime.ui_contributions import UI_CONTRIBUTIONS
+
+        UI_CONTRIBUTIONS.remove(name)
         await ledger.append(
             project_id=project_id,
             actor_id=actor_id,
