@@ -88,10 +88,10 @@ probe "a failed setup still unwinds" \
 
 probe "the honest-miss diagnostic is required" \
   packages/aleph-assistant/src/aleph_assistant/retrieval/router.py \
-  's/titles, summaries and aliases only/something or other/' \
+  's/titles, summaries, aliases and page bodies/something or other/' \
   "uv run python -c \"
 from aleph_assistant.retrieval import router as r
-assert 'titles' in r._MISS_REASON and 'bodies' in r._MISS_REASON
+assert 'bodies' in r._MISS_REASON and 'source' in r._MISS_REASON
 \""
 
 # ---------------------------------------------------------------------------

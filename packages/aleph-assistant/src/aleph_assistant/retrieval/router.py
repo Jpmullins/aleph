@@ -42,24 +42,36 @@ _log = structlog.get_logger(__name__)
 
 _PROMPT_DIR = Path(__file__).parent / "prompts"
 
-# An honest miss names its likely cause. Candidate generation is lexical and
-# conjunctive — Postgres FTS over each page's title, summary and aliases, with
-# `plainto_tsquery`, which requires EVERY term to be present — so "no candidates"
-# far more often means the question is phrased in different words than that the
-# project lacks the knowledge. Saying "I found nothing" without saying why sends
-# the reader off to re-ingest material that is already there.
+# An honest miss names its likely cause — and the cause it names has to be the
+# CURRENT one.
+#
+# This text used to say retrieval matched "titles, summaries and aliases only —
+# never page bodies" and "requires every term to be present". Both were true
+# when it was written and both were fixed afterwards: `wiki_index` now carries
+# `body_text` at weight C, and `or_tsquery` ORs the terms instead of ANDing
+# them. So a real miss was telling the reader to rephrase for a reason that no
+# longer existed — a diagnostic that has outlived its defect sends people to fix
+# the wrong thing, which is worse than no diagnostic.
+#
+# What remains true is that candidate generation is LEXICAL: it matches word
+# stems, so a question phrased entirely in synonyms of what the page says can
+# still miss, and the corpus search (which is not lexical-only) is the leg that
+# covers that case. Saying "I found nothing" without saying why sends the reader
+# off to re-ingest material that is already there.
 _MISS_REASON = (
-    "no candidate pages: retrieval matches a question's terms against page "
-    "titles, summaries and aliases only — never page bodies — and requires every "
-    "term to be present. A wording mismatch is a more likely explanation than "
-    "missing coverage."
+    "no candidate pages and no matching source passages: page retrieval matches "
+    "word stems against titles, summaries, aliases and page bodies, and the "
+    "corpus search found nothing either. A question phrased entirely in synonyms "
+    "of what the material says is a more likely explanation than missing "
+    "coverage; genuinely absent coverage is the other."
 )
 _MISS_BODY = (
-    "I could not find any wiki page matching that question.\n\n"
-    "This is a lexical match against page titles and summaries, so it misses "
-    "when a question uses different words than a page's title — including when "
-    "the answer is written in the page body. Rephrasing with terms you would "
-    "expect in a page title may find it.\n\n"
+    "I could not find anything on that — not in the wiki pages, and not in the "
+    "ingested sources.\n\n"
+    "Page search matches word stems against a page's title, summary, aliases and "
+    "body, so it misses when a question is phrased entirely in different words "
+    "than the material uses. Rephrasing with a term you would expect to appear "
+    "in the text may find it.\n\n"
     "If the project genuinely has no coverage here, `/synthesize` will research "
     "the topic and propose new pages."
 )

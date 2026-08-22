@@ -7,13 +7,22 @@ its search — the most misleading answer a retrieval system can give.
 
 These tests pin the two halves of the fix: the outage is named on the result,
 and it is named *in the reply text* a person actually reads.
+
+The dead embedder is not a stub that raises. It is a **real** `LiteLLMClient`
+pointed at `aleph_models.testing.FakeGateway`, asked for `titan-embed-v2` — the
+model name the deployed profile actually bound, against a gateway that actually
+serves `titan-embed-text-v2`. That one-character-class difference is the live
+production defect: every embed 400s, and because chunks are written only after
+the embed returns it also killed the lexical leg, which needs no model at all.
+A hand-written `raise RuntimeError("model not found")` asserts that the router
+survives *an* exception. This asserts it survives *the* one.
 """
 
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
-from typing import Any
+from collections.abc import AsyncIterator
+from typing import Any, cast
 
 import pytest
 
@@ -22,27 +31,18 @@ from aleph_assistant.retrieval.router import (
     WikiFirstRetrievalRouter,
     _with_degradation,
 )
+from aleph_models.client import LiteLLMClient
+from aleph_models.pricing import PricingTable
+from aleph_models.testing import FakeGateway, RecordingSessions
 from aleph_rks.models import EMBEDDING_DIM
 
+#: What the profile bound on the deployed instance. No gateway serves it.
+WRONG_EMBEDDER = "titan-embed-v2"
+#: What the gateway serves. `FakeGateway`'s defaults carry this one and not the
+#: one above, on purpose.
+RIGHT_EMBEDDER = "titan-embed-text-v2"
 
-class _DeadEmbedder:
-    def __init__(self) -> None:
-        self.calls = 0
-
-    async def embed(self, **_kw: Any) -> Any:
-        self.calls += 1
-        msg = "litellm.BadRequestError: model not found"
-        raise RuntimeError(msg)
-
-
-@dataclass
-class _EmbedResponse:
-    embeddings: list[list[float]]
-
-
-class _LiveEmbedder:
-    async def embed(self, **_kw: Any) -> _EmbedResponse:
-        return _EmbedResponse(embeddings=[[0.5] * EMBEDDING_DIM])
+EMBED_ROUTE = "/v1/embeddings"
 
 
 class _Session:
@@ -54,6 +54,23 @@ class _Session:
 
     async def __aexit__(self, *_a: object) -> bool:
         return False
+
+
+@pytest.fixture
+async def gateway() -> AsyncIterator[tuple[FakeGateway, LiteLLMClient]]:
+    """A real gateway client, on the hostile default config."""
+    fake = FakeGateway()
+    async with fake.client() as http:
+        yield (
+            fake,
+            LiteLLMClient(
+                base_url=fake.base_url,
+                api_key=fake.api_key,
+                http_client=http,
+                pricing=PricingTable(),
+                session_maker=cast("Any", RecordingSessions()),
+            ),
+        )
 
 
 def _router(embedder: Any, captured: dict[str, Any]) -> WikiFirstRetrievalRouter:
@@ -80,35 +97,46 @@ def patched_search(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     return captured
 
 
-async def test_a_dead_embedder_is_named_on_the_result(patched_search: dict[str, Any]) -> None:
-    embedder = _DeadEmbedder()
-    router = _router(embedder, patched_search)
+async def test_a_dead_embedder_is_named_on_the_result(
+    patched_search: dict[str, Any],
+    gateway: tuple[FakeGateway, LiteLLMClient],
+) -> None:
+    fake, client = gateway
+    router = _router(client, patched_search)
 
     await router._search_corpus(
         principal=object(),  # type: ignore[arg-type]
         project_id=uuid.uuid4(),
         agent_run_id=None,
-        profile_bindings={},
+        profile_bindings={"embedding": {"model": WRONG_EMBEDDER}},
         query="what did the survey find",
         budget=8,
     )
 
-    assert embedder.calls == 1
+    assert fake.models_requested() == [WRONG_EMBEDDER], (
+        "the request that failed must be the one naming the unserved model"
+    )
+    assert fake.count(EMBED_ROUTE) == 1, (
+        "a 400 is not retryable; retrying a wrong model name triples the latency "
+        "of every failed turn and never succeeds"
+    )
     assert router._degraded == "embedder_unavailable"
 
 
 async def test_lexical_search_still_runs_when_the_embedder_is_dead(
     patched_search: dict[str, Any],
+    gateway: tuple[FakeGateway, LiteLLMClient],
 ) -> None:
     """The keyword leg needs no model. Skipping the search entirely — which
     `return []` did — throws away the half that still works."""
-    router = _router(_DeadEmbedder(), patched_search)
+    _fake, client = gateway
+    router = _router(client, patched_search)
 
     await router._search_corpus(
         principal=object(),  # type: ignore[arg-type]
         project_id=uuid.uuid4(),
         agent_run_id=None,
-        profile_bindings={},
+        profile_bindings={"embedding": {"model": WRONG_EMBEDDER}},
         query="quokka photosynthesis anomaly",
         budget=8,
     )
@@ -121,15 +149,21 @@ async def test_lexical_search_still_runs_when_the_embedder_is_dead(
 
 async def test_a_healthy_embedder_reports_no_degradation(
     patched_search: dict[str, Any],
+    gateway: tuple[FakeGateway, LiteLLMClient],
 ) -> None:
-    """The check must be able to say 'fine' too, or it is a constant."""
-    router = _router(_LiveEmbedder(), patched_search)
+    """The check must be able to say 'fine' too, or it is a constant.
+
+    Same gateway, same client, one correct model name — so what separates this
+    case from the one above is exactly the defect, not the test scaffolding.
+    """
+    _fake, client = gateway
+    router = _router(client, patched_search)
 
     await router._search_corpus(
         principal=object(),  # type: ignore[arg-type]
         project_id=uuid.uuid4(),
         agent_run_id=None,
-        profile_bindings={},
+        profile_bindings={"embedding": {"model": RIGHT_EMBEDDER}},
         query="anything",
         budget=8,
     )

@@ -282,8 +282,15 @@ from aleph_assistant.retrieval import router as r
 # The diagnostic must exist AND name the mechanism. 'I found nothing' without a
 # cause sends a reader off to re-ingest material that is already there.
 assert hasattr(r, '_MISS_REASON'), 'the honest-miss diagnostic is gone'
-for word in ('titles', 'bodies'):
+# The diagnostic must name BOTH surfaces it searched, or a reader cannot tell
+# whether 'nothing found' means the wiki is empty or the sources are.
+for word in ('page', 'bodies', 'source'):
     assert word in r._MISS_REASON, f'the diagnostic no longer names the cause ({word!r} missing)'
+# And it must not describe a defect that was fixed: retrieval covers page bodies
+# and ORs its terms. A diagnostic that outlived its defect sends people to fix
+# the wrong thing.
+for stale in ('never page bodies', 'requires every term'):
+    assert stale not in r._MISS_REASON, f'the diagnostic still describes the OLD behaviour: {stale!r}'
 # Assert on the CALL, not the word: 'list_pages' also appears in the comment
 # explaining why the fallback was removed, so a bare substring test fails on
 # its own documentation.

@@ -1,8 +1,14 @@
 """WikiIndex maintenance — denormalized retrieval index per WikiPage.
 
-The trigger on `wiki_index` regenerates `index_tsv` from `title + summary
-+ aliases_jsonb` on every insert/update. `refresh_page` and
-`select_pages` are the only paths to that table.
+The trigger on `wiki_index` regenerates `index_tsv` from `title` (weight A),
+`summary + aliases_jsonb` (weight B) and `body_text` (weight C) on every
+insert/update. `refresh_page` and `select_pages` are the only paths to that
+table.
+
+`body_text` is named here because omitting it is what this docstring did for the
+life of the column: retrieval was body-blind, the migration that added the body
+did not update the prose, and a reader checking "does search cover page bodies"
+got the wrong answer from the module that owns the answer.
 """
 
 from __future__ import annotations
