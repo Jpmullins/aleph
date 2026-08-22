@@ -575,6 +575,13 @@ run_shell E9 "no unused class selector in the stylesheets" \
 run_shell E10 "design-token drift does not grow" \
   "./scripts/check-web-drift.sh 2>&1 | tail -1"
 
+# E12: the four thresholds in apps/web/vitest.config.ts were a comment nothing
+# could read — @vitest/coverage-v8 is an OPTIONAL peer of vitest and was absent,
+# so the only command that evaluates them answered MISSING DEPENDENCY. A floor
+# that cannot be evaluated is a floor that does not exist.
+run_shell E12 "the web coverage floor can be evaluated, and it bites" \
+  "CI=1 pnpm -C apps/web test:coverage 2>&1 | grep -E '^Statements' | tail -1"
+
 # ---------------------------------------------------------------------------
 # G — Verification infrastructure
 # ---------------------------------------------------------------------------

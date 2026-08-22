@@ -426,12 +426,16 @@ jobs:
       # `catalog.generated.ts` that no longer compiles against server.ts.
       - name: copilot-runtime install + typecheck
         run: |
+          npm --prefix apps/copilot-runtime ci
+          npm --prefix apps/copilot-runtime run typecheck
 
       # WS-P4 stood up vitest and 89 tests, and CI ran none of them. Every
       # workstream wanting a behavioural front-end assertion had been settling
       # for a source-level grep because no runner existed; a runner that exists
       # and does not run is the same outcome with more files in it.
-      - name: web unit tests
-        run: pnpm -C apps/web test:run
-          npm --prefix apps/copilot-runtime ci
-          npm --prefix apps/copilot-runtime run typecheck
+      #
+      # `test:coverage`, not `test:run`: the four thresholds in
+      # apps/web/vitest.config.ts are the floor WS-UI-2 c6 asks for, and a floor
+      # only CI's developers remember to check is a comment.
+      - name: web unit tests + coverage floor
+        run: pnpm -C apps/web test:coverage

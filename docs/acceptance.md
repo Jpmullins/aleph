@@ -185,6 +185,7 @@ The refactor is not done until the replaced thing is gone.
 | E9 | No unused class selector | `scripts/check-web-dead-css.sh` | ✅ |
 | E10 | Design-token drift does not grow | `scripts/check-web-drift.sh`, pinned at **0** across six counters | ✅ |
 | E11 | No surface renders identically in light and dark | `tests/playwright/specs/theme-differs-per-surface.spec.ts` renders each surface the server declares, screenshots it in both themes and compares pixels. Every source-reading web check is blind to a colour that arrives as an inline style, an SVG fill or a canvas paint, and the last hardcoded colour found in this app was on a canvas. All six surfaces measure 100% changed; the floor is 2% | ✅ |
+| E12 | The web coverage floor can be evaluated, and it bites | `apps/web/vitest.config.ts` thresholds, run as `acceptance.sh` E12 — statements **39.47%** (649/1644), branches 26.33%, functions 32.53%, lines 40.69%, against 38/24/31/39. The four numbers were a comment nothing could read until 2026-08-22: `@vitest/coverage-v8` is an OPTIONAL peer of vitest and was absent, so the only command that evaluates the thresholds answered `MISSING DEPENDENCY`. Measured, not asserted — dropping `SurfaceStreamProvider.test.tsx` alone takes statements to 32.78% and fails all four | ✅ |
 
 **Why E is blocked, and what unblocks it.**
 

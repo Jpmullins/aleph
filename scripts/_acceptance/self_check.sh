@@ -447,6 +447,30 @@ ORPHAN
   rm -f apps/web/src/components/__selfcheck_orphan.tsx
 fi
 
+if [ -f apps/web/src/styles.css ]; then
+  # A hand-authored rule nothing wears. Appended at EOF rather than spliced in:
+  # a class written between two `@import` statements sat in a chunk the sweep
+  # skipped for containing an `@`, which was a hole in the sweep and not a
+  # property of the probe — closed in check-web-dead-css.sh, and the EOF anchor
+  # keeps this probe independent of that fix.
+  probe "web dead-CSS sweep notices a class nothing applies" \
+    apps/web/src/styles.css \
+    's|\z|\n.selfcheck-zombie { color: red; }\n|' \
+    "./scripts/check-web-dead-css.sh"
+fi
+
+if [ -f apps/web/src/components/Rail.tsx ]; then
+  # One rounded corner. `--radius` is 0px and the ratchet pin is ZERO, so a
+  # single added `rounded-lg` must move it. The plan's own mutation named
+  # `border border-line bg-surface`, which does not occur in this file (it is
+  # `border-r`), so perl edited nothing and the ratchet certified a mutation
+  # that never happened.
+  probe "design-token ratchet notices one added corner" \
+    apps/web/src/components/Rail.tsx \
+    's/border-r border-line bg-surface/border-r border-line rounded-lg bg-surface/' \
+    "./scripts/check-web-drift.sh --ratchet"
+fi
+
 # The meta-check. A sweep nothing runs is the defect class this whole harness
 # exists to catch, and it has landed three times — so the probe adds an unwired
 # sweep and requires the check to notice.

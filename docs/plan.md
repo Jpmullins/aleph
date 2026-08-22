@@ -48,7 +48,7 @@ that was already lying before anyone started.
 |---|---|---|
 | 1 | `docs/decisions.md` | **done** — 12 decisions; D5 (kernel is Python) closed; `CLAUDE.md`'s "open decision, do not assume Python" line is gone |
 | 2 | acceptance status re-derived; dangling `tests/e2e/` refs | **done** — all 4 distinct `tests/e2e/` paths in `acceptance.sh` resolve; `check-dead-refs.sh` is green over 521 files |
-| 3 | a self-check probe for every subject | **PARTIAL** — 27 probes over 25 sweeps, but **7 sweeps still have none**: `check-agent-catalog-covers-renderer`, `check-compose-hardening`, `check-confidence-vocabulary`, `check-lint-count`, `check-project-scope`, `check-web-dead-css`, `check-web-drift`. `check-project-scope` is WS-P6's own sweep |
+| 3 | a self-check probe for every subject | **PARTIAL** — 33 probes over 26 sweeps, and **5 sweeps still have none**: `check-agent-catalog-covers-renderer`, `check-compose-hardening`, `check-confidence-vocabulary`, `check-lint-count`, `check-project-scope` — the last is WS-P6's own sweep. `check-web-dead-css` and `check-web-drift` gained probes on 2026-08-22, and writing the first of them found a HOLE in its subject: a class declared above the first `{` in a stylesheet was invisible to the dead-CSS sweep, because the selector text had the `@import` lines glued to it and an `if "@" in selector: continue` guard skipped the whole rule |
 | 4 | `acceptance.sh` in CI with a ratcheting `--max-skip` | **done** |
 | 5 | `scripts/status.sh` | **done** — the eight numbers; 1 failing, 2 not measurable as of 2026-08-22 |
 | 6 | integration cadence declared | **done** — Part 6, line 2495 |
