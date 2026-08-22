@@ -680,7 +680,7 @@ belongs in `docs/decisions.md` either way.
 - The kernel still has no database dependency
   <br>``uv run python -c "import tomllib,pathlib; d=tomllib.loads(pathlib.Path('packages/aleph-kernel/pyproject.toml').read_text()); assert sorted(d['project']['dependencies'])==['aleph-core','aleph-observability']"` exits 0.`
 - There is no second declaration of the core capability set
-  <br>``grep -rn "core_capabilities" apps packages scripts | wc -l` returns 0. Today it returns 3.`
+  <br>``grep -rn "def core_capabilities" apps packages scripts | wc -l` returns exactly 1, in `packages/aleph-runtime/src/aleph_runtime/capabilities.py`. Not 0 over the bare name — the composition root has to declare the set somewhere, so the old form was red forever and said nothing about whether a SECOND declaration had appeared, which is the property.`
 - The schema and the models agree
   <br>``cd apps/api && uv run alembic check` produces no diff; `uv run pyright` reports 0 errors.`
 - The workspace package count does not grow
@@ -705,15 +705,15 @@ belongs in `docs/decisions.md` either way.
 - The agent surface has a caller in product code
   <br>``grep -rn "AgentPluginAPI(" apps/api/src | wc -l` returns ≥ 1. Today it returns 0. The open paren is load-bearing: without it the grep counts the docstrings that describe the fix, so it passes whether or not anything constructs the class.`
 - The kernel on app state is read, not just written
-  <br>``grep -rn "state\.kernel" apps/api/src | wc -l` returns ≥ 2. Today it returns 1 — the write at lifespan.py:80.`
+  <br>``grep -rn 'getattr(request.app.state, "kernel"' apps/api/src | wc -l` returns ≥ 1 — a READ, outside `lifespan.py`. Counting `state.kernel` counts the write too, so it was ≥ 2 the moment one route mentioned it. `getattr` with a default is deliberate: a route must answer 503 when the kernel is not mounted, not `AttributeError`. Today: 3, in `routes/plugins.py`.`
 - A refusal is predictable from the preview
   <br>``uv run pytest -m integration tests/integration/test_plugin_routes.py::test_preview_matches_the_refusal -q`: install A, install B requiring A, assert `preview_removal(A)` names exactly {B}, then assert `disable(A)` is refused naming exactly {B}. FAILS TODAY — there is no route and no tool.`
 - Core capability is not addressable over HTTP
-  <br>``::test_no_core_capability_is_addressable_over_http` asserts `GET /v1/projects/{id}/plugins` returns `plugin_id: null` for all ten capabilities in `apps/api/aleph.toml`, and that `DELETE` with a fabricated UUID returns 404 carrying the "mounted from the boot manifest" message from agent_api.py:198-206.`
+  <br>``::test_no_core_capability_is_addressable_over_http` asserts `GET /v1/projects/{id}/plugins` returns `plugin_id: null`, `removable: false` and `trust: "core"` for every one of the ten capabilities in `apps/api/aleph.toml`; `::test_a_fabricated_plugin_id_is_unaddressable_not_merely_refused` asserts `DELETE` and the removal preview both return 404 carrying the "mounted from the boot manifest" message from agent_api.py:198-206.`
 - Authoring a plugin requires more than project scope
-  <br>``::test_author_plugin_requires_an_operator_role` asserts a principal with project access but without the operator role gets 403.`
+  <br>``::test_authoring_over_http_is_refused_for_a_member_who_is_not_owner` holds a real `ProjectRole.EDITOR` principal — one that passes `project_scope_dep` — and asserts 403 on `POST /plugins` while a VIEWER still gets 200 on `GET`, so the refusal is about the role and not about project access. `::test_authoring_requires_owner_not_merely_project_access` is the second witness below HTTP.`
 - The plugins pane is reachable and the client did not hardcode it
-  <br>``GET /v1/projects/{id}/panes` includes `{"id":"plugins"}` and `./scripts/check-pane-registry.sh` still exits 0.`
+  <br>``PANE_REGISTRY` includes `settings`, whose surface carries a `plugins` section listing every `UIContribution` with its trust (`routes/surfaces.py:541`), and `./scripts/check-pane-registry.sh` exits 0. There is no top-level `plugins` pane and there is not meant to be: WS-B1 made settings a pane and plugin settings a section inside it, so the original wording asks for a screen the design deliberately does not have.`
 - Every mutating route writes a ledger row
   <br>``::test_disable_over_http_writes_a_ledger_row` asserts one `action_ledger_events` row with `action_kind == "plugin.disable"`.`
 
@@ -742,7 +742,7 @@ belongs in `docs/decisions.md` either way.
 - Authored skills are project-scoped
   <br>``::test_project_a_cannot_read_project_bs_authored_skill` asserts the skill list for project B excludes project A's authored skill.`
 - Nothing blocks the FastAPI event loop
-  <br>``::test_the_async_path_is_used` asserts `abefore_agent` is the exercised hook and that the store backend's `als`/`adownload_files` resolve to the protocol defaults, which are `asyncio.to_thread` wrappers (backends/protocol.py:366-368, :622-624).`
+  <br>``::test_the_async_path_is_used_so_nothing_blocks_the_event_loop` records `threading.get_ident()` inside the routed backend's sync `ls`/`download_files`, asserts both really ran, and asserts neither ran on the loop thread. NOT `abefore_agent`: that hook belongs to `rubric.py`, and `authored_skills.py` has none — the refresh happens in `awrap_tool_call`, the only moment the authoring turn can use what it just wrote.`
 - Every authored skill has a ledger row
   <br>``::test_every_authored_write_is_ledgered` asserts the count of `action_ledger_events` rows with `action_kind='skill.author'` equals the number of authored `SKILL.md` keys in the store for that project.`
 
@@ -1385,7 +1385,7 @@ belongs in `docs/decisions.md` either way.
 - A value that violates the declared schema is refused, not stored.
   <br>`Submit {"max_concurrent_runs": "banana"} against {"type":"integer"}; assert a refusal response and zero rows written`
 - A password-format field never reaches plugin_settings.values.
-  <br>`Submit a schema with a format: password field; assert the JSONB holds a credential reference and the encrypted store holds the secret; `SELECT values::text FROM plugin_settings` contains no plaintext`
+  <br>`Submit a schema with `format: password` or `writeOnly: true`; assert `SecretFieldRefused` at the generator, so no such field can render and therefore no such value can be submitted. Secret-SHAPED keys that slip past the schema are redacted before persistence, and `SELECT values::text FROM plugin_settings` contains no plaintext. Not a credential reference in the JSONB: a settings value reaches `card_actions` and the append-only ledger, so the design is refusal, not storage — credentials go through `ConnectorCredential`. `packages/aleph-a2ui/tests/test_secret_redaction.py::test_a_schema_declaring_a_secret_is_refused_before_it_can_be_shown` and `::test_a_secret_by_name_only_still_reaches_the_screen_and_is_redacted` pin both halves.`
 - settings_card.py has a non-test importer. FAILS TODAY: returns 0.
   <br>``grep -rn 'from aleph_a2ui.settings_card import' --include='*.py' apps packages | grep -v tests | wc -l` returns ≥1. The import form, not the bare name: twelve of the twenty bare-name hits are docstrings explaining what `settings_card.py` is, so the loose grep counts the prose documenting the fix`
 - The three trust tiers are observable at the API and change behaviour.
