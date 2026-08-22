@@ -41,8 +41,26 @@ RUN uv sync --no-dev --all-packages
 
 EXPOSE 8000
 
-# Invoke the venv binary directly: the container may run as an arbitrary uid
-# (compose sets user: for the shared asset bind mount), and `uv run` would
-# need a writable cache/HOME that uid doesn't have.
+
+# Run as an unprivileged uid.
+#
+# `data/assets` has to exist and be owned by that uid BEFORE the volume is
+# attached: Docker seeds a NEW named volume's ownership from whatever the image
+# has at the mount point, so creating it here is what makes the volume writable.
+# An existing volume from a previous root-owned run is NOT re-chowned by this —
+# see `deploy/README.md` for the one-line fix.
+RUN mkdir -p /app/data/assets \
+ && useradd --uid 10001 --create-home --shell /usr/sbin/nologin aleph \
+ && chown -R 10001:10001 /app/data
+USER 10001
+
+# Invoke the venv binary directly: this image runs as an unprivileged uid and
+# `uv run` would want a writable cache/HOME it does not have.
+#
+# The previous version of this comment said "compose sets user: for the shared
+# asset bind mount". Compose sets no `user:` anywhere — checked — and `assets`
+# is a named volume, not a bind mount. The reasoning was right and both of its
+# stated facts were wrong, which is how the image ended up running as root
+# while a comment implied somebody had thought about it.
 CMD ["/app/.venv/bin/uvicorn", "aleph_api.main:create_app", "--factory", \
      "--host", "0.0.0.0", "--port", "8000"]

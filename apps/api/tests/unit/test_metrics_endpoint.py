@@ -64,7 +64,7 @@ def app(monkeypatch: pytest.MonkeyPatch) -> Any:
     # with its dependencies is missing at exactly the moment it is wanted.
     application.state.settings = SimpleNamespace(
         aleph_auth_mode="local",
-        aleph_agent_token_secret="unit-test-secret",
+        aleph_agent_token_secret="unit-test-secret-0123456789abcdef0123456789abcdef",
     )
     return application
 

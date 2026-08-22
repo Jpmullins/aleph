@@ -157,6 +157,52 @@ def _ndcg_at(ordered: list[Any], wanted: set[Any], cutoff: int) -> float:
     return dcg / ideal if ideal else 0.0
 
 
+#: Chunk rows per INSERT+COMMIT while seeding.
+#:
+#: One flush for the whole corpus worked for twelve documents and drops the
+#: asyncpg connection for a real one, losing several minutes of embedding with
+#: nothing salvaged.
+SEED_BATCH = 200
+
+
+async def _seed_batch(
+    maker: Any,
+    batch: list[tuple[str, Any]],
+    *,
+    doc_to_source: dict[str, Any],
+    vectors: list[list[float]] | None,
+    project_id: Any,
+    base: int,
+) -> None:
+    from aleph_core.ids import uuid7
+    from aleph_rks.models import DocumentChunk
+
+    async with maker() as session:
+        for offset, (doc_id, chunk) in enumerate(batch):
+            index = base + offset
+            session.add(
+                DocumentChunk(
+                    id=uuid7(),
+                    project_id=project_id,
+                    source_id=doc_to_source[doc_id],
+                    normalized_document_id=uuid7(),
+                    ordinal=chunk.ordinal,
+                    # The chunk's own text, so `char_start`/`char_end` index the
+                    # document exactly — the invariant `test_chunk_offsets.py`
+                    # pins on the production path.
+                    text=chunk.text,
+                    text_tsv="",  # trigger fills this
+                    section_path=chunk.section_path,
+                    char_start=chunk.char_start,
+                    char_end=chunk.char_end,
+                    token_count=chunk.token_count,
+                    embedding=(vectors[index] if vectors is not None else _zero_vector()),
+                    embedder_model="eval-fixture",
+                )
+            )
+        await session.commit()
+
+
 def _title_of(corpus: list[dict[str, Any]], doc_id: str) -> str:
     for doc in corpus:
         if doc["doc_id"] == doc_id:
@@ -179,10 +225,28 @@ def _zero_vector() -> list[float]:
     return [0.0] * EMBEDDING_DIM
 
 
+#: Texts per embedding request.
+#:
+#: The eval sent the whole corpus in one call, which was fine for twelve short
+#: documents and returns `413 Request Entity Too Large` for a real one. Nothing
+#: about the old set could have surfaced this: the measurement was small enough
+#: that the transport never mattered, which is its own argument for WS-RS5.
+EMBED_BATCH = 64
+
+
 def _gateway_embed(model: str, texts: list[str]) -> list[list[float]]:
-    """Embed via the configured gateway. Raises on any failure — the caller
-    decides whether to degrade, so a broken embedder can never be mistaken for
-    a legitimately lexical run."""
+    """Embed via the configured gateway, in batches.
+
+    Raises on any failure — the caller decides whether to degrade, so a broken
+    embedder can never be mistaken for a legitimately lexical run.
+    """
+    out: list[list[float]] = []
+    for start in range(0, len(texts), EMBED_BATCH):
+        out.extend(_embed_one_batch(model, texts[start : start + EMBED_BATCH]))
+    return out
+
+
+def _embed_one_batch(model: str, texts: list[str]) -> list[list[float]]:
     import json
     import urllib.request
 
@@ -342,34 +406,26 @@ async def run(k: int = 8) -> Report:
             model = bound_for_seed[0] if bound_for_seed else None
             doc_vectors = _gateway_embed(str(model), bodies)
 
-        async with maker() as session:
-            for doc in corpus:
-                doc_to_source[doc["doc_id"]] = uuid7()
-            for index, (doc_id, chunk) in enumerate(seeded):
-                source_id = doc_to_source[doc_id]
-                session.add(
-                    DocumentChunk(
-                        id=uuid7(),
-                        project_id=project_id,
-                        source_id=source_id,
-                        normalized_document_id=uuid7(),
-                        ordinal=chunk.ordinal,
-                        # The chunk's own text, so `char_start`/`char_end` index
-                        # the document exactly — the invariant
-                        # `test_chunk_offsets.py` pins on the production path.
-                        text=chunk.text,
-                        text_tsv="",  # trigger fills this
-                        section_path=chunk.section_path,
-                        char_start=chunk.char_start,
-                        char_end=chunk.char_end,
-                        token_count=chunk.token_count,
-                        embedding=(
-                            doc_vectors[index] if doc_vectors is not None else _zero_vector()
-                        ),
-                        embedder_model="eval-fixture",
-                    )
-                )
-            await session.commit()
+        for doc in corpus:
+            doc_to_source[doc["doc_id"]] = uuid7()
+
+        # Committed in batches.
+        #
+        # This was one session and one flush for the whole corpus. Twelve
+        # documents meant twelve rows; a real corpus means thousands, and
+        # asyncpg drops the connection mid-`executemany` — `connection was
+        # closed in the middle of operation`, after several minutes of
+        # embedding, with nothing salvaged. Like the `413` on the embed side,
+        # the old set was too small for the transport to matter.
+        for offset in range(0, len(seeded), SEED_BATCH):
+            await _seed_batch(
+                maker,
+                seeded[offset : offset + SEED_BATCH],
+                doc_to_source=doc_to_source,
+                vectors=doc_vectors,
+                project_id=project_id,
+                base=offset,
+            )
 
         hits = 0
         by_phrasing: dict[str, list[int]] = {}

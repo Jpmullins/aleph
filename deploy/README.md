@@ -19,6 +19,30 @@ so `docker kill aleph-api-1` leaves it stopped and `docker compose up -d api`
 is how you bring it back. See [`../docs/operations.md`](../docs/operations.md)
 for the measured behaviour, the memory caps, and log rotation.
 
+## Upgrading to non-root images
+
+`apps/api`, `apps/workers`, `apps/copilot-runtime` and `apps/web/Dockerfile.dev`
+now run as an unprivileged uid. Four of six images ran as root, which
+`scripts/check-compose-hardening.sh` reports and CI enforces.
+
+**One-time step on an existing deployment.** The `assets` named volume was
+created while the container ran as root, so it is owned by uid 0 — verified:
+`drwxr-xr-x 0 0`. Docker seeds a NEW volume's ownership from the image, so a
+fresh stack is fine; an existing one is not, and the API cannot write an asset
+until you chown it:
+
+```bash
+docker compose -f deploy/compose/docker-compose.yml down
+docker run --rm -v aleph_assets:/mnt alpine chown -R 10001:10001 /mnt
+docker compose -f deploy/compose/docker-compose.yml up -d
+```
+
+Skipping it does not fail silently: the asset-store capability probe writes and
+reads a real object at boot, so the API refuses to come up and says which
+capability could not answer. That is the intended behaviour — a stack that
+starts and cannot store anything is worse than one that refuses to start.
+
+
 ## Aleph serves no models
 
 There is no inference server in this stack and there should never be one. Aleph

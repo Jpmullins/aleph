@@ -60,6 +60,42 @@ class SourceOut(BaseModel):
     updated_at: datetime
 
 
+async def _read_bounded(file: UploadFile, limit: int) -> bytes:
+    """Read an upload, refusing anything over `limit` WITHOUT buffering it.
+
+    This was `await file.read()` — the whole body into memory, unbounded, before
+    anything looked at it. A single large POST is enough to take the API out,
+    and the container now has a hard `mem_limit`, so "out" means OOM-killed
+    rather than slow.
+
+    Read in chunks and stop at the first one that crosses the line. Checking
+    `Content-Length` instead would be cheaper and wrong twice over: a chunked
+    request carries no length, and a header is a claim by the caller — the whole
+    point is not to trust the size the client says it is sending.
+
+    Starlette spills `UploadFile` to a temp file past its own threshold, so this
+    also stops a large upload filling the disk on its way to being rejected.
+    """
+    from fastapi import HTTPException
+
+    chunk_size = 1024 * 1024
+    buffer = bytearray()
+    while True:
+        chunk = await file.read(chunk_size)
+        if not chunk:
+            break
+        buffer.extend(chunk)
+        if len(buffer) > limit:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=(
+                    f"upload exceeds the {limit // (1024 * 1024)} MiB limit "
+                    "(ALEPH_MAX_UPLOAD_BYTES)"
+                ),
+            )
+    return bytes(buffer)
+
+
 @router.post(
     "/{project_id}/sources/upload", status_code=status.HTTP_201_CREATED, response_model=SourceOut
 )
@@ -74,7 +110,7 @@ async def upload_source(
 ) -> SourceOut:
     require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
 
-    data = await file.read()
+    data = await _read_bounded(file, request.app.state.settings.aleph_max_upload_bytes)
     mime_type = file.content_type or "application/octet-stream"
     filename = file.filename or "upload"
 

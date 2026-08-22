@@ -83,6 +83,13 @@ class Settings(BaseSettings):
     # no way back. See `aleph_connectors.keys`.
     aleph_agent_token_secret: str
 
+    #: Largest upload the API will accept, in bytes. 64 MiB.
+    #:
+    #: The upload route read the whole body into memory with no bound at all, so
+    #: one large POST could take the process out — and with a hard `mem_limit`
+    #: on the container that means OOM-killed, not slow.
+    aleph_max_upload_bytes: int = 64 * 1024 * 1024
+
     # Credential encryption. Separate from the signing secret above, and that
     # separation is the entire point of WS-P7. Required, and validated here so a
     # bad value fails at boot rather than at the first decrypt — which is a
@@ -158,6 +165,25 @@ class Settings(BaseSettings):
         published in this repository.
         """
         master_key_bytes(value)
+        return value
+
+    @field_validator("aleph_agent_token_secret")
+    @classmethod
+    def _check_agent_token_secret(cls, value: str) -> str:
+        """The signing secret gets the same guard, for the same two reasons.
+
+        WS-P7 gave `ALEPH_CREDENTIAL_MASTER_KEY` a boot-time check and left this
+        one declared as a bare `str`. Both are published in `.env.example` as
+        `CHANGE-ME-run-openssl-rand-hex-32`, and this one signs the agent tokens
+        that authorise a worker to re-enter the API — so a deployment that keeps
+        the placeholder is one where anybody holding this repository can mint a
+        token it will accept.
+
+        The failure mode is worse than the master key's, not better: a weak
+        encryption key is discovered when someone tries to read the data, while
+        a weak signing key is discovered when someone uses it.
+        """
+        master_key_bytes(value, setting="ALEPH_AGENT_TOKEN_SECRET")
         return value
 
     @property

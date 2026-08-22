@@ -231,8 +231,17 @@ if (echo > "/dev/tcp/$_PG_HOST/$_PG_PORT") >/dev/null 2>&1; then
   # 26 downgrades had never been executed. This is the slowest probe here (it
   # creates a scratch database) and it is worth it: the forward path was guarded
   # by `alembic check` and the reverse path by nothing at all.
+  #
+  # The revision is resolved at RUN TIME, not written here. This probe used to
+  # name `20260821_2330_rs1_chunks_before_embeddings.py`, and
+  # `check-migration-roundtrip.sh --last` downgrades only the NEWEST revision —
+  # so the moment WS-P7 added a migration, the probe was mutating a file the
+  # check no longer executed. It reported "can fail" while breaking nothing,
+  # which is worse than not existing: it occupied the slot where a real probe
+  # would have gone. Only the green-first rule caught it.
+  HEAD_MIGRATION="$(ls apps/api/alembic/versions/*.py | sort | tail -1)"
   probe "the migration round trip notices a broken downgrade" \
-    apps/api/alembic/versions/20260821_2330_rs1_chunks_before_embeddings.py \
+    "$HEAD_MIGRATION" \
     's/def downgrade\(\) -> None:/def downgrade() -> None:\n    op.drop_table("projects")/' \
     "./scripts/check-migration-roundtrip.sh"
 

@@ -50,4 +50,10 @@ WORKDIR /app/apps/web
 
 EXPOSE 5173
 
+# Vite's dev server writes its cache into `node_modules/.vite`, so the tree pnpm
+# just built has to belong to the uid that runs it — chowned rather than assumed.
+RUN chown -R node:node /app
+
+USER node
+
 CMD ["pnpm", "run", "dev", "--", "--host", "0.0.0.0"]

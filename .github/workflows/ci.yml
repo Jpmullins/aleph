@@ -150,6 +150,56 @@ jobs:
       - name: Design-token drift does not grow
         run: ./scripts/check-web-drift.sh
 
+      # Compose hardening: restart policies, log rotation, memory caps, the
+      # gateway URL being interpolatable, and no image running as root.
+      - name: The compose stack is hardened
+        run: ./scripts/check-compose-hardening.sh
+
+  images:
+    name: images build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Nothing built these. `grep -n "docker\|Dockerfile" ci.yml` returned
+      # ZERO lines against five Dockerfiles, so a change that broke an image
+      # was found by whoever next ran `compose up` — which, for the digest-pin
+      # and non-root work, would have been at deploy time.
+      #
+      # Build only; no push, no registry. The question is whether the
+      # instructions still produce an image, and `--load` keeps that answerable
+      # without any credentials.
+      - name: Build every image
+        run: |
+          set -euo pipefail
+          for df in apps/api/Dockerfile \
+                    apps/workers/Dockerfile \
+                    apps/code-runner/Dockerfile \
+                    apps/copilot-runtime/Dockerfile \
+                    apps/web/Dockerfile \
+                    apps/web/Dockerfile.dev; do
+            echo "::group::$df"
+            docker build -f "$df" -t "aleph-ci:$(echo "$df" | tr /. -)" .
+            echo "::endgroup::"
+          done
+
+      # A `USER` line that names a uid the image cannot actually run as is worse
+      # than no `USER` line: the sweep goes green and the container still fails,
+      # now at deploy time with a permissions error nobody expects.
+      - name: Every built image runs as a non-root uid
+        run: |
+          set -euo pipefail
+          for df in apps/api/Dockerfile \
+                    apps/workers/Dockerfile \
+                    apps/code-runner/Dockerfile \
+                    apps/copilot-runtime/Dockerfile \
+                    apps/web/Dockerfile.dev; do
+            tag="aleph-ci:$(echo "$df" | tr /. -)"
+            uid=$(docker run --rm --entrypoint sh "$tag" -c 'id -u')
+            echo "$df -> uid $uid"
+            [ "$uid" != "0" ] || { echo "::error::$df runs as root"; exit 1; }
+          done
+
   python-unit:
     name: unit tests
     runs-on: ubuntu-latest

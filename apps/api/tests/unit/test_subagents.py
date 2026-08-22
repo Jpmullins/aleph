@@ -33,7 +33,7 @@ def settings() -> Settings:
         otel_exporter_otlp_endpoint="http://localhost:4317",
         litellm_base_url="http://localhost:18999",
         insights_litellm_api_key="test-key",
-        aleph_agent_token_secret="test-secret",
+        aleph_agent_token_secret="unit-test-secret-0123456789abcdef0123456789abcdef",
         # WS-P7: credential encryption has its own required key now. It is
         # never the signing secret, and it is not padded — hence 64 bytes here
         # rather than "test-secret".

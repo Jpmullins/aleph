@@ -29,4 +29,9 @@ COPY apps/copilot-runtime/ ./
 
 EXPOSE 4000
 
+# The node images ship an unprivileged `node` user (uid 1000). Nothing here
+# writes to disk at runtime, so there is no volume ownership to arrange — this
+# image was root purely because nobody said otherwise.
+USER node
+
 CMD ["npm", "start"]
