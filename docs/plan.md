@@ -42,20 +42,20 @@ plausible work over three months, each green against its own criteria, and the
 first honest end-to-end measurement happens at the end — against an instrument
 that was already lying before anyone started.
 
-**Status as of 2026-08-22 — five of the six are done.** Measured, not asserted:
+**Status as of 2026-08-22 — all six are done.** Measured, not asserted:
 
 | # | item | state |
 |---|---|---|
 | 1 | `docs/decisions.md` | **done** — 12 decisions; D5 (kernel is Python) closed; `CLAUDE.md`'s "open decision, do not assume Python" line is gone |
 | 2 | acceptance status re-derived; dangling `tests/e2e/` refs | **done** — all 4 distinct `tests/e2e/` paths in `acceptance.sh` resolve; `check-dead-refs.sh` is green over 521 files |
-| 3 | a self-check probe for every subject | **PARTIAL** — 33 probes over 26 sweeps, and **5 sweeps still have none**: `check-agent-catalog-covers-renderer`, `check-compose-hardening`, `check-confidence-vocabulary`, `check-lint-count`, `check-project-scope` — the last is WS-P6's own sweep. `check-web-dead-css` and `check-web-drift` gained probes on 2026-08-22, and writing the first of them found a HOLE in its subject: a class declared above the first `{` in a stylesheet was invisible to the dead-CSS sweep, because the selector text had the `@import` lines glued to it and an `if "@" in selector: continue` guard skipped the whole rule |
+| 3 | a self-check probe for every subject | **DONE 2026-08-22** — 40 probes, **0 of 26 sweeps unprobed**, from 7. Writing them found two defects in their own subjects: a class declared above the first `{` in a stylesheet was invisible to the dead-CSS sweep (`([^{}]*)\{` glues the `@import` lines onto the selector text and an `if "@" in selector: continue` guard then skips a real rule), and the restore drill — which had no caller at all — found this instance's backup UNRESTORABLE, because postgres inherited Docker's 64 MB `/dev/shm` and pg_restore died building the HNSW index with 40 GB free on the host |
 | 4 | `acceptance.sh` in CI with a ratcheting `--max-skip` | **done** |
 | 5 | `scripts/status.sh` | **done** — the eight numbers; 1 failing, 2 not measurable as of 2026-08-22 |
 | 6 | integration cadence declared | **done** — Part 6, line 2495 |
 
 The gate itself was the thing it was built to prevent, and that is fixed: `run_shell`
 read `tail`'s exit status through 24 of 33 pipes, so a failing check behind a pipe
-reported PASS. The remaining Part 0 work is item 3 alone.
+reported PASS. **Part 0 is closed.**
 
 **First, in order:**
 
@@ -1454,7 +1454,7 @@ belongs in `docs/decisions.md` either way.
 **Criteria:**
 
 - The binding sweep covers every producer and every component. TODAY it reports 5 components and 11 bound props.
-  <br>``./scripts/check-surface-bindings.sh` reports ≥21 components and ≥108 props inspected`
+  <br>``./scripts/check-surface-bindings.sh` reports **every** catalog component compared — 23 of 23 today, 110 distinct props — and names each component it does NOT compare, with a reason, in the passing output. A completeness statement rather than a raw count: the 108 floor was derived from a 114-prop contract, the contract is smaller now because this batch deleted unread props the new zod→view direction found, and a floor that falls when you REMOVE dead code is a floor that punishes the fix. A named exemption no direction examines is itself a mismatch, so the written reason cannot buy free coverage.`
 - Zero drift between catalog.json and the client zod schemas. FAILS TODAY: 21 mismatched props (9 catalog-only, 12 zod-only).
   <br>`The sweep's catalog↔zod comparison exits 0; reproduce today's number with the python comparison in this plan's approach`
 - Zero props declared in a zod schema and never read by the view that owns them. FAILS TODAY: 28.
