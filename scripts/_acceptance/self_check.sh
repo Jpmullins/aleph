@@ -235,12 +235,12 @@ probe "check-acceptance-claims notices a cited test that does not exist" \
 # scanning for red sees neither.
 probe "check-acceptance-claims notices a real test cited under the wrong directory" \
   docs/plan.md \
-  's|apps/api/tests/unit/test_agent_cost_callback\.py::test_no_usage_writes_an_unpriced_row|tests/unit/test_agent_cost_callback.py::test_no_usage_writes_an_unpriced_row|' \
+  's|apps/api/tests/unit/test_agent_cost_callback.py::test_no_usage_writes_an_unpriced_row|tests/unit/test_agent_cost_callback.py::test_no_usage_writes_an_unpriced_row|' \
   "./scripts/check-acceptance-claims.sh"
 
 probe "check-acceptance-claims notices a bare ::test_id no file defines" \
   docs/plan.md \
-  's|apps/api/tests/unit/test_agent_cost_callback\.py::test_no_usage_writes_an_unpriced_row_rather_than_nothing|::test_no_usage_writes_unknown_row|' \
+  's|apps/api/tests/unit/test_agent_cost_callback.py::test_no_usage_writes_an_unpriced_row_rather_than_nothing|::test_no_usage_writes_unknown_row|' \
   "./scripts/check-acceptance-claims.sh"
 
 # The mutation that matters is not "delete the rule" — it is "widen the allow",

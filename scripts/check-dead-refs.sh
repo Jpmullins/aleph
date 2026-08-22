@@ -87,6 +87,12 @@ ALLOW = {
     # of input, not a file — and the docstring exists because that exact bug
     # shipped once.
     "skills/x",
+    # The wrong-directory a check-acceptance-claims probe INVENTS. The whole
+    # mutation is "cite a real test under a directory it does not live in",
+    # so the path is required to be absent — its absence is the subject, not
+    # a defect. (The older probe beside it is immune only by accident: it
+    # escapes every slash for sed, so this sweep never sees a path at all.)
+    "tests/unit/test_agent_cost_callback.py",
 }
 
 problems: list[str] = []
