@@ -1317,6 +1317,96 @@ async def connector_settings_surface(
     )
 
 
+async def _generic_plugin_settings_save(
+    *,
+    session: AsyncSession,
+    ledger: LedgerWriter,
+    principal: Principal,
+    project_id: UUID,
+    request: CardActionRequest,
+) -> dict[str, Any]:
+    """Persist a declared plugin's settings, then re-render from storage.
+
+    WS-A4. The connector branch above writes a `ConnectorBinding` because that
+    is what a connector's settings ARE; a plugin that merely declares a schema
+    has nowhere of its own, and `plugin_settings` is that place.
+
+    Re-rendering from the database rather than echoing the submission is the
+    same rule as the connector path: what comes back is what is stored, so a
+    value that was coerced or dropped shows as unchanged instead of appearing
+    saved.
+
+    NO SECRETS reach this table. `settings_components` refuses a field that
+    declares itself one, and `redact_secrets` scrubs secret-shaped keys before
+    `ActionRouter` persists anything — this handler is the third place that
+    would have to fail for a credential to land in plaintext.
+    """
+    # The OWNER gate is in `_plugin_settings_save`, which is the only caller and
+    # runs it before dispatching here. A second `require_at_least` on this line
+    # would be UNREACHABLE — it could never fail independently, so it would look
+    # load-bearing while proving nothing, and a mutation removing it would leave
+    # every test green. One gate, where it actually runs.
+    from aleph_a2ui.components.surfaces import ALEPH_V09_CATALOG_ID
+    from aleph_a2ui.settings_card import settings_surface
+    from aleph_db.models.plugin_settings import PluginSettings
+    from aleph_runtime.ui_contributions import UI_CONTRIBUTIONS
+
+    plugin_id = str(request.params["plugin_id"])
+    contribution = UI_CONTRIBUTIONS.get(plugin_id)
+    if contribution is None:
+        msg = f"no plugin has declared a settings screen for {plugin_id!r}"
+        raise NotFound(msg)
+
+    values = submitted_values(request.params)
+
+    row = (
+        await session.execute(
+            select(PluginSettings).where(
+                PluginSettings.project_id == project_id,
+                PluginSettings.plugin_id == plugin_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = PluginSettings(
+            id=uuid7(),
+            project_id=project_id,
+            plugin_id=plugin_id,
+            values=values,
+            created_by=principal.user_id,
+        )
+        session.add(row)
+    else:
+        # Replace, not merge. A settings screen submits every field it renders,
+        # so merging would keep a value the operator just cleared.
+        row.values = values
+    await session.flush()
+
+    # Same transaction as the write, per the standing rule.
+    await ledger.append(
+        project_id=project_id,
+        actor_id=principal.user_id,
+        actor_kind=principal.actor_kind,
+        action_kind="plugin_settings.update",
+        target_id=row.id,
+        target_kind="plugin_settings",
+        payload={"plugin_id": plugin_id, "keys": sorted(values)},
+        trace_id=current_trace_id(),
+    )
+
+    return {
+        "messages": settings_surface(
+            plugin_id=plugin_id,
+            plugin_title=contribution.title,
+            config_schema=contribution.config_schema,
+            catalog_id=ALEPH_V09_CATALOG_ID,
+            surface_id=f"settings:{plugin_id}",
+            current=row.values,
+            description=contribution.description or None,
+        )
+    }
+
+
 async def _plugin_settings_save(
     *,
     session: AsyncSession,
@@ -1343,8 +1433,16 @@ async def _plugin_settings_save(
     require_at_least(principal, project_id, at_least=ProjectRole.OWNER)
 
     kind = str(request.params["plugin_kind"])
+    if kind == "plugin":
+        return await _generic_plugin_settings_save(
+            session=session,
+            ledger=ledger,
+            principal=principal,
+            project_id=project_id,
+            request=request,
+        )
     if kind != "connector":
-        msg = f"unknown plugin_kind for settings save: {kind!r} (known: 'connector')"
+        msg = f"unknown plugin_kind for settings save: {kind!r} (known: 'connector', 'plugin')"
         raise ValidationFailed(msg)
 
     connector_id = UUID(str(request.params["plugin_id"]))

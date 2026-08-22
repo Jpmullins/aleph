@@ -273,6 +273,16 @@ if [ $NEEDS_SERVICES -eq 1 ]; then
 else
   skip A10 "needs postgres"
 fi
+# A11: a plugin declares a schema and gets a settings screen, with no browser
+# code. `settings_card.py` was 279 working lines with no importer outside its
+# own tests — and after A3a, its only caller was the SAVE handler, so the
+# screen could not be opened without first writing to it.
+if [ $NEEDS_SERVICES -eq 1 ]; then
+  run_shell A11 "a plugin's declared schema becomes a settings screen that reads back" \
+    "uv run pytest -m integration tests/integration/test_plugin_settings_contract.py -q -p no:randomly 2>&1 | tail -1"
+else
+  skip A11 "needs postgres"
+fi
 
 # ---------------------------------------------------------------------------
 # B — Retrieval

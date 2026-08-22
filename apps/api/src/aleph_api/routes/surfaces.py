@@ -149,6 +149,77 @@ class SurfaceMessagesOut(BaseModel):
     messages: list[dict[str, Any]]
 
 
+async def _settings_messages(
+    session: Any, project_id: UUID, plugin_id: str | None, surface_id: str
+) -> list[dict[str, Any]]:
+    """One plugin's settings screen, generated from its declared schema.
+
+    The read path `settings_card.py` never had. It was 279 lines of working,
+    unit-tested generator with no importer outside its own tests — and after
+    WS-A3a gave it one, that caller was the SAVE handler, so the screen could
+    only be seen by first writing to it.
+
+    Values come from `plugin_settings`; the shape comes from the contribution.
+    A plugin with no stored row renders its schema defaults, which is what a
+    settings screen should do the first time it is opened.
+    """
+    from sqlalchemy import select as _select
+
+    from aleph_a2ui.components.surfaces import ALEPH_V09_CATALOG_ID as _CATALOG
+    from aleph_a2ui.settings_card import settings_surface
+    from aleph_db.models.plugin_settings import PluginSettings
+    from aleph_runtime.ui_contributions import UI_CONTRIBUTIONS
+
+    contributions = UI_CONTRIBUTIONS.all()
+    if plugin_id is None:
+        if not contributions:
+            return _pane_message(
+                surface_id,
+                "No plugin has declared a settings screen. A plugin gets one by "
+                "declaring a config schema — it ships no browser code.",
+            )
+        listing = ", ".join(sorted(c.plugin_id for c in contributions))
+        return _pane_message(surface_id, f"Choose a plugin to configure: {listing}")
+
+    contribution = UI_CONTRIBUTIONS.get(plugin_id)
+    if contribution is None:
+        return _pane_message(surface_id, f"No plugin {plugin_id!r} has declared a settings screen.")
+
+    row = (
+        await session.execute(
+            _select(PluginSettings).where(
+                PluginSettings.project_id == project_id,
+                PluginSettings.plugin_id == plugin_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+    return settings_surface(
+        plugin_id=contribution.plugin_id,
+        plugin_title=contribution.title,
+        config_schema=contribution.config_schema,
+        catalog_id=_CATALOG,
+        surface_id=surface_id,
+        current=(row.values if row else None),
+        description=contribution.description or None,
+    )
+
+
+def _pane_message(surface_id: str, message: str) -> list[dict[str, Any]]:
+    """A one-component pane that says something.
+
+    Used for the empty and unknown states rather than returning `[]`: an empty
+    message list renders as a blank block, which is indistinguishable from a
+    pane that failed to load.
+    """
+    return full_surface(
+        surface_id=surface_id,
+        catalog_id=ALEPH_V09_CATALOG_ID,
+        components=[{"id": "root", "component": "Text", "text": {"path": "/message"}}],
+        data_model={"message": message},
+    )
+
+
 def _pane_error_surface(surface_id: str, tab: str, exc: BaseException) -> list[dict[str, Any]]:
     """One pane that says it broke, so the other panes can carry on.
 
@@ -227,6 +298,8 @@ async def _build_tab_messages(
         return await _grounding_messages(session, project_id, args.get("claim_id"), sid)
     if tab_lc == "inspector":
         return await _inspector_messages(session, project_id, args.get("run_id"), sid)
+    if tab_lc == "settings":
+        return await _settings_messages(session, project_id, args.get("plugin"), sid)
     msg = f"unknown tab: {tab_lc}"
     raise NotFound(msg)
 

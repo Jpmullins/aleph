@@ -437,7 +437,7 @@ async def claim_ticket(
 async def checkpoint(
     maker: Callable[[], Any], *, run_id: UUID, heartbeat: bool = True
 ) -> Checkpoint:
-    """"May I keep going?" — one round trip, in its own short-lived session.
+    """ "May I keep going?" — one round trip, in its own short-lived session.
 
     Its own session on purpose: the worker's data transaction may be long, and a
     cancellation written by the API after that transaction opened would be

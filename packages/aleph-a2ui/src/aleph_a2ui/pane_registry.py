@@ -72,6 +72,13 @@ _CORE: tuple[PaneKind, ...] = (
         params=("claim_id",),
     ),
     PaneKind(
+        id="settings",
+        title="Settings",
+        icon="settings",
+        launchable=True,
+        params=("plugin",),
+    ),
+    PaneKind(
         id="inspector",
         title="Inspector",
         icon="inspector",
