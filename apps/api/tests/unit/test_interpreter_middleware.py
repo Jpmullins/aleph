@@ -567,3 +567,72 @@ for (let i = 0; i < {over}; i++) {{ await tools.searchWiki({{query: `q-${{i}}`}}
     assert "PTCCallBudgetExceeded" in turn.text, turn.text
     assert len(calls) <= INTERPRETER_MAX_PTC_CALLS, len(calls)
     assert turn.requests == 2
+
+
+# ---------------------------------------------------------------------------
+# The half D9 does not reach.
+#
+# `FanOutPolicyMiddleware` appeared on exactly three lines in the whole
+# repository, all inside `interpreter.py` itself: `__all__`, its `class`, and
+# the return of `build_interpreter_middleware`. Zero tests, zero sweeps, zero
+# docs — and it is the only thing that tells the model to reach for `eval` in
+# the first place.
+#
+# So deleting it broke WS-H5 in production while the acceptance row that
+# certifies WS-H5 stayed green: `interpreter_fanout_probe.py` SCRIPTS the
+# model's decision to emit the eval call, which bypasses the entire path from
+# "user asks for a fan-out" to "model emits eval". A producer with no
+# consumer-test, sitting inside the criterion that exists to prove it works.
+# Found by an adversarial pass running `return [interpreter]`.
+
+
+def test_the_fan_out_policy_reaches_the_model() -> None:
+    """The prompt is appended to whatever system message the request carried."""
+    from langchain_core.messages import SystemMessage
+
+    from aleph_api.interpreter import FanOutPolicyMiddleware
+
+    seen: list[str | None] = []
+
+    def handler(request: Any) -> Any:
+        message = request.system_message
+        seen.append(None if message is None else message.text)
+        return "answered"
+
+    class _Req:
+        def __init__(self, system_message: SystemMessage | None) -> None:
+            self.system_message = system_message
+
+        def override(self, *, system_message: SystemMessage) -> _Req:
+            return _Req(system_message)
+
+    middleware = FanOutPolicyMiddleware()
+    assert middleware.wrap_model_call(_Req(SystemMessage("ORIGINAL")), handler) == "answered"
+    assert middleware.wrap_model_call(_Req(None), handler) == "answered"
+
+    with_original, without = seen
+    assert with_original is not None and without is not None
+    # The original survives — appending must not replace the orchestrator's
+    # own instructions, which is the failure mode of "override the system
+    # message" done carelessly.
+    assert with_original.startswith("ORIGINAL"), with_original
+    assert INTERPRETER_TOOL_NAME in with_original, with_original
+    # And it still lands when there was no system message at all.
+    assert INTERPRETER_TOOL_NAME in without, without
+
+
+def test_the_fan_out_policy_is_in_the_production_middleware_list() -> None:
+    """`build_interpreter_middleware` returns it, not just the interpreter.
+
+    This is the mutation that survived: `return [interpreter]` left the probe
+    at rc=0, 20/20, and this whole module at 10 passed. Asserted by TYPE rather
+    than by grepping the source, so moving the class or renaming the file
+    cannot satisfy it.
+    """
+    from aleph_api.interpreter import FanOutPolicyMiddleware
+
+    built = build_interpreter_middleware(tools=_orchestrator_tools())
+    assert any(isinstance(m, FanOutPolicyMiddleware) for m in built), (
+        "the fan-out policy prompt is not in the orchestrator's middleware, so "
+        f"nothing tells the model to use the scratchpad: {[type(m).__name__ for m in built]}"
+    )

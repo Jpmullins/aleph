@@ -12,8 +12,10 @@ from aleph_scholar.errors import ScholarUnavailable, ScholarUpstreamError
 from aleph_scholar.http import (
     DEFAULT_BURST,
     DEFAULT_RATE_PER_SECOND,
+    EGRESS_BLOCK_RETRY_AFTER_S,
     POLITE_POOL_CEILING_PER_SECOND,
     ScholarHttp,
+    egress_block_note,
 )
 
 
@@ -24,11 +26,12 @@ def _http(
     burst: int = DEFAULT_BURST,
     rate_per_second: float | None = None,
     deadline_s: float | None = None,
+    mailto: str = "scholar-tests@aleph-fixture.org",
 ):
     """A ScholarHttp over MockTransport whose clock advances only on sleep."""
     clock = clock or FakeClock()
     return ScholarHttp(
-        mailto="scholar-tests@aleph-fixture.org",
+        mailto=mailto,
         client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         retry_wait_min=0.0,
         retry_wait_max=0.0,
@@ -231,3 +234,152 @@ async def test_rate_limit_is_configurable_from_the_environment(
 
     monkeypatch.setenv("ALEPH_SCHOLAR_RATE_PER_SECOND", "99")
     assert _http(handler).rate_per_second == POLITE_POOL_CEILING_PER_SECOND  # still clamped
+
+
+# ---------------------------------------------------------------------------
+# A Retry-After measured in hours is a block, not a rate limit (`WS-E2`)
+# ---------------------------------------------------------------------------
+
+
+async def test_a_multi_hour_retry_after_is_reported_as_a_block_not_a_backoff() -> None:
+    """The 429 this deployment actually got, and what it now says about it.
+
+    Measured against the running stack: `Retry-After: 12309`. The 503 body read
+    "openalex did not answer within the request budget — retry in 12309s.",
+    which is the wording for a transient blip, so two consecutive audits read it
+    as one and looked for a rate-limit cause. There was none — the same request
+    was 429 over IPv4 and 200 over IPv6.
+
+    Asserted on what the sentence has to TELL somebody, not on its phrasing: the
+    number, that waiting is not the remedy, and that the rate setting is not
+    involved. A test that pinned the wording would go red on a comma and green
+    on a sentence that said nothing.
+    """
+    clock = FakeClock()
+
+    def blocked(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers={"Retry-After": "12309"})
+
+    with pytest.raises(ScholarUnavailable) as caught:
+        await _http(blocked, clock=clock, deadline_s=5.0).get("https://api.openalex.org/works")
+
+    message = str(caught.value)
+    assert "12309" in message
+    assert "no request budget can wait it out" in message
+    assert "ALEPH_SCHOLAR_RATE_PER_SECOND" in message
+    # The header is still handed up untouched — the note explains it, it does
+    # not replace it.
+    assert caught.value.retry_after == 12309.0
+    assert caught.value.status_code == 429
+
+
+async def test_a_short_retry_after_gets_no_block_note() -> None:
+    """A throttled burst must not be labelled a block.
+
+    This is the half that keeps the note worth reading. A sentence attached to
+    every 429 is a sentence people scroll past, and then the one 429 that IS a
+    block looks exactly like the forty that were not.
+    """
+    clock = FakeClock()
+
+    def throttled(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers={"Retry-After": "5"})
+
+    with pytest.raises(ScholarUnavailable) as caught:
+        await _http(throttled, clock=clock, deadline_s=2.0).get("https://api.openalex.org/works")
+
+    message = str(caught.value)
+    assert "egress address" not in message
+    assert "over IPv6" not in message
+    assert caught.value.retry_after == 5.0
+
+
+async def test_a_5xx_with_a_long_retry_after_is_not_called_a_block() -> None:
+    """Only 429 carries the reading.
+
+    A 503 with a long `Retry-After` is a maintenance window; the upstream is
+    saying it is down, not that this caller is unwelcome. Telling an operator to
+    go and look at the egress route would send them somewhere there is nothing
+    to find.
+    """
+    clock = FakeClock()
+
+    def down(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, headers={"Retry-After": "12309"})
+
+    with pytest.raises(ScholarUnavailable) as caught:
+        await _http(down, clock=clock, deadline_s=2.0).get("https://api.openalex.org/works")
+
+    assert "egress address" not in str(caught.value)
+    assert caught.value.status_code == 503
+
+
+def test_the_block_threshold_is_a_boundary_not_a_coincidence() -> None:
+    """Directly on `egress_block_note`, at the edge and either side of it.
+
+    The three tests above drive the transport, which can only reach the note
+    through a 429 that outlives a budget; that path cannot show where the line
+    is. `EGRESS_BLOCK_RETRY_AFTER_S` is read from the module rather than
+    written out here, because a test that restates the constant it tests only
+    proves the constant equals itself — but the *behaviour* on each side of it
+    is asserted, so moving the constant moves the boundary and both of these
+    still mean something.
+    """
+    edge = EGRESS_BLOCK_RETRY_AFTER_S
+    assert egress_block_note("api.openalex.org", edge) != ""
+    assert egress_block_note("api.openalex.org", edge - 1) == ""
+    assert egress_block_note("api.openalex.org", None) == ""
+    # The host is named, so an operator reading a log with both upstreams in it
+    # knows which one blocked them.
+    assert "api.openalex.org" in egress_block_note("api.openalex.org", edge)
+    assert "api.crossref.org" in egress_block_note("api.crossref.org", edge)
+
+
+async def test_the_block_note_comes_before_the_mailto_note() -> None:
+    """Ordering, with BOTH notes present — the design claim, finally asserted.
+
+    This is the whole point of `egress_block_note`, and it had no test. Every
+    other test in this file runs through `_http` with a CONTACTABLE mailto, so
+    `self.degradation` is empty, the append loop executes at most once, and
+    reversing the tuple to `(self.degradation, block)` leaves 136 tests green.
+    Found by an adversarial pass running exactly that mutation.
+
+    The ordering is not cosmetic. The two remedies are opposite — a throttled
+    burst is fixed by slowing down, a blocked egress address is not fixed by
+    anything this process can do — and "set a real mailto" became the accepted
+    diagnosis for this 429 twice, in two audits, because the weaker
+    explanation was the one in front of the reader.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers={"Retry-After": "9035"})
+
+    # An unset mailto, so the degradation note is non-empty and BOTH notes fire.
+    http = _http(handler, mailto="", deadline_s=1.0)
+    try:
+        with pytest.raises(ScholarUnavailable) as caught:
+            await http.get("https://api.openalex.org/works", params={})
+    finally:
+        await http.aclose()
+
+    message = str(caught.value)
+    block_at = message.find("9035s")
+    mailto_at = message.find("ALEPH_SCHOLAR_MAILTO")
+    assert block_at != -1, f"no egress-block note in: {message}"
+    assert mailto_at != -1, f"no mailto note in: {message}"
+    assert block_at < mailto_at, (
+        "the mailto note is in front of the egress-block note. A reader stops at "
+        f"the first explanation, and this one is wrong: {message}"
+    )
+
+
+def test_the_block_note_reports_hours_not_minutes() -> None:
+    """`(2.5h)`, not `(150.6h)`. Also unpinned until an adversarial pass.
+
+    `hours = retry_after / 3600.0` could be `/ 60.0` and every other assertion
+    in this file still passes, because they all match on the seconds figure or
+    on the host. An operator reads the parenthesis to decide whether to wait.
+    """
+    note = egress_block_note("api.openalex.org", 9035.0)
+    assert "(2.5h)" in note, note
+    assert "9035s" in note, note

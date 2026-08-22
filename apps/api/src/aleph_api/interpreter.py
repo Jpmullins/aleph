@@ -141,6 +141,13 @@ PTC_ALLOWLIST: Final[tuple[str, ...]] = (
     # and it is the one of the three a loop genuinely wants: "poll until this
     # finishes" is the natural shape, and it costs a SELECT.
     "check_background_task",
+    # WS-RS6 / WS-RS10. Both are read-only searches over indexes the agent did
+    # not write — `search_corpus` over document chunks, `search_claims` over the
+    # claim spine. A loop wanting "search, read, refine the query, search again"
+    # is the whole reason the interpreter exists, and neither can mutate
+    # anything, so neither needs a HITL gate.
+    "search_corpus",
+    "search_claims",
 )
 
 #: The orchestrator tools deliberately NOT exposed, and why. This is half of a
