@@ -544,7 +544,7 @@ at the right file and the wrong row.
 - Every exported file validates against OKF v0.1
   <br>`scripts/check-okf.py over the export exits 0, including a non-empty `type` on 100% of files. Fails today: 599 of 843 live pages have no type at all.`
 - The format round-trips
-  <br>`Export, import, export again; the two exports are byte-identical (diff -r exits 0).`
+  <br>``render_vault(parse_vault(render_vault(x)))` is byte-identical, over BOTH dialects and including the `evidence.json` sidecar via `parse_evidence_json` — `packages/aleph-artifacts/tests/test_vault_export.py::test_export_import_export_is_byte_identical` and `tests/unit/test_vault_evidence_bundle.py::test_the_whole_bundle_including_the_sidecar_round_trips`. This is a FORMAT round trip, and saying so is the point: `parse_vault` writes no revision, no ledger row and no page, so a DATABASE importer is deliberately out of scope. `test_the_round_trip_preserves_the_governance_fields` exists because byte-identity can otherwise hold by dropping the same field on both passes.`
 - The false governance claim is gone from the tree
   <br>`grep -rn 'runs on the write path' packages/ apps/ docs/wiki-schema.md CLAUDE.md returns 0 — docs/plan.md is OUT of scope, because the only hit under the old wording is line 534, this criterion quoting itself, which no amount of fixing can remove. Was 2 (docs/wiki-schema.md:16-18 and schema.py:14-16), both describing behaviour that does not exist.`
 - The documented lint count matches the code
@@ -1346,7 +1346,7 @@ belongs in `docs/decisions.md` either way.
 - Vitest runs in CI.
   <br>``grep -c 'apps/web test' .github/workflows/ci.yml` returns ≥1`
 - A coverage floor is recorded so later workstreams cannot silently drop it.
-  <br>``pnpm -C apps/web test -- --coverage` prints a statements percentage; that number is written into docs/acceptance.md as the baseline`
+  <br>``pnpm -C apps/web test:coverage` prints a statements percentage and exits 0 against the four thresholds in `apps/web/vitest.config.ts`; the number is recorded in `docs/acceptance.md` E12. NOT `pnpm … test -- --coverage`: pnpm 11 passes `--` through to vitest verbatim, so the flag is swallowed and the command prints no percentage and exits 0 — the criterion's literal form was satisfied by a run that measured nothing.`
 
 **Review.** Mutation on each of the six component tests: break exactly what each asserts — remove a rail entry from the mocked /panes payload, invert Block's verb-render condition, drop a field from the settings fixture — and confirm precisely that test fails and no other. For Playwright, add `console.warn("mutation")` to App.tsx and confirm the smoke goes red; remove it.
 <br>**Iterate.** v2 adds two things the harness makes cheap. (a) Visual regression: Playwright screenshots of the Board and one pane in both themes, which turns workstream G's token drift from a grep into an image diff. (b) An axe-core accessibility pass in the smoke, which immediately catches the missing focus trap and Escape handler on Drawers.tsx:29-30 (which declares role='dialog' aria-modal='true' and implements neither) and the…

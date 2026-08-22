@@ -110,7 +110,39 @@ def _sidecar_round_trip(label: str, files: dict[str, str]) -> list[str]:
     return []
 
 
-def _validate(label: str, files: dict[str, str], counts: object) -> list[str]:
+def _markdown_round_trip(label: str, files: dict[str, str], title: str) -> list[str]:
+    """Parse the pages back and re-render them. Empty means no loss.
+
+    The other half of `_sidecar_round_trip`, and it was the missing half: on a
+    LIVE corpus only the sidecar was read back, and `parse_vault` was exercised
+    over fixtures alone. That is the wrong way round — the reason to run a round
+    trip against real data is that the strings which break a format are the ones
+    a model wrote and a publisher titled. This corpus holds page bodies with
+    YAML-significant characters in the title, wikilinks inside code fences, and
+    front-matter values a fixture would never think to choose.
+    """
+    from aleph_artifacts.exporters.vault import parse_vault, render_vault
+
+    markdown = {name: body for name, body in files.items() if name.endswith(".md")}
+    if not markdown:
+        return []
+    try:
+        pages = parse_vault(markdown)
+    except ValueError as exc:
+        return [f"{label}: the exported markdown cannot be read back: {exc}"]
+    again = render_vault(pages, dialect="okf", project_title=title).files
+    if dict(again) != markdown:
+        lost = sorted(set(markdown) ^ set(again)) or sorted(
+            name for name, body in markdown.items() if again.get(name) != body
+        )
+        return [
+            f"{label}: the markdown does not survive parse_vault + render_vault — "
+            f"{len(lost)} file(s) differ, first: {lost[0] if lost else '?'}"
+        ]
+    return []
+
+
+def _validate(label: str, files: dict[str, str], counts: object, title: str) -> list[str]:
     """Every problem with this bundle, as lines. Empty means it conforms."""
     import importlib.util
 
@@ -140,6 +172,7 @@ def _validate(label: str, files: dict[str, str], counts: object) -> list[str]:
     )
     out += [f"{label}: {problem}" for problem in check_okf.check_bundle(files)]
     out += _sidecar_round_trip(label, files)
+    out += _markdown_round_trip(label, files, title)
     if not concepts:
         out.append(f"{label}: the export produced no concept documents")
     return out
@@ -231,7 +264,7 @@ async def _run() -> int:
     summary: list[str] = []
     total_anchored = 0
     for label, title, files, counts in rendered:
-        problems += _validate(f"{label} ({title!r})", files, counts)
+        problems += _validate(f"{label} ({title!r})", files, counts, title)
         pages = sum(1 for n in files if n.endswith(".md"))
         total_anchored += counts.anchored_citations  # pyright: ignore[reportAttributeAccessIssue]
         summary.append(
