@@ -1,7 +1,8 @@
 /**
  * Settings, the ledger, the run digest and the account — as panes on the board.
  *
- * This replaces `components/Drawers.tsx`: 742 lines behind `fixed inset-0`,
+ * This replaces the web app's deleted settings drawer: 742 lines behind a
+ * `fixed inset-0` overlay,
  * claiming `role="dialog" aria-modal="true"` while implementing none of the
  * behaviour, carrying its own copies of two lists the server owns, and — the
  * reason WS-B1 exists — making settings the one part of the workbench a plugin
@@ -66,7 +67,13 @@ interface ConnectorRow {
   requires_auth: boolean;
   enabled: boolean;
   config: Record<string, unknown>;
-  has_key: boolean;
+  /** `set` / `unset` for an owner; `unknown` when the viewer may not be told —
+   *  reading key state is owner-gated on the REST path, and a surface stream is
+   *  open to every member. */
+  key_state: "set" | "unset" | "unknown";
+  /** The credential blob's own status, e.g. consensus `reconnect_required`.
+   *  Owner-only, and null for a plain API key, which carries no status. */
+  status: string | null;
 }
 
 interface Section {
@@ -112,6 +119,12 @@ interface SettingsProps {
   sections?: Section[];
 }
 
+/** See the note in `SettingsSurface` — a pre-model render resolves a binding to
+ *  the binding object, and `?? []` lets that through. */
+function arr<T>(value: T[] | undefined): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
 function errMsg(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 403) return "Owner access required.";
@@ -122,16 +135,31 @@ function errMsg(err: unknown): string {
 
 export function SettingsSurface({ component }: RendererProps) {
   const props = (component.props ?? {}) as SettingsProps;
-  const sections = props.sections ?? [];
+  /**
+   * `Array.isArray`, not `?? []`, and it is load-bearing.
+   *
+   * A surface arrives as three messages — `createSurface`, `updateComponents`,
+   * `updateDataModel` — and the Board mounts the tree as soon as the first one
+   * lands. In that window the binder has the component and not yet the model,
+   * so a `{ path: "/sections" }` binding resolves to the binding OBJECT rather
+   * than to a value. `??` does not help: an object is not nullish, so
+   * `sections.map` threw and React unmounted the whole pane before the model
+   * ever arrived. Measured, not theorised — the pane rendered nothing at all
+   * and the only trace was `sections.map is not a function` in the console.
+   */
+  const sections = Array.isArray(props.sections) ? props.sections : [];
+  const title = typeof props.title === "string" ? props.title : "Settings";
   const { projectId } = useSurface();
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-5 p-3" data-testid="settings-surface">
       <div className="text-xs uppercase tracking-wider text-ink-muted">
-        {props.title ?? "Settings"}
+        {title}
       </div>
       {sections.length === 0 ? (
-        <p className="text-sm text-ink-muted">This pane declared no sections.</p>
+        <p className="text-sm text-ink-muted" data-testid="settings-no-sections">
+          Waiting for this pane's sections…
+        </p>
       ) : (
         sections.map((section, index) => (
           <SectionBlock
@@ -162,19 +190,19 @@ function SectionBlock({ section, projectId }: { section: Section; projectId: str
 function SectionBody({ section, projectId }: { section: Section; projectId: string }) {
   switch (section.kind) {
     case "fields":
-      return <Fields rows={section.rows ?? []} />;
+      return <Fields rows={arr(section.rows)} />;
     case "members":
-      return <Members members={section.members ?? []} />;
+      return <Members members={arr(section.members)} />;
     case "model_profile":
       return <ModelProfile section={section} projectId={projectId} />;
     case "connectors":
-      return <Connectors connectors={section.connectors ?? []} projectId={projectId} />;
+      return <Connectors connectors={arr(section.connectors)} projectId={projectId} />;
     case "plugins":
-      return <Plugins plugins={section.plugins ?? []} />;
+      return <Plugins plugins={arr(section.plugins)} />;
     case "ledger":
       return <Ledger section={section} />;
     case "runs":
-      return <Runs runs={section.runs ?? []} limit={section.limit} />;
+      return <Runs runs={arr(section.runs)} limit={section.limit} />;
     case "note":
       return <p className="text-sm text-ink-soft">{section.text}</p>;
     default:
@@ -240,7 +268,7 @@ function Members({ members }: { members: { id: string; user_id: string; role: st
 function ModelProfile({ section, projectId }: { section: Section; projectId: string }) {
   const qc = useQueryClient();
   const gateway = section.gateway;
-  const capabilities = section.capabilities ?? [];
+  const capabilities = arr(section.capabilities);
 
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: ["model-profile", projectId] });
@@ -280,7 +308,7 @@ function ModelProfile({ section, projectId }: { section: Section; projectId: str
   return (
     <div>
       <div className="flex flex-wrap gap-1.5">
-        {(section.profiles ?? []).map((name) => {
+        {arr(section.profiles).map((name) => {
           const active = name === section.current;
           return (
             <button
@@ -330,6 +358,7 @@ function ModelProfile({ section, projectId }: { section: Section; projectId: str
       <ul className="space-y-2">
         {capabilities.map((cap) => {
           const pending = bind.isPending && bind.variables?.capability === cap.id;
+          const eligible = arr(cap.eligible);
           return (
             <li
               key={cap.id}
@@ -340,7 +369,7 @@ function ModelProfile({ section, projectId }: { section: Section; projectId: str
                 <div className="text-xs font-medium text-ink">{cap.label}</div>
                 <div className="truncate text-[11px] text-ink-muted">{cap.help}</div>
               </div>
-              {cap.eligible.length === 0 ? (
+              {eligible.length === 0 ? (
                 <span
                   className="shrink-0 text-[11px] text-badge-warning-fg"
                   title="No model on this gateway meets this capability's requirements. It is left unbound on purpose — binding a model that cannot do the job fails later, and less visibly."
@@ -354,12 +383,12 @@ function ModelProfile({ section, projectId }: { section: Section; projectId: str
                   value={cap.bound ?? ""}
                   disabled={pending}
                   onChange={(e) => {
-                    const model = cap.eligible.find((m) => m.id === e.target.value);
+                    const model = eligible.find((m) => m.id === e.target.value);
                     if (model) bind.mutate({ capability: cap.id, model });
                   }}
                 >
                   {cap.bound === null && <option value="">— unbound —</option>}
-                  {cap.eligible.map((m) => (
+                  {eligible.map((m) => (
                     <option key={m.id} value={m.id}>
                       {m.label}
                     </option>
@@ -462,9 +491,21 @@ function ConnectorItem({
         </button>
       </div>
 
-      {connector.requires_auth && (
+      {connector.status && (
+        <p className="mt-1 text-[11px] text-badge-warning-fg" data-testid="connector-status">
+          {connector.status}
+        </p>
+      )}
+
+      {connector.requires_auth && connector.key_state === "unknown" && (
+        <p className="mt-2 text-[11px] text-ink-muted">
+          Owner access is required to see or change this key.
+        </p>
+      )}
+
+      {connector.requires_auth && connector.key_state !== "unknown" && (
         <div className="mt-2">
-          {connector.has_key && !editing ? (
+          {connector.key_state === "set" && !editing ? (
             <div className="flex items-center gap-2 text-xs">
               <span className="bg-badge-completed-bg px-1.5 py-0.5 font-medium text-badge-completed-fg">
                 Key set
@@ -491,7 +532,7 @@ function ConnectorItem({
                 type="password"
                 value={keyDraft}
                 onChange={(e) => setKeyDraft(e.target.value)}
-                placeholder={connector.has_key ? "New key…" : "Paste API key…"}
+                placeholder={connector.key_state === "set" ? "New key…" : "Paste API key…"}
                 aria-label={`API key for ${connector.name}`}
                 autoComplete="off"
                 className="min-w-0 flex-1 border border-line-strong px-2 py-1 text-xs focus:border-line-strong focus:outline-none"
@@ -504,7 +545,7 @@ function ConnectorItem({
               >
                 Save
               </button>
-              {connector.has_key && (
+              {connector.key_state === "set" && (
                 <button
                   type="button"
                   onClick={() => {
@@ -571,7 +612,7 @@ function Plugins({
 
 function Ledger({ section }: { section: Section }) {
   const chain = section.chain;
-  const events = section.events ?? [];
+  const events = arr(section.events);
   return (
     <div>
       {chain && (

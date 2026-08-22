@@ -17,6 +17,7 @@
  * Aleph's own.
  */
 import { Icons } from "@/components/Icons";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { usePaneKinds, useWorkspaceUI } from "@/lib/workspace-ui";
 
 export function ContextBar({
@@ -127,6 +128,19 @@ export function ContextBar({
           Source
         </button>
       )}
+
+      {/*
+        The theme control, inside a project at last.
+        `ThemeToggle` has existed and worked for a long time and was rendered in
+        exactly one place: the project LIST. Once you opened a project there was
+        no way to change the theme without going back out — the control was
+        behind the thing you wanted to look at while using it. WS-B1's fifth
+        criterion is that this is reachable from inside the workspace, and the
+        context bar is where it goes: it is the one strip present on every
+        surface, and unlike the rail it has horizontal room for a two-segment
+        group.
+      */}
+      <ThemeToggle />
 
       <span
         className="text-ink-muted"

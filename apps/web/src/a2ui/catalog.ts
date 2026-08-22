@@ -29,6 +29,7 @@ export const COMPONENT_NAMES = [
   "WikiPageCard",
   "WikiSurface",
   "InspectorSurface",
+  "SettingsSurface",
 ] as const;
 
 export type ComponentName = (typeof COMPONENT_NAMES)[number];

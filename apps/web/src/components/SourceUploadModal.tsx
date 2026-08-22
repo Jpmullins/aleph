@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { Modal } from "@/components/Modal";
 import { ApiError } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 
@@ -46,10 +47,8 @@ export function SourceUploadModal({ projectId, onClose, onUploaded }: Props) {
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 px-4">
-      <div className="w-full max-w-md border border-line-strong bg-surface p-6">
-        <h2 className="mb-4 text-xl font-semibold">Upload source</h2>
-        <form
+    <Modal title="Upload source" onClose={onClose} testId="source-upload-modal">
+      <form
           onSubmit={(e) => {
             e.preventDefault();
             upload.mutate();
@@ -95,8 +94,7 @@ export function SourceUploadModal({ projectId, onClose, onUploaded }: Props) {
               {upload.isPending ? "Uploading…" : "Upload"}
             </button>
           </div>
-        </form>
-      </div>
-    </div>
+      </form>
+    </Modal>
   );
 }

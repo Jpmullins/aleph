@@ -36,7 +36,7 @@ async function mountRail(served: ReturnType<typeof pane>[]): Promise<RenderResul
   const view = render(
     <QueryClientProvider client={client}>
       <WorkspaceUIProvider>
-        <Rail projectId="proj-1" onBack={() => undefined} onOpenDrawer={() => undefined} />
+        <Rail projectId="proj-1" onBack={() => undefined} />
         <PaneProbe />
       </WorkspaceUIProvider>
     </QueryClientProvider>,
@@ -100,10 +100,45 @@ describe("Rail", () => {
     );
   });
 
-  it("keeps the drawer buttons, which are not panes and are not server-driven", async () => {
-    const view = await mountRail([]);
-    for (const kind of ["settings", "logs", "notifications", "profile"]) {
-      expect(view.getByTestId(`rail-${kind}`)).toBeTruthy();
+  /**
+   * The inverse of the test that used to stand here, and WS-B1's second
+   * criterion at the one place it is observable in a unit test.
+   *
+   * It asserted that settings / logs / notifications / profile were rendered
+   * ALWAYS, by a four-tuple compiled into this component, regardless of what
+   * the server returned — they opened a slide-over rather than a pane. That
+   * tuple was the last client-side decision about what a person can open, and
+   * it is why settings could not be contributed to by a plugin.
+   *
+   * They are ordinary pane kinds now. Both halves matter: served, they render
+   * like any other pane; NOT served, they must not appear at all, which is the
+   * half that proves the names are no longer compiled in. A test that only
+   * checked the first half would pass with the tuple restored.
+   */
+  it("renders the former drawer kinds only when the server serves them", async () => {
+    const drawerKinds = ["settings", "logs", "notifications", "profile"];
+    const served = await mountRail(
+      drawerKinds.map((k) => pane(k, k[0].toUpperCase() + k.slice(1), "settings")),
+    );
+    for (const kind of drawerKinds) {
+      await waitFor(() => expect(served.getByTestId(`rail-${kind}`)).toBeTruthy());
     }
+    served.unmount();
+
+    const bare = await mountRail([pane("wiki", "Wiki", "wiki")]);
+    await waitFor(() => expect(bare.getByTestId("rail-wiki")).toBeTruthy());
+    for (const kind of drawerKinds) {
+      expect(bare.queryByTestId(`rail-${kind}`)).toBeNull();
+    }
+  });
+
+  it("opens a former drawer kind as a pane on the board, not as an overlay", async () => {
+    const view = await mountRail([pane("settings", "Settings", "settings")]);
+    await waitFor(() => expect(view.getByTestId("rail-settings")).toBeTruthy());
+    fireEvent.click(view.getByTestId("rail-settings"));
+    // A pane in the workspace state is a block on the Board. The drawer put
+    // nothing here at all — it was React state in ProjectWorkspace holding a
+    // `fixed inset-0` overlay above everything.
+    expect(panes.filter((p) => p.kind === "Settings")).toHaveLength(1);
   });
 });

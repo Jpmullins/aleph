@@ -88,6 +88,7 @@ import { HypothesesSurface as HypothesesSurfaceView } from "./components/Hypothe
 import { HypothesisCard as HypothesisCardView } from "./components/HypothesisCard";
 import { NoteEditorCard as NoteEditorCardView } from "./components/NoteEditorCard";
 import { NotesSurface as NotesSurfaceView } from "./components/NotesSurface";
+import { SettingsSurface as SettingsSurfaceView } from "./components/SettingsSurface";
 import { SourceCard as SourceCardView } from "./components/SourceCard";
 import { TableCard as TableCardView } from "./components/TableCard";
 import { WikiPageCard as WikiPageCardView } from "./components/WikiPageCard";
@@ -523,8 +524,15 @@ export const BriefsSurfaceImpl = createComponentImplementation(
 export const GroundingSurfaceApi = {
   name: "GroundingSurface",
   schema: z3.object({
-    claim: z3.any().optional(),
-    groundings: z3.any().optional(),
+    // `CommonSchemas.DynamicValue`, not `z3.any()`. See the note on
+    // `SettingsSurfaceApi` below: the binder classifies a `z3.any()` prop as
+    // STATIC and hands the view the literal `{ path: "/claim" }` instead of
+    // resolving it, so this pane rendered nothing at all. `z3.any()` here was
+    // found by WS-B1 while debugging the identical mistake in a new surface —
+    // and `check-surface-bindings.sh` is green on it, because that sweep asks
+    // whether the prop is DECLARED, not whether it is declared BINDABLE.
+    claim: CommonSchemas.DynamicValue.optional(),
+    groundings: CommonSchemas.DynamicValue.optional(),
     children: z3.array(z3.any()).optional(),
   }),
 };
@@ -540,16 +548,58 @@ export const InspectorSurfaceApi = {
   // summary the client never declared: the binder resolves only declared props,
   // so the SSE payload was correct, the view read `undefined`, and nothing
   // raised.
+  //
+  // The three data props are `CommonSchemas.DynamicValue`, not `z3.any()`, and
+  // that distinction is what makes the pane render at all. A `z3.any()` prop is
+  // classified STATIC by the v0_9 binder and passed through VERBATIM, so
+  // `runs` arrived as the object `{ path: "/runs" }`, `runs.length === 0` was
+  // false, `runs.map` threw, and React unmounted the Inspector every time it
+  // was opened — with the server sending a correct payload on every frame.
   schema: z3.object({
-    runs: z3.any().optional(),
-    selected: z3.any().optional(),
-    events: z3.any().optional(),
+    runs: CommonSchemas.DynamicValue.optional(),
+    selected: CommonSchemas.DynamicValue.optional(),
+    events: CommonSchemas.DynamicValue.optional(),
     children: z3.array(z3.any()).optional(),
   }),
 };
 export const InspectorSurfaceImpl = createComponentImplementation(
   InspectorSurfaceApi,
   adapt("InspectorSurface", InspectorSurfaceView, "inspector"),
+);
+
+/**
+ * WS-B1. Settings is a PANE, and the drawer is gone.
+ *
+ * Two props, and the second is the whole design: `sections` is an ordered list
+ * the SERVER composes, so `settings`, `logs`, `notifications` and `profile` are
+ * four values of one component rather than four components. `Drawers.tsx` had a
+ * React function per section, which is exactly why a plugin's settings had
+ * nowhere to land.
+ *
+ * Both are declared here because the binder resolves ONLY declared props —
+ * `check-surface-bindings.sh` exists because the wiki surface once shipped ten
+ * categories the client never declared and rendered as though the project had
+ * none.
+ */
+export const SettingsSurfaceApi = {
+  name: "SettingsSurface",
+  schema: z3.object({
+    title: CommonSchemas.DynamicValue.optional(),
+    // `CommonSchemas.DynamicValue`, NOT `z3.any()`, and the difference is the
+    // whole pane. The v0_9 binder classifies each declared prop from its schema:
+    // a `Dynamic*` is BINDABLE and `{ path: "/sections" }` is resolved against
+    // the data model, while `z3.any()` is STATIC and passed through VERBATIM.
+    // Declared as `z3.any()` this prop arrived at the view as the literal object
+    // `{ path: "/sections" }` — every `updateDataModel` correct on the wire,
+    // every section computed, and `sections.map is not a function` in the
+    // console. Measured in a browser, not reasoned about.
+    sections: CommonSchemas.DynamicValue.optional(),
+    children: z3.array(z3.any()).optional(),
+  }),
+};
+export const SettingsSurfaceImpl = createComponentImplementation(
+  SettingsSurfaceApi,
+  adapt("SettingsSurface", SettingsSurfaceView, "settings"),
 );
 
 /**
@@ -582,6 +632,7 @@ export const ALEPH_CARD_IMPLS = [
   BriefsSurfaceImpl,
   GroundingSurfaceImpl,
   InspectorSurfaceImpl,
+  SettingsSurfaceImpl,
 ];
 
 /**

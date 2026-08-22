@@ -1,5 +1,7 @@
 import { useState } from "react";
 
+import { Modal } from "@/components/Modal";
+
 import { confidenceLabel, confidenceTone, isConfidence } from "../confidence";
 import { HypothesisMatrix, type AchMatrix } from "./HypothesisMatrix";
 import { CardShell, FeedbackButton, Pill, SurfaceHeader, type RendererProps } from "./_shared";
@@ -111,10 +113,10 @@ function NewHypothesisModal({
   const [title, setTitle] = useState("");
   const [statement, setStatement] = useState("");
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-ink/40 px-4">
-      <div className="w-full max-w-md border border-line-strong bg-surface p-5">
-        <h3 className="mb-3 text-base font-semibold">New hypothesis</h3>
-        <form
+    // WS-B1: Escape closes it and Tab stays inside it, because `Modal` owns
+    // both. This was a bare `fixed inset-0` with no key handling at all.
+    <Modal title="New hypothesis" onClose={onClose} testId="new-hypothesis-modal">
+      <form
           onSubmit={(e) => {
             e.preventDefault();
             if (title && statement) onCreate(title, statement);
@@ -157,8 +159,7 @@ function NewHypothesisModal({
               Create
             </button>
           </div>
-        </form>
-      </div>
-    </div>
+      </form>
+    </Modal>
   );
 }

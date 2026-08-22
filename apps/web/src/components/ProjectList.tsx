@@ -2,8 +2,9 @@ import { useMutation, useQuery, useQueryClient } from"@tanstack/react-query";
 import { useState } from"react";
 
 import { AlephLogo } from"@/components/AlephLogo";
+import { Modal } from "@/components/Modal";
 import { ThemeToggle } from"@/components/ThemeToggle";
-import { ApiError, api, type ProjectOut } from"@/lib/api";
+import { ApiError, api, type ModelProfileOut, type ProjectOut } from"@/lib/api";
 
 interface Props {
   onOpen: (projectId: string) => void;
@@ -212,13 +213,32 @@ function ProjectCreateModal({ onClose, onCreated }: CreateProps) {
   const qc = useQueryClient();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [profile, setProfile] = useState<"aleph-dev" |"aleph-production">("aleph-dev");
+  /**
+   * The profile names come from the server.
+   *
+   * They were a two-member union typed into this file — the two seeded template
+   * names, spelled as string literals — which is a client-side copy of a list
+   * only the database knows. Seed a third and it could not be chosen here; drop
+   * one and this offered a name `POST /v1/projects` would reject. WS-B1's third
+   * criterion is that no such copy survives anywhere under `apps/web/src`.
+   *
+   * `undefined` until the list lands, so the request carries no profile name at
+   * all rather than a guessed one — the server's own default is a better answer
+   * than this component's.
+   */
+  const templates = useQuery<ModelProfileOut[]>({
+    queryKey: ["model-profile-templates"],
+    queryFn: () => api.get<ModelProfileOut[]>("/v1/model-profile-templates"),
+  });
+  const names = templates.data?.map((t) => t.name) ?? [];
+  const [profile, setProfile] = useState<string>("");
+  const chosen = profile || names[0] || "";
   const create = useMutation({
     mutationFn: async () =>
       api.post<ProjectOut>("/v1/projects", {
         title,
         description,
-        model_profile_name: profile,
+        ...(chosen ? { model_profile_name: chosen } : {}),
       }),
     onSuccess: (p) => {
       qc.invalidateQueries({ queryKey: ["projects"] });
@@ -226,10 +246,8 @@ function ProjectCreateModal({ onClose, onCreated }: CreateProps) {
     },
   });
   return (
-    <div className="fixed inset-0 flex items-center justify-center bg-ink/40 px-4">
-      <div className="w-full max-w-md border border-line-strong bg-surface p-6">
-        <h2 className="mb-4 text-xl font-semibold">New project</h2>
-        <form
+    <Modal title="New project" onClose={onClose} testId="project-create-modal">
+      <form
           onSubmit={(e) => {
             e.preventDefault();
             create.mutate();
@@ -257,12 +275,21 @@ function ProjectCreateModal({ onClose, onCreated }: CreateProps) {
           <label className="block">
             <span className="text-sm font-medium text-ink-soft">Model profile</span>
             <select
-              value={profile}
-              onChange={(e) => setProfile(e.target.value as typeof profile)}
+              value={chosen}
+              disabled={names.length === 0}
+              onChange={(e) => setProfile(e.target.value)}
               className="mt-1 w-full border border-line-strong px-3 py-2 text-sm"
             >
-              <option value="aleph-dev">aleph-dev (cheap)</option>
-              <option value="aleph-production">aleph-production (premium)</option>
+              {names.length === 0 && (
+                <option value="">
+                  {templates.isPending ? "Loading templates…" : "No templates — server default"}
+                </option>
+              )}
+              {names.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
             </select>
           </label>
           {create.isError && (
@@ -284,8 +311,7 @@ function ProjectCreateModal({ onClose, onCreated }: CreateProps) {
               {create.isPending ?"Creating…" :"Create"}
             </button>
           </div>
-        </form>
-      </div>
-    </div>
+      </form>
+    </Modal>
   );
 }

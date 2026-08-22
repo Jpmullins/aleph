@@ -165,6 +165,11 @@ def test_the_document_references_nothing_outside_itself() -> None:
         assert marker not in _style(html), f"the stylesheet reaches out via {marker!r}"
 
 
+#: A length that is actually zero. `0`, `0px`, `0rem`, `0%` — and `none`, which
+#: is not a length but is what `border-radius` means by no radius.
+_ZERO = re.compile(r"^(?:0(?:px|rem|em|%|pt)?|none)$", re.I)
+
+
 def test_the_document_carries_no_radius() -> None:
     """WS-E3 criterion 5, asserted on the OUTPUT rather than on the source.
 
@@ -174,8 +179,59 @@ def test_the_document_carries_no_radius() -> None:
     future generated block is caught too. Aleph is squared: tokens.css pins
     `--radius: 0px` and the compiled document was the only curved surface left
     in the product.
+
+    **Every declared VALUE is parsed, rather than the text being matched.**
+    Both the plan's grep and the first version of this test used
+    `border-radius: *[^0;]`, which does not do what it looks like it does: with
+    a greedy ` *` the expression matches on the SPACE, so `border-radius: 0.5rem`
+    trips it and `border-radius:0.5rem` — no space, leading zero — passes clean.
+    A curved document would have shipped past both.
+
+    The shorthand takes up to four lengths (`0 0 4px 4px`), so each is checked
+    separately; matching the first would miss three quarters of the corners.
     """
-    assert not re.search(r"border-radius:\s*[^0;]", _style(compile_page_html(**_PAGE)))
+    style = _style(compile_page_html(**_PAGE))
+    offenders: list[str] = []
+    for declaration in re.finditer(r"border-radius\s*:\s*([^;}]+)", style, re.I):
+        value = declaration.group(1).strip()
+        for length in value.split():
+            if length == "/":  # the elliptical-radius separator
+                continue
+            if not _ZERO.match(length):
+                offenders.append(f"{value!r} (component {length!r})")
+    assert not offenders, (
+        "the compiled document declares a non-zero corner radius: "
+        + "; ".join(offenders)
+    )
+
+
+def test_the_radius_check_can_see_every_shape_a_radius_takes() -> None:
+    """The check above is only worth its parser. This is that parser's test.
+
+    Without it the fix is a claim: the regex it replaced looked correct and was
+    not, and nothing distinguished them until somebody wrote out the strings.
+    """
+
+    def offenders(style: str) -> list[str]:
+        out: list[str] = []
+        for declaration in re.finditer(r"border-radius\s*:\s*([^;}]+)", style, re.I):
+            for length in declaration.group(1).strip().split():
+                if length != "/" and not _ZERO.match(length):
+                    out.append(length)
+        return out
+
+    # Every shape the old expression let through, and the one it caught.
+    assert offenders("a{border-radius:0.5rem}") == ["0.5rem"], "leading zero, no space"
+    assert offenders("a{border-radius: 0.5rem}") == ["0.5rem"]
+    assert offenders("a{border-radius:.5rem}") == [".5rem"]
+    assert offenders("a{border-radius:8px}") == ["8px"]
+    assert offenders("a{border-radius:0 0 4px 4px}") == ["4px", "4px"], "shorthand corners"
+    assert offenders("a{BORDER-RADIUS:9PX}") == ["9PX"], "css is case-insensitive"
+    # And the forms that are genuinely zero must not be reported, or the check
+    # is unsatisfiable and somebody will delete it.
+    for clean in ("a{border-radius:0}", "a{border-radius: 0px}", "a{border-radius:none}",
+                  "a{border-radius:0 0 0 0}", "a{border-radius:0%}"):
+        assert offenders(clean) == [], clean
 
 
 # ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ import { ArtifactsSurface } from "./components/ArtifactsSurface";
 import { BriefsSurface } from "./components/BriefsSurface";
 import { GroundingSurface } from "./components/GroundingSurface";
 import { InspectorSurface } from "./components/InspectorSurface";
+import { SettingsSurface } from "./components/SettingsSurface";
 import { ChartCard } from "./components/ChartCard";
 import { ClaimCard } from "./components/ClaimCard";
 import { DiffCard } from "./components/DiffCard";
@@ -88,6 +89,7 @@ const CARD_VIEWS: Record<ComponentName, ComponentType<ChildRenderProps>> = {
   BriefsSurface,
   GroundingSurface,
   InspectorSurface,
+  SettingsSurface,
   ClaimCard,
   SourceCard,
   ArtifactCard,

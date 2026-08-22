@@ -16,14 +16,22 @@ import { usePaneKinds, useWorkspaceUI } from "@/lib/workspace-ui";
 
 // No icon map here any more: the registry carries each pane's icon, so adding a
 // pane is one entry rather than an entry plus a parallel table to forget.
+//
+// WS-B1 deleted the second list that used to sit at the bottom of this file: a
+// four-tuple of `[kind, icon, label]` for settings / logs / notifications /
+// profile, each opening a slide-over that covered the workspace. They are
+// ordinary pane kinds now, so they come down the same `usePaneKinds` fetch as
+// everything else and this component knows none of their names. The tuple was
+// also the last thing in the client that decided what was openable — which is
+// why `check-pane-registry.sh` could see four registry ids hardcoded here and
+// `Drawers.tsx` could ship a settings screen no plugin could contribute to.
 
 interface Props {
   projectId: string;
   onBack: () => void;
-  onOpenDrawer: (kind: "settings" | "logs" | "notifications" | "profile") => void;
 }
 
-export function Rail({ projectId, onBack, onOpenDrawer }: Props) {
+export function Rail({ projectId, onBack }: Props) {
   // Whatever is loaded — the rail no longer knows any surface name in advance.
   const paneKinds = usePaneKinds(projectId);
   // The rail is a *launcher*, not a switcher: clicking opens a pane beside
@@ -92,31 +100,6 @@ export function Rail({ projectId, onBack, onOpenDrawer }: Props) {
         );
       })}
 
-      <div className="flex-1" />
-
-      {(
-        [
-          ["settings", "settings", "Settings"],
-          ["logs", "ledger", "Action ledger"],
-          ["notifications", "bell", "Notifications"],
-          ["profile", "profile", "Profile"],
-        ] as const
-      ).map(([kind, icon, label]) => {
-        const Icon = Icons[icon];
-        return (
-          <button
-            key={kind}
-            type="button"
-            onClick={() => onOpenDrawer(kind)}
-            aria-label={label}
-            title={label}
-            data-testid={`rail-${kind}`}
-            className="grid h-9 w-9 place-items-center text-ink-muted hover:bg-sunken hover:text-ink"
-          >
-            <Icon size={17} />
-          </button>
-        );
-      })}
     </nav>
   );
 }

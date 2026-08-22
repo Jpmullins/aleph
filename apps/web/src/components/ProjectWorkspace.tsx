@@ -5,8 +5,6 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { AssistantDock } from "@/components/AssistantDock";
 import { ContextBar } from "@/components/ContextBar";
 import { PipelineStrip } from "@/components/PipelineStrip";
-import { Drawer } from "@/components/Drawers";
-import type { DrawerKind } from "@/components/LeftPanel";
 import { Rail } from "@/components/Rail";
 import { Board } from "@/components/Board";
 import { SourceUploadModal } from "@/components/SourceUploadModal";
@@ -34,7 +32,6 @@ export function ProjectWorkspace({ projectId, onBack }: Props) {
   });
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [threadId, setThreadId] = useState<string | null>(null);
-  const [drawer, setDrawer] = useState<DrawerKind | null>(null);
   const [showUpload, setShowUpload] = useState(false);
 
   // When the session changes, resolve its primary thread.
@@ -69,7 +66,7 @@ export function ProjectWorkspace({ projectId, onBack }: Props) {
         so it collapses to a strip and gives the space back.
       */}
       <div className="flex h-full">
-        <Rail projectId={projectId} onBack={onBack} onOpenDrawer={setDrawer} />
+        <Rail projectId={projectId} onBack={onBack} />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <ContextBar projectId={projectId} projectTitle={project.data?.title} onUpload={() => setShowUpload(true)} />
           {/* Corpus-level progress. Sits under the context bar because it
@@ -107,7 +104,6 @@ export function ProjectWorkspace({ projectId, onBack }: Props) {
             </PanelGroup>
           </div>
         </div>
-        {drawer && <Drawer kind={drawer} projectId={projectId} onClose={() => setDrawer(null)} />}
         {showUpload && (
           <SourceUploadModal
             projectId={projectId}
