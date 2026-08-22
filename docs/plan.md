@@ -494,7 +494,7 @@ at the right file and the wrong row.
 **Criteria:**
 
 - PDF passages carry section labels
-  <br>`On a 20-PDF fixture set: psql -tAc "select count(*) filter (where section_path is null)::float / count(*) from document_chunks c join sources s on ... where s.kind='pdf'" is below 0.10. It is 1.00 today, for every PDF, by construction.`
+  <br>`psql -tAc "select count(*) filter (where c.section_path is null)::float / nullif(count(*),0) from document_chunks c join normalized_documents n on n.id = c.normalized_document_id where n.parser like 'docling%'" is below 0.10.` **CORRECTED 2026-08-22:** the original joined `sources s ... where s.kind='pdf'` and `sources` **has no `kind` column** — the query errors rather than returning a number, so the criterion could not be evaluated at all. Which parser ran is recorded on `normalized_documents.parser`, which is also the honest discriminator: a pypdf row legitimately has no headings, so measuring "all PDFs" would grade the chooser rather than the parser. Measured today over pypdf rows: **0.903**.`
 - Structure metadata is measured, not hardcoded
   <br>`psql -tAc "select count(*) from normalized_documents where (structure_jsonb->>'heading_count')::int > 0 and parser like 'docling%'" > 0`. **CORRECTED 2026-08-22:** the column is `structure_jsonb`; as written the query errors rather than returning a number, so the criterion could never be evaluated at all. Scoped to the docling parser, since a pypdf row legitimately has no headings.`
 - Tables are detected
