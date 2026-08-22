@@ -594,6 +594,13 @@ run_shell E10 "design-token drift does not grow" \
 # that cannot be evaluated is a floor that does not exist.
 run_shell E12 "the web coverage floor can be evaluated, and it bites" \
   "CI=1 pnpm -C apps/web test:coverage 2>&1 | grep -E '^Statements' | tail -1"
+# E12a. E12 proves the MECHANISM: coverage-v8 is installed, the thresholds are
+# evaluated, a dropped suite reddens it. It cannot see the floor itself —
+# measured, setting all four thresholds to 0 leaves E12 green, because the
+# command still prints a percentage and still exits 0. So the one move that
+# makes a red build green was invisible to every gate in this repository.
+run_shell E12a "the web coverage floor has not been quietly lowered" \
+  "uv run python scripts/_acceptance/web_coverage_floor.py 2>&1 | tail -1"
 
 # ---------------------------------------------------------------------------
 # G — Verification infrastructure

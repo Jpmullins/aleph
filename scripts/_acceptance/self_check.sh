@@ -465,6 +465,18 @@ if [ -f apps/web/src/styles.css ]; then
     apps/web/src/styles.css \
     's|\z|\n.selfcheck-zombie { color: red; }\n|' \
     "./scripts/check-web-dead-css.sh"
+
+  # The SAME defect, anchored above the first `{` in the file. This is the one
+  # that pins the fix rather than the sweep: the EOF probe above is red on the
+  # OLD sweep too, so reverting `selector = before_brace.rsplit(";", 1)[-1]`
+  # left every gate in the repo green. `([^{}]*)\{` captures everything since
+  # the last brace, so at the top of a stylesheet the `@import` lines are glued
+  # onto the selector text and an `if "@" in selector: continue` guard skipped
+  # a real rule — any class declared above the first brace was invisible.
+  probe "web dead-CSS sweep sees a class declared above the first brace" \
+    apps/web/src/styles.css \
+    's|\@import "./styles/tokens.css";|\@import "./styles/tokens.css";\n.selfcheck-topfile { color: red; }|' \
+    "./scripts/check-web-dead-css.sh"
 fi
 
 if [ -f apps/web/src/components/Rail.tsx ]; then
