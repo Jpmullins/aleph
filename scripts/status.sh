@@ -142,8 +142,19 @@ else
 fi
 
 # --- 7. p95 first-token latency ----------------------------------------------
-if [ -f scripts/_acceptance/agent_latency.py ]; then
-  line 7 "p95 first-token" "see probe" unknown "run: uv run python scripts/_acceptance/agent_latency.py"
+#
+# Deliberately not measured here. The probe drives REAL chat turns against a
+# real gateway, so it takes a minute and spends tokens, and `status.sh` is meant
+# to be something you run without thinking about it. Naming the command is more
+# useful than a stale cached number, which is the other way this line could go.
+#
+# It stays `unknown` even once the probe exists, and that is not a hedge: Part 1
+# states no ceiling for number 7, so there is nothing for a measurement to be
+# compared against yet. A verdict needs a threshold; without one, a number is
+# just a number.
+if [ -f scripts/_acceptance/agent_turn_probe.py ]; then
+  line 7 "p95 first-token" "see probe" unknown \
+    "no stated ceiling; measure with: uv run python scripts/_acceptance/agent_turn_probe.py"
 else
   line 7 "p95 first-token" "n/a" unknown "no probe exists and no ceiling is stated (WS-E1c)"
 fi

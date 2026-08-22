@@ -450,6 +450,29 @@ else
   skip H1 "needs postgres + a reachable gateway"
 fi
 
+# H2 drives REAL chat turns. It is the only check here that pays money, and the
+# only one that measures what a person waits for rather than what a function
+# returns. Two numbers come out of it: the per-turn upstream chat-completion
+# count (WS-E1c criterion 5 — the number the "weirdly rate limited" report never
+# had) and time to first token (Part 1 number 7).
+#
+# The request count is read from `model_calls` rather than from a counting
+# wrapper. The ledger is the production write path and a standing invariant, so
+# if it and reality disagree, the LEDGER is the defect — which is worth finding.
+# A wrapper would only ever measure the wrapper.
+#
+# Deliberately outside --quick even when services are up: three real turns take
+# roughly a minute and cost tokens, and a gate people skip because it is slow is
+# a gate that stops running.
+if [ $NEEDS_SERVICES -eq 1 ] && gateway_up && [ "${ALEPH_ACCEPTANCE_DRIVE_AGENT:-0}" = "1" ]; then
+  run_shell H2 "a real chat turn: upstream request count and time to first token" \
+    "uv run python scripts/_acceptance/agent_turn_probe.py --samples ${ALEPH_PROBE_SAMPLES:-3}"
+elif [ $NEEDS_SERVICES -eq 1 ] && gateway_up; then
+  skip H2 "set ALEPH_ACCEPTANCE_DRIVE_AGENT=1 to drive real turns (spends tokens)"
+else
+  skip H2 "needs postgres + a reachable gateway"
+fi
+
 # ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
