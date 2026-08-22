@@ -184,6 +184,19 @@ class ClaimUpsert:
     section_anchor: str | None = None
     revision_id: UUID | None = None
     evidence: list[EvidenceDraft] = field(default_factory=list)
+    #: Move an existing belief onto ``page_id``, rather than leaving it where
+    #: it was first asserted.
+    #:
+    #: False by default and that is a decision, pinned by
+    #: `test_reasserting_a_claim_keeps_its_identity`: identity is the
+    #: proposition, not the page, so page B re-asserting page A's claim must
+    #: not quietly move it — the belief would vanish from A's claim list
+    #: because A did nothing wrong.
+    #:
+    #: The curator's merge fold passes True, because moving the claim onto the
+    #: target IS the merge: the source page is soft-deleted a few lines later
+    #: and a belief left pointing at it is orphaned.
+    reassign_page: bool = False
 
 
 @dataclass(frozen=True)
@@ -253,9 +266,10 @@ async def claim_embedder_for(
     model was unreachable would be trading the thing for the index of it, and a
     partial batch is refused outright — zipping a short result would attach
     vectors to the wrong claims, which is worse than none.
+
+    No early return for an empty list: `embed_texts` already makes no call for
+    one, so a guard here would be a branch no test could tell from its absence.
     """
-    if not texts:
-        return {}.get
     from aleph_rks.embedding import embed_texts
 
     wanted = list(dict.fromkeys(texts))
@@ -391,14 +405,40 @@ class BeliefService:
                 # show the page as having no claims from the second compile
                 # onwards.
                 #
+                # Only for the page the claim already sits on, unless the
+                # caller says otherwise. A DIFFERENT page re-asserting the same
+                # proposition must not take the belief off the page that holds
+                # it — see `ClaimUpsert.reassign_page`.
+                #
                 # `revision_id` only when the caller supplies one: a writer
                 # that does not know the revision must not blank the one that
                 # is there.
-                claim.page_id = draft.page_id
-                if draft.revision_id is not None:
-                    claim.revision_id = draft.revision_id
-                if draft.section_anchor is not None:
-                    claim.section_anchor = draft.section_anchor
+                if draft.reassign_page or claim.page_id == draft.page_id:
+                    claim.page_id = draft.page_id
+                    if draft.revision_id is not None:
+                        claim.revision_id = draft.revision_id
+                    if draft.section_anchor is not None:
+                        claim.section_anchor = draft.section_anchor
+
+                # The vector, on the UPDATE branch too.
+                #
+                # `embedding` was assigned in the insert branch only, and the
+                # one wired production caller — `curator_service.
+                # recurate_overview` via `_carry_claims` — selects claims that
+                # ALREADY EXIST, so every draft it produces lands here. The
+                # vector was computed, paid for at the gateway, and discarded
+                # 100% of the time; 18,038 of 18,038 claims on the live stack
+                # have a NULL embedding and an HNSW index with nothing to index.
+                #
+                # Backfill-only, not unconditional. A claim's text is its
+                # identity (`claim_key`), so a row that already has a vector has
+                # the right one, and re-embedding every re-assertion would pay
+                # the gateway again on every recompile of every page. This
+                # fills the hole and does not re-dig it.
+                if claim.embedding is None:
+                    vector = _embed_or_none(embed, proposition)
+                    if vector is not None:
+                        claim.embedding = vector
                 created = False
 
             written, rejected = await self._attach_evidence(

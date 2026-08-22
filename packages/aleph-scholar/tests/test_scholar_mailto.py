@@ -1,24 +1,24 @@
 """An undeliverable contact address is a degradation, and it says so (`WS-E2`).
 
-MEASURED 2026-08-22 against the running stack, and it is the reason this file
-exists. `ALEPH_SCHOLAR_MAILTO` was `dev@aleph.local` — the value Aleph ships as
-its default. Eight concurrent `/scholar/search` calls returned 0 successes, and
-the API log showed why:
+Aleph ships `ALEPH_SCHOLAR_MAILTO=dev@aleph.local`. It is well formed and cannot
+receive mail, and the polite pool is granted on a contactable address — so
+`ScholarHttp` sent a `mailto=` that bought nothing, clamped its own rate to the
+POLITE ceiling it had not been granted, and reported none of that anywhere. The
+three tests below pin the places that now do.
 
-    {"provider":"openalex","upstream_status":429,"retry_after":28409,
-     "error":"scholar upstream api.openalex.org unavailable after 1 attempt(s)
-              within a 20.0s budget: HTTP 429"}
+**This is an entitlement gap, not the cause of the 429s that opened `WS-E2`.**
+The audit said the placeholder mailto was why eight concurrent searches returned
+0/8. Measured 2026-08-22, same URL, same User-Agent, same `mailto=`, same host,
+differing only in IP address family:
 
-28409 seconds is 7.9 hours, applied to the deployment, not to the request. The
-same query issued from the host succeeded, so this was not the network and not
-the query — it was pool membership. The polite pool is granted on a contactable
-address; `dev@aleph.local` is well formed and cannot receive mail, so every
-request Aleph sent carried a `mailto=` that bought nothing while the client
-behaved as though it had.
+    curl -4 …/works?search=long+context&mailto=dev@aleph.local -> 429, Retry-After 25668
+    curl -6 …/works?search=long+context&mailto=dev@aleph.local -> 200
 
-Nothing anywhere reported that. `ScholarHttp` believed it was polite, clamped
-its rate to the polite ceiling, and the only artefact was a 429 that reads as an
-outage. These tests pin the three places that now say otherwise.
+Dropping the mailto and the User-Agent changed nothing over IPv4. Crossref over
+the same IPv4 answered 200. OpenAlex is blocking this deployment's IPv4 egress
+for about 7.1 hours; the host escapes it by preferring IPv6 and the API
+container, being IPv4-only, does not. Nothing in this file fixes that, and
+nothing in this file claims to.
 """
 
 from __future__ import annotations

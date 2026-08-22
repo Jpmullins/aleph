@@ -210,7 +210,7 @@ class PricingRefresher:
         if task is None:
             return
         task.cancel()
-        _done, pending = await asyncio.wait({task})
+        _done, pending = await asyncio.wait({task}, timeout=max(0.0, timeout_s))
         if pending:
             _log.warning(
                 "gateway.pricing_refresh_stop_timeout",

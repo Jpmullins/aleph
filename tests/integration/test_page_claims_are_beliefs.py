@@ -265,6 +265,105 @@ async def test_a_compiled_claim_is_embedded_when_the_caller_supplies_an_embedder
     assert len(list(claims[0].embedding)) == 1024
 
 
+async def test_a_RE_ASSERTED_claim_gets_its_vector_too(
+    maker: Callable[[], AsyncSession], committed_project: uuid.UUID
+) -> None:
+    """The UPDATE branch, which is the one production actually takes.
+
+    `embedding` was assigned in the insert branch only. The single wired
+    production caller — `curator_service.recurate_overview` through
+    `_carry_claims` — selects claims that ALREADY EXIST, so every draft it
+    produces lands on the update branch. The vector was computed, paid for at
+    the gateway, and discarded 100% of the time.
+
+    That is why 18,038 of 18,038 claims on the live stack carried a NULL
+    embedding while a test asserting "a compiled claim is embedded" passed: it
+    only ever compiled the FIRST time.
+    """
+    vector = [0.05] * 1024
+    first = {"title": "Basin sedimentation", "body_md": "# Basin\n\nFirst compile.\n"}
+
+    # First compile with NO embedder — the row that exists on the live stack.
+    await _commit(
+        maker,
+        project_id=committed_project,
+        claims=[ClaimDraft(text=CLAIM_TEXT, citations=[_citation()])],
+        **first,
+    )
+    claims = await _live_claims(maker, committed_project)
+    assert claims[0].embedding is None, "the premise of this test is gone"
+
+    # Recompile with one. Same claim text, so `claim_key` matches and this is
+    # an update, not an insert.
+    await _commit(
+        maker,
+        project_id=committed_project,
+        title="Basin sedimentation",
+        body_md="# Basin\n\nSecond compile.\n",
+        claims=[ClaimDraft(text=CLAIM_TEXT, citations=[_citation()])],
+        embed={CLAIM_TEXT: vector}.get,
+    )
+    claims = await _live_claims(maker, committed_project)
+    assert len(claims) == 1, f"the re-assertion inserted a second row: {len(claims)}"
+    assert claims[0].embedding is not None, (
+        "a re-asserted claim never gets a vector, so the only path production "
+        "takes leaves the HNSW index with nothing to index"
+    )
+    assert len(list(claims[0].embedding)) == 1024
+
+
+async def test_a_claim_that_already_has_a_vector_is_not_re_embedded(
+    maker: Callable[[], AsyncSession], committed_project: uuid.UUID
+) -> None:
+    """Backfill, not re-embed on every recompile.
+
+    A claim's text IS its identity (`claim_key`), so a row that already has a
+    vector has the right one. Re-embedding every re-assertion would pay the
+    gateway again on every recompile of every page — and without this test the
+    fix above would most naturally be written that way.
+    """
+    original = [0.05] * 1024
+    replacement = [0.99] * 1024
+    calls: list[str] = []
+
+    def counting_embed(text: str) -> list[float] | None:
+        # A DIFFERENT vector each call. Returning the same one both times makes
+        # an overwrite indistinguishable from a skip, and the first version of
+        # this test did exactly that — mutating the guard to `if True:` left it
+        # green.
+        calls.append(text)
+        return original if len(calls) == 1 else replacement
+
+    await _commit(
+        maker,
+        project_id=committed_project,
+        title="Basin sedimentation",
+        body_md="# Basin\n\nFirst.\n",
+        claims=[ClaimDraft(text=CLAIM_TEXT, citations=[_citation()])],
+        embed=counting_embed,
+    )
+    assert calls == [CLAIM_TEXT], calls
+
+    await _commit(
+        maker,
+        project_id=committed_project,
+        title="Basin sedimentation",
+        body_md="# Basin\n\nSecond.\n",
+        claims=[ClaimDraft(text=CLAIM_TEXT, citations=[_citation()])],
+        embed=counting_embed,
+    )
+    # The embedder may be CALLED (the caller computes eagerly); what must not
+    # happen is the stored vector being replaced on a row that already had one.
+    claims = await _live_claims(maker, committed_project)
+    stored = list(claims[0].embedding)
+    assert stored == original, (
+        "the vector was replaced on re-assertion, so every recompile of every "
+        "page pays the gateway again for a claim whose text — its identity — "
+        "did not change"
+    )
+    assert stored != replacement
+
+
 async def test_a_compiled_claim_without_an_embedder_is_still_written(
     maker: Callable[[], AsyncSession], committed_project: uuid.UUID
 ) -> None:
@@ -415,30 +514,21 @@ async def test_a_merge_folds_the_source_page_claims_as_beliefs(
         body_md="# Basin\n\nThe surviving page.\n",
         claims=[ClaimDraft(text=CLAIM_TEXT, citations=[_citation()])],
     )
-    # The source asserts TWO claims and the target already holds one of them,
-    # so "what the source had" (2) and "what the target gained" (1) are
-    # different numbers. A fixture where they agree cannot tell the ledger
-    # counting one from counting the other.
     source = await _commit(
         maker,
         project_id=committed_project,
         title="Basin sedimentation (draft)",
         body_md="# Basin draft\n\nSuperseded prose.\n",
-        claims=[
-            ClaimDraft(text=OTHER_CLAIM, citations=[_citation("[c2]")]),
-            ClaimDraft(text=CLAIM_TEXT, citations=[_citation()]),
-        ],
+        claims=[ClaimDraft(text=OTHER_CLAIM, citations=[_citation("[c2]")])],
     )
     folded = await _apply_merge(maker, committed_project, source.page_id, target.page_id)
-    assert folded == 1, (
-        "the ledger should record the ONE claim the target gained, not the two "
-        f"the source page listed; got {folded}"
-    )
+    assert folded == 1, f"the ledger should record the claim the target gained; got {folded}"
 
     claims = await _live_claims(maker, committed_project)
     by_text = {c.text: c for c in claims}
     assert set(by_text) == {CLAIM_TEXT, OTHER_CLAIM}
     assert by_text[OTHER_CLAIM].page_id == target.page_id, "the merge dropped the claim"
+    assert by_text[CLAIM_TEXT].page_id == target.page_id
     assert by_text[OTHER_CLAIM].claim_key == claim_key_for(OTHER_CLAIM)
 
 
@@ -491,3 +581,50 @@ async def test_a_folded_claim_keeps_the_evidence_that_anchors_it(
     assert cites[0].quote == _citation().quote, "the fold dropped the quote"
     assert cites[0].char_start == _citation().char_start
     assert cites[0].char_end == _citation().char_end
+
+
+async def test_a_merge_folds_a_claim_whose_revision_id_has_gone_stale(
+    maker: Callable[[], AsyncSession], committed_project: uuid.UUID
+) -> None:
+    """`_carry_claims` selects a page's claims, and a claim's revision moves.
+
+    A claim is durable and a page is not: recompile the page without listing
+    the claim again and the row keeps the revision it was last asserted on
+    while the page moves ahead. Selecting `revision_id == current_revision_id`
+    — which is what the carry did — makes that claim invisible to the merge,
+    so the fold silently drops a belief the page still holds. The wiki ingest
+    path produces exactly this shape: `_node_claim_extraction` writes claims
+    against the revision that has just been committed, and the next curator
+    commit moves the page past it.
+    """
+    target = await _commit(
+        maker,
+        project_id=committed_project,
+        title="Basin sedimentation",
+        body_md="# Basin\n\nThe surviving page.\n",
+        claims=[ClaimDraft(text=CLAIM_TEXT, citations=[_citation()])],
+    )
+    source = await _commit(
+        maker,
+        project_id=committed_project,
+        title="Basin sedimentation (draft)",
+        body_md="# Basin draft\n\nFirst.\n",
+        claims=[ClaimDraft(text=OTHER_CLAIM, citations=[_citation("[c2]")])],
+    )
+    # A recompile that does not re-list the claim. The page advances; the
+    # belief stays where it was last asserted.
+    stale = await _commit(
+        maker,
+        project_id=committed_project,
+        title="Basin sedimentation (draft)",
+        page_id=source.page_id,
+        body_md="# Basin draft\n\nSecond, and it lists no claims.\n",
+        claims=[],
+    )
+    assert stale.revision_id != source.revision_id
+
+    folded = await _apply_merge(maker, committed_project, source.page_id, target.page_id)
+    assert folded == 1, (
+        "the merge did not fold a claim whose revision_id had gone stale; the "
+        "source page is about to be soft-deleted and the belief goes with it"
+    )

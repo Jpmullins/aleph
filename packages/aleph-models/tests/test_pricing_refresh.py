@@ -441,7 +441,13 @@ async def test_stop_gives_up_rather_than_hanging_on_a_task_that_ignores_cancella
     await asyncio.sleep(0)
 
     started = time.monotonic()
-    await refresher.stop(timeout_s=0.05)
+    try:
+        # The outer bound is the test's, not the subject's: without it an
+        # unbounded `stop()` HANGS the suite, and a hang is a worse signal than
+        # a failure — CI reports it as a timeout with no named test.
+        await asyncio.wait_for(refresher.stop(timeout_s=0.05), timeout=2.0)
+    except TimeoutError:
+        pytest.fail("stop() never returned; it is waiting on a task that will not stop")
     elapsed = time.monotonic() - started
 
     assert cancels == 1, "stop() did not cancel the task at all"
