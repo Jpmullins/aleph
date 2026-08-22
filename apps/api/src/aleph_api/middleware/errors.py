@@ -29,7 +29,7 @@ the same `scope` dict — which is why they are what this module reads.
 Reading the request also makes the correlation independent of middleware order,
 so the fix cannot be undone by an insertion in `main.py`. The order still
 matters for the CORS invariant and is pinned by
-`tests/unit/test_request_correlation.py::test_middleware_order_is_pinned`.
+`apps/api/tests/unit/test_request_correlation.py::test_middleware_order_is_pinned`.
 """
 
 from __future__ import annotations

@@ -13,7 +13,8 @@
 # holding no rows.
 #
 # Usage:
-#   ./scripts/status.sh            # the numbers
+#   ./scripts/status.sh            # the numbers (runs the full gate; minutes)
+#   ./scripts/status.sh --quick    # skip the service-backed checks, and say so
 #   ./scripts/status.sh --brief    # one line per number, no explanation
 #
 # Exits 0 if every measurable number is good, 1 otherwise. A number that is
@@ -25,7 +26,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 BRIEF=0
-[ "${1:-}" = "--brief" ] && BRIEF=1
+QUICK=0
+for arg in "$@"; do
+  case "$arg" in
+    --brief) BRIEF=1 ;;
+    --quick) QUICK=1 ;;
+  esac
+done
 
 DB_URL="${DATABASE_URL:-${ALEPH_TEST_DATABASE_URL:-}}"
 export DATABASE_URL="$DB_URL"
@@ -54,16 +61,31 @@ printf '%-3s %-24s %-12s %-8s %s\n' "#" "NUMBER" "VALUE" "VERDICT" "MEANS"
 printf '%-3s %-24s %-12s %-8s %s\n' "---" "------------------------" "------------" "--------" "-----"
 
 # --- 1. the gate --------------------------------------------------------------
-GATE_OUT="$(./scripts/acceptance.sh --quick 2>&1 | tail -40)"
+#
+# The FULL gate by default, not `--quick`. Quick mode skips every service-backed
+# check, so `skip <= 2` is unreachable by construction and number 1 would read
+# FAIL forever for a reason that has nothing to do with the system. A fast
+# number that cannot be met is the same failure as a green light that means
+# nothing, pointed the other way.
+#
+# It takes a few minutes. That is the honest cost of the definition of done;
+# `--quick` is available and is labelled when used.
+if [ $QUICK -eq 1 ]; then
+  GATE_MODE="--quick (service-backed checks skipped)"
+  GATE_OUT="$(./scripts/acceptance.sh --quick 2>&1 | tail -60)"
+else
+  GATE_MODE="full"
+  GATE_OUT="$(./scripts/acceptance.sh 2>&1 | tail -60)"
+fi
 GATE_LINE="$(printf '%s' "$GATE_OUT" | grep -oE 'pass=[0-9]+ +fail=[0-9]+ +red=[0-9]+.*' | tail -1)"
 GATE_FAIL="$(printf '%s' "$GATE_LINE" | grep -oE 'fail=[0-9]+' | cut -d= -f2)"
 GATE_SKIP="$(printf '%s' "$GATE_LINE" | grep -oE 'skip=[0-9]+' | cut -d= -f2)"
 GATE_MISS="$(printf '%s' "$GATE_LINE" | grep -oE 'missing=[0-9]+' | cut -d= -f2)"
 if [ -n "${GATE_FAIL:-}" ]; then
   if [ "$GATE_FAIL" -eq 0 ] && [ "${GATE_MISS:-0}" -eq 0 ] && [ "${GATE_SKIP:-99}" -le 2 ]; then
-    line 1 "acceptance gate" "f${GATE_FAIL}/s${GATE_SKIP}/m${GATE_MISS}" ok "fail=0, skip<=2, no missing subjects"
+    line 1 "acceptance gate" "f${GATE_FAIL}/s${GATE_SKIP}/m${GATE_MISS}" ok "fail=0, skip<=2, no missing subjects ($GATE_MODE)"
   else
-    line 1 "acceptance gate" "f${GATE_FAIL}/s${GATE_SKIP}/m${GATE_MISS}" FAIL "needs fail=0, skip<=2, missing=0 (--quick)"
+    line 1 "acceptance gate" "f${GATE_FAIL}/s${GATE_SKIP}/m${GATE_MISS}" FAIL "needs fail=0, skip<=2, missing=0 ($GATE_MODE)"
   fi
 else
   line 1 "acceptance gate" "n/a" unknown "could not parse acceptance.sh output"

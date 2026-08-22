@@ -99,7 +99,7 @@ def create_app() -> FastAPI:
     # principal and project out of the shared ASGI scope rather than inheriting
     # contextvars, because a BaseHTTPMiddleware's downstream bindings cannot
     # reach an upstream frame. The order is still pinned, by
-    # `tests/unit/test_request_correlation.py::test_middleware_order_is_pinned`
+    # `apps/api/tests/unit/test_request_correlation.py::test_middleware_order_is_pinned`
     # and `test_cors_survives_errors.py::test_cors_is_the_outermost_middleware`,
     # so a fourth middleware cannot land in the wrong slot in silence.
     app.add_middleware(AuthMiddleware)
