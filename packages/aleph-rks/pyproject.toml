@@ -26,6 +26,25 @@ dependencies = [
     "aleph-security",
 ]
 
+[project.optional-dependencies]
+# Layout-aware PDF reading. WS-RS11.
+#
+# An EXTRA, not a dependency, and the reason is in
+# `docs/measurements/pdf-parsers.md`: docling pulls a model stack on the order
+# of a gigabyte and downloads weights on first use. Aleph's shipped parsers
+# extract the words and none of the structure — a median of one or two headings
+# across a whole paper and zero tables, so every PDF chunk carries
+# `section_path = NULL` by construction — but that is a capped feature, not a
+# broken install, and forcing a gigabyte on someone who ingests HTML would be
+# the wrong default.
+#
+# `uv sync --all-extras` (what CI and `./scripts/bootstrap-local.sh` run) picks
+# it up. A deployment that does not want it keeps the flat parsers and is told
+# so by the normalizer registry rather than by a stack trace.
+pdf-layout = [
+    "docling>=2.0,<3",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

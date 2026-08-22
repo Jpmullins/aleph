@@ -38,11 +38,25 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+#: NOTE the `.*` on the markdown branch. Without it the `\s*$` anchor demanded
+#: end-of-line immediately after the first title character, so `## ABSTRACT`
+#: did not match and only a one-character heading did. That undercounted every
+#: parser and reported **zero** for docling, whose headings are all markdown —
+#: which would have been read as "the layout parser found no structure" when it
+#: had found 41 headings in the first document tried.
 _HEADING = re.compile(
-    r"^(?:#{1,6}\s+\S|(?:\d+\.)+\d*\s+[A-Z]|[A-Z][A-Z \-]{4,60})\s*$",
+    r"^(?:#{1,6}[ \t]+\S.*|(?:\d+\.)+\d*[ \t]+[A-Z].*|[A-Z][A-Z \-]{4,60})[ \t]*$",
     re.MULTILINE,
 )
 #: A markdown table row. The only table shape a downstream chunker can use.
+#: A MARKDOWN heading, and this is the column that decides the criterion.
+#:
+#: `chunk_markdown` finds a section by looking for `#`. The generous detector
+#: above also counts an ALL-CAPS line and a numbered `3.2 Method`, which is
+#: fair for judging "did the parser see structure" and MISLEADING for judging
+#: "can the chunker use it" — a flat parser scores 25 on the first and 0 on the
+#: second, and only the second sets `section_path`.
+_MD_HEADING = re.compile(r"^#{1,6}[ \t]+\S", re.MULTILINE)
 _TABLE_ROW = re.compile(r"^\s*\|.+\|\s*$", re.MULTILINE)
 _FIGURE = re.compile(r"^\s*(?:Figure|Fig\.|Table)\s+\d+", re.MULTILINE | re.IGNORECASE)
 
@@ -52,6 +66,7 @@ class Measurement:
     parser: str
     chars: int = 0
     headings: int = 0
+    md_headings: int = 0
     table_rows: int = 0
     figures: int = 0
     failed: str | None = None
@@ -74,6 +89,7 @@ def _measure(name: str, text: str) -> Measurement:
         parser=name,
         chars=len(text),
         headings=len(_HEADING.findall(text)),
+        md_headings=len(_MD_HEADING.findall(text)),
         table_rows=len(_TABLE_ROW.findall(text)),
         figures=len(_FIGURE.findall(text)),
     )
@@ -171,8 +187,11 @@ def main() -> int:
             except Exception as exc:
                 parser._m.append(Measurement(parser=parser.name, failed=f"{type(exc).__name__}"))
 
-    print(f"{'parser':<14}{'ok':>5}{'chars':>10}{'headings':>10}{'table rows':>12}{'figures':>9}")
-    print("-" * 60)
+    print(
+        f"{'parser':<14}{'ok':>5}{'chars':>10}{'headings':>10}"
+        f"{'md head':>9}{'table rows':>12}{'figures':>9}"
+    )
+    print("-" * 69)
     for parser in parsers:
         if not parser.available:
             print(f"{parser.name:<14}{'—':>5}  NOT INSTALLED ({parser.why_not})")
@@ -186,6 +205,7 @@ def main() -> int:
             f"{parser.name:<14}{len(ok):>5}"
             f"{int(med([m.chars for m in ok])):>10}"
             f"{int(med([m.headings for m in ok])):>10}"
+            f"{int(med([m.md_headings for m in ok])):>9}"
             f"{int(med([m.table_rows for m in ok])):>12}"
             f"{int(med([m.figures for m in ok])):>9}"
         )
@@ -203,8 +223,10 @@ def main() -> int:
     # The number that matters for RS11 criterion 1: a parser emitting no
     # headings leaves every chunk with `section_path = NULL`, whatever else it
     # does well.
-    print("\nheadings are the criterion. A parser with a median of 0 cannot give a")
-    print("chunk a section path, and `section_path IS NULL` stays at 1.00.")
+    print("\n`md head` is the criterion, not `headings`. `chunk_markdown` finds a")
+    print("section by looking for `#`, so only markdown headings set `section_path`.")
+    print("A parser with a median of 0 there leaves `section_path IS NULL` at 1.00")
+    print("however much structure it appears to have seen.")
     return 0
 
 

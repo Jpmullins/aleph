@@ -49,15 +49,30 @@ which supersedes the old decision that the wiki was being deleted.
   **3,451 chunks, all embedded, 0 normalized documents without chunks, 0 stuck runs.** Aleph now
   ships no embedder name; the binding is chosen by autoconfigure from what the gateway reports and
   probed before use. `WS-RS1`, landed.
-  **The 0.91 recall figure is still a laboratory number** — it is measured on 45 questions over 12
-  short paragraphs with one seeded chunk per document, so it does not describe the production index.
-  `WS-RS5` replaces the set; until then, treat 0.91 as "the retriever works", not as a quality claim.
+  **The 0.91 laboratory number is gone, and the real one is worse.** `WS-RS5` landed: the eval now
+  runs the production chunker, embeds the same string ingest embeds, and reports nDCG and MRR
+  alongside recall. Measured against a 738-document set built from this instance's own corpus
+  (`python -m aleph_evals.build_retrieval_set`): **nDCG@10 0.681, MRR 0.443, recall@1 0.34, @3 0.51,
+  @8 0.64, @20 0.78.** The old 12-document set scored **recall@1 = 1.00** — saturated, and unable to
+  resolve any change RS6 or RS10 might make. The generated set is NOT committed: the corpus is
+  published papers and redistributing them is not the eval's call. Point `ALEPH_RETRIEVAL_DATASET`
+  at a generated one; CI measures the small committed set, lexical-only, with a floor on recall@1.
+
+  **Retrieval never abstains.** Asked a question its corpus cannot answer it returns passages
+  anyway, 8 times out of 8. A cosine-distance floor does not fix it — measured, the answerable and
+  off-corpus distributions overlap (`docs/decisions.md` D10). `ChunkHit` now carries
+  `cosine_distance` and `lexical_rank` so a reranker can; both legs had been computing them and
+  discarding them.
 - **The Claim Spine** (`docs/belief-engine.md`) is the evidence layer *underneath* the wiki, not a
   replacement for it: durable claims with verbatim quotes anchored to exact character offsets, so a
-  page's assertions are traceable to a sentence. **It has never run in production** — 796 claims,
-  0 edges, 0 verbatim quotes, and `BeliefService` has no caller outside its own module. It is now
-  covered end to end by `tests/e2e/test_belief_spine.py`, which exercises the service directly; that
-  makes `WS-RS8` a wiring job rather than a rewrite, and does **not** mean the belief layer is
+  page's assertions are traceable to a sentence. **It runs now.** `WS-RS8` gave it its first caller:
+  `_node_claim_extraction` reads the source's CHUNKS, requires the model to quote them verbatim, and
+  writes through `BeliefService`, so a claim carries a quote, a chunk and a document-relative span.
+  The research path does too — it had been grounding every quote and then discarding all four values
+  one function call later. Claims are also embedded at write time now (`WS-RS10`); the HNSW index on
+  `wiki_claims.embedding` had never had anything to index. The 796 pre-existing thin citations stay
+  and are re-derivable — `docs/decisions.md` D9 — so number 3 is red until `rebuild` runs over the
+  corpus. It is
   running. See `WS-RS8`.
 - **They are different plugins and both are fully accessible.** *"What do we think about X, and on
   what evidence?"* is the wiki. *"What did source 47 actually say?"* is the RAG. Framing them as

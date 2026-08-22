@@ -289,6 +289,8 @@ run_shell B6 "retrieval dataset has >=40 labelled pairs" \
 # Asserted by import, not by grep: `grep -q '_MISS_REASON'` also matched
 # `_MISS_REASON_UNUSED`, so the check survived its own subject being renamed
 # away. Substring matching is not a check.
+run_pytest B11 "the PDF parser is a resolved choice, not a hardcoded default" \
+  packages/aleph-rks/tests/test_pdf_parser_registry.py
 run_shell B8 "empty search reports honestly" \
   "uv run python -c \"
 import inspect

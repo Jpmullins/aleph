@@ -61,6 +61,108 @@ class Normalizer(Protocol):
 # ---------------------------------------------------------------------------
 
 
+class DoclingNormalizer:
+    """Layout-aware PDF reading: real headings, real tables, real captions.
+
+    The shipped normalizers extract the words and none of the structure —
+    measured over 20 of this instance's own PDFs, a median of one or two
+    headings across an entire paper and ZERO table rows
+    (`docs/measurements/pdf-parsers.md`). Both hardcode
+    `{"heading_count": 0, "table_count": 0, "figure_count": 0}` with a comment
+    admitting the library cannot tell.
+
+    That is why every PDF chunk carries `section_path = NULL`: the chunker finds
+    sections by looking for markdown headings, and there were none. The chunker
+    computes exact character offsets and a test asserts the span slices back to
+    the source — precision spent on a document with no structure to be precise
+    about.
+
+    **The counts here are MEASURED, not asserted.** They are counted off the
+    emitted markdown, so if docling produces a flat wall of text for some
+    document, `heading_count` is 0 and says so — which is the whole difference
+    between this and the literal it replaces.
+
+    Optional by construction. `docling` is an extra (`aleph-rks[pdf-layout]`)
+    because it pulls a model stack of roughly a gigabyte and downloads weights
+    on first use. A deployment that does not install it keeps the flat parsers,
+    and `normalizer_for` says so rather than raising an ImportError at ingest.
+    """
+
+    parser = "docling"
+
+    def __init__(self) -> None:
+        try:
+            import importlib.metadata as _md
+
+            from docling.document_converter import DocumentConverter
+        except Exception as exc:  # pragma: no cover - exercised by the registry
+            msg = (
+                "docling is not installed. Install the extra: "
+                "`uv sync --all-packages --all-extras`, or "
+                "`pip install 'aleph-rks[pdf-layout]'`"
+            )
+            raise NormalizationFailed(msg) from exc
+        try:
+            version = _md.version("docling")
+        except Exception:
+            version = "unknown"
+        self.parser_version = f"docling@{version}"
+        self._converter = DocumentConverter()
+
+    def normalize(self, data: bytes) -> NormalizationResult:
+        import re
+        import tempfile
+
+        # docling takes a path, not bytes. Written to a temp file rather than
+        # kept in memory: the converter streams large PDFs and a NamedTemporary
+        # is cheaper than holding a second copy of a 40 MB paper.
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=True) as handle:
+            handle.write(data)
+            handle.flush()
+            try:
+                result = self._converter.convert(handle.name)
+            except Exception as exc:
+                msg = f"docling failed to convert document: {exc}"
+                raise NormalizationFailed(msg) from exc
+            markdown = result.document.export_to_markdown()
+            page_count = len(getattr(result.document, "pages", []) or [])
+
+        headings = len(re.findall(r"^#{1,6}\s+\S", markdown, re.MULTILINE))
+        table_rows = len(re.findall(r"^\s*\|.+\|\s*$", markdown, re.MULTILINE))
+        figures = len(
+            re.findall(r"^\s*(?:Figure|Fig\.|Table)\s+\d+", markdown, re.MULTILINE | re.I)
+        )
+
+        flags: list[str] = []
+        # `ocr-required` finally gets a producer that means it. The shipped
+        # parsers set it on a character-count heuristic; a layout parser that
+        # returns almost nothing from a multi-page document is the real signal.
+        if page_count and len(markdown) / max(page_count, 1) < 100:
+            flags.append("ocr-required")
+        if headings == 0:
+            # Said out loud. A structure-aware parser that found no structure
+            # is a fact about the document worth recording, and the difference
+            # between measuring zero and hardcoding it.
+            flags.append("no-headings-found")
+
+        return NormalizationResult(
+            markdown=markdown,
+            parser=self.parser,
+            parser_version=self.parser_version,
+            structure={
+                "page_count": page_count,
+                # Counted off the output. The two parsers this replaces wrote
+                # literal zeros here.
+                "heading_count": headings,
+                # Markdown rows, minus the separator row per table where one
+                # exists — an approximation, and a measured one.
+                "table_count": table_rows,
+                "figure_count": figures,
+            },
+            quality_flags=flags,
+        )
+
+
 class PyPDFNormalizer:
     parser = "pypdf"
 
@@ -382,13 +484,58 @@ class EpubNormalizer:
 # ---------------------------------------------------------------------------
 
 
+#: PDF parser preference, most structure-aware first.
+#:
+#: A LIST rather than a hardcoded default, because this is the plugin thesis
+#: applied to ingest: the parser is a choice, the registry resolves it, and a
+#: deployment that has not installed the layout stack degrades to the flat
+#: parsers instead of failing to ingest. `ALEPH_PDF_PARSER` pins one by name
+#: for an operator who wants to compare
+#: (`scripts/compare_pdf_parsers.py`, `docs/measurements/pdf-parsers.md`).
+PDF_PARSERS: tuple[tuple[str, type], ...] = (
+    ("docling", DoclingNormalizer),
+    ("pypdf", PyPDFNormalizer),
+    ("pdfminer", PDFMinerNormalizer),
+)
+
+
+def pdf_normalizer(preferred: str | None = None) -> Normalizer:
+    """The best PDF parser this deployment actually has.
+
+    Tries in order and takes the first that constructs. `DoclingNormalizer`
+    raises `NormalizationFailed` when the extra is not installed, so an
+    installation without it silently keeps the flat parsers — silently in the
+    sense of "no crash", not "no record": the resulting document carries
+    `heading_count: 0` and the chunks carry `section_path = NULL`, which is
+    exactly what that state means.
+    """
+    import os
+
+    wanted = preferred or os.environ.get("ALEPH_PDF_PARSER") or ""
+    candidates = list(PDF_PARSERS)
+    if wanted:
+        named = [c for c in candidates if c[0] == wanted]
+        if not named:
+            msg = f"unknown PDF parser {wanted!r}; choose from {[c[0] for c in PDF_PARSERS]}"
+            raise NormalizationFailed(msg)
+        # Pinned by name means PINNED. Falling back would make the setting a
+        # suggestion and a comparison run would silently measure the wrong one.
+        candidates = named
+
+    last: Exception | None = None
+    for _name, cls in candidates:
+        try:
+            return cls()  # ty: ignore[invalid-return-type]
+        except Exception as exc:
+            last = exc
+    msg = f"no usable PDF parser: {last}"
+    raise NormalizationFailed(msg)
+
+
 def normalizer_for(mime_type: str) -> Normalizer:
     mt = mime_type.split(";", maxsplit=1)[0].strip().lower()
     if mt == "application/pdf":
-        try:
-            return PyPDFNormalizer()
-        except NormalizationFailed:
-            return PDFMinerNormalizer()
+        return pdf_normalizer()
     if mt == ("application/vnd.openxmlformats-officedocument.wordprocessingml.document"):
         return DocxNormalizer()
     if mt in {"text/html", "application/xhtml+xml"}:
