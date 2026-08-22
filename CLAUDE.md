@@ -393,6 +393,54 @@ below only with a test that would have caught them.
   own checks fail (`--self-check`) — is the gate to trust.
 ### Fixed, with the test that pins each
 
+**2026-08-22, later (batch 8 — the gate stopped over-reporting, and PDFs stopped being flat)**
+
+- **`acceptance.sh` ran 64 checks and `docs/acceptance.md` listed 46.** The whole plugin cluster
+  A7–A11 — what this file's opening section calls the product — appeared on no scoreboard, and eight
+  of this file's own "here is the evidence" citations named rows that did not exist (`C10` and `F7`
+  exist nowhere at all). A row id is not a path, so `check-dead-refs.sh` could not see it, and rule 9
+  runs doc → test. `check-acceptance-rows.sh` closes both missing edges: gate → doc, and prose → doc.
+  → acceptance P13.
+- **A ✅ row claimed "142 passed" against a suite of 165, through three audits**, because
+  `check-acceptance-claims.sh` resolved paths and node ids and never counted anything. It counts now,
+  for rows whose check is a bare `pytest <path>`. Two further citation shapes were invisible to it —
+  a real test cited under the wrong directory, and a bare `::name` with no path — and both run as
+  pytest exit 4 rather than as a pass or a fail, so a reader scanning for red sees neither.
+- **A CI step with an empty `run:` reported success.** A bad merge put the web-test step's body
+  inside the copilot-runtime step, so `npm ci` and `tsc` ran nowhere while their step went green.
+  And `python-integration` supplied 3 of the 11 settings the app needs to boot; it has not gone red
+  only because origin/main is behind. Both fixed; the eight added are load-bearing one at a time.
+- **This instance's backup was not restorable, and the drill that would have said so had no caller.**
+  postgres inherited Docker's 64 MB `/dev/shm`; `pg_restore` died building the HNSW index reporting
+  "No space left on device" with 40 GB free. Fixed, pinned against the RENDERED compose config, and
+  the drill is now acceptance row **P8a** — 68 tables, 1,064,741 rows, every count and content digest
+  identical, the ledger hash chain re-derived on both sides.
+- **Every sweep now has a self-check probe (0 unprobed, from 7),** which closes Part 0. Writing them
+  found two defects in their own subjects: a class declared above the first `{` in a stylesheet was
+  invisible to the dead-CSS sweep, and the restore drill above. `scripts/_acceptance/` probes had the
+  same gap and the first three now have probes too.
+- **Rule 11 was listed as enforced and could not fail.** `check-agent-middleware.sh` decided the
+  subagent half with `if "AlephAgentMiddleware" not in text` — a MODULE-level string search that the
+  import line satisfies. Emptying the retriever's middleware left it rc=0 with every tool that
+  subagent carries one exception away from ending the turn. Now an AST walk of each builder's returned
+  dict, plus `test_agent_tool_guard.py::test_every_subagent_spec_really_carries_the_guard`, which
+  builds every subagent `pkgutil` can find.
+- **PDFs were flat in production and four separate faults kept them that way**, each presenting as no
+  error at all because `normalize_bytes` falls back to pdfminer: extras not installed, `do_ocr=True`
+  with no OCR engine, `opencv-python` rather than headless (missing `libGL`), and a torch dlopen that
+  ABORTS the process on arm64 so no exception is raised and arq records no failure. docling now runs:
+  0 → 12 documents, null `section_path` NULL (unevaluable) → 0.0000 over 760 chunks. `WORKERS_MEM_LIMIT`
+  2g → 4g, because docling peaks at 2,263 MB and an OOM kill is not an exception either.
+  → `docs/measurements/pdf-layout-retrieval.md`: nDCG@10 +0.011 against a four-times-smaller noise
+  floor, and section-label rate 0.02 → 1.00, which is the row no ranking metric can see.
+- **A reranker switched itself off for the life of the process.** `skipped_reason` was set on an
+  unreadable reply and never cleared, and `_search_and_rerank` reads it BEFORE calling `rank`; on the
+  208-question set the first of 8 unreadable replies silently degraded the other 200.
+- **Twelve kernel invariants the code upheld and nothing measured**, found by 84 mutations — shutdown
+  ordering across a chain, a probe that RAISES, `has()` on an undeclared key, a PROBE-refused install,
+  a negative spend. Almost every one was invisible because a test's ARRANGEMENT made the property
+  unobservable, not because nobody thought of it.
+
 **2026-08-22 (the plugin cluster, and the instruments)**
 
 - **Cost attribution closed, in three deploys, and the third was found by a probe rather than by
