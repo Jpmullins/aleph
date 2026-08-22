@@ -39,6 +39,7 @@ from aleph_api.copilot_agent import (
     assistant_agent_resolver,
     switched_profile_message,
 )
+from aleph_models.endpoints import SOURCE_ROW, SOURCE_SETTINGS, ResolvedEndpoint
 
 
 def _profile(model: str) -> dict[str, Any]:
@@ -101,6 +102,33 @@ def _model_names(agent: Any) -> list[str]:
     names = [kwargs["model"].model_name]
     names.extend(sub["model"].model_name for sub in kwargs["subagents"])
     return names
+
+
+def _base_urls(agent: Any) -> set[str]:
+    """Every gateway the graph's seven models point at. One, if it is correct."""
+    kwargs = agent.graph.aleph_captured
+    models = [kwargs["model"], *(sub["model"] for sub in kwargs["subagents"])]
+    return {str(m.openai_api_base) for m in models}
+
+
+def _endpoint_loader(endpoints: dict[UUID | None, ResolvedEndpoint]) -> Any:
+    """Stand in for `endpoint_for_project`'s single SELECT."""
+
+    async def load(project_id: UUID | None) -> ResolvedEndpoint:
+        return endpoints[project_id]
+
+    return load
+
+
+def _row(base_url: str, api_key: str = "sk-row") -> ResolvedEndpoint:
+    """A `gateway_endpoints` row, as `GatewayEndpointService.resolve` returns it."""
+    return ResolvedEndpoint(
+        base_url=base_url,
+        api_key=api_key,
+        name="primary",
+        endpoint_id=uuid4(),
+        source=SOURCE_ROW,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -487,3 +515,210 @@ async def test_the_production_resolver_uses_the_bounded_process_cache(
         assert len(cache) == 1, "the resolver did not use the process-wide cache"
     finally:
         cache.clear()
+
+
+# ---------------------------------------------------------------------------
+# c5: the endpoint half of the resolution — WS-MEP-4's rows reaching the agent
+# ---------------------------------------------------------------------------
+
+
+async def test_two_projects_on_two_gateways_build_against_two_gateways(
+    captured_graphs: list[dict[str, Any]],
+) -> None:
+    """MEP-4's rows, reaching the assistant. Before this they did not.
+
+    `resolve_agent` computed `_openai_base_url(settings.litellm_base_url)` for
+    every project, so a project pointed at its own gateway had a row that read
+    back correctly on the settings screen and an assistant still talking to the
+    deployment default. The endpoint component of the cache signature was a
+    constant, which the signature's own docstring warns is "the whole of
+    WS-MEP-4 made inert".
+    """
+    a, b = uuid4(), uuid4()
+    resolve = assistant_agent_resolver(
+        settings=_settings("http://boot-gateway.invalid"),
+        store=None,
+        load_bindings=_loader({a: ALPHA, b: ALPHA}),
+        load_endpoint=_endpoint_loader(
+            {a: _row("http://gw-a.invalid"), b: _row("http://gw-b.invalid")}
+        ),
+        cache=BoundedGraphCache(AGENT_GRAPH_CACHE_MAX),
+    )
+
+    assert _base_urls(await resolve(a)) == {"http://gw-a.invalid/v1"}
+    assert _base_urls(await resolve(b)) == {"http://gw-b.invalid/v1"}
+    # Identical bindings, different endpoints: two graphs. One graph here would
+    # mean the cache key ignored the endpoint, and project B would be answered
+    # by a graph whose seven models all point at A's gateway.
+    assert len(captured_graphs) == 2
+    # And neither of them fell back to the boot setting.
+    assert all("boot-gateway" not in url for g in captured_graphs for url in _urls_of(g))
+
+
+def _urls_of(captured: dict[str, Any]) -> set[str]:
+    models = [captured["model"], *(sub["model"] for sub in captured["subagents"])]
+    return {str(m.openai_api_base) for m in models}
+
+
+async def test_the_credential_travels_with_the_url(
+    captured_graphs: list[dict[str, Any]],
+) -> None:
+    """A resolved endpoint reached with the deployment's key is a 401.
+
+    Both halves come off one row, and a refactor that threaded the URL and left
+    the key on Settings would pass every base-url assertion in this file while
+    failing on the first real call — against somebody else's quota if the two
+    gateways happen to share a provider.
+    """
+    project = uuid4()
+    resolve = assistant_agent_resolver(
+        settings=_settings(),
+        store=None,
+        load_bindings=_loader({project: ALPHA}),
+        load_endpoint=_endpoint_loader(
+            {project: _row("http://gw-a.invalid", api_key="sk-project-a")}
+        ),
+        cache=BoundedGraphCache(AGENT_GRAPH_CACHE_MAX),
+    )
+
+    captured = (await resolve(project)).graph.aleph_captured
+    models = [captured["model"], *(sub["model"] for sub in captured["subagents"])]
+    keys = {m.openai_api_key.get_secret_value() for m in models}
+    assert keys == {"sk-project-a"}
+
+
+async def test_repointing_a_project_takes_effect_on_the_next_turn(
+    captured_graphs: list[dict[str, Any]],
+) -> None:
+    """The endpoint's version of c2. No restart, no cache clear."""
+    project = uuid4()
+    endpoints = {project: _row("http://gw-a.invalid")}
+    resolve = assistant_agent_resolver(
+        settings=_settings(),
+        store=None,
+        load_bindings=_loader({project: ALPHA}),
+        load_endpoint=_endpoint_loader(endpoints),
+        cache=BoundedGraphCache(AGENT_GRAPH_CACHE_MAX),
+    )
+
+    assert _base_urls(await resolve(project)) == {"http://gw-a.invalid/v1"}
+    endpoints[project] = _row("http://gw-b.invalid")
+    assert _base_urls(await resolve(project)) == {"http://gw-b.invalid/v1"}
+
+
+async def test_rotating_a_key_at_an_unchanged_url_rebuilds_the_graph(
+    captured_graphs: list[dict[str, Any]],
+) -> None:
+    """ "It worked yesterday", prevented.
+
+    The URL and the bindings are identical, so a signature over those two alone
+    is a cache HIT and the seven models keep the revoked key until something
+    happens to evict the entry. `ProjectGatewayCatalogs` keys on a digest of
+    the key for exactly this reason; the graph cache has to as well.
+    """
+    project = uuid4()
+    endpoints = {project: _row("http://gw-a.invalid", api_key="sk-old")}
+    resolve = assistant_agent_resolver(
+        settings=_settings(),
+        store=None,
+        load_bindings=_loader({project: ALPHA}),
+        load_endpoint=_endpoint_loader(endpoints),
+        cache=BoundedGraphCache(AGENT_GRAPH_CACHE_MAX),
+    )
+
+    first = await resolve(project)
+    endpoints[project] = _row("http://gw-a.invalid", api_key="sk-rotated")
+    second = await resolve(project)
+
+    assert second is not first, "a rotated key reused the graph built with the old one"
+    captured = second.graph.aleph_captured
+    assert captured["model"].openai_api_key.get_secret_value() == "sk-rotated"
+
+
+async def test_a_project_with_no_row_still_uses_the_deployment_gateway(
+    captured_graphs: list[dict[str, Any]],
+) -> None:
+    """Adoption without a flag day, and the reason the fallback is not a guess.
+
+    `settings_endpoint` is the same value `GatewayEndpointService.resolve`
+    returns for a project with no row, so the un-configured case goes down one
+    code path rather than two that can disagree.
+    """
+    project = uuid4()
+    resolve = assistant_agent_resolver(
+        settings=_settings("http://boot-gateway.invalid"),
+        store=None,
+        load_bindings=_loader({project: ALPHA}),
+        cache=BoundedGraphCache(AGENT_GRAPH_CACHE_MAX),
+    )
+
+    # No `load_endpoint`: production's `endpoint_for_project` runs, and with no
+    # `session_maker` bound on `_runtime` it returns the deployment default.
+    assert copilot_agent._runtime.get("session_maker") is None
+    assert _base_urls(await resolve(project)) == {"http://boot-gateway.invalid/v1"}
+
+
+async def test_the_resolution_reports_which_endpoint_answered() -> None:
+    """`row` and `settings` are different facts and must stay distinguishable.
+
+    They bill identically. Without this, "the assistant is on the wrong
+    gateway" and "nobody has configured one" look the same from outside, which
+    is the diagnosis problem `AgentResolution` exists as a value to solve.
+    """
+    from aleph_api.copilot_agent import resolve_agent
+
+    project = uuid4()
+    row = await resolve_agent(
+        project,
+        settings=_settings(),
+        load_bindings=_loader({project: ALPHA}),
+        load_endpoint=_endpoint_loader({project: _row("http://gw-a.invalid")}),
+    )
+    assert row.endpoint_source == SOURCE_ROW
+    assert row.endpoint_id is not None
+    assert row.endpoint == "http://gw-a.invalid/v1"
+
+    fell_through = await resolve_agent(
+        project,
+        settings=_settings("http://boot-gateway.invalid"),
+        load_bindings=_loader({project: ALPHA}),
+    )
+    assert fell_through.endpoint_source == SOURCE_SETTINGS
+    assert fell_through.endpoint_id is None
+
+
+def test_the_signature_never_contains_the_key_itself() -> None:
+    """A cache key is logged and would be reported by a diagnostics route.
+
+    The key has to be IN the signature — a rotation must invalidate it — and it
+    must not be in it verbatim. Digesting is what makes both true at once.
+    """
+    secret = "sk-a-real-looking-credential-0123456789"
+    signed = agent_resolution_signature(
+        endpoint="http://gw-a.invalid/v1", bindings=ALPHA, api_key=secret
+    )
+    assert secret not in signed
+    assert signed != agent_resolution_signature(
+        endpoint="http://gw-a.invalid/v1", bindings=ALPHA, api_key="sk-different"
+    )
+
+
+def test_the_resolution_does_not_print_its_credential() -> None:
+    """`repr` is where a secret leaks without anybody choosing to log it.
+
+    An `AgentResolution` reaches structlog events and tracebacks, and MEP-6's
+    iterate note proposes serialising one over HTTP.
+    """
+    resolution = AgentResolution(
+        project_id=uuid4(),
+        endpoint="http://gw-a.invalid/v1",
+        bindings=ALPHA,
+        signature="deadbeef",
+        endpoint_source=SOURCE_ROW,
+        api_key="sk-must-not-appear",
+    )
+    assert "sk-must-not-appear" not in repr(resolution)
+    assert "gw-a.invalid" in repr(resolution)
+    # Still reachable by name, because the model builders need it.
+    assert resolution.agent_endpoint.api_key == "sk-must-not-appear"
+    assert "sk-must-not-appear" not in repr(resolution.agent_endpoint)

@@ -33,6 +33,7 @@ from collections.abc import Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
@@ -40,8 +41,10 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
+from aleph_api.harness_profiles import ensure_harness_profiles_registered
 from aleph_core.errors import PermissionDenied
 from aleph_core.ids import uuid7
+from aleph_models.endpoints import ResolvedEndpoint, settings_endpoint
 from aleph_security.request_context import current_principal, require_project_access
 from aleph_security.roles import ProjectRole
 from aleph_wiki.index_service import IndexService
@@ -518,6 +521,230 @@ async def search_wiki(query: str, config: RunnableConfig, top_k: int = 6) -> str
         "workspace, pass its page_id to `open_page`.)"
     )
     return header + "\n" + "\n".join(lines) + footer
+
+
+# ---------------------------------------------------------------------------
+# WS-RS6 c6 / WS-RS10 c5 — the agent can read the two indexes directly
+# ---------------------------------------------------------------------------
+#
+# CLAUDE.md opens by describing two knowledge plugins: the wiki, which is what
+# the project CONCLUDED, and the RAG over the raw collection, which is what it
+# COLLECTED. The agent could reach only the first. `search_wiki` returns titles
+# and one-line summaries; `deep_read` composes an answer through the wiki-first
+# router. *"What did source 47 actually say?"* had no tool at all, against
+# 3,451 embedded chunks and an HNSW index over `wiki_claims.embedding`.
+#
+# Both tools return PASSAGES, not composed answers, and that is the point: a
+# model that can only ever see somebody's summary of a passage has no way to
+# check the summary. Composition already has a tool.
+
+
+async def _query_embedding(
+    query: str,
+    *,
+    project_id: UUID,
+    principal: Principal,
+    bindings: dict[str, Any],
+    agent_run_id: UUID | None,
+    purpose: str,
+) -> list[float] | None:
+    """Embed one query, or `None` when the embedder is unavailable.
+
+    `None` is `search_corpus`'s and `search_claims`' contract for "run the
+    lexical leg only". It is NOT the same as a zero vector, which is what the
+    degraded caller used to pass: cosine distance to the zero vector is
+    degenerate, so the dense leg returns an arbitrary page of rows and RRF
+    fuses that noise in as though it were a ranking (WS-RS1).
+    """
+    import structlog
+
+    litellm = _runtime.get("litellm")
+    if litellm is None:
+        return None
+    try:
+        embedded = await litellm.embed(
+            principal=principal,
+            project_id=project_id,
+            agent_run_id=agent_run_id,
+            profile_bindings=bindings,
+            input=[query],
+            purpose=purpose,
+        )
+    except Exception as exc:
+        structlog.get_logger(__name__).warning(
+            "agent.search.embed_failed",
+            purpose=purpose,
+            project_id=str(project_id),
+            error=f"{type(exc).__name__}: {exc}",
+            impact="the search runs lexical-only and says so",
+        )
+        return None
+    return embedded.embeddings[0] if embedded.embeddings else None
+
+
+@tool
+async def search_corpus(query: str, config: RunnableConfig, top_k: int = 8) -> str:
+    """Search the RAW INGESTED SOURCES and get the actual passages back.
+
+    This is the tool for *"what does the literature in this project actually
+    say about X"* and *"what did that paper say, in its own words"*. It searches
+    every ingested document, chunked, with a dense (meaning) and a keyword
+    ranking fused together, and returns the passage text itself with the source
+    it came from.
+
+    Prefer this over `search_wiki` whenever the answer has to be grounded in
+    what a source SAID rather than in what the project concluded — quoting,
+    checking a summary, or answering about material nobody has written a page
+    about yet. `search_wiki` scans conclusions; this reads evidence.
+
+    Returns up to `top_k` passages, each with its source short id and section.
+    """
+    from aleph_api.chat_runs import run_id_from_config
+    from aleph_rks.rerank import reranker_for
+    from aleph_rks.retrieval import search_corpus as _search_corpus
+
+    session_maker = _runtime.get("session_maker")
+    litellm = _runtime.get("litellm")
+    project_id = await _authorized(await _project_id_from_config(config))
+    if session_maker is None or project_id is None:
+        return "Corpus search is unavailable (no project scope on this run)."
+    limit = max(1, min(top_k, 20))
+    principal = _acting_principal(project_id)
+    bindings = dict(await bindings_for_project(project_id) or {})
+    agent_run_id = run_id_from_config(config)
+
+    vector = await _query_embedding(
+        query,
+        project_id=project_id,
+        principal=principal,
+        bindings=bindings,
+        agent_run_id=agent_run_id,
+        purpose="agent.search_corpus.query_embed",
+    )
+    # `reranker_for` never raises and never returns None; an unbound
+    # `Capability.RERANK` is a normal state and degrades to fused order.
+    reranker = (
+        reranker_for(
+            client=litellm,
+            principal=principal,
+            project_id=project_id,
+            profile_bindings=bindings,
+            agent_run_id=agent_run_id,
+        )
+        if litellm is not None
+        else None
+    )
+    async with session_maker() as session:  # type: AsyncSession
+        hits = await _search_corpus(
+            session,
+            project_id=project_id,
+            query_text=query,
+            query_embedding=vector,
+            top_k=limit,
+            reranker=reranker,
+        )
+        short_ids = await _corpus_short_ids(session, {h.source_id for h in hits if h.source_id})
+
+    # Degradation is REPORTED, not inferred from a short result list. An empty
+    # list from a dead embedder and an empty list from a corpus that has nothing
+    # on the subject are the same three characters on the wire, and the model
+    # answers very differently depending on which it is.
+    degraded = (
+        "" if vector is not None else " (degraded: keyword-only, the embedder did not answer)"
+    )
+    if not hits:
+        return (
+            f'Nothing in this project\'s ingested sources matched "{query}"'
+            f"{degraded}. That is a fact about the corpus, not an error — say so "
+            "rather than answering from memory."
+        )
+    lines: list[str] = []
+    for hit in hits:
+        # `section_path` is a STRING (`aleph_rks.retrieval.ChunkHit`), not a list —
+        # joining it renders one character per separator.
+        where = hit.section_path or "(no section)"
+        label = short_ids.get(hit.source_id, "?") if hit.source_id else "?"
+        lines.append(f"- [{label}] {where} · chunk={hit.chunk_id}\n  {hit.text.strip()[:1200]}")
+    return f"{len(hits)} passage(s) from the ingested corpus{degraded}:\n" + "\n".join(lines)
+
+
+async def _corpus_short_ids(session: Any, source_ids: set[UUID]) -> dict[UUID, str]:
+    """`Source.short_id` per id, so a passage can be cited as `[s7]`.
+
+    A passage the analyst cannot trace to a document is not evidence, and the
+    chunk row carries only a `source_id` UUID — which is not something to put
+    in front of a reader.
+    """
+    if not source_ids:
+        return {}
+    from sqlalchemy import select
+
+    from aleph_rks.models import Source
+
+    rows = (
+        await session.execute(select(Source.id, Source.short_id).where(Source.id.in_(source_ids)))
+    ).all()
+    return {row.id: row.short_id for row in rows}
+
+
+@tool
+async def search_claims(query: str, config: RunnableConfig, top_k: int = 8) -> str:
+    """Search the project's CLAIMS — the individual evidence-anchored beliefs.
+
+    A claim is one proposition the project holds, with the confidence derived
+    from its evidence and a citation chain down to a verbatim quote. This
+    searches them directly (meaning + keyword, fused, plus one hop across
+    related claims), which is the tool for *"what do we believe about X, and how
+    strongly"*.
+
+    It is not `search_wiki`: that returns PAGES by title and summary. It is not
+    `search_corpus`: that returns raw source passages. Use this when the
+    question is about the project's own position and its confidence.
+    """
+    from aleph_api.chat_runs import run_id_from_config
+    from aleph_wiki.claim_search import search_claims as _search_claims
+
+    session_maker = _runtime.get("session_maker")
+    project_id = await _authorized(await _project_id_from_config(config))
+    if session_maker is None or project_id is None:
+        return "Claim search is unavailable (no project scope on this run)."
+    limit = max(1, min(top_k, 20))
+    principal = _acting_principal(project_id)
+    bindings = dict(await bindings_for_project(project_id) or {})
+
+    vector = await _query_embedding(
+        query,
+        project_id=project_id,
+        principal=principal,
+        bindings=bindings,
+        agent_run_id=run_id_from_config(config),
+        purpose="agent.search_claims.query_embed",
+    )
+    async with session_maker() as session:  # type: AsyncSession
+        hits = await _search_claims(
+            session,
+            project_id=project_id,
+            query_text=query,
+            query_embedding=vector,
+            top_k=limit,
+        )
+    degraded = (
+        "" if vector is not None else " (degraded: keyword-only, the embedder did not answer)"
+    )
+    if not hits:
+        return (
+            f'No claim in this project matched "{query}"{degraded}. The project '
+            "may hold no belief on this yet — `search_corpus` reads the raw "
+            "sources, which is where a belief would come from."
+        )
+    lines = [
+        f"- {h.text.strip()[:600]}\n"
+        f"  confidence={h.confidence} · claim_id={h.claim_id}"
+        f"{' · page_id=' + str(h.page_id) if h.page_id else ''}"
+        f"{' · reached via a related claim' if h.via_graph else ''}"
+        for h in hits
+    ]
+    return f"{len(hits)} claim(s){degraded}:\n" + "\n".join(lines)
 
 
 @tool
@@ -1649,6 +1876,70 @@ def use_agent_bindings(bindings: Mapping[str, Any] | None) -> Iterator[None]:
         _ACTIVE_BINDINGS.reset(token)
 
 
+@dataclass(frozen=True)
+class AgentEndpoint:
+    """Where the agent's seven models point, and what they authenticate with.
+
+    `base_url` is already `/v1`-normalised: one setting feeds two clients with
+    opposite conventions (`_openai_base_url`), and normalising once at the
+    resolution boundary is what stops the two ends disagreeing.
+
+    `api_key` is `repr=False` deliberately. This value ends up in tracebacks,
+    structlog events and `AgentResolution`, and MEP-6's own iterate note
+    proposes `GET /v1/projects/{id}/agent/resolution` — a route that would
+    serialise whatever this object holds. A redacted repr is not encryption; it
+    is the difference between a key in a log line and a key that has to be
+    asked for by name.
+    """
+
+    base_url: str
+    api_key: str = dataclass_field(default="", repr=False)
+
+
+#: The endpoint in force for the graph being built. Same mechanism, same reason
+#: as `_ACTIVE_BINDINGS`: six of the seven models are constructed by
+#: `subagents/*.py`, which take no endpoint argument, so threading one would
+#: mean touching six modules and forgetting the seventh.
+_ACTIVE_ENDPOINT: ContextVar[AgentEndpoint | None] = ContextVar(
+    "aleph_active_agent_endpoint", default=None
+)
+
+
+@contextmanager
+def use_agent_endpoint(endpoint: AgentEndpoint | None) -> Iterator[None]:
+    """Point every model built in this block at `endpoint`.
+
+    `None` is a no-op, so a direct `build_assistant_deep_agent(...)` call keeps
+    using the boot settings exactly as it did.
+    """
+    if endpoint is None:
+        yield
+        return
+    token = _ACTIVE_ENDPOINT.set(endpoint)
+    try:
+        yield
+    finally:
+        _ACTIVE_ENDPOINT.reset(token)
+
+
+def _active_endpoint(settings: Settings) -> AgentEndpoint:
+    """The endpoint in force: the graph being built, else the boot settings.
+
+    The settings fallback is not a guess — it is the same deployment default
+    `GatewayEndpointService.resolve` returns for a project with no row — but it
+    IS the thing WS-MEP-4 exists to stop being the only answer. Before this, a
+    project could point itself at Ollama, watch the settings screen read the row
+    back, and have every assistant turn keep talking to `LITELLM_BASE_URL`.
+    """
+    scoped = _ACTIVE_ENDPOINT.get()
+    if scoped is not None:
+        return scoped
+    return AgentEndpoint(
+        base_url=_openai_base_url(settings.litellm_base_url),
+        api_key=settings.insights_litellm_api_key,
+    )
+
+
 def _active_bindings() -> Mapping[str, Any] | None:
     """The bindings in force: the graph being built, else the boot default."""
     scoped = _ACTIVE_BINDINGS.get()
@@ -1765,11 +2056,16 @@ def _gateway_chat_model(settings: Settings, *, purpose: str, capability: Any = N
     resolved_capability = capability or Capability.SYNTHESIS
     model = _resolve_agent_model(resolved_capability)
     window = _resolve_agent_context_window(resolved_capability)
-    base_url = _openai_base_url(settings.litellm_base_url)
+    # THIS PROJECT's gateway, not the deployment's. `assistant_agent_resolver`
+    # resolves the `gateway_endpoints` row per turn and `build_assistant_deep_
+    # agent` holds it open across all seven constructions; a direct caller with
+    # no scope in force gets the boot settings, which is what it always got.
+    endpoint = _active_endpoint(settings)
+    base_url = endpoint.base_url
     return ChatOpenAI(
         model=model,
         base_url=base_url,
-        api_key=settings.insights_litellm_api_key,
+        api_key=endpoint.api_key,
         temperature=0.2,
         # The agent's traffic goes through the same metered door as everything
         # else. WS-MEP-2 built the limiter and left this seam unwired, so the
@@ -2159,6 +2455,9 @@ async def cancel_background_task(ticket_id: str, config: RunnableConfig) -> str:
 
 _ORCHESTRATOR_TOOLS: tuple[Any, ...] = (
     search_wiki,
+    # WS-RS6 c6 / WS-RS10 c5. Both indexes, reachable.
+    search_corpus,
+    search_claims,
     wiki_curation_status,
     wiki_schema,
     wiki_lint_report,
@@ -2188,6 +2487,7 @@ def build_assistant_deep_agent(
     store: AsyncPostgresStore,
     checkpointer: Any = None,
     bindings: Mapping[str, Any] | None = None,
+    endpoint: AgentEndpoint | None = None,
 ):
     """Compile the assistant Deep Agent against one project's model bindings.
 
@@ -2308,7 +2608,20 @@ def build_assistant_deep_agent(
     # ContextVar: a builder added later inherits the scope instead of needing a
     # new argument threaded to it, and a graph half-built from two profiles is
     # not expressible.
-    with use_agent_bindings(bindings):
+    # WS-MEP-7. BEFORE anything is built, and that ordering is the feature:
+    # `create_deep_agent` reads the harness-profile registry once, while it
+    # assembles the prompt and the middleware stack. A profile registered after
+    # it returns affects the NEXT graph and not this one — which presents as a
+    # profile that only "works after a restart", the least diagnosable shape a
+    # configuration bug can take.
+    #
+    # Idempotent per process, so this is a flag check on every turn but the
+    # first. It raises on a misconfigured file rather than continuing with no
+    # profiles: a small model handed the full thirty-tool prompt does not fail,
+    # it just answers badly, and nothing would say why.
+    ensure_harness_profiles_registered()
+
+    with use_agent_bindings(bindings), use_agent_endpoint(endpoint):
         # The orchestrator's OWN model. Cost is attributed to `assistant.turn` via
         # the AgentCostCallbackHandler that `_gateway_chat_model` attaches (rule #5).
         model = _gateway_chat_model(settings, purpose="assistant.turn")
@@ -2504,17 +2817,30 @@ def agent_graph_cache() -> BoundedGraphCache:
     return _GRAPH_CACHE
 
 
-def agent_resolution_signature(*, endpoint: str, bindings: Mapping[str, Any] | None) -> str:
+def agent_resolution_signature(
+    *, endpoint: str, bindings: Mapping[str, Any] | None, api_key: str = ""
+) -> str:
     """A stable key for "which graph is this".
 
-    BOTH halves are load bearing. Drop the endpoint and two projects pointed at
-    different gateways share one graph — which is the whole of WS-MEP-4 made
+    ALL THREE parts are load bearing. Drop the endpoint and two projects pointed
+    at different gateways share one graph — which is the whole of WS-MEP-4 made
     inert. Drop the bindings and a project that rebinds keeps the graph it had —
-    which is the whole of this workstream made inert. Neither omission fails
-    loudly; both produce an assistant quietly using the wrong model.
+    which is the whole of this workstream made inert. Drop the key and rotating
+    a credential at an unchanged URL does not take effect until the entry is
+    evicted, which presents as "it worked yesterday" — the same reason
+    `ProjectGatewayCatalogs` keys on a digest of the key rather than on the URL
+    alone. None of the three omissions fails loudly; each produces an assistant
+    quietly talking to the wrong place.
+
+    The key is DIGESTED, never included. This value is logged, and is the cache
+    key a diagnostics route would report.
     """
     payload = json.dumps(
-        {"endpoint": endpoint, "bindings": bindings or {}},
+        {
+            "endpoint": endpoint,
+            "bindings": bindings or {},
+            "credential": hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16],
+        },
         sort_keys=True,
         default=str,
     )
@@ -2534,6 +2860,21 @@ class AgentResolution:
     endpoint: str
     bindings: Mapping[str, Any]
     signature: str
+    #: `row` when the project has a `gateway_endpoints` row of its own, and
+    #: `settings` when it fell through to the deployment default. They bill the
+    #: same way and mean different things, so "nobody configured a gateway"
+    #: stays distinguishable from "this project chose this one".
+    endpoint_source: str = ""
+    #: Which row, when there was one. `None` for the deployment default.
+    endpoint_id: UUID | None = None
+    #: The credential for `endpoint`. `repr=False`, and never part of the
+    #: signature except as a digest — see `agent_resolution_signature`.
+    api_key: str = dataclass_field(default="", repr=False)
+
+    @property
+    def agent_endpoint(self) -> AgentEndpoint:
+        """This resolution as the value the model builders read."""
+        return AgentEndpoint(base_url=self.endpoint, api_key=self.api_key)
 
     def model_for(self, capability: Any) -> str:
         """The model this resolution binds for `capability`.
@@ -2572,21 +2913,73 @@ async def bindings_for_project(project_id: UUID | None) -> Mapping[str, Any] | N
     return dict(profile.bindings_jsonb)
 
 
+async def endpoint_for_project(project_id: UUID | None, *, settings: Settings) -> ResolvedEndpoint:
+    """The project's gateway row, else the deployment default. WS-MEP-4.
+
+    The sibling of `bindings_for_project`, and it existed nowhere: WS-MEP-6
+    refactored the agent into a per-request factory and left the endpoint half
+    of its resolution hardcoded to `settings.litellm_base_url`, so
+    `gateway_endpoints` reached the model picker, the autoconfigure probe and
+    the worker jobs, and never reached the assistant. The endpoint component of
+    the graph-cache signature was a constant, which is the same defect the
+    signature's own docstring warns about.
+
+    Read per turn for the same reason the bindings are: an operator repointing
+    a project must not have to restart the API for it to be true. One indexed
+    SELECT, on a path about to call a language model.
+
+    A key this deployment cannot decrypt RAISES rather than falling back —
+    `GatewayEndpointService.resolve` decides that, and this does not soften it.
+    Falling back would send the project's traffic to a different gateway under
+    a different key and say nothing.
+    """
+    session_maker = _runtime.get("session_maker")
+    if project_id is None or session_maker is None:
+        return settings_endpoint(
+            base_url=settings.litellm_base_url,
+            api_key=settings.insights_litellm_api_key,
+        )
+
+    from aleph_connectors.credentials import credential_cipher
+    from aleph_models.endpoints import GatewayEndpointService
+
+    cipher = credential_cipher(
+        master_key=settings.aleph_credential_master_key,
+        legacy_key=settings.credential_legacy_key,
+    )
+    async with session_maker() as session:
+        return await GatewayEndpointService(session, cipher=cipher).resolve(
+            project_id=project_id,
+            fallback_base_url=settings.litellm_base_url,
+            fallback_api_key=settings.insights_litellm_api_key,
+        )
+
+
 async def resolve_agent(
     project_id: UUID | None,
     *,
     settings: Settings,
     load_bindings: Callable[[UUID | None], Awaitable[Mapping[str, Any] | None]] | None = None,
+    load_endpoint: Callable[[UUID | None], Awaitable[ResolvedEndpoint]] | None = None,
 ) -> AgentResolution:
     """What the next turn for `project_id` resolves to, without building it."""
     loader = load_bindings or bindings_for_project
     bindings = await loader(project_id)
-    endpoint = _openai_base_url(settings.litellm_base_url)
+    if load_endpoint is not None:
+        resolved = await load_endpoint(project_id)
+    else:
+        resolved = await endpoint_for_project(project_id, settings=settings)
+    endpoint = _openai_base_url(resolved.base_url)
     return AgentResolution(
         project_id=project_id,
         endpoint=endpoint,
         bindings=bindings or {},
-        signature=agent_resolution_signature(endpoint=endpoint, bindings=bindings),
+        signature=agent_resolution_signature(
+            endpoint=endpoint, bindings=bindings, api_key=resolved.api_key
+        ),
+        endpoint_source=resolved.source,
+        endpoint_id=resolved.endpoint_id,
+        api_key=resolved.api_key,
     )
 
 
@@ -2596,6 +2989,7 @@ def assistant_agent_resolver(
     store: AsyncPostgresStore,
     checkpointer: Any = None,
     load_bindings: Callable[[UUID | None], Awaitable[Mapping[str, Any] | None]] | None = None,
+    load_endpoint: Callable[[UUID | None], Awaitable[ResolvedEndpoint]] | None = None,
     cache: BoundedGraphCache | None = None,
 ) -> Callable[[UUID | None], Awaitable[Any]]:
     """Build the per-request agent resolver the AG-UI route mounts.
@@ -2614,7 +3008,12 @@ def assistant_agent_resolver(
     graphs = cache if cache is not None else _GRAPH_CACHE
 
     async def resolve(project_id: UUID | None) -> Any:
-        resolution = await resolve_agent(project_id, settings=settings, load_bindings=load_bindings)
+        resolution = await resolve_agent(
+            project_id,
+            settings=settings,
+            load_bindings=load_bindings,
+            load_endpoint=load_endpoint,
+        )
 
         def _build() -> Any:
             return LangGraphAGUIAgent(
@@ -2625,6 +3024,7 @@ def assistant_agent_resolver(
                     store=store,
                     checkpointer=checkpointer,
                     bindings=resolution.bindings,
+                    endpoint=resolution.agent_endpoint,
                 ),
             )
 

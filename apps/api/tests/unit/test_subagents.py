@@ -105,6 +105,73 @@ def test_subagent_model_points_at_gateway(settings: Settings) -> None:
     assert base.rstrip("/").endswith("/v1")
 
 
+def test_subagent_model_points_at_the_resolved_endpoint_not_the_boot_setting(
+    settings: Settings,
+) -> None:
+    """WS-MEP-6 c5, the half that could not fail before.
+
+    `test_subagent_model_points_at_gateway` above asserts the base is
+    `settings.litellm_base_url` + `/v1`, and it was green before MEP-6 started,
+    green after the refactor, and would stay green whether or not a project's
+    `gateway_endpoints` row ever reached the agent — which it did not:
+    `resolve_agent` computed `_openai_base_url(settings.litellm_base_url)` and
+    the endpoint half of the graph-cache signature was a constant.
+
+    So this is the case where the resolved endpoint DIFFERS from the boot
+    setting. If the resolution is ignored the subagent lands back on
+    `settings.litellm_base_url` and this assertion is the one that says so.
+    """
+    from aleph_api.copilot_agent import AgentEndpoint, use_agent_endpoint
+
+    resolved = AgentEndpoint(
+        base_url="http://project-owned-gateway.invalid/v1", api_key="sk-project-owned"
+    )
+    with use_agent_endpoint(resolved):
+        sub = _builders()["retriever"](settings=settings)
+
+    model: ChatOpenAI = sub["model"]
+    assert str(model.openai_api_base) == resolved.base_url
+    assert settings.litellm_base_url not in str(model.openai_api_base)
+    # And the credential travelled with the URL. A resolved endpoint reached
+    # with the deployment's key is a 401 at best and somebody else's quota at
+    # worst, and the two halves come from one row.
+    assert model.openai_api_key is not None
+    assert model.openai_api_key.get_secret_value() == "sk-project-owned"
+
+
+def test_every_subagent_follows_the_resolved_endpoint(settings: Settings) -> None:
+    """All six, not just the one the previous test happens to name.
+
+    The endpoint travels by ContextVar for the same reason the bindings do:
+    `subagents/*.py` take no endpoint argument. A builder that constructed its
+    model outside the scope would be the failure this covers, and it would show
+    up on exactly one of the six.
+    """
+    from aleph_api.copilot_agent import AgentEndpoint, use_agent_endpoint
+
+    resolved = AgentEndpoint(base_url="http://elsewhere.invalid/v1", api_key="sk-elsewhere")
+    with use_agent_endpoint(resolved):
+        bases = {
+            name: str(build(settings=settings)["model"].openai_api_base)
+            for name, build in _builders().items()
+        }
+    assert set(bases.values()) == {resolved.base_url}, bases
+
+
+def test_leaving_the_scope_restores_the_boot_endpoint(settings: Settings) -> None:
+    """The ContextVar is reset, so one project's endpoint cannot leak to the next.
+
+    A `set()` with no matching `reset()` would pass every test above and make
+    the FIRST project resolved in a process the endpoint for every later one.
+    """
+    from aleph_api.copilot_agent import AgentEndpoint, use_agent_endpoint
+
+    with use_agent_endpoint(AgentEndpoint(base_url="http://scoped.invalid/v1", api_key="sk-x")):
+        pass
+    after = _builders()["retriever"](settings=settings)["model"]
+    assert str(after.openai_api_base).startswith(settings.litellm_base_url.rstrip("/"))
+
+
 def test_all_six_subagent_names_are_distinct() -> None:
     builders = _builders()
     assert set(builders) == {
