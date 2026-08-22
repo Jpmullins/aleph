@@ -585,9 +585,10 @@ Distribution `aleph-xxx` · module `aleph_xxx` · tables plural snake_case · ac
    documents the fix, a SQL predicate returning NULL, a mutation string absent from its file, a node
    id whose command exits 4) and about as many that can never pass. They are corrected as they are
    found; assume more remain, and when a criterion looks green, check that it could have been red.
-   Read **Part 0 first**: the
-   acceptance gate is currently certifying things that are false, and repairing it comes before any
-   other work. Part 1 is the eight numbers that mean "done". Part 7 lists every LangChain and
+   Read **Part 0 first** — but read its status table, not its prose. Part 0 said the acceptance gate
+   was certifying things that are false, and it was: `run_shell` read `tail`'s exit status through 24
+   of 33 pipes, so a failing check behind a pipe reported PASS. That is fixed, and **five of Part 0's
+   six items are done**. The one left is a self-check probe for the last seven sweeps. Part 1 is the eight numbers that mean "done". Part 7 lists every LangChain and
    CopilotKit doc to read, mapped to the workstreams that need it — **do not work from memory on
    those APIs**, use the `docs-langchain` and `copilotkit-mcp` MCP servers.
 2. **`docs/decisions.md`** — the dated decisions and their reasoning. D1 (two knowledge plugins, the

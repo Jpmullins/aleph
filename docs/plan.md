@@ -42,6 +42,21 @@ plausible work over three months, each green against its own criteria, and the
 first honest end-to-end measurement happens at the end — against an instrument
 that was already lying before anyone started.
 
+**Status as of 2026-08-22 — five of the six are done.** Measured, not asserted:
+
+| # | item | state |
+|---|---|---|
+| 1 | `docs/decisions.md` | **done** — 12 decisions; D5 (kernel is Python) closed; `CLAUDE.md`'s "open decision, do not assume Python" line is gone |
+| 2 | acceptance status re-derived; dangling `tests/e2e/` refs | **done** — all 4 distinct `tests/e2e/` paths in `acceptance.sh` resolve; `check-dead-refs.sh` is green over 521 files |
+| 3 | a self-check probe for every subject | **PARTIAL** — 27 probes over 25 sweeps, but **7 sweeps still have none**: `check-agent-catalog-covers-renderer`, `check-compose-hardening`, `check-confidence-vocabulary`, `check-lint-count`, `check-project-scope`, `check-web-dead-css`, `check-web-drift`. `check-project-scope` is WS-P6's own sweep |
+| 4 | `acceptance.sh` in CI with a ratcheting `--max-skip` | **done** |
+| 5 | `scripts/status.sh` | **done** — the eight numbers; 1 failing, 2 not measurable as of 2026-08-22 |
+| 6 | integration cadence declared | **done** — Part 6, line 2495 |
+
+The gate itself was the thing it was built to prevent, and that is fixed: `run_shell`
+read `tail`'s exit status through 24 of 33 pipes, so a failing check behind a pipe
+reported PASS. The remaining Part 0 work is item 3 alone.
+
 **First, in order:**
 
 1. Create `docs/decisions.md`. It does not exist and is cited nine times, and
