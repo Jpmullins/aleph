@@ -265,6 +265,14 @@ if [ $NEEDS_SERVICES -eq 1 ]; then
 else
   skip A9 "needs postgres"
 fi
+# A10: the composition root, tested. 783 lines deciding what a running Aleph
+# consists of, and zero tests over it — only a script CI did not call.
+if [ $NEEDS_SERVICES -eq 1 ]; then
+  run_shell A10 "the manifest and the composition root agree, and a probe notices a dead dependency" \
+    "uv run pytest -m integration tests/integration/test_capability_probes.py -q -p no:randomly 2>&1 | tail -1"
+else
+  skip A10 "needs postgres"
+fi
 
 # ---------------------------------------------------------------------------
 # B — Retrieval
