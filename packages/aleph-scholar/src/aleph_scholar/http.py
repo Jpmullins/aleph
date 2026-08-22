@@ -64,6 +64,12 @@ A contactable mailto is still worth having — it is what the polite pool is
 granted on, and `is_contactable` below stops this client claiming one it does
 not have — but it is not what those 429s were, and this module must not say it
 is.
+
+So a 429 whose `Retry-After` is measured in hours now says which of the two it
+is: `egress_block_note` puts one sentence on the `ScholarUnavailable` naming the
+reading and the remedy. Without it the artefact is "retry in 12309s", which
+reads as an ordinary backoff and is why two consecutive audits reported the
+mailto as the cause of a block it had no bearing on.
 """
 
 from __future__ import annotations
@@ -95,6 +101,22 @@ POLITE_POOL_CEILING_PER_SECOND = 10.0
 #: This is an entitlement correction, NOT a fix for the 429s measured on this
 #: deployment. See the module docstring, *What the measured 429s actually were*.
 COMMON_POOL_CEILING_PER_SECOND = 1.0
+
+#: A `Retry-After` at or above this is not throttling. Above about a quarter of
+#: an hour no token bucket, no request budget and no `ALEPH_SCHOLAR_RATE_PER_SECOND`
+#: setting has anything to do with the answer: the upstream has put a fixed
+#: wall-clock deadline on the caller's egress ADDRESS and is counting it down.
+#: The two readings need different words, because "retry in 12309s" printed as
+#: an ordinary backoff reads as a transient blip and gets waited on, and 3.4
+#: hours of a research loop's search phase are gone before anyone asks why.
+#:
+#: 900s is the boundary between "a burst got throttled" (upstreams answer those
+#: in seconds to low minutes) and "you are blocked" (measured on this
+#: deployment: 25668, then 12309, then 10069, one deadline counting down). No
+#: upstream documents this number; it is Aleph's reading of its own logs, which
+#: is why the sentence it produces says *what was measured* rather than
+#: asserting a cause.
+EGRESS_BLOCK_RETRY_AFTER_S = 900.0
 
 
 #: Domains and suffixes that cannot receive mail, so an address on one of them
@@ -196,6 +218,41 @@ def is_contactable(mailto: str) -> bool:
     if domain in _UNDELIVERABLE_DOMAINS:
         return False
     return not domain.endswith(_UNDELIVERABLE_SUFFIXES)
+
+
+def egress_block_note(host: str, retry_after: float | None) -> str:
+    """One sentence when a 429's `Retry-After` is too long to be throttling.
+
+    Empty when the header is absent, or short enough that a burst limiter
+    explains it. Otherwise it names the reading and the remedy, because the
+    remedies are opposite: a throttled burst is fixed by slowing down, and a
+    blocked egress address is not fixed by anything this process can do.
+
+    Measured on this deployment, 2026-08-22 — the reason this exists rather
+    than being a hunch. Identical requests, same URL, same `User-Agent`, same
+    `mailto=`, differing only in IP address family: `-4` → 429 with
+    `Retry-After: 25668`, `-6` → 200. Successive IPv4 calls returned 25667,
+    25665, 25663: one fixed deadline on the ADDRESS, about 7.1 hours out.
+    Crossref over the same IPv4 answered 200, so it is not the network. The
+    container is IPv4-only and scored 0/8 on the fan-out probe while the host,
+    which prefers IPv6, scored 200 on the identical URL.
+
+    The wording is deliberately a reading and not a verdict: this function sees
+    one header and cannot see the route the packet took. What it can say for
+    certain is the thing an operator most needs and the plain 503 hides — that
+    waiting is not a plan and no rate setting is involved.
+    """
+    if retry_after is None or retry_after < EGRESS_BLOCK_RETRY_AFTER_S:
+        return ""
+    hours = retry_after / 3600.0
+    return (
+        f"{host} asked for a retry in {retry_after:.0f}s ({hours:.1f}h). A Retry-After "
+        "measured in hours is a fixed deadline on this deployment's egress address, not "
+        "a burst limiter: no rate setting affects it and no request budget can wait it "
+        "out. Check the egress route before touching ALEPH_SCHOLAR_RATE_PER_SECOND — "
+        "measured on this deployment, the same request was 429 over IPv4 and 200 over "
+        "IPv6."
+    )
 
 
 def _clamped_rate(rate: float, ceiling: float) -> float:
@@ -359,9 +416,18 @@ class ScholarHttp:
         self.polite = is_contactable(mailto)
         #: Empty when polite; otherwise one sentence naming the cause and the
         #: fix. It is appended to the `ScholarUnavailable` message on a
-        #: throttled request, which is how it reaches the operator: the API
-        #: route echoes that message into the 503 body, so a rate-limit failure
-        #: says WHY instead of "the upstream is unavailable".
+        #: throttled request.
+        #:
+        #: WHERE IT ACTUALLY SURFACES, corrected 2026-08-22: the structured log
+        #: line, and nothing else. An earlier version of this comment said "the
+        #: API route echoes that message into the 503 body". It does not —
+        #: `routes/scholar.py::_upstream_problem` puts `str(exc)` in the
+        #: `error=` log field and builds the response `detail` itself, so the
+        #: body a caller reads is still "openalex did not answer within the
+        #: request budget — retry in 12309s." with no note attached. Measured
+        #: against the running deployment. The one-line fix belongs in that
+        #: route, not here; until it lands, this note reaches an operator with
+        #: `docker logs` and no one else.
         self.degradation = (
             ""
             if self.polite
@@ -567,8 +633,20 @@ class ScholarHttp:
         # (see the module docstring). Appended only on 429: a 500 or a
         # timeout says nothing about pool membership, and attaching the note
         # there would train people to scroll past it.
-        if last_status == 429 and self.degradation:
-            msg = f"{msg}. {self.degradation}"
+        if last_status == 429:
+            # Order matters. The block note is a reading of a number this
+            # request actually received; the mailto note is standing
+            # housekeeping that is true whether or not it explains anything.
+            # Putting the weaker one first is how "set a real mailto" became
+            # the accepted diagnosis for a 429 that had nothing to do with it,
+            # twice, in two audits.
+            block = egress_block_note(host, last_retry_after)
+            for note in (block, self.degradation):
+                if note:
+                    # `rstrip('.')` so two sentences do not join as `IPv6.. ALEPH_`.
+                    # Cosmetic, and it is the reason the tests above assert on
+                    # substrings that carry meaning rather than on punctuation.
+                    msg = f"{msg.rstrip('.')}. {note}"
         raise ScholarUnavailable(msg, status_code=last_status, retry_after=last_retry_after)
 
     async def aclose(self) -> None:

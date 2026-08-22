@@ -123,3 +123,77 @@ async def test_every_registered_tool_is_wrapped() -> None:
         result = await _run_with(RuntimeError("forced"), name=tool.name)
         assert isinstance(result, ToolMessage), f"{tool.name} was not survivable"
         assert result.status == "error"
+
+
+def _settings() -> Any:
+    """A Settings a subagent builder can be constructed against, no network."""
+    from aleph_api.settings import Settings
+
+    return Settings(  # type: ignore[call-arg]
+        database_url="postgresql+asyncpg://aleph:x@localhost:5432/aleph",
+        redis_url="redis://localhost:6379/0",
+        langfuse_host="http://localhost:3000",
+        langfuse_public_key="pk",
+        langfuse_secret_key="sk",
+        otel_exporter_otlp_endpoint="http://localhost:4317",
+        litellm_base_url="http://localhost:18999",
+        insights_litellm_api_key="test-key",
+        aleph_agent_token_secret="unit-test-secret-0123456789abcdef0123456789abcdef",
+        aleph_credential_master_key="c" * 64,
+    )
+
+
+def _built_subagent_specs() -> dict[str, dict[str, Any]]:
+    """Every `build_*_subagent` in the package, discovered and BUILT.
+
+    Discovered rather than listed. A seventh subagent must be covered the day it
+    lands, and a list of six here would be a test that quietly stops testing the
+    thing it is named after — which is how the guard came to be missing from the
+    subagents in the first place.
+    """
+    import importlib
+    import pkgutil
+    import re
+
+    import aleph_api.subagents as package
+
+    settings = _settings()
+    specs: dict[str, dict[str, Any]] = {}
+    for info in pkgutil.iter_modules(package.__path__):
+        module = importlib.import_module(f"{package.__name__}.{info.name}")
+        for attr in dir(module):
+            if not re.fullmatch(r"build_\w+_subagent", attr):
+                continue
+            specs[attr] = getattr(module, attr)(settings=settings)
+    return specs
+
+
+def test_every_subagent_spec_really_carries_the_guard() -> None:
+    """The BUILT spec, not the source text — the sweep only reads the text.
+
+    `scripts/check-agent-middleware.sh` decides a subagent is guarded by looking
+    for the string `AlephAgentMiddleware` anywhere in its file. Measured: empty
+    the retriever's middleware list to `[]` and leave the import line and the
+    comment above it alone, and the sweep still prints "orchestrator + 6
+    subagents guarded" and exits 0. Every tool that subagent carries is then one
+    exception away from ending the turn, with a green gate over it.
+
+    This asserts the object. The middleware list a builder actually returns has
+    to contain an `AlephAgentMiddleware` instance, so no arrangement of imports,
+    comments or docstrings can satisfy it.
+    """
+    specs = _built_subagent_specs()
+    assert specs, "no build_*_subagent functions were discovered — update this test"
+
+    unguarded = [
+        name
+        for name, spec in specs.items()
+        if not any(
+            isinstance(entry, AlephAgentMiddleware) for entry in spec.get("middleware") or []
+        )
+    ]
+    assert not unguarded, (
+        f"{unguarded} return a spec whose middleware list holds no AlephAgentMiddleware. "
+        "deepagents REPLACES the parent's middleware when a spec declares its own, so "
+        "these subagents' tools are unguarded and a raising tool ends the turn."
+    )
