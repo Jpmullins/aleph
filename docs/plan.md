@@ -297,7 +297,6 @@ at the right file and the wrong row.
   <br>`grep -c 'aleph_evals' .github/workflows/ci.yml is >= 1. Returns 0 today.`
 - Every acceptance check can be shown to fail
   <br>`./scripts/acceptance.sh --self-check exits 0 with the newly added and repaired parts included.`
-- ~~E5 goes honestly red again~~ — **WITHDRAWN 2026-08-22.** It conditioned E5's redness on "until RS8 lands". RS8 landed: `aleph_belief` has four consumers outside its own package (`confidence.py`, `belief_service.py`, `claim_search.py`, and a test), so `run_expected_red_shell E5` correctly reports `PASS FIXED`. There is nothing left to go red.
   <br>`The acceptance run reports E5 as a known, unfixed defect until RS8 lands, rather than 'FIXED'. Today it reports FIXED for a module with no callers.`
 
 **Review.** Mutation across three layers. Flip `or_tsquery` back to `plainto_tsquery` at retrieval.py:98 and confirm the CI eval job fails on the recall floor; restore. Delete one tests/e2e file and confirm acceptance reports FAIL, not SKIP; restore.
@@ -408,7 +407,7 @@ at the right file and the wrong row.
 - The belief write path has a real caller
   <br>`grep -rn 'BeliefService' --include='*.py' . | grep -v 'packages/aleph-belief/' | wc -l >= 2. Returns 0 today (all 3 hits are self-references inside belief_service.py plus one docstring mention in models.py:236).`
 - Citations written by ingest carry a quote and a chunk
-  <br>`After ingesting one document on the live stack: psql -tAc "select count(*) from citations where source_id = '<new>' and (verbatim is null or chunk_ids = '{}')" returns 0. Today it is 786 of 786 across the whole database.`
+  <br>`After ingesting one document on the live stack: psql -tAc "select count(*) from citations where source_id = '<new>' and (quote is null or char_start is null or jsonb_array_length(coalesce(chunk_ids, '[]'::jsonb)) = 0)" returns 0.` **CORRECTED 2026-08-22:** the original was **unsatisfiable by schema and therefore always green** — `verbatim` is a NOT NULL boolean, so `verbatim is null` matches nothing, and `chunk_ids` is `jsonb`, so `= '{}'` compares an array column to an empty OBJECT and matches nothing either. The query returned 0 for every possible state of the database, including the state it was written to catch. Ungroundedness lives in `quote`, `char_start` and an empty `chunk_ids` ARRAY.`
 - Claims have stable identity
   <br>`psql -tAc "select count(*) from wiki_claims where claim_key is null" for the new source returns 0, and re-ingesting the same source does not double the claim count. All 786 are NULL today.`
 - The belief acceptance suite passes

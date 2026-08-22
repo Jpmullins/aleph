@@ -1,0 +1,3 @@
+# Vitest v8 coverage output (`pnpm test:coverage`). The floor itself lives in
+# `vitest.config.ts`, which IS committed — the report is a build artifact.
+coverage/
