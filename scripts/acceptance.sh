@@ -538,6 +538,8 @@ else
   skip H8 "needs a database with a corpus to export"
 fi
 
+run_shell P12 "every security override still names a package the lockfile resolves" \
+  "./scripts/check-security-overrides.sh 2>&1 | tail -1"
 run_shell P5b "tracked code does not import untracked modules" \
   "./scripts/check-imports-resolve.sh 2>&1 | tail -1"
 run_shell E8 "every web module is reachable from an entry point" \

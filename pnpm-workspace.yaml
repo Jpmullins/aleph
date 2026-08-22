@@ -18,7 +18,6 @@ allowBuilds:
 
 # Security overrides: force transitive deps to patched versions (Dependabot).
 overrides:
-  prismjs: ">=1.30.0" # GHSA-x7hr-w5r2-h6wg (DOM clobbering / XSS) — <1.30.0
   postcss: ">=8.5.10" # nested-source-map parse vuln — <8.5.10
   dompurify: ">=3.4.11 <4" # XSS via mXSS — <=3.4.10 (transitive via @a2ui/markdown-it + mermaid)
   js-yaml: ">=4.2.0 <5" # <=4.1.1 (transitive, dev-only via eslint; pin to 4.x — eslint needs the 4.x API)

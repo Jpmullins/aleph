@@ -465,6 +465,12 @@ light.
   green, because pytest, ruff and pyright all read the untracked files sitting in the working tree.
   Nothing else looks at the repository as somebody else would receive it.
 - `check-migration-roundtrip.sh` — every migration's downgrade actually runs, not merely exists.
+- `check-security-overrides.sh` — every entry in `pnpm-workspace.yaml`'s `overrides:` block names a
+  package the lockfile still resolves. An override forces a transitive dependency to a patched
+  version, and that claim expires: upstream moves, the direct dependency bumps its range, and the
+  pin becomes something nobody needs that holds the tree back and reads to the next person as a live
+  advisory. A stale one and a load-bearing one are identical on the page. It found `prismjs` on its
+  first run — overridden for GHSA-x7hr-w5r2-h6wg, and nothing in the tree depends on it any more.
 
 ### On what is deliberately absent
 

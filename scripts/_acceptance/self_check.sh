@@ -427,6 +427,14 @@ else
   printf '  \033[33m%-8s\033[0m %s\n' "skip" "$IMPORT_SUBJECT is not tracked — cannot untrack it"
 fi
 
+# A security override for a package nothing depends on any more. Mutated by
+# ADDING one rather than by removing a real one: the failure mode is an override
+# outliving its reason, so the mutation has to be an override with no reason.
+probe "an override for a package nothing depends on is noticed" \
+  pnpm-workspace.yaml \
+  's/^overrides:$/overrides:\n  a-package-nothing-here-depends-on: ">=9.9.9"/m' \
+  "./scripts/check-security-overrides.sh"
+
 probe "the runtime bridge check notices an any-origin proxy" \
   apps/copilot-runtime/src/server.ts \
   's/^  cors: \{$/  cors: true, \/\/ probe\n  _unused: {/m' \
