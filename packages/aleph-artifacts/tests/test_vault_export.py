@@ -384,16 +384,38 @@ def test_no_source_file_claims_the_schema_runs_on_the_write_path() -> None:
     said it ran at commit time. The claim is gone; this keeps it gone.
     """
     hits: list[str] = []
-    for root in (REPO_ROOT / "docs", REPO_ROOT / "packages" / "aleph-wiki" / "src"):
-        for path in root.rglob("*"):
+    # CLAUDE.md is in the scan. It was not, and the claim survived there for a
+    # week after being removed from the two places this test was written to
+    # cover — in the file whose opening paragraph exists to say that asserting
+    # an invariant the code does not hold is the single reason a broken
+    # retrieval path survived seven work packages. A pin whose scope excludes
+    # the most load-bearing document in the repository pins the wrong thing.
+    roots = (
+        REPO_ROOT / "docs",
+        REPO_ROOT / "packages" / "aleph-wiki" / "src",
+        REPO_ROOT / "CLAUDE.md",
+    )
+    for root in roots:
+        candidates = [root] if root.is_file() else list(root.rglob("*"))
+        for path in candidates:
             if not path.is_file() or path.suffix not in {".md", ".py"}:
                 continue
             # docs/plan.md is where the criterion itself is written down.
             if path.name == "plan.md":
                 continue
-            if "runs on the write path" in path.read_text(encoding="utf-8", errors="ignore"):
-                hits.append(str(path.relative_to(REPO_ROOT)))
-    assert hits == []
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            # A bare substring match on the CLAIM. Both places that used to
+            # make it now say the opposite in words that do not contain the
+            # phrase ("is NOT on the write path", "is NOT wired into the write
+            # path"), so no exclusion is needed — and an exclusion here was
+            # actively wrong: a first attempt skipped any line containing
+            # " NOT ", which the sentence "stored as data, not as a document,
+            # so validate_page runs on the write path" satisfies. The mutation
+            # that reintroduced the exact claim stayed green.
+            for line in text.splitlines():
+                if "runs on the write path" in line:
+                    hits.append(f"{path.relative_to(REPO_ROOT)}: {line.strip()[:90]}")
+    assert hits == [], "\n".join(hits)
 
 
 def _simple_page(*, slug: str, title: str, body_md: str) -> VaultPage:

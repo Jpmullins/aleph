@@ -271,6 +271,27 @@ def test_no_colour_in_the_stylesheet_comes_from_outside_the_palettes() -> None:
     assert found <= known, f"colours with no token behind them: {sorted(found - known)}"
 
 
+def test_no_rule_outside_the_palette_blocks_names_a_colour() -> None:
+    """The defect was one literal — `background:#ffffff` on `body`.
+
+    Pinning that string would not stop the next one, so this deletes the two
+    palette blocks and asserts NOTHING is left that names a colour: every rule
+    in the sheet has to paint through a `var(--doc-*)`, which is the only way a
+    rule can follow the theme. A hex here is a rule that renders the same on
+    both grounds — the same failure `scripts/check-web-drift.sh` counts on the
+    React side, which cannot see this file.
+    """
+    style = _style(compile_page_html(**_PAGE))
+    rules = re.sub(r"@media[^{]*\{:root\{[^}]*\}\}", "", style)
+    rules = re.sub(r":root\{[^}]*\}", "", rules)
+    assert "--doc-bg:" not in rules, "the palette blocks were not removed; the check is vacuous"
+    assert "body{" in rules, "the body rule was removed with them; the check is vacuous"
+    leftovers = re.findall(
+        r"(?:background|color|border[a-z-]*)\s*:[^;}]*(#[0-9a-fA-F]{3,8}|rgba?\()", rules
+    )
+    assert not leftovers, f"rules painting a literal colour instead of a token: {leftovers}"
+
+
 @pytest.mark.parametrize("state", list(Confidence), ids=lambda c: c.value)
 def test_every_confidence_state_has_a_themed_badge_rule(state: Confidence) -> None:
     style = _style(compile_page_html(**_PAGE))

@@ -86,8 +86,13 @@ which supersedes the old decision that the wiki was being deleted.
   what evidence?"* is the wiki. *"What did source 47 actually say?"* is the RAG. Framing them as
   competitors is what produced the removal decision, and it was a false choice.
 - **The wiki now has a schema** (`docs/wiki-schema.md`). Ported from the hermes-agent `llm-wiki`
-  skill — the harness that built `~/wiki/ai-research` — and stored as data, not as a document, so
-  `WikiSchema.validate_page` runs on the write path. Per-project domain, category list, controlled
+  skill — the harness that built `~/wiki/ai-research` — and stored as data, not as a document.
+  **`WikiSchema.validate_page` is NOT on the write path**, and this file said it was until
+  2026-08-22. Its only non-test caller is `aleph_wiki.lint`, which reports and never repairs, so a
+  page carrying a tag nobody declared is committed and then found in a lint rather than refused at
+  commit. `schema.py`'s own docstring has said so since it was written; the claim survived here
+  because the test that pins it scans `docs/` and `packages/aleph-wiki/src` and this file is in
+  neither. Per-project domain, category list, controlled
   tag taxonomy, page thresholds. `POST /wiki/schema/propose` derives one from the corpus that
   actually exists, because the shipped default describes AI/ML research and is the wrong taxonomy
   for any project that is about something else. A wrong taxonomy is worse than none: it gives every
