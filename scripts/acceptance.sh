@@ -268,8 +268,17 @@ fi
 # A8: the guardrail gets its first caller. Until WS-A2,
 # `grep -rn AgentPluginAPI apps/api/src` returned 0 — the thing CLAUDE.md calls
 # the product had no HTTP route, no agent tool and no graph node.
-run_shell A8 "the kernel is reachable, and a refusal matches its own preview" \
-  "uv run pytest -m integration tests/integration/test_plugin_routes.py -q -p no:randomly 2>&1 | tail -1"
+# Gated: the row drives an integration suite, so without postgres it reports
+# `5 failed, 5 passed, 5 errors` — a FAIL that says the kernel is unreachable
+# when what is unreachable is the database. Every other integration row in this
+# file is guarded; this one was not, so `--quick` was red for a reason it could
+# do nothing about, and a real A8 regression would have looked identical.
+if [ $NEEDS_SERVICES -eq 1 ]; then
+  run_shell A8 "the kernel is reachable, and a refusal matches its own preview" \
+    "uv run pytest -m integration tests/integration/test_plugin_routes.py -q -p no:randomly 2>&1 | tail -1"
+else
+  skip A8 "needs postgres"
+fi
 if [ $NEEDS_SERVICES -eq 1 ]; then
   run_shell A9 "a plugin can add a pane, and a broken one cannot blank the workspace" \
     "uv run pytest -m integration tests/integration/test_plugin_panes.py -q -p no:randomly 2>&1 | tail -1"
@@ -553,7 +562,11 @@ fi
 # vaults (the largest, and the one whose evidence chain is most populated) and
 # validates the bytes, because a claim about a FILE FORMAT is worth what a
 # validator says about the actual file.
-if [ -n "${DATABASE_URL:-}${ALEPH_DATABASE_URL:-}" ]; then
+# The guard used to be `[ -n "${DATABASE_URL:-}${ALEPH_DATABASE_URL:-}" ]`,
+# which is ALWAYS true: both are exported unconditionally further up from
+# DB_URL, which itself has a hardcoded default. So the `skip` below was dead
+# code and the row failed on a connection error instead of skipping.
+if [ $NEEDS_SERVICES -eq 1 ]; then
   run_shell H8 "a real vault export conforms to OKF v0.1, evidence chain included" \
     "uv run python scripts/_acceptance/okf_export_probe.py 2>&1 | tail -2"
 else
