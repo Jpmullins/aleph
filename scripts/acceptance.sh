@@ -381,6 +381,19 @@ run_pytest D4 "spawn ledger: lineage, depth, fan-out and budget brakes" \
   packages/aleph-kernel/tests/test_spawn_ledger.py
 run_pytest D5 "probation: a capability that degrades is retired automatically" \
   packages/aleph-kernel/tests/test_probation.py
+# D7 is the wiring, and it is a unit check on purpose: it patches
+# `create_deep_agent` and reads the kwargs the real builder passes. A test that
+# imported `SKILL_SOURCES` and counted two entries would stay green through
+# somebody editing the call site back to one source — the constant is not the
+# feature, the call is.
+run_pytest D7 "the agent is wired to author skills: two sources, allow before deny" \
+  apps/api/tests/unit/test_agent_skill_wiring.py
+if [ $NEEDS_SERVICES -eq 1 ]; then
+  run_shell D8 "an authored skill survives the conversation that wrote it" \
+    "uv run pytest -m integration tests/integration/test_authored_skills.py -q -p no:randomly 2>&1 | tail -1"
+else
+  skip D8 "needs postgres"
+fi
 
 # ---------------------------------------------------------------------------
 # E — Deletion

@@ -299,6 +299,37 @@ async def _self_headers(project_id: UUID, *, settings: Any) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _agent_filesystem_permissions() -> list[Any]:
+    """The agent's filesystem rules, as one list, in the order they are matched.
+
+    A module-level function and not an inline literal so the tests can assert on
+    the rules that actually ship. A test holding its own copy of this list is a
+    test of the copy, and it stays green through any change to the original —
+    which is the whole failure mode `check-agent-fs-permissions.sh` exists for.
+
+    ORDER IS THE MECHANISM. `_check_fs_permission` is first-match-wins
+    (deepagents/middleware/filesystem.py:111-116), so the allow must sit ahead
+    of the deny. Swapped, the deny matches `/skills/authored/**` too, every
+    authored write is refused, and nothing reports a misconfiguration — the
+    self-improvement loop is simply off.
+
+    The deny itself is the older rule and still the important one: the agent may
+    READ its standing orders and may not rewrite them. `FilesystemBackend`
+    implements `write` and `edit`, and deepagents allows any operation no rule
+    matches, so without it the assistant could rewrite the four bundled SKILL.md
+    files on the live container — and text in an ingested web page could in
+    principle instruct it to.
+    """
+    from deepagents import FilesystemPermission
+
+    from aleph_api.authored_skills import AUTHORED_PREFIX
+
+    return [
+        FilesystemPermission(operations=["write"], paths=[f"{AUTHORED_PREFIX}**"], mode="allow"),
+        FilesystemPermission(operations=["write"], paths=["/skills/**"], mode="deny"),
+    ]
+
+
 def _project_id_from_thread_id(thread_id: object) -> UUID | None:
     """Parse the project UUID out of a project-prefixed thread id.
 
@@ -673,6 +704,7 @@ async def _read_wiki_impl(query: str, config: RunnableConfig) -> str:
 
     from sqlalchemy import select
 
+    from aleph_api.chat_runs import run_id_from_config
     from aleph_assistant.retrieval.router import WikiFirstRetrievalRouter
     from aleph_db.models.model_profile import ModelProfile
 
@@ -699,7 +731,13 @@ async def _read_wiki_impl(query: str, config: RunnableConfig) -> str:
         query=query,
         prior_messages=[],
         profile=profile,
-        agent_run_id=None,
+        # The turn this search belongs to. Not `None`: the router makes three
+        # further model calls of its own (`corpus_search.query_embed`,
+        # `page_selection`, `compose`), and passing None writes all three as
+        # unattributed — priced, but belonging to nothing. The live probe found
+        # exactly that: 13 attributed `assistant.turn` rows alongside 9
+        # orphans, all from inside this one tool.
+        agent_run_id=run_id_from_config(config),
     )
     coverage = getattr(result, "coverage_judgment", "ok")
     body = getattr(result, "composed_body_md", "") or "(the composer returned no body)"
@@ -1612,7 +1650,7 @@ def build_assistant_deep_agent(
     persistence) while all other agent files stay ephemeral per-thread.
     """
     from copilotkit import CopilotKitMiddleware
-    from deepagents import FilesystemPermission, create_deep_agent
+    from deepagents import create_deep_agent
     from deepagents.backends import (
         BackendProtocol,
         CompositeBackend,
@@ -1625,12 +1663,18 @@ def build_assistant_deep_agent(
     from langgraph.prebuilt.tool_node import ToolRuntime
 
     from aleph_api.agent_middleware import AlephAgentMiddleware
+    from aleph_api.authored_skills import (
+        SKILL_SOURCES,
+        AuthoredSkillsMiddleware,
+        authored_namespace,
+    )
     from aleph_api.subagents.analyst import build_analyst_subagent
     from aleph_api.subagents.researcher import build_researcher_subagent
     from aleph_api.subagents.retriever import build_retriever_subagent
     from aleph_api.subagents.reviewer import build_reviewer_subagent
     from aleph_api.subagents.viz_builder import build_viz_builder_subagent
     from aleph_api.subagents.wiki_builder import build_wiki_builder_subagent
+    from aleph_db.repos.agent_runs import SYSTEM_ACTOR
 
     def _memory_namespace(_rt: object) -> tuple[str, ...]:
         """Scope persistent memory per-project so projects never share memory.
@@ -1678,6 +1722,12 @@ def build_assistant_deep_agent(
             default=StateBackend(),
             routes={
                 "/memories/": StoreBackend(namespace=_memory_namespace),
+                # WS-H1: the one writable place a skill can go. Nested INSIDE
+                # `/skills/` on purpose — CompositeBackend sorts routes
+                # longest-prefix-first (backends/composite.py:162-163), so this
+                # wins for its own prefix while everything else under
+                # `/skills/` still resolves to the read-only bundled set.
+                "/skills/authored/": StoreBackend(namespace=authored_namespace),
                 "/skills/": _skills_backend,
             },
         )
@@ -1707,7 +1757,11 @@ def build_assistant_deep_agent(
         # sees each skill's name + description at startup and reads the full
         # procedure on demand. `/skills` is the in-backend source the
         # CompositeBackend routes to the FilesystemBackend above.
-        skills=["/skills"],
+        # BOTH sources, and this is not a stylistic choice: skills are listed
+        # per source path, so `["/skills"]` returns the four bundled ones and
+        # never the store's, no matter how the route is configured. Measured
+        # through the composite before and after.
+        skills=list(SKILL_SOURCES),
         # The agent may READ its standing orders and may not rewrite them.
         #
         # `FilesystemBackend` implements `write` and `edit`, `create_deep_agent`
@@ -1726,9 +1780,15 @@ def build_assistant_deep_agent(
         # This is a blanket deny, not the governed path. `WS-H1` opens
         # `/skills/authored/**` for writing, ledgered — and the ORDER will matter
         # then, because an allow rule ahead of this deny would reopen everything.
-        permissions=[
-            FilesystemPermission(operations=["write"], paths=["/skills/**"], mode="deny"),
-        ],
+        # ORDER IS THE WHOLE THING. `_check_fs_permission` is first-match-wins
+        # (middleware/filesystem.py:111-116), so the allow must sit ahead of the
+        # deny. Swapped, the deny matches `/skills/authored/**` too and the
+        # authored route is silently read-only — the feature is off, every write
+        # is refused, and nothing anywhere reports a misconfiguration.
+        # `test_the_bundled_skills_stay_read_only` and
+        # `test_the_authored_route_is_writable` are asserted in the same run
+        # precisely so neither can be satisfied by dropping the other.
+        permissions=_agent_filesystem_permissions(),
         # AlephAgentMiddleware first: it wraps every tool call so an exception
         # becomes a ToolMessage the model can read and route around, instead of
         # killing the conversation. Before it, any one of 27 tools throwing
@@ -1737,6 +1797,11 @@ def build_assistant_deep_agent(
         # wrong thing.
         middleware=[
             AlephAgentMiddleware(session_maker=_runtime.get("session_maker")),
+            AuthoredSkillsMiddleware(
+                session_maker=_runtime.get("session_maker"),
+                actor_id=SYSTEM_ACTOR,
+                backend_factory=_memory_backend,
+            ),
             CopilotKitMiddleware(),
         ],
         backend=_memory_backend,

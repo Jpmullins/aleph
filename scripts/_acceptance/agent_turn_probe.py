@@ -82,6 +82,39 @@ async def _drive(client: httpx.AsyncClient, url: str, project_id: str, prompt: s
     ok = False
     run_id: uuid.UUID | None = None
 
+    try:
+        run_id, first_token, ok, error = await _stream(client, url, body, started)
+    except httpx.HTTPError as exc:
+        # A transport failure mid-stream is a FAILED SAMPLE, not a crash. The
+        # first version let this escape, and a probe that dies on the thing it
+        # is measuring tells you less than one that records it: "the connection
+        # dropped 12s in" is a finding about the product.
+        return Turn(
+            ok=False,
+            first_token_s=first_token,
+            total_s=time.monotonic() - started,
+            agent_run_id=run_id,
+            error=f"{type(exc).__name__}: {exc}"[:200],
+        )
+
+    return Turn(
+        ok=ok,
+        first_token_s=first_token,
+        total_s=time.monotonic() - started,
+        agent_run_id=run_id,
+        error=error,
+    )
+
+
+async def _stream(
+    client: httpx.AsyncClient, url: str, body: dict[str, object], started: float
+) -> tuple[uuid.UUID | None, float | None, bool, str | None]:
+    """Read one SSE response. Raises on transport failure; `_drive` records it."""
+    first_token: float | None = None
+    error: str | None = None
+    ok = False
+    run_id: uuid.UUID | None = None
+
     async with client.stream("POST", url, json=body) as response:
         raw = response.headers.get(AGENT_RUN_HEADER)
         if raw:
@@ -91,13 +124,7 @@ async def _drive(client: httpx.AsyncClient, url: str, project_id: str, prompt: s
                 run_id = None
         if response.status_code != 200:
             await response.aread()
-            return Turn(
-                ok=False,
-                first_token_s=None,
-                total_s=time.monotonic() - started,
-                agent_run_id=run_id,
-                error=f"HTTP {response.status_code}",
-            )
+            return run_id, None, False, f"HTTP {response.status_code}"
         async for line in response.aiter_lines():
             if not line.startswith("data:"):
                 continue
@@ -113,13 +140,7 @@ async def _drive(client: httpx.AsyncClient, url: str, project_id: str, prompt: s
             elif kind == RUN_FINISHED_EVENT:
                 ok = error is None
 
-    return Turn(
-        ok=ok,
-        first_token_s=first_token,
-        total_s=time.monotonic() - started,
-        agent_run_id=run_id,
-        error=error,
-    )
+    return run_id, first_token, ok, error
 
 
 async def _attribute(turns: list[Turn], database_url: str) -> None:
