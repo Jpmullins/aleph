@@ -159,6 +159,15 @@ probe "check-agent-fs-permissions notices an allow ahead of the deny" \
   's/        permissions=\[\n            FilesystemPermission/        permissions=[\n            FilesystemPermission(operations=["write"], paths=["\/skills\/**"], mode="allow"),\n            FilesystemPermission/' \
   "./scripts/check-agent-fs-permissions.sh"
 
+# The mutation that defeated the FIRST version of this sweep: `with_for_update()`
+# → `with_for_update(read=True)`. FOR SHARE is not a lock for `max + 1`, and the
+# sweep matched the method name without looking at the mode, then printed "all
+# FOR UPDATE" — which was false.
+probe "check-page-lock notices a shared lock masquerading as an exclusive one" \
+  packages/aleph-wiki/src/aleph_wiki/wiki_service.py \
+  's/\.with_for_update\(\)/.with_for_update(read=True)/g' \
+  "./scripts/check-page-lock.sh"
+
 # The subagent half is the one that goes wrong silently: a spec declaring its
 # own middleware OVERRIDES the parent's guard rather than adding to it.
 probe "check-agent-middleware notices one unguarded subagent" \

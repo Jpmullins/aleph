@@ -117,6 +117,13 @@ jobs:
       - name: Every agent and subagent survives a raising tool
         run: ./scripts/check-agent-middleware.sh
 
+      # `commit_revision` picks a version number as `max + 1`, which is only
+      # safe while the page row is locked FOR UPDATE. It was not, on the branch
+      # five call sites take, so two concurrent commits both read the same max
+      # and the loser's work was discarded as an unhandled 500.
+      - name: No unlocked wiki page read in the create-or-lock path
+        run: ./scripts/check-page-lock.sh
+
   python-unit:
     name: unit tests
     runs-on: ubuntu-latest

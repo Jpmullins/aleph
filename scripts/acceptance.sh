@@ -344,6 +344,18 @@ if [ $NEEDS_SERVICES -eq 1 ]; then
 else
   for p in C1 C3 C4 C5 C6 C7; do skip "$p" "needs postgres"; done
 fi
+# C9 is in part C because `commit_revision` IS the claim-write path: every claim
+# in the database today was written through this function, so a commit it loses
+# is claims it loses.
+run_shell C9a "no unlocked wiki page read in the create-or-lock path" \
+  "./scripts/check-page-lock.sh"
+if [ $NEEDS_SERVICES -eq 1 ]; then
+  run_pytest C9 "concurrent wiki commits do not lose work" \
+    tests/integration/test_commit_revision_concurrency.py
+else
+  skip C9 "needs postgres"
+fi
+
 if [ $NEEDS_SERVICES -eq 1 ]; then
   run_pytest C8 "the belief graph rebuilds from its sources, idempotently" \
     tests/e2e/test_belief_spine.py::test_the_belief_graph_rebuilds_from_its_sources \

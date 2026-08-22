@@ -61,7 +61,7 @@ _WS = re.compile(r"\s+")
 MAX_PROPOSITION_CHARS = 300
 
 #: Writers whose claims an agent may never overwrite.
-_PROTECTED_ORIGINS = frozenset()
+_PROTECTED_ORIGINS = frozenset({"user"})
 
 
 def claim_key_for(text: str) -> str:

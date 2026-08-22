@@ -107,6 +107,7 @@ Replaces the wiki as the knowledge substrate. See `belief-engine.md`.
 | C5 | Deterministic reconciliation replaces the LLM identity judge | `packages/aleph-belief/tests/test_reconcile.py` and `tests/e2e/test_belief_spine.py::test_duplicate_beliefs_are_proposed_for_merge_without_a_model` — a scored candidate with a named reject reason and **zero LLM calls** | ✅ |
 | C6 | A human can write a claim, and agents cannot overwrite it | `tests/e2e/test_belief_spine.py::test_an_agent_cannot_overwrite_a_user_claim`, `::test_a_user_may_revise_their_own_claim` | ✅ |
 | C7 | Every written citation carries a source anchor | `tests/e2e/test_belief_spine.py::test_every_written_citation_carries_a_source_id`, `::test_a_fabricated_quote_is_refused` — `source_id`, `verbatim` and the char span are all set. Replaces `source_page_id`, which no writer ever populated | ✅ |
+| C9 | A concurrent wiki commit does not lose work | `tests/integration/test_commit_revision_concurrency.py` — 8 real concurrent sessions on both the by-title and the by-ID branch, plus `scripts/check-page-lock.sh`. In part C because `commit_revision` **is** the claim-write path: every claim in the database was written through it, so a commit it loses is claims it loses | ✅ |
 | C8 | The belief graph is rebuildable from the RKS | `tests/e2e/test_belief_spine.py::test_the_belief_graph_rebuilds_from_its_sources`, `::test_rebuilding_twice_is_idempotent`, `::test_a_rebuild_does_not_destroy_human_corrections` | ✅ |
 
 > **⚠ These rows measure the machinery, not its use.** `BeliefService` has never

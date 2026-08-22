@@ -11,11 +11,18 @@ must read before it writes — a controlled tag taxonomy, a fixed category list,
 explicit page thresholds, and a required frontmatter block. That file is what
 built `~/wiki/ai-research`, and this module is that file as data.
 
-Why data and not a document: an agent can ignore a document. `validate_page`
-runs on the write path, so a page carrying a tag nobody declared is rejected at
-commit time rather than discovered during a lint six weeks later. The schema is
-per-project and editable because "the tag taxonomy" is a claim about a domain,
-and Aleph does not assume every project studies the same one.
+Why data and not a document: a document is prose an agent can talk itself out
+of, while `validate_page` returns a list of violations a caller can act on
+mechanically. The schema is per-project and editable because "the tag taxonomy"
+is a claim about a domain, and Aleph does not assume every project studies the
+same one.
+
+`validate_page` is NOT wired into the write path. This docstring said it was.
+Its only non-test caller is `aleph_wiki.lint`, which reports and never repairs,
+so a page carrying a tag nobody declared is committed and then found in a lint
+rather than rejected at commit time. Do not read this module's existence as an
+enforcement guarantee: an invariant asserted in a docstring and absent from the
+code is the failure mode CLAUDE.md's opening paragraph exists to prevent.
 
 The vocabulary here deliberately mirrors the hermes schema field-for-field
 (`type`, `category`, `tags`, `related`, `sources`, `confidence`, `contested`,
