@@ -1086,7 +1086,7 @@ belongs in `docs/decisions.md` either way.
 - A handler constructed the way production constructs it (no pricing= argument) prices a known model instead of recording 'unknown'
   <br>`New test apps/api/tests/unit/test_agent_cost_callback.py::test_handler_built_the_production_way_uses_the_bound_pricing_table — mirrors copilot_agent.py:1506 exactly, binds a populated table via bind_runtime, asserts recorded pricing_source != 'unknown'.`
 - The cost callback can no longer invent an empty price list
-  <br>`grep -c 'PricingTable()' apps/api/src/aleph_api/copilot_cost_callback.py returns 0 (returns 1 today, at line 195).`
+  <br>`apps/api/tests/unit/test_agent_cost_callback.py::test_the_callback_no_longer_invents_a_table, ::test_an_unbound_table_is_not_cached_so_a_late_gateway_still_prices and ::test_no_pricing_table_bound_is_reported_as_its_own_failure pass. NOT a grep for `PricingTable()`: that returns 2 today and can only reach 0 by deleting the docstring at :209 that explains the fabrication AND the empty-table fallback at :258 the design requires, so the check was red forever and rewarded removing the explanation.`
 - Two models in one table keep different provenance labels
   <br>`uv run pytest packages/aleph-models/tests/test_pricing.py -q, with a new test merging a gateway-reported model and a hint-filled model into one table and asserting breakdown() returns source 'gateway' for the first and 'static' for the second. FAILS TODAY: pricing.py:148-152 assigns one label to the whole table.`
 - A gateway that was down at boot produces priced calls once it comes up, with no restart
@@ -1113,7 +1113,7 @@ belongs in `docs/decisions.md` either way.
 **Criteria:**
 
 - Concurrent gateway calls never exceed the configured ceiling
-  <br>`grep -rn 'Semaphore\|AsyncLimiter' packages/aleph-runtime/src/aleph_runtime/capabilities.py returns >= 1 line, plus a unit test firing 20 concurrent LiteLLMClient.chat() calls at a fake gateway that records max in-flight, asserting it never exceeds ALEPH_GATEWAY_MAX_CONCURRENCY.`
+  <br>`grep -c GATEWAY_LIMITER packages/aleph-runtime/src/aleph_runtime/capabilities.py returns >= 1 (7 today) — the limiter is a kernel capability wherever its semaphore lives, and it lives in aleph_models/limiter.py by design, so grepping capabilities.py for `Semaphore` is red forever and would be satisfied by moving working code into the wrong package. The behaviour half is the check: a unit test firing 20 concurrent LiteLLMClient.chat() calls at a fake gateway that records max in-flight, asserting it never exceeds ALEPH_GATEWAY_MAX_CONCURRENCY.`
 - A 429 carrying Retry-After: 7 causes a ~7 second wait, not a 1 second one
   <br>`Unit test in packages/aleph-models/tests/ using a fake clock, asserting the computed wait. FAILS TODAY: retry.py:28-31 uses wait_exponential(min=1,max=4) and no code in that file reads any header.`
 - Being rate limited during autoconfigure does not disqualify a model
@@ -1123,7 +1123,7 @@ belongs in `docs/decisions.md` either way.
 - Two /readyz hits one second apart produce exactly one outbound gateway request
   <br>`Test counts requests on the fake gateway. FAILS TODAY: routes/health.py:49 calls the gateway on every hit, so it produces two.`
 - No capability is offered in Settings that nothing can resolve
-  <br>`grep -rn '\"rerank\"\|Capability.RERANK' apps packages --include=*.py --include=*.tsx | grep -v tests | wc -l returns exactly 1 (the enum member alone). Returns 4 today (enum, policy at discovery.py:392, and Drawers.tsx:88 and :107).`
+  <br>`python3 scripts/_lib/capability_offers.py exits 0 — every capability the Settings picker offers has a resolution policy and a production caller. NOT `rerank appears exactly once`: that criterion assumed rerank was a dead offer to be deleted, and WS-RS6 did the opposite — it is now 27 hits with a production caller at retrieval/router.py:429 and a measured eval arm, so the old form can only pass by removing shipped capability. Original wording, for the record: exactly 1 (the enum member alone), 4 at the time (enum, policy at discovery.py:392, and Drawers.tsx:88 and :107).`
 
 **Review.** One mutation per criterion, each restored afterward. Raise ALEPH_GATEWAY_MAX_CONCURRENCY above the burst size and confirm the concurrency test fails. Delete the Retry-After parse and confirm the wait test fails. Revert the 429 branch in probe_model and confirm the binding test fails. Point /readyz back at litellm.health() and confirm the one-request test fails.
 <br>**Iterate.** v1 bounds request COUNT. v2 bounds SPEND: the limiter reads the per-project cost total MEP-1 makes trustworthy and refuses to start a new agent turn once a project's configured budget is exhausted, returning a message the assistant can say out loud rather than surfacing someone else's 429.
@@ -1144,13 +1144,13 @@ belongs in `docs/decisions.md` either way.
 - The fake reproduces every gateway misbehaviour this cluster handles
   <br>`uv run pytest -m 'not integration' -q -k gateway_fake passes with at least 8 tests covering: /model/info 403 fallback, rates absent, 429 with Retry-After, 429 without, list-but-400-on-invoke, slow response, embedding mode, request counting.`
 - No document names a path that does not exist
-  <br>`uv run python scripts/_acceptance/docs_claims.py exits 0. FAILS TODAY: it will name deploy/local-gateway/ from docs/operations.md:27 and docs/acceptance.md:152.`
+  <br>`./scripts/check-dead-refs.sh exits 0. There is no scripts/_acceptance/docs_claims.py and none is planned — check-dead-refs.sh is the sweep that shipped for this, and it now also reads audit/claims.yaml and asserts docs/operations.md names every sweep.`
 - The deleted local gateway is gone from the prose as well as the tree
-  <br>`grep -rn 'local-llm\|local-gateway' CLAUDE.md docs/ | wc -l returns 0. Returns 5 today.`
+  <br>`grep -rn 'local-llm\|local-gateway' CLAUDE.md docs/operations.md docs/architecture.md docs/acceptance.md | wc -l returns 0. Scoped deliberately: over all of docs/ it returns 11, and 8 of those are docs/plan.md quoting this criterion, so the unscoped form can never reach 0 while the criterion exists to be read. docs/plan.md and docs/update/ are out of scope — the plan records history and the update reports are history.`
 - The fake is genuinely shared, not copied per package
   <br>`grep -rl 'FakeGateway' apps packages | wc -l returns >= 3, with exactly one file defining it (grep -rl 'class FakeGateway' returns 1).`
 - The docs sweep is proven capable of failing
-  <br>`scripts/acceptance.sh --self-check includes the docs-claims check and demonstrates it going red when a fabricated path is inserted into a doc.`
+  <br>`scripts/acceptance.sh --self-check reports `can fail` for the probes 'check-dead-refs notices a path that is not there' (self_check.sh:179) and 'check-dead-refs notices a sweep the operations doc stopped naming' (:220). There is no docs-claims check to include — check-dead-refs.sh is the sweep, per c2.`
 
 **Review.** Mutation on the sweep first, since it has the most leverage: add a line to docs/operations.md referencing deploy/does-not-exist/, confirm docs_claims.py exits non-zero AND names the file and line number rather than just failing, then remove it.
 <br>**Iterate.** v2 promotes the fake into a conformance suite: one parametrised test running Aleph's entire model path against three endpoint profiles — a full-metadata gateway, an ids-only restricted-key gateway, and an ids-only gateway with no hints available — asserting what Aleph does in each.
@@ -1237,7 +1237,7 @@ belongs in `docs/decisions.md` either way.
 - No model name is hardcoded on the agent path
   <br>`grep -n 'claude-sonnet-4-6' apps/api/src/aleph_api/copilot_agent.py | wc -l returns 0 — the fallback becomes a stated 'no model bound' error rather than a guessed id. Returns 1 today (line 1436).`
 - The existing gateway guarantees survive the refactor
-  <br>`apps/api/tests/unit/test_subagents.py::test_subagent_model_points_at_gateway and apps/api/tests/unit/test_agent_gateway_base_url.py both still pass, now against a resolved endpoint rather than boot settings.`
+  <br>`resolve_agent takes its endpoint from the project's gateway_endpoints row, and test_subagent_model_points_at_gateway runs a case where the RESOLVED endpoint differs from settings.litellm_base_url, asserting the built model points at the resolved one. Both named tests were green before this workstream and are indifferent to whether any endpoint is resolved, so 'both still pass' cannot fail — the clause 'now against a resolved endpoint' is the whole criterion and needs its own case.`
 - The set_model_profile tool's own claim is true of the system
   <br>`Test switches the profile, then asserts the next turn's model matches the new profile — i.e. the sentence the tool returns is verified, not just its wording. FAILS TODAY.`
 
@@ -1268,7 +1268,7 @@ belongs in `docs/decisions.md` either way.
 - A malformed profile file fails loudly at boot
   <br>`Test asserting a broken YAML file raises with the filename in the message rather than being skipped; plus uv run pyright and uv run ruff check . exit 0 with the loader included.`
 - The effect of a profile is a recorded number, not an opinion
-  <br>`Run aleph_evals over a fixed task set with and without the small-model profile against MEP-3's fake configured as a small model, reporting tool-call error rate. The criterion is that the number is produced and recorded, not that it clears a threshold on the first pass.`
+  <br>`Run aleph_evals over a fixed task set with and without the small-model profile against MEP-3's fake configured as a small model, reporting tool-call error rate for BOTH arms. The check fails if either arm produced no number, or if the profiled arm's tool-call error rate is worse than the control arm's by more than 5 points. The original wording — 'the number is produced and recorded, not that it clears a threshold' — admits in its own text that it cannot fail: a run that reports 100% errors satisfies it. A floor relative to the control arm is still not a quality bar, but it is falsifiable.`
 
 **Review.** Mutation on the key shape first, since it is the failure this design exists to prevent: register a profile under 'openai' instead of 'openai:<id>', confirm the bare-key test fails, and — more importantly — confirm that an unrelated second model now picks up that profile's prompt suffix, demonstrating the blast radius on the record. Restore.
 <br>**Iterate.** v2 turns profiles from operator-authored into measured: run the eval per profile class on a schedule, record tool-call error rate and token cost per class in the same ledger MEP-1 made trustworthy, and require a profile change to be justified by a number.
@@ -1960,7 +1960,7 @@ because each is a way a plan can look rigorous and measure nothing.
 
 *Why it fails as a criterion:* Measurable, but the plan states no mechanism that satisfies it in this workspace, and every obvious mechanism collides with an existing constraint. tests/conftest.py is scoped to the tests/ subtree — pytest will not apply it to packages/aleph-models/tests/ — so it cannot host a cross-package fixture. A new workspace package breaks docs/acceptance.md E4, which asserts the count does not grow and pyproject.toml lines 12-32 already list exactly 21. A sys.path shim is precisely the pattern commit 483816d removed from scripts/check-graph-state-keys.sh for making a gate depend on the test suite exis
 
-*Replaced with:* Name the home and measure that instead: 'the fake lives at packages/aleph-models/src/aleph_models/testing/gateway.py, is exported from the installed distribution, is imported by tests in >= 3 packages, and `grep -c members pyproject.toml` still shows 21 workspace members.' That is checkable and it forces the placement decision now rather than at implementation time.
+*Replaced with:* Name the home and measure that instead: 'the fake lives at packages/aleph-models/src/aleph_models/testing/gateway.py, is exported from the installed distribution, is imported by tests in >= 3 packages, and `[tool.uv.workspace] members` still lists 23 entries. Not `grep -c members pyproject.toml`, which counts LINES containing the word and so returns 1 no matter how the list grows; and not 21, which was already wrong when written.' That is checkable and it forces the placement decision now rather than at implementation time.
 
 
 **8. WS-MEP-4 — grep -rn 'app.state.litellm' apps/api/src apps/workers/src | wc -l returns 0. Returns 2 today.**
