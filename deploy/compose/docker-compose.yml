@@ -377,11 +377,20 @@ services:
     # reaches the container and Vite serves the image's copy forever. That
     # failure is silent: HMR reports connected, the page reloads, and nothing
     # about it changes. Mounting `src` makes edits live under either command.
-    # Only `src` and `index.html` are mounted so the image's node_modules,
-    # which are installed for the container's platform, stay intact.
+    # `src`, `index.html` and `public` are mounted; the image's node_modules,
+    # installed for the container's platform, stay intact.
+    #
+    # `public` is here because WS-E3 vendored the three font families into
+    # `apps/web/public/fonts/` and they were invisible to this container: Vite
+    # answered every `/fonts/*.woff2` with the SPA fallback, so all three
+    # requests returned 200 with an identical 2,603 bytes of index.html and
+    # `document.fonts.load()` failed with a NetworkError. A 200 that is the
+    # wrong body is the worst shape this can take — nothing reports an error
+    # and the page silently falls back to Georgia.
     volumes:
       - ../../apps/web/src:/app/apps/web/src
       - ../../apps/web/index.html:/app/apps/web/index.html
+      - ../../apps/web/public:/app/apps/web/public
     # Vite's DEV server, and the number is measured rather than guessed: this
     # container idles at 1.07 GiB with polling on. The first value tried here was
     # 1g, and the result is worth recording — the container was OOM-killed on

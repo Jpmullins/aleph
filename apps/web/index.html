@@ -4,12 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%230C0E10'/%3E%3Cg fill='none' stroke='%23D9D4C8' stroke-width='7'%3E%3Ccircle cx='50' cy='50' r='34'/%3E%3Ccircle cx='50' cy='50' r='17'/%3E%3C/g%3E%3Cline x1='29' y1='71' x2='71' y2='29' stroke='%23D9D4C8' stroke-width='8'/%3E%3Ccircle cx='50' cy='50' r='7' fill='%23D9D4C8'/%3E%3C/svg%3E" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Newsreader:opsz,wght@6..72,300;6..72,400;6..72,500&family=Public+Sans:wght@400;500;600;700&display=swap"
-    />
+    <!-- No font <link> here, and no preconnect to a font CDN.
+         Three tags pointing at fonts.googleapis.com stood here. Aleph deploys
+         as a docker compose stack into networks that may have no outbound
+         route, and a CDN font does not fail loudly — it falls back, so every
+         face silently became a system font and nothing reported it. The three
+         families are vendored under public/fonts and declared in
+         src/styles/fonts.css. See public/fonts/README.md. WS-E3. -->
     <title>Aleph</title>
     <script>
       // Resolve the stored theme preference to an explicit data-theme before

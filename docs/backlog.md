@@ -187,10 +187,53 @@ noted.
   errored with 'RUN_ERROR'`. The secondary error is a symptom; the primary
   `RUN_ERROR` has not been traced yet. Reproduces on the newest project.
 - **E2. `POST /scholar/search` returns 503** repeatedly in the API log.
-- **E3. Compiled HTML assets are broken in the reader.** The sandboxed iframe
-  blocks scripts (`allow-scripts` not set) and the page preloads
-  `/_fs-ch-*/assets/inter-var.woff2`, which 404s and is also blocked by CORS
-  from the `null` origin. So server-compiled page HTML renders unstyled.
+- **E3. Typography and the compiled document. DIAGNOSED, and the first report
+  was wrong on both counts.** Fixed 2026-08-22; the corrected diagnosis is kept
+  here because the original is what a reader would otherwise act on.
+
+  *What the original entry said, and why neither half held.* It said the
+  sandboxed iframe blocks scripts, and that the page preloads a font that 404s.
+  The `sandbox=""` on `apps/web/src/a2ui/components/HtmlDocCard.tsx` is
+  deliberate and correct — the compiled document contains no scripts by
+  construction and `apps/api/src/aleph_api/routes/wiki.py` pairs it with a
+  `Content-Security-Policy: sandbox` header, so `allow-scripts` would weaken it
+  for nothing. And the font path it named appears nowhere in this repository —
+  neither that asset directory nor that file name is grepped anywhere in the
+  tree, and the compiler emits no external reference of any kind. It was a
+  browser extension's request, read as the app's.
+
+  *The two real causes, both now fixed.*
+
+  1. **`apps/web/index.html` loaded all three faces from `fonts.googleapis.com`**
+     — two `preconnect`s and a stylesheet `<link>`. Aleph deploys as a docker
+     compose stack into networks that may have no outbound route, and a CDN font
+     does not fail loudly: it falls back. Every face silently became a system
+     font, the interface stopped looking like itself, and nothing reported it.
+     The three families are vendored now under `apps/web/public/fonts/` (12
+     `woff2` files, 384,584 bytes total; 198,964 of that is the three `-latin`
+     subsets an English page actually loads), declared in
+     `apps/web/src/styles/fonts.css`, and the `<link>` tags are gone.
+  2. **`packages/aleph-wiki/src/aleph_wiki/html_compiler.py`'s inline
+     `<style>` was a second, divergent palette.** `_STYLE` hardcoded
+     `background:#ffffff` with Tailwind-default slate ink and six invented
+     confidence-badge colours, none of which came from
+     `apps/web/src/styles/tokens.css` and none of which had a dark counterpart.
+     Opened from the dark workspace the compiled page was a white rectangle in
+     the middle of a near-black one; it was the only surface the design system
+     did not reach, and the only place in the product with rounded corners. It
+     now emits both of Aleph's palettes and switches on `prefers-color-scheme`,
+     carries no `border-radius` at all, and holds a Python mirror of the two
+     token blocks that `packages/aleph-wiki/tests/test_html_compiler.py` asserts
+     against the stylesheet character for character.
+
+  *What is still open.* `prefers-color-scheme` is the only theme signal that
+  crosses into a `sandbox=""` iframe — measured: an embedder's `color-scheme`
+  does NOT propagate to the media query in Chromium 151, tried both on `<html>`
+  and on the `<iframe>` element itself. So the compiled document tracks the
+  app's *default* "system" setting exactly, and diverges only for a viewer who
+  has explicitly toggled the theme against their OS. Closing that needs
+  `apps/api/src/aleph_api/routes/wiki.py` to accept a theme and thread it into
+  the compiler, which also means a second cached `RenderedAsset` per page.
 - **E4. Agent model calls cannot be priced.** `claude-sonnet-4-6` is recorded
   with `pricing_source=unknown`. Correct behaviour (never a silent `$0`) but it
   means agent spend is unpriced in practice — the gateway is not reporting rates

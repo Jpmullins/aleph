@@ -1,4 +1,8 @@
 @import "tailwindcss";
+/* The vendored @font-face rules come BEFORE the tokens that name the
+   families, so the faces exist by the time --font-ui/--font-mono/
+   --font-prose are resolved against them. */
+@import "./styles/fonts.css";
 @import "./styles/tokens.css";
 
 /*
@@ -187,10 +191,16 @@
   background: var(--surface-bg);
 }
 
-/* Assistant prose in the serif face (matches wiki/answer prose). */
+/* Assistant prose in the serif face (matches wiki/answer prose).
+ *
+ * This named "Source Serif 4" — a FOURTH face, never loaded by anything and
+ * absent from tokens.css, so the rule resolved to Georgia and the assistant
+ * read in a different serif from every other long piece of prose in the app. It
+ * reads the prose token now, which is the same Newsreader the reading region
+ * uses, so there is one serif and one place to change it. */
 .aleph-live-chat [data-message-role="assistant"],
 .aleph-live-chat .copilotKitAssistantMessage {
-  font-family: "Source Serif 4", Georgia, Cambria, "Times New Roman", serif;
+  font-family: var(--font-prose);
 }
 
 /* The inline-RGB override that used to live here is gone.
