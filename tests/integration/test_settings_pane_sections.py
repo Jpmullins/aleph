@@ -109,9 +109,11 @@ async def _seed_project(maker: Callable[[], AsyncSession], project_id: uuid.UUID
 async def test_the_settings_pane_carries_every_section_the_drawer_had(
     maker: Callable[[], AsyncSession], committed_project: uuid.UUID
 ) -> None:
-    """Six sections, and each one is a drawer section that had to survive.
+    """Seven sections, and each one is a drawer section that had to survive.
 
-    `fields` twice — Project and Cost — then Members, the model profile (which
+    `fields` twice — Project and Cost — then Members, the model GATEWAY
+    (WS-MEP-5: the drawer had no such control at all, which is why an operator
+    had to redeploy to change `LITELLM_BASE_URL`), the model profile (which
     absorbed `ModelProfileSection` AND `CapabilityBindings`), Connectors, and
     the plugin listing the drawer could not have had.
     """
@@ -130,6 +132,7 @@ async def test_the_settings_pane_carries_every_section_the_drawer_had(
         "fields",
         "fields",
         "members",
+        "gateway_endpoints",
         "model_profile",
         "connectors",
         "plugins",
@@ -277,3 +280,119 @@ async def test_a_non_owner_is_not_told_whether_a_key_is_set(
     assert connectors["connectors"], "no connectors seeded; this assertion would be vacuous"
     assert all(c["key_state"] == "unknown" for c in connectors["connectors"])
     assert all(c["status"] is None for c in connectors["connectors"])
+
+
+async def test_the_gateway_endpoint_section_reaches_an_owner_and_carries_no_key(
+    maker: Callable[[], AsyncSession], committed_project: uuid.UUID
+) -> None:
+    """WS-MEP-5. Five routes shipped with no screen; this is the screen's data.
+
+    Two assertions, and the second is the one with consequences. A settings
+    pane is STREAMED — every member with the pane open receives every byte of
+    it — so a section that carried even a prefix of `api_key_cipher` would be
+    disclosing a credential over SSE. `GatewayEndpoint.api_key_cipher` and its
+    plaintext must appear nowhere in the payload, and `has_api_key` must still
+    be true, or the test would pass just as happily against a section that
+    forgot to say a key exists.
+    """
+    import json
+
+    from aleph_db.models.gateway_endpoint import GatewayEndpoint
+
+    await _seed_project(maker, committed_project)
+    secret = "sk-selfcheck-this-must-never-be-streamed"
+    async with maker() as s:
+        s.add(
+            GatewayEndpoint(
+                project_id=committed_project,
+                name="probe-endpoint",
+                base_url="http://gateway.invalid",
+                api_key_cipher=secret.encode(),
+                cipher_scheme="libsodium-sealed",
+                key_version="v2",
+                is_default=True,
+                created_by=uuid.uuid4(),
+            )
+        )
+        await s.commit()
+
+    async with maker() as session:
+        messages = await _build_tab_messages(
+            session,
+            committed_project,
+            "settings",
+            {},
+            "settings",
+            principal=_owner(committed_project),
+            app_state=None,
+        )
+    section = next(s for s in _model(messages)["sections"] if s["kind"] == "gateway_endpoints")
+    assert section["can_edit"] is True
+    rows = section["endpoints"]
+    assert [r["name"] for r in rows] == ["probe-endpoint"]
+    assert rows[0]["has_api_key"] is True
+    assert rows[0]["base_url"] == "http://gateway.invalid"
+    # Over the WHOLE pane, not just this section: a key leaking through some
+    # other section is the same disclosure.
+    assert secret not in json.dumps(messages, default=str)
+    # A whitelist, not a `"api_key" not in ...` scan — `has_api_key` contains
+    # that substring, so the scan passed for the wrong reason. Adding a field
+    # to the section has to be a decision made here.
+    assert set(rows[0]) == {
+        "id",
+        "name",
+        "base_url",
+        "is_default",
+        "has_api_key",
+        "key_version",
+        "last_probe_at",
+        "last_probe_ok",
+        "last_probe_error",
+        "last_probe_model_count",
+    }
+
+
+async def test_a_non_owner_is_not_shown_the_gateway_endpoints(
+    maker: Callable[[], AsyncSession], committed_project: uuid.UUID
+) -> None:
+    """The five REST routes are OWNER-gated; the surface stream is not.
+
+    Sending the rows to every member would widen who can read a project's
+    gateway URLs — reconnaissance, and a security change no test would have
+    noticed. Withheld with a stated reason, not silently empty: an empty list
+    with no explanation is indistinguishable from "no endpoints configured".
+    """
+    await _seed_project(maker, committed_project)
+    async with maker() as s:
+        from aleph_db.models.gateway_endpoint import GatewayEndpoint
+
+        s.add(
+            GatewayEndpoint(
+                project_id=committed_project,
+                name="probe-endpoint",
+                base_url="http://gateway.invalid",
+                is_default=True,
+                created_by=uuid.uuid4(),
+            )
+        )
+        await s.commit()
+
+    async with maker() as session:
+        messages = await _build_tab_messages(
+            session,
+            committed_project,
+            "settings",
+            {},
+            "settings",
+            principal=_member(committed_project),
+            app_state=None,
+        )
+    section = next(s for s in _model(messages)["sections"] if s["kind"] == "gateway_endpoints")
+    assert section["can_edit"] is False
+    assert section["endpoints"] == []
+    assert "owner" in section["blurb"].lower()
+    # The URL is the thing being withheld; it must not survive anywhere in the
+    # pane the non-owner receives.
+    import json
+
+    assert "gateway.invalid" not in json.dumps(messages, default=str)

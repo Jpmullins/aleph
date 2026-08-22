@@ -337,6 +337,102 @@ async def _gateway_section_data(app_state: Any) -> tuple[dict[str, Any], list[An
     return ({"reachable": True, "model_count": len(models), "note": note}, models)
 
 
+async def _gateway_endpoints_section(
+    session: Any, project_id: UUID, principal: Any, app_state: Any
+) -> dict[str, Any]:
+    """Where this project's model calls go, and whether that address answers.
+
+    WS-MEP-5. Five routes existed under `/v1/projects/{id}/gateway-endpoints`
+    and `grep -rn 'gateway-endpoints' apps/web/src` returned 0 — a table, a
+    cipher, a resolver and a probe with no screen, which is the producer with
+    no consumer CLAUDE.md names as this codebase's dominant defect, reproduced
+    inside the change that was supposed to fix the configuration story.
+
+    Three rules this section keeps, each of which has a failure behind it:
+
+    * **The key is not here and cannot be.** `GatewayEndpoint.api_key_cipher`
+      never leaves the server, so `has_api_key` and `key_version` are the whole
+      answer. A masked hint would be a disclosure, and this pane is streamed —
+      an SSE frame is not a place to put even a prefix of a credential.
+    * **The write path is REST, not the ActionRouter.** Everything else in this
+      pane follows "reads are bound, writes are calls" for shape; here it is a
+      security property. A settings value dispatched as a card action lands in
+      `card_actions` AND in the append-only ledger, which is why
+      `settings_card` refuses a field that declares itself a secret. The key
+      goes to `PUT /v1/projects/{id}/gateway-endpoints` and nowhere else.
+    * **A non-owner is told, not shown.** The five REST routes are
+      OWNER-gated; the surface stream is open to every member. Rendering the
+      rows to everybody would widen who can read a project's gateway URLs,
+      which is reconnaissance. `can_edit` is false and the list is empty, with
+      a line saying why — the drawer's habit of taking a 403 and drawing
+      nothing is what made the connectors panel look like "no connectors".
+
+    `last_probe_error` is carried through verbatim. "Could not connect" sends
+    an operator to look at the network when the gateway said `invalid api key`.
+    """
+    from aleph_db.models.gateway_endpoint import GatewayEndpoint
+    from aleph_security.roles import ProjectRole, rank
+
+    role = principal.role_in(project_id) if principal is not None else None
+    is_owner = role is not None and rank(role) >= rank(ProjectRole.OWNER.value)
+
+    settings = getattr(app_state, "settings", None)
+    fallback = getattr(settings, "litellm_base_url", None) if settings is not None else None
+
+    if not is_owner:
+        return {
+            "kind": "gateway_endpoints",
+            "title": "Model gateway",
+            "blurb": (
+                "Which OpenAI-compatible endpoint this project's model calls go to. "
+                "Reading and changing endpoints is owner-only, so this list is not "
+                "shown to you — it is withheld, not empty."
+            ),
+            "can_edit": False,
+            "endpoints": [],
+            "fallback_base_url": None,
+        }
+
+    rows = list(
+        (
+            await session.execute(
+                select(GatewayEndpoint)
+                .where(GatewayEndpoint.project_id == project_id)
+                .order_by(GatewayEndpoint.name)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    return {
+        "kind": "gateway_endpoints",
+        "title": "Model gateway",
+        "blurb": (
+            "Aleph serves no models. Point it at any OpenAI-compatible endpoint here; the "
+            "key is encrypted per project and is never sent back to this screen. Test "
+            "connection reports what the endpoint itself said."
+        ),
+        "can_edit": True,
+        "fallback_base_url": fallback,
+        "endpoints": [
+            {
+                "id": str(r.id),
+                "name": r.name,
+                "base_url": r.base_url,
+                "is_default": bool(r.is_default),
+                "has_api_key": r.api_key_cipher is not None,
+                "key_version": r.key_version,
+                "last_probe_at": (None if r.last_probe_at is None else r.last_probe_at.isoformat()),
+                "last_probe_ok": r.last_probe_ok,
+                "last_probe_error": r.last_probe_error,
+                "last_probe_model_count": r.last_probe_model_count,
+            }
+            for r in rows
+        ],
+    }
+
+
 async def _model_profile_section(session: Any, project_id: UUID, app_state: Any) -> dict[str, Any]:
     """Profile templates, the current binding per capability, and the options.
 
@@ -614,6 +710,7 @@ async def _project_settings_messages(
                 {"id": str(m.id), "user_id": str(m.user_id), "role": m.role} for m in members
             ],
         },
+        await _gateway_endpoints_section(session, project_id, principal, app_state),
         await _model_profile_section(session, project_id, app_state),
         await _connectors_section(session, project_id, principal, app_state),
         _plugins_section(),

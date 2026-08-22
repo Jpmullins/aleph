@@ -31,10 +31,14 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { api, ApiError } from "@/lib/api";
+import { api, errMsg } from "@/lib/api";
 import { useWorkspaceUI } from "@/lib/workspace-ui";
 
 import { useSurface } from "../surface-context";
+import {
+  GatewayEndpoints,
+  type GatewayEndpointRow,
+} from "./GatewayEndpointsSection";
 import type { RendererProps } from "./_shared";
 
 interface FieldRow {
@@ -88,6 +92,12 @@ interface Section {
   capabilities?: CapabilityRow[];
   connectors?: ConnectorRow[];
   plugins?: { id: string; title: string; description: string; trust: string }[];
+  /** WS-MEP-5's section: the project's model-gateway rows. `can_edit` is false
+   *  for a non-owner — the REST routes are owner-gated and the surface stream
+   *  is not, so the list is withheld with a reason rather than sent. */
+  can_edit?: boolean;
+  endpoints?: GatewayEndpointRow[];
+  fallback_base_url?: string | null;
   chain?: {
     ok: boolean;
     count: number;
@@ -123,14 +133,6 @@ interface SettingsProps {
  *  the binding object, and `?? []` lets that through. */
 function arr<T>(value: T[] | undefined): T[] {
   return Array.isArray(value) ? value : [];
-}
-
-function errMsg(err: unknown): string {
-  if (err instanceof ApiError) {
-    if (err.status === 403) return "Owner access required.";
-    return `Failed (${err.status}).`;
-  }
-  return "Something went wrong.";
 }
 
 export function SettingsSurface({ component }: RendererProps) {
@@ -193,6 +195,8 @@ function SectionBody({ section, projectId }: { section: Section; projectId: stri
       return <Fields rows={arr(section.rows)} />;
     case "members":
       return <Members members={arr(section.members)} />;
+    case "gateway_endpoints":
+      return <GatewayEndpoints section={section} projectId={projectId} />;
     case "model_profile":
       return <ModelProfile section={section} projectId={projectId} />;
     case "connectors":

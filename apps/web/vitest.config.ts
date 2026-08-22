@@ -46,15 +46,21 @@ export default mergeConfig(
        * provider and no number, so "the web app has tests now" was a count of
        * tests and said nothing about how much of the app any of them touch.
        *
-       * Measured 2026-08-22 over 216 tests in 23 files, with exactly the
+       * Measured 2026-08-22 over 225 tests in 24 files, with exactly the
        * include/exclude below:
-       *   statements 38.14% (605/1586) · branches 24.51% (344/1403)
-       *   functions  30.87% (159/515)  · lines    39.27% (562/1431)
+       *   statements 39.47% (649/1644) · branches 26.33% (385/1462)
+       *   functions  32.53% (176/541)  · lines    40.69% (606/1489)
        *
        * The thresholds sit ~1.5 points under each of those. Low enough that
        * deleting one small test does not fail the build, high enough that
        * deleting a suite does — a ratchet, not an aspiration. Raise them with
        * the coverage, never to match a number somebody wants to see.
+       *
+       * Measured, not asserted: dropping `SurfaceStreamProvider.test.tsx`
+       * alone takes statements to 32.78% and fails all four. The provider that
+       * evaluates these is `@vitest/coverage-v8`, an OPTIONAL peer of vitest —
+       * it was absent, so the four numbers below were a comment nothing could
+       * read, and `pnpm test:coverage` answered `MISSING DEPENDENCY`.
        *
        * `enabled` is deliberately absent: coverage runs on `--coverage`, so
        * `pnpm test` stays fast and this block costs nothing until asked for.
@@ -71,10 +77,10 @@ export default mergeConfig(
         include: ["src/**/*.{ts,tsx}"],
         exclude: ["src/**/*.test.{ts,tsx}", "src/a2ui/catalog.ts", "src/vite-env.d.ts"],
         thresholds: {
-          statements: 36,
-          branches: 23,
-          functions: 29,
-          lines: 37,
+          statements: 38,
+          branches: 24,
+          functions: 31,
+          lines: 39,
         },
       },
     },

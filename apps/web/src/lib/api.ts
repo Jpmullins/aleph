@@ -53,6 +53,23 @@ export function apiUrl(path: string): string {
   return `${baseUrl}${path}`;
 }
 
+/**
+ * An `ApiError` as a sentence a person can act on.
+ *
+ * Lives beside `ApiError` rather than in the one view that first needed it:
+ * `SettingsSurface.tsx` owned the only copy, and the gateway-endpoints section
+ * WS-MEP-5 adds needs the same three answers. Two copies of "what does a 403
+ * mean here" is how one of them ends up saying `Failed (403).` to an owner who
+ * simply is not one.
+ */
+export function errMsg(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 403) return "Owner access required.";
+    return `Failed (${err.status}).`;
+  }
+  return "Something went wrong.";
+}
+
 export const api = {
   get<T>(path: string): Promise<T> {
     return request("GET", path);
