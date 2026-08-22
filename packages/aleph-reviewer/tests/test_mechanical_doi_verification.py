@@ -23,6 +23,7 @@ from aleph_reviewer.models import ReviewFinding
 from aleph_rks.models import Source
 from aleph_scholar import DoiVerdict, ScholarUpstreamError
 from aleph_security.principal import Principal
+from aleph_wiki.belief_service import claim_key_for
 from aleph_wiki.models import Citation, SourcePage, WikiClaim, WikiRevision
 
 pytestmark = pytest.mark.integration
@@ -132,12 +133,26 @@ async def _seed_revision(
             extracted_at=datetime.now(UTC),
         )
         session.add(source_page)
+        claim_text = "A claim backed by the seeded source."
         claim = WikiClaim(
             id=uuid7(),
             project_id=project_id,
             page_id=page_id,
             revision_id=revision.id,
-            text="A claim backed by the seeded source.",
+            text=claim_text,
+            # Keyed, like a row the production write path would produce.
+            #
+            # `BeliefService.upsert_claim` derives `claim_key` from the
+            # proposition on every write, and it is the column claim IDENTITY
+            # rests on (WS-RS8 c3). Leaving it NULL here made the fixture
+            # describe a row the pipeline cannot emit — and, because this test
+            # commits against the live database and does not clean up, every
+            # run added two rows to the very health count that asks "how many
+            # claims have no identity". Measured while auditing the rebuilt
+            # image: the only NULL-key claims written after the two stale
+            # writers were gone came from HERE, two per run, in throwaway
+            # uuid4 projects.
+            claim_key=claim_key_for(claim_text),
             created_by=user_id,
         )
         session.add(claim)

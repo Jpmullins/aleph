@@ -148,3 +148,87 @@ def test_inspect_finds_the_signature_the_eval_relies_on() -> None:
     swap of chunk text and title."""
     params = inspect.signature(embedding_text).parameters
     assert all(p.kind is inspect.Parameter.KEYWORD_ONLY for p in params.values())
+
+
+def test_the_report_prints_the_size_of_the_set_it_measured() -> None:
+    """WS-RS5 c1's second clause: the floor is on a number nobody could see.
+
+    The criterion is ">= 300 documents and >= 150 questions ... and the eval
+    run against it reports its size". Every metric was printed and the size was
+    not, so a saturated 12-document toy and a 740-document generated set
+    rendered identically apart from the numbers — and the difference between
+    "retrieval got better" and "the ruler got shorter" was invisible.
+    """
+    report = retrieval_eval.Report(
+        mode="hybrid",
+        k=8,
+        total=200,
+        hits=160,
+        by_phrasing={},
+        misses=[],
+        corpus_documents=740,
+        corpus_chunks=4245,
+        corpus_questions=208,
+        dataset_dir="/tmp/generated-set",
+    )
+    rendered = report.render()
+    assert "740 documents" in rendered
+    assert "4245 chunks" in rendered
+    assert "208 questions" in rendered
+    assert "/tmp/generated-set" in rendered
+
+
+def test_the_claim_arm_does_not_report_a_chunk_count_of_zero() -> None:
+    """A zero beside a real number reads as an empty index.
+
+    The claim arm seeds no chunks at all and prints its own `seeded N claims`
+    line. `0 chunks` there would be read as "the corpus is empty", which is the
+    same confusion between an absent measurement and a measured absence that
+    `abstain n/a` exists to avoid.
+    """
+    report = retrieval_eval.Report(
+        mode="hybrid",
+        k=8,
+        total=10,
+        hits=2,
+        by_phrasing={},
+        misses=[],
+        surface=retrieval_eval.CLAIMS,
+        corpus_documents=740,
+        corpus_chunks=0,
+        corpus_questions=208,
+    )
+    rendered = report.render()
+    assert "740 documents" in rendered
+    assert "chunks" not in rendered
+
+
+def test_the_reported_size_is_measured_and_cannot_be_a_literal() -> None:
+    """The field existing is not the field being filled.
+
+    A `corpus_documents: int = 0` that `run()` never binds renders `0 documents`
+    for every set ever measured, which is worse than printing nothing: it is a
+    number, so it reads as having been counted. This asserts the `Report(...)`
+    that `run()` actually constructs binds each size keyword to an EXPRESSION —
+    `len(corpus)`, not `740` and not `0`.
+    """
+    tree = ast.parse(EVAL_SRC.read_text())
+    run = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "run"
+    )
+    constructed = [
+        node
+        for node in ast.walk(run)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "Report"
+    ]
+    assert len(constructed) == 1, "run() should build exactly one Report"
+    bound = {kw.arg: kw.value for kw in constructed[0].keywords}
+    for field_name in ("corpus_documents", "corpus_chunks", "corpus_questions"):
+        assert field_name in bound, f"run() does not report {field_name}"
+        assert not isinstance(bound[field_name], ast.Constant), (
+            f"{field_name} is a literal — it would report the same size for every set"
+        )

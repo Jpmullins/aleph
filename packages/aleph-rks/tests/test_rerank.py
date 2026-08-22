@@ -644,6 +644,7 @@ async def test_the_adaptive_reranker_falls_back_on_a_5xx_not_only_a_4xx() -> Non
     class _Native:
         name = "cross-encoder"
         calls = 0
+        skipped_reason: str | None = None
 
         async def rank(self, *, query: str, hits: Sequence[ChunkHit], top_k: int) -> list[ChunkHit]:
             type(self).calls += 1
@@ -652,6 +653,11 @@ async def test_the_adaptive_reranker_falls_back_on_a_5xx_not_only_a_4xx() -> Non
     class _Fallback:
         name = "llm-listwise"
         calls = 0
+        # Part of the `Reranker` protocol, and the wrapper now reads it: a
+        # delegate that degraded during `rank` has to be able to say so, and a
+        # stub without the attribute is a stub that does not implement the
+        # protocol it is standing in for.
+        skipped_reason: str | None = None
 
         async def rank(self, *, query: str, hits: Sequence[ChunkHit], top_k: int) -> list[ChunkHit]:
             type(self).calls += 1
@@ -1085,3 +1091,136 @@ async def test_the_unparseable_log_carries_the_reply_that_could_not_be_read(
         "has to be able to SEE that is what happened"
     )
     assert entry["candidates"] == 5
+
+
+# ---------------------------------------------------------------------------
+# `skipped_reason` is a verdict about ONE search — WS-RS6
+# ---------------------------------------------------------------------------
+#
+# Two halves of one defect, and each is invisible without the other.
+#
+# `_search_and_rerank` reads `reranker.skipped_reason` BEFORE the call and, when
+# it is set, returns fused order without reranking at all. So a value left over
+# from a previous unreadable reply does not merely mislabel one trace — it
+# switches the reranker off for every later search in the process. Measured on
+# the 208-question generated set: 8 replies came back unreadable, and the first
+# of them would have silently disabled the other 200.
+#
+# It also re-reads the field AFTER the call, so a reranker that degraded DURING
+# `rank` lands on the span. Production always holds an `AdaptiveReranker`, whose
+# own `skipped_reason` nothing ever set — so that second read could never be
+# anything but `None`, and the defence was written, tested against the delegate,
+# and inert on the wrapper.
+
+
+class _ReplyingClient:
+    """A gateway that returns a different canned reply on each call."""
+
+    def __init__(self, *contents: str) -> None:
+        self.contents = list(contents)
+        self.calls = 0
+
+    async def chat(self, **_kw: Any) -> ChatResponse:
+        content = self.contents[min(self.calls, len(self.contents) - 1)]
+        self.calls += 1
+        return ChatResponse(
+            id="fake",
+            model="a-judge-model",
+            choices=[
+                ChatChoice(
+                    index=0,
+                    message=ChatMessage(role="assistant", content=content),
+                    finish_reason="stop",
+                )
+            ],
+            usage=ChatUsage(),
+            cost_usd="0",
+            cache_savings_usd="0",
+            latency_ms=1,
+            model_call_id=str(uuid4()),
+        )
+
+
+@pytest.mark.asyncio
+async def test_one_unreadable_reply_does_not_disable_the_next_search() -> None:
+    """The latch. Without the per-call reset this is how the feature dies."""
+    client = _ReplyingClient(
+        '{"relevant": [{"id": "4", "score": 2}]}',  # unreadable — a string id
+        '{"relevant": [{"id": 2, "score": 3}]}',  # perfectly good
+    )
+    reranker = ListwiseLlmReranker(
+        client=cast("LiteLLMClient", client),
+        principal=PRINCIPAL,
+        project_id=PROJECT,
+        profile_bindings=BINDINGS,
+    )
+
+    await reranker.rank(query="q", hits=hits(5), top_k=5)
+    assert reranker.skipped_reason is not None, "an unreadable reply must be recorded"
+
+    ranked = await reranker.rank(query="q", hits=hits(5), top_k=5)
+    assert reranker.skipped_reason is None, (
+        "the previous search's verdict outlived it — `_search_and_rerank` reads "
+        "this BEFORE calling rank and would never rerank again"
+    )
+    assert ranked[0].text == "passage 2", "the second judgement was not applied"
+
+
+@pytest.mark.asyncio
+async def test_the_adaptive_wrapper_reports_its_delegates_degradation() -> None:
+    """The wrapper is what production holds, so the wrapper is what is read."""
+    from aleph_rks.rerank import AdaptiveReranker
+
+    class _DeadNative:
+        name = "cross-encoder"
+        skipped_reason: str | None = None
+
+        async def rank(self, **_kw: Any) -> list[ChunkHit]:
+            raise RerankUnsupported("no reranker on this gateway")
+
+    fallback = ListwiseLlmReranker(
+        client=cast("LiteLLMClient", _ReplyingClient('{"relevant": [{"id": "4", "score": 2}]}')),
+        principal=PRINCIPAL,
+        project_id=PROJECT,
+        profile_bindings=BINDINGS,
+    )
+    adaptive = AdaptiveReranker(native=cast("Any", _DeadNative()), fallback=fallback)
+
+    await adaptive.rank(query="q", hits=hits(5), top_k=5)
+
+    assert fallback.skipped_reason is not None
+    assert adaptive.skipped_reason == fallback.skipped_reason, (
+        "the search's span says the reranker judged, and its reply was garbage"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_adaptive_wrapper_clears_the_reason_when_the_reply_is_good() -> None:
+    """A sticky reason on the wrapper is the same latch one level up."""
+    from aleph_rks.rerank import AdaptiveReranker
+
+    class _DeadNative:
+        name = "cross-encoder"
+        skipped_reason: str | None = None
+
+        async def rank(self, **_kw: Any) -> list[ChunkHit]:
+            raise RerankUnsupported("no reranker on this gateway")
+
+    fallback = ListwiseLlmReranker(
+        client=cast(
+            "LiteLLMClient",
+            _ReplyingClient(
+                '{"relevant": [{"id": "4", "score": 2}]}',
+                '{"relevant": [{"id": 1, "score": 3}]}',
+            ),
+        ),
+        principal=PRINCIPAL,
+        project_id=PROJECT,
+        profile_bindings=BINDINGS,
+    )
+    adaptive = AdaptiveReranker(native=cast("Any", _DeadNative()), fallback=fallback)
+
+    await adaptive.rank(query="q", hits=hits(5), top_k=5)
+    assert adaptive.skipped_reason is not None
+    await adaptive.rank(query="q", hits=hits(5), top_k=5)
+    assert adaptive.skipped_reason is None

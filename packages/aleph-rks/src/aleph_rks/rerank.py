@@ -575,6 +575,14 @@ class ListwiseLlmReranker:
     skipped_reason: str | None = None
 
     async def rank(self, *, query: str, hits: Sequence[ChunkHit], top_k: int) -> list[ChunkHit]:
+        # Cleared per call. `skipped_reason` describes THIS search, and
+        # `_search_and_rerank` reads it BEFORE calling `rank` and returns fused
+        # order without reranking when it is set — so a value left over from a
+        # previous unreadable reply does not merely mislabel one trace, it
+        # switches the reranker off for the rest of the process. Measured on
+        # the 208-question set: 8 replies were unreadable, and the first of them
+        # would have disabled the other 200.
+        self.skipped_reason = None
         if not hits:
             return []
         passages = "\n\n".join(f"[{i}] {h.text[:RERANK_SNIPPET_CHARS]}" for i, h in enumerate(hits))
@@ -698,7 +706,19 @@ class AdaptiveReranker:
                 self.name = self.native.name
                 return out
         self.name = self.fallback.name
-        return await self.fallback.rank(query=query, hits=hits, top_k=top_k)
+        out = await self.fallback.rank(query=query, hits=hits, top_k=top_k)
+        # The delegate's per-call verdict, carried out to the caller.
+        #
+        # `_search_and_rerank` re-reads `reranker.skipped_reason` after the call
+        # precisely so a reranker that degraded DURING `rank` — an unreadable
+        # reply, a cross-encoder that answered with nothing — lands on the span.
+        # That read was against THIS object, whose own field nothing ever set,
+        # so on the only path production takes it could never be anything but
+        # `None`: the defence was written, tested on the delegate, and inert on
+        # the wrapper. Copied rather than delegated through a property because
+        # the `Reranker` protocol declares a plain attribute.
+        self.skipped_reason = self.fallback.skipped_reason
+        return out
 
 
 #: Said in words, once, so the same sentence reaches the span, the log and any

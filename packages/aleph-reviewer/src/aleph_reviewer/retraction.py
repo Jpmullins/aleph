@@ -65,7 +65,8 @@ from aleph_observability.tracing import current_trace_id
 from aleph_reviewer.review_service import add_finding, finalize_run, start_run
 from aleph_rks.models import Source
 from aleph_wiki.belief_service import BeliefService
-from aleph_wiki.models import Citation, WikiClaim
+from aleph_wiki.derivation import DERIVED_FROM
+from aleph_wiki.models import Citation, ClaimEdge, WikiClaim
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -100,6 +101,18 @@ class RetractionImpact:
     #: claim derived from one of those, and so on. Carried so the ledger and the
     #: finding can say *how* a claim was reached rather than only that it was.
     depth_by_claim: dict[UUID, int] = field(default_factory=dict)
+    #: Whether this project has ANY `derived_from` edge for the walk to follow.
+    #:
+    #: "0 claims were derived from those" and "there is no derivation graph on
+    #: this instance" are the same output and are not remotely the same fact,
+    #: and today it is always the second: nothing in production writes
+    #: `derived_from` (WS-RS9 c4 — `claim_edges` holds two rows and both are
+    #: `supersedes`). Reported rather than inferred, because an absence standing
+    #: in for a state is the defect class this repository keeps shipping — a
+    #: dead embedder wrote no chunks and looked like a project nobody had
+    #: ingested into, and a retraction that reaches one hop out of two looks
+    #: exactly like a retraction nothing depended on.
+    derivation_graph_is_empty: bool = True
 
     @property
     def all_touched(self) -> set[UUID]:
@@ -147,11 +160,24 @@ def describe_impact(impact: RetractionImpact, *, short_id: str, reason: str) -> 
     by re-running the query is not a report.
     """
     deepest = max(impact.depth_by_claim.values(), default=0)
+    # The second hop's zero is qualified, always. Without this the sentence
+    # "0 derived from those" is written identically whether the walk found no
+    # dependants or whether there was no graph to walk, and only the first of
+    # those is a result. On this instance it is always the second.
+    second_hop = (
+        f"{len(impact.derived)} derived from those (deepest hop {deepest})"
+        if not impact.derivation_graph_is_empty
+        else (
+            "0 derived from those — NOT because nothing depends on them: this "
+            "project has no 'derived_from' edge at all, so the second hop had "
+            "no graph to walk (WS-RS9 c4)"
+        )
+    )
     return (
         f"Source {short_id} was retracted: {reason}. "
         f"Reached {len(impact.all_touched)} claim(s): "
         f"{len(impact.directly_cited)} citing it directly, "
-        f"{len(impact.derived)} derived from those (deepest hop {deepest}). "
+        f"{second_hop}. "
         f"{len(impact.unsupported)} left with no surviving support "
         f"(status={STATUS_UNSUPPORTED}); "
         f"{len(impact.weakened)} survive on independent evidence "
@@ -188,6 +214,13 @@ async def retraction_impact(session: AsyncSession, source_id: UUID) -> Retractio
     directly_cited = set(direct_rows)
     depth_by_claim: dict[UUID, int] = dict.fromkeys(directly_cited, 0)
 
+    # Asked once, cheaply, and it is the difference between a measurement and
+    # an assumption. `LIMIT 1` over the partial-index-able predicate, so the
+    # cost is a lookup and not a count.
+    has_edges = (
+        await session.execute(select(ClaimEdge.id).where(ClaimEdge.kind == DERIVED_FROM).limit(1))
+    ).first() is not None
+
     derived: set[UUID] = set()
     if directly_cited:
         # Recursive walk over derived_from, depth-capped and cycle-guarded by
@@ -197,13 +230,13 @@ async def retraction_impact(session: AsyncSession, source_id: UUID) -> Retractio
             WITH RECURSIVE downstream(claim_id, depth, path) AS (
                 SELECT e.src_claim_id, 1, ARRAY[e.dst_claim_id, e.src_claim_id]
                 FROM claim_edges e
-                WHERE e.kind = 'derived_from'
+                WHERE e.kind = :derived_kind
                   AND e.dst_claim_id = ANY(:roots)
                 UNION ALL
                 SELECT e.src_claim_id, d.depth + 1, d.path || e.src_claim_id
                 FROM claim_edges e
                 JOIN downstream d ON e.dst_claim_id = d.claim_id
-                WHERE e.kind = 'derived_from'
+                WHERE e.kind = :derived_kind
                   AND d.depth < :max_depth
                   AND NOT (e.src_claim_id = ANY(d.path))
             )
@@ -212,7 +245,15 @@ async def retraction_impact(session: AsyncSession, source_id: UUID) -> Retractio
         )
         rows = await session.execute(
             walk,
-            {"roots": list(directly_cited), "max_depth": MAX_DERIVATION_DEPTH},
+            {
+                "roots": list(directly_cited),
+                "max_depth": MAX_DERIVATION_DEPTH,
+                # The kind, from the ONE place it is named. It was spelled as a
+                # SQL literal here and as `DERIVED_FROM` in the writer, which is
+                # the third of the three places `aleph_wiki.derivation` warns
+                # cannot import each other — and a typo in either is silent.
+                "derived_kind": DERIVED_FROM,
+            },
         )
         for claim_id, depth in rows.all():
             if claim_id in directly_cited:
@@ -224,7 +265,9 @@ async def retraction_impact(session: AsyncSession, source_id: UUID) -> Retractio
 
     touched = directly_cited | derived
     if not touched:
-        return RetractionImpact(set(), set(), set(), set(), {})
+        return RetractionImpact(
+            set(), set(), set(), set(), {}, derivation_graph_is_empty=not has_edges
+        )
 
     # The declined branch: does anything else still support it?
     surviving = (
@@ -251,6 +294,7 @@ async def retraction_impact(session: AsyncSession, source_id: UUID) -> Retractio
         unsupported=touched - still_supported,
         weakened=touched & still_supported,
         depth_by_claim=depth_by_claim,
+        derivation_graph_is_empty=not has_edges,
     )
 
 

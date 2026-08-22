@@ -127,6 +127,28 @@ class Report:
     #: Claims that were never seeded because the dataset carries none.
     claims_seeded: int = 0
     edges_seeded: int = 0
+    #: How big the measured set actually is. WS-RS5 c1 puts a floor on it —
+    #: ">= 300 documents and >= 150 questions" — and until 2026-08-22 the run
+    #: printed neither, so the number the floor is about was invisible in the
+    #: output that is supposed to report it. A saturated 12-document toy and a
+    #: 740-document generated set rendered identically apart from the metrics,
+    #: which is the difference between "retrieval got better" and "the ruler
+    #: got shorter".
+    corpus_documents: int = 0
+    corpus_chunks: int = 0
+    corpus_questions: int = 0
+    #: Chunk arm only. How many returned passages carried a `section_path`, out
+    #: of how many were returned. This is what a layout-aware PDF parser buys
+    #: directly (WS-RS11): the chunker finds a section by looking for a markdown
+    #: heading, so a flat parser makes this structurally 0 and no ranking metric
+    #: notices — the passages are the same words either way, and only the reader
+    #: loses the ability to see where in the paper the answer came from.
+    labelled_hits: int = 0
+    returned_hits: int = 0
+    #: Where the set was read from. Printed because the path is an environment
+    #: variable (`ALEPH_RETRIEVAL_DATASET`): two runs of the same command can
+    #: legitimately measure two different sets, and the output has to say which.
+    dataset_dir: str = ""
 
     @property
     def recall(self) -> float:
@@ -136,10 +158,33 @@ class Report:
     def abstain_rate(self) -> float:
         return self.abstain_correct / self.abstain_total if self.abstain_total else 0.0
 
+    @property
+    def section_label_rate(self) -> float:
+        return self.labelled_hits / self.returned_hits if self.returned_hits else 0.0
+
+    def _corpus_line(self) -> str:
+        """Documents, searchable units and questions — plus the set's path.
+
+        Written as one line rather than three because it is context, not a
+        result. `chunks` is omitted on the claim arm: that arm seeds no chunks
+        and prints its own `seeded N claims` line, and reporting a chunk count
+        of zero beside it would read as an empty index.
+        """
+        parts = [f"{self.corpus_documents} documents"]
+        if self.surface == CHUNKS:
+            parts.append(f"{self.corpus_chunks} chunks")
+        parts.append(f"{self.corpus_questions} questions")
+        return " · ".join(parts) + (f"  [{self.dataset_dir}]" if self.dataset_dir else "")
+
     def render(self) -> str:
         lines = [
             f"{self.surface} recall@{self.k} = {self.recall:.2f}  ({self.hits}/{self.total})",
             f"mode: {self.mode}",
+            # The size of the ruler, before any number measured with it. The
+            # chunk count is the honest one for the chunk arm — it is what
+            # `search_corpus` searched — and the document count is what
+            # WS-RS5 c1's ">= 300" floor is stated against, so both are here.
+            f"  corpus    {self._corpus_line()}",
             f"  nDCG@{NDCG_K}  {self.ndcg:.3f}",
             f"  MRR       {self.mrr:.3f}",
         ]
@@ -162,6 +207,12 @@ class Report:
             lines.append(
                 "  recall    "
                 + "  ".join(f"@{n} {v:.2f}" for n, v in sorted(self.recall_at.items()))
+            )
+        if self.surface == CHUNKS:
+            lines.append(
+                f"  sections  {self.section_label_rate:.2f}  "
+                f"({self.labelled_hits}/{self.returned_hits} retrieved passages "
+                "carry a section label)"
             )
         if self.abstain_total:
             lines.append(
@@ -526,6 +577,7 @@ async def _seed_claims(
     project_id: Any,
     mode: str,
     embedding_model: tuple[str, str] | None,
+    dataset: Path,
 ) -> tuple[dict[UUID, str], int]:
     """Seed the claim surface from the dataset, and return `claim_id -> doc_id`.
 
@@ -566,7 +618,7 @@ async def _seed_claims(
         )
         raise SystemExit(msg)
 
-    claims_path = DATASET_DIR / "claims.jsonl"
+    claims_path = dataset / "claims.jsonl"
     if not claims_path.exists():
         msg = (
             f"{claims_path} does not exist, so --surface claims has nothing to search. "
@@ -585,7 +637,7 @@ async def _seed_claims(
         )
         raise NoClaimLayer(msg)
 
-    edge_path = DATASET_DIR / "claim_edges.jsonl"
+    edge_path = dataset / "claim_edges.jsonl"
     edge_rows = _load(edge_path) if edge_path.exists() else []
 
     vectors: list[list[float]] | None = None
@@ -658,7 +710,17 @@ async def run(
     rerank: bool = False,
     surface: str = CHUNKS,
     walk_graph: bool = True,
+    dataset_dir: Path | None = None,
 ) -> Report:
+    """One measurement over one set.
+
+    `dataset_dir` overrides `ALEPH_RETRIEVAL_DATASET` for this call only. It is
+    a parameter and not another environment read because WS-RS11 c5 needs TWO
+    sets measured inside ONE process — the same corpus parsed by the layout
+    normalizer and by the flat one — and re-importing this module per arm to
+    pick up a changed environment variable is how a comparison ends up
+    measuring the same set twice without saying so.
+    """
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     from aleph_core.ids import uuid7
@@ -673,7 +735,8 @@ async def run(
         msg = "ALEPH_DATABASE_URL or DATABASE_URL is required"
         raise SystemExit(msg)
 
-    corpus = _load(DATASET_DIR / "corpus.jsonl")
+    dataset = dataset_dir or DATASET_DIR
+    corpus = _load(dataset / "corpus.jsonl")
     questions = [
         Question(
             id=row["id"],
@@ -682,7 +745,7 @@ async def run(
             phrasing=row.get("phrasing", "unspecified"),
             category=row.get("category", "factual"),
         )
-        for row in _load(DATASET_DIR / "questions.jsonl")
+        for row in _load(dataset / "questions.jsonl")
     ]
 
     engine = create_async_engine(url)
@@ -711,12 +774,14 @@ async def run(
         claim_to_doc: dict[UUID, str] = {}
         claims_seeded = 0
         edges_seeded = 0
+        corpus_chunks = 0
 
         if surface == CHUNKS:
             seeded: list[tuple[str, Chunk]] = []
             for doc in corpus:
                 for chunk in chunk_markdown(doc["text"]):
                     seeded.append((doc["doc_id"], chunk))
+            corpus_chunks = len(seeded)
 
             # Embed the corpus in one batch. Seeding zero vectors while
             # querying a real one would leave the dense leg ranking nothing and
@@ -761,6 +826,7 @@ async def run(
                 embedding_model=(
                     (await _embedding_model(maker)) if mode.startswith("hybrid") else None
                 ),
+                dataset=dataset,
             )
             claims_seeded = len(claim_to_doc)
 
@@ -773,6 +839,8 @@ async def run(
         abstain_correct = 0
         graph_hop_results = 0
         graph_hop_only_hits = 0
+        labelled_hits = 0
+        returned_hits = 0
 
         async with maker() as session:
             for question in questions:
@@ -805,6 +873,8 @@ async def run(
                     )
                     ordered = [h.source_id for h in found]
                     non_empty = bool(found)
+                    returned_hits += len(found)
+                    labelled_hits += sum(1 for h in found if h.section_path)
                 else:
                     claim_hits = await search_claims(
                         session,
@@ -887,6 +957,12 @@ async def run(
             graph_hop_enabled=walk_graph and surface == CLAIMS,
             claims_seeded=claims_seeded,
             edges_seeded=edges_seeded,
+            labelled_hits=labelled_hits,
+            returned_hits=returned_hits,
+            corpus_documents=len(corpus),
+            corpus_chunks=corpus_chunks,
+            corpus_questions=len(questions),
+            dataset_dir=str(dataset),
         )
     finally:
         # The fixture project is scratch; leave nothing behind.

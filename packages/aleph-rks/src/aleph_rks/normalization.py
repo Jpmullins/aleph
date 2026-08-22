@@ -105,7 +105,9 @@ class DoclingNormalizer:
         try:
             import importlib.metadata as _md
 
-            from docling.document_converter import DocumentConverter
+            from docling.datamodel.base_models import InputFormat
+            from docling.datamodel.pipeline_options import PdfPipelineOptions
+            from docling.document_converter import DocumentConverter, PdfFormatOption
         except Exception as exc:  # pragma: no cover - exercised by the registry
             msg = (
                 "docling is not installed. Install the extra: "
@@ -118,7 +120,34 @@ class DoclingNormalizer:
         except Exception:
             version = "unknown"
         self.parser_version = f"docling@{version}"
-        self._converter = DocumentConverter()
+
+        # **OCR off, deliberately.** docling defaults it ON, and the default is
+        # wrong here twice over.
+        #
+        # *It fails closed on a fresh install.* `DocumentConverter()` with the
+        # default options raises "No OCR engine found" when no OCR extra is
+        # installed — and `normalize_bytes` catches `NormalizationFailed` for
+        # PDFs and falls back to pdfminer, so the symptom is not an error. It is
+        # every PDF quietly coming out FLAT with `parser="pdfminer"`, which is
+        # the exact state WS-RS11 exists to end. Measured in the built worker
+        # image before this line: `parser=pdfminer ... heading_count 0`.
+        #
+        # *And it is the wrong job.* Aleph's corpus is born-digital papers,
+        # where OCR adds minutes per document and finds nothing the text layer
+        # did not already have. A scan has no text layer, and Aleph already has
+        # the right answer for that: `OCR_REQUIRED` is raised below on
+        # characters-per-page, and `aleph_rks.indexing` reads it. Flagging a
+        # scan for a human beats silently running a second-rate OCR over it and
+        # indexing the result as though it were the paper.
+        #
+        # Table structure stays ON: it is what the layout parser is FOR, and it
+        # runs on the text layer.
+        options = PdfPipelineOptions()
+        options.do_ocr = False
+        options.do_table_structure = True
+        self._converter = DocumentConverter(
+            format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)}
+        )
 
     def normalize(self, data: bytes) -> NormalizationResult:
         import re

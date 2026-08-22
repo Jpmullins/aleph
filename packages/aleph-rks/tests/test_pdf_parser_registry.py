@@ -158,3 +158,32 @@ def test_the_healthy_case_stays_silent(monkeypatch: pytest.MonkeyPatch) -> None:
         normalization.pdf_normalizer("pypdf")
 
     assert not [entry for entry in logs if entry.get("event") == "rks.pdf_parser.degraded"]
+
+
+def test_the_layout_parser_does_not_ask_for_an_ocr_engine() -> None:
+    """docling defaults `do_ocr=True`, and that default silently un-does WS-RS11.
+
+    `DocumentConverter()` with the default options raises "No OCR engine found"
+    when no OCR extra is installed. `normalize_bytes` catches
+    `NormalizationFailed` for PDFs and falls back to pdfminer — so the symptom
+    is NOT an error anyone sees. It is every PDF coming out flat with
+    `parser="pdfminer"`, which is the state this workstream exists to end.
+    Measured in the built worker image before the option was set:
+
+        parser=pdfminer  heading_count=0  table_count=0  40/40 chunks unsectioned
+
+    Table structure stays on: it is the thing the layout parser is for, and it
+    runs off the text layer rather than off an OCR pass.
+    """
+    docling = pytest.importorskip("docling", reason="the pdf-layout extra is not installed")
+    assert docling  # the import is the point; keeps the linter quiet
+
+    from aleph_rks.normalization import DoclingNormalizer
+
+    normalizer = DoclingNormalizer()
+    from docling.datamodel.base_models import InputFormat
+
+    options = normalizer._converter.format_to_options[InputFormat.PDF].pipeline_options
+    assert options is not None
+    assert options.do_ocr is False, "docling would demand an OCR engine and fall back to pdfminer"
+    assert options.do_table_structure is True, "tables are the reason the layout parser is here"

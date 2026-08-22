@@ -253,8 +253,17 @@ services:
     # Ingest normalizes whole documents in memory (PDF → markdown → chunks), so
     # a single pathological source is the realistic way this grows without
     # bound.
-    mem_limit: ${WORKERS_MEM_LIMIT:-2g}
-    memswap_limit: ${WORKERS_MEM_LIMIT:-2g}
+    #
+    # 4g, not 2g, since WS-RS11 put the layout-aware PDF parser in this image.
+    # MEASURED in the built image on one real 10-page paper: peak RSS 2,263 MB —
+    # docling loads a layout model and TableFormer into the worker process. At
+    # the old 2g ceiling the kernel OOM-kills the worker on its first PDF, and
+    # an OOM kill is not an exception: `except NormalizationFailed` cannot see
+    # it, no failure is recorded against the source, and arq simply loses the
+    # job. Raised in the default rather than left to the operator, because the
+    # failure only appears once ingest is already wired up.
+    mem_limit: ${WORKERS_MEM_LIMIT:-4g}
+    memswap_limit: ${WORKERS_MEM_LIMIT:-4g}
     healthcheck:
       # arq's own health check, not a pgrep: it reads the health key the worker
       # writes to Redis, so it reports whether the worker is PROCESSING rather
