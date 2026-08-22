@@ -115,9 +115,20 @@ async function main() {
 
   try {
     if (!up) {
-      console.log("SKIP: the runtime did not start (is `npx tsx` available?)");
+      // Exit 1, not 0. `run_shell` in `scripts/acceptance.sh` has no way to
+      // record a SKIP for a row it already decided to run: it reads the exit
+      // status and prints the last line, so `return 0` here made row F5 report
+      // PASS with "SKIP: the runtime did not start" as its detail, and a bridge
+      // that cannot boot at all was the strongest possible version of the
+      // defect this probe exists to catch. The row is already guarded on `node`
+      // being present (acceptance.sh skips F5 otherwise), so reaching here
+      // means node is installed and the bridge still would not come up.
       console.log(log.slice(-600));
-      return 0;
+      console.log(
+        "FAIL: the runtime did not start after 30s — install its deps " +
+          "(`pnpm -C apps/copilot-runtime install`) or check the log above",
+      );
+      return 1;
     }
     console.log("runtime bridge probe");
 

@@ -47,6 +47,34 @@ async def test_has_never_raises() -> None:
     assert c.has("undeclared") is False
 
 
+async def test_has_is_false_for_an_undeclared_key_that_IS_provided() -> None:
+    """`has` answers "declared AND up", and the first half was untested.
+
+    `test_has_never_raises` above cannot tell the two apart: its store is empty,
+    so `has("undeclared")` is False because nothing provides it, not because
+    the key was never declared. Deleting the declaration check from `has` left
+    every kernel test green.
+
+    It matters because `has` is what probes are written against — `return ok()
+    if ctx.has(key) else problem(...)`. A `has` that ignores the declaration
+    lets a capability prove itself against a service it never asked for and is
+    not allowed to read, so the probe passes and the first real `ctx.get` of
+    that key raises `UndeclaredAccess` in production.
+    """
+    store, scope = Store(), EffectScope("p")
+    Context(owner="p", requires=frozenset(), store=store, scope=scope).provide("secrets", "S")
+
+    c = ctx({"db"}, store, EffectScope("c"))
+    assert c.has("secrets") is False, (
+        "has() reported a key this capability never declared. It is provided "
+        "and it is still not this capability's to see — `get` refuses it, so "
+        "`has` saying yes makes a probe pass on a read that cannot happen."
+    )
+    # And the pair that shows the assertion above is about the DECLARATION:
+    # the same key, declared, is True.
+    assert ctx({"secrets"}, store, EffectScope("c2")).has("secrets") is True
+
+
 async def test_private_names_stay_attribute_errors() -> None:
     """copy/pickle/the debugger must not be told they undeclared a capability."""
     c = ctx({"db"}, Store(), EffectScope("c"))

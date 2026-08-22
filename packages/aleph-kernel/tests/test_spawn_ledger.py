@@ -150,3 +150,28 @@ def test_an_unknown_spawn_is_refused_not_silently_created() -> None:
 
     with pytest.raises(SpawnDenied, match="unknown spawn"):
         ledger().get(uuid.uuid4())
+
+
+def test_a_negative_spend_is_refused_rather_than_crediting_the_budget() -> None:
+    """`record_spend(id, -5)` would UNDO spend, which is a way to mint budget.
+
+    Found by mutation: deleting the negative-amount guard left every kernel
+    test green. `test_overspending_is_refused_not_merely_reported` covers the
+    ceiling and nothing covered the floor, so the one brake that actually
+    bounds cost — "a subtree can never spend more than its root was given" —
+    could be walked backwards by any caller that computes an amount and gets
+    the sign wrong.
+
+    It is not only fraud. A refund, a retry that reverses a charge, a token
+    count subtracted twice: every one of those arrives as a negative here, and
+    silently accepting it makes `subtree_spent` a number nobody can rely on.
+    """
+    lg = ledger()
+    root = lg.open_root("r", budget=100)
+    lg.record_spend(root.id, 60)
+
+    with pytest.raises(SpawnDenied, match="negative"):
+        lg.record_spend(root.id, -50)
+
+    assert lg.get(root.id).spent == 60, "the refused spend changed the ledger anyway"
+    assert lg.get(root.id).remaining == 40

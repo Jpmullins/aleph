@@ -11,9 +11,11 @@ directions.
 from __future__ import annotations
 
 import pathlib
+import shutil
 
 import pytest
 from surface_bindings import (
+    _SUBJECTS,
     catalog_components,
     catalog_props,
     client_bindable_props,
@@ -159,11 +161,13 @@ def test_the_coverage_denominator_is_the_canonical_catalog() -> None:
         (root / "packages/aleph-a2ui/src/aleph_a2ui/catalog.json").read_text()
     )
     assert report.catalog_total == len(catalog)
-    # Coverage is genuinely partial today: the card components are bound from
-    # `cards.py`, which declares no `{"path": ...}` bindings at all. If this ever
-    # becomes 0 the sweep has either grown to cover the cards (good, update this)
-    # or lost its denominator (bad).
-    assert report.uncompared > 0
+    # `uncompared` was > 0 for as long as "compared" meant "has a Python
+    # producer". That is the input to two of the five directions, and the
+    # component it excluded — `ArtifactCard` — is read by the other three. It is
+    # 0 now, and that is a claim with teeth only because a component NO
+    # direction examines is a mismatch rather than an entry in a footnote:
+    # see `test_a_producerless_component_nothing_examines_is_a_mismatch`.
+    assert report.uncompared == 0
     assert set(report.compared) <= catalog
 
 
@@ -714,3 +718,70 @@ def test_every_catalog_component_has_a_producer_or_a_written_reason() -> None:
     assert set(report.compared) | set(report.no_producer) == catalog
     # And the reasons are reasons, not placeholders.
     assert all(len(why) > 40 for why in report.no_producer.values()), report.no_producer
+
+
+def _mirror_the_repo_the_sweep_reads(root: pathlib.Path, into: pathlib.Path) -> None:
+    """Copy just the trees `run()` opens, so a mutation can be applied to them.
+
+    `run()` reads nine named subject files plus two globs — every `.tsx` under
+    `apps/web/src` and every `.py` under `apps/api/src/aleph_api`. Copying those
+    is ~2.6MB and lets the mutation below be applied to a real tree rather than
+    to a hand-built dict, which is the difference between pinning the sweep and
+    pinning a fixture.
+    """
+    for name, _why in _SUBJECTS:
+        src = root / name
+        dst = into / name
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+    for tree in ("apps/web/src", "apps/api/src/aleph_api"):
+        shutil.copytree(root / tree, into / tree, dirs_exist_ok=True)
+
+
+def test_a_producerless_component_nothing_examines_is_a_mismatch(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A written reason must not become an exemption.
+
+    `_NO_PRODUCER_REASON` names a catalog component nothing emits and says why.
+    Those components are counted as compared and contribute their props to the
+    coverage number, which is only honest while some direction still reads
+    them: `ArtifactCard` has no producer and three of the five directions check
+    it. Take away the last of the three — here by renaming its zod entry, the
+    single edit that hides it from catalog↔zod, agent→zod and zod→view at once
+    — and the sentence would otherwise buy it seven props of free coverage.
+
+    The rename targets `export const ArtifactCardApi`, which is where
+    `_API_BLOCK` reads the component name from. Renaming the `name:` field
+    inside the block changes nothing and would have made this test green
+    against an unmutated tree.
+    """
+    root = pathlib.Path(__file__).resolve().parents[2]
+    _mirror_the_repo_the_sweep_reads(root, tmp_path)
+
+    before = run(tmp_path)
+    assert "ArtifactCard" in before.compared
+    assert before.no_producer_directions["ArtifactCard"] == [
+        "agent→zod",
+        "catalog↔zod",
+        "zod→view",
+    ]
+    assert not [m for m in before.mismatches if m.component == "ArtifactCard"]
+
+    client = tmp_path / "apps/web/src/a2ui/aleph-catalog-v09.tsx"
+    source = client.read_text()
+    mutated = source.replace("export const ArtifactCardApi = {", "export const AGQApi = {", 1)
+    assert mutated != source, "the mutation string is not in the file; this test proves nothing"
+    client.write_text(mutated)
+
+    after = run(tmp_path)
+    assert "ArtifactCard" not in after.compared
+    assert after.no_producer_directions["ArtifactCard"] == []
+    excused = [
+        m
+        for m in after.mismatches
+        if m.component == "ArtifactCard" and "exemption, not coverage" in m.reason
+    ]
+    assert excused, after.mismatches
+    # And the seven props go with it, rather than staying in the total.
+    assert after.props_inspected == before.props_inspected - 7

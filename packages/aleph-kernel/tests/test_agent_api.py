@@ -341,3 +341,83 @@ async def test_unregister_of_an_unknown_name_is_a_keyerror() -> None:
     kernel = Kernel()
     with pytest.raises(KeyError):
         kernel.unregister("never-existed")
+
+
+# ---------------------------------------------------------------------------
+# The ghost, on the branch an agent actually hits
+# ---------------------------------------------------------------------------
+
+
+async def test_an_install_the_PROBE_refused_leaves_no_ghost() -> None:
+    """`test_a_failed_install_leaves_no_ghost` never reaches this branch.
+
+    It installs a spec with an unsatisfiable `requires`, which raises
+    `MissingProvider` out of `topological_order` — the generic `except
+    Exception` arm. The `except ProbeFailed` arm has its own
+    `_unregister_quietly` call and nothing exercised it: deleting that line
+    left all 153 kernel tests green, including both tests written for exactly
+    this defect.
+
+    It is the likelier arm by a distance. An agent's first plugin usually
+    resolves its dependencies fine and then cannot prove it works — that is
+    what a probe gate is FOR. So the fix as tested covered the rarer half of
+    the failure it was written for, and the half that poisons the process for
+    the rest of its life was open.
+    """
+    kernel = Kernel()
+    api = AgentPluginAPI(kernel)
+
+    refused = await api.install(broken("first-attempt"))
+    assert refused.installed is False
+    assert "refused" in refused.detail, refused.detail
+
+    # The name is free again — an agent's second attempt is version two of the
+    # same plugin, not a new one with a different name.
+    second = await api.install(working("first-attempt", provides=("first-attempt",)))
+    assert second.installed is True, f"the refused install held its name: {second.detail}"
+
+    # An unrelated plugin still installs, and the whole graph still boots.
+    # Both re-derive the topological order over everything registered, which is
+    # why one leftover would break them all.
+    other = await api.install(working("unrelated"))
+    assert other.installed is True, f"the ghost poisoned the graph: {other.detail}"
+    await kernel.boot()
+
+
+async def test_unregistering_a_plugin_also_unregisters_what_came_down_with_it() -> None:
+    """`disable(force=True, unregister=True)` must not leave half a ghost.
+
+    The dependents were torn down as collateral, so they are droppable too —
+    and if they are left REGISTERED, the flag has moved the ghost one level out
+    rather than removed it: the next install of a dependent's name fails with
+    "already registered", which is precisely the message `unregister` exists to
+    stop an agent from ever seeing.
+
+    Nothing covered this. `test_an_agent_can_ship_a_second_version` uses
+    `unregister=True` on a plugin with no dependents, so the loop over
+    `radius.collateral` is a loop over nothing and deleting it changed no test.
+    """
+    kernel = Kernel()
+    api = AgentPluginAPI(kernel)
+
+    base = await api.install(working("store", provides=("store",)))
+    assert base.plugin_id is not None
+    dependent = await api.install(working("indexer", provides=("index",), requires=("store",)))
+    assert dependent.installed is True, dependent.detail
+
+    stopped = await api.disable(PluginId(UUID(base.plugin_id)), force=True, unregister=True)
+    assert stopped.installed is False
+    assert "indexer" in stopped.detail, stopped.detail
+
+    # Both names are free. Reinstalling the DEPENDENT is the half that was open:
+    # it is the one `unregister` had to loop over to reach.
+    again = await api.install(working("indexer", provides=("index",)))
+    assert again.installed is True, (
+        f"the collateral kept its registration: {again.detail}. `unregister` "
+        "dropped the target and left the plugins it took down as ghosts."
+    )
+    # And the target's own name, with a real assertion: `install(...) is not
+    # None` would be satisfied by every refusal an InstallOutcome can carry.
+    target_again = await api.install(working("store", provides=("store",)))
+    assert target_again.installed is True, target_again.detail
+    assert target_again.plugin_id is not None

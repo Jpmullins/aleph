@@ -386,3 +386,165 @@ async def test_a_setup_that_raises_leaves_no_trace() -> None:
     assert log == ["opened", "closed"], "the failed setup leaked its resource"
     assert not k.is_provided("halfbuilt"), "a failed setup left its service published"
     assert k.state_of("halfbuilt") is State.FAILED
+
+
+# ---------------------------------------------------------------------------
+# Four invariants the kernel upholds and nothing measured
+# ---------------------------------------------------------------------------
+#
+# All four were found by mutating kernel.py and watching all 153 tests stay
+# green. Each is a distinct BRANCH of a property that is covered on some other
+# branch — which is why reading the suite suggests they were held.
+
+
+async def test_a_probe_that_raises_unwinds_what_setup_built() -> None:
+    """The raise branch, not the returns-a-failure branch.
+
+    `test_a_failing_probe_rolls_back_everything_setup_built` covers the probe
+    that answers `problem(...)`; `test_a_probe_that_raises_is_a_failed_probe_
+    not_a_crash` covers the probe that throws — but only as far as the recorded
+    STATE. The `await scope.unwind()` on the raising path had no assertion
+    behind it, and deleting it left every kernel test green.
+
+    The two are not the same code path and the raising one is the likelier: a
+    probe fails by raising whenever the thing it probes is unreachable, which
+    is what `ConnectionError` here stands for. A capability that leaks its pool
+    on that path leaks it on every restart of a dependency that is down.
+    """
+    log: list[str] = []
+
+    async def setup(ctx: Context) -> AsyncIterator[Inv]:
+        log.append("opened")
+
+        async def close() -> None:
+            log.append("closed")
+
+        yield close
+        ctx.provide("halfbuilt", object())
+
+    async def probe(ctx: Context) -> ProbeResult:
+        msg = "connection refused"
+        raise ConnectionError(msg)
+
+    k = Kernel()
+    k.register_core(
+        CapabilitySpec(
+            name="halfbuilt", setup=setup, probe=probe, provides=frozenset({"halfbuilt"})
+        )
+    )
+    with pytest.raises(ProbeFailed, match="connection refused"):
+        await k.boot()
+
+    assert log == ["opened", "closed"], "a probe that RAISED leaked what setup had built"
+    assert not k.is_provided("halfbuilt"), "a capability whose probe raised left its service up"
+    assert k.state_of("halfbuilt") is State.FAILED
+
+
+async def test_a_chain_is_torn_down_top_down_not_in_activation_order() -> None:
+    """Three deep, because two cannot tell the orders apart.
+
+    `test_teardown_runs_dependents_before_providers` has one provider and one
+    dependent, so `radius.collateral` is a single name and the ordering line —
+    `reversed(topological_order(...))` — is unobservable: any order of one item
+    is the same order. Deleting `reversed` left it green.
+
+    With `db <- index <- reports` the two orders differ, and the wrong one tears
+    down `index` while `reports` is still live and still holding its binding.
+    """
+    log: list[str] = []
+
+    def layer(name: str, needs: str, gives: str):
+        async def setup(ctx: Context) -> AsyncIterator[Inv]:
+            ctx.get(needs)
+            ctx.provide(gives, f"{name}-value")
+
+            async def down() -> None:
+                log.append(f"down:{name}")
+
+            yield down
+
+        async def probe(ctx: Context) -> ProbeResult:
+            return ok() if ctx.has(needs) else problem(f"{needs} unavailable")
+
+        return CapabilitySpec(
+            name=name,
+            setup=setup,
+            probe=probe,
+            requires=frozenset({needs}),
+            provides=frozenset({gives}),
+        )
+
+    k = Kernel()
+    pid = k.register_dynamic(provider("db", "db", log=log))
+    k.register_dynamic(layer("index", "db", "index"))
+    k.register_dynamic(layer("reports", "index", "reports"))
+    await k.boot()
+
+    await k.deactivate(pid, force=True)
+
+    assert log == ["down:reports", "down:index", "down:db"], (
+        f"torn down {log}; a provider came down while a live dependent still held its binding"
+    )
+
+
+async def test_registering_a_name_twice_is_refused() -> None:
+    """A second plugin may not take over a mounted name.
+
+    Nothing tested this at all, and the consequence is not cosmetic. A silent
+    overwrite replaces the `_Mounted` record wholesale: the live capability's
+    scope and context are dropped on the floor with its inverses unrun, and the
+    old `PluginId` still resolves to nothing, so the agent holding it can
+    neither disable nor replace what it installed.
+
+    Both entry points are checked, because they are different methods and only
+    one of them mints a handle.
+    """
+    k = Kernel()
+    k.register_core(provider("db", "db"))
+    with pytest.raises(ValueError, match="already registered"):
+        k.register_core(provider("db", "db"))
+    with pytest.raises(ValueError, match="already registered"):
+        k.register_dynamic(provider("db", "db"))
+
+    pid = k.register_dynamic(provider("cache", "cache"))
+    with pytest.raises(ValueError, match="already registered"):
+        k.register_dynamic(provider("cache", "cache"))
+    # And the refusal changed nothing: the original handle still resolves.
+    assert k.plugin_id_for("cache") == pid
+
+
+async def test_shutdown_unwinds_dependents_before_providers() -> None:
+    """ "LIFO unwind on shutdown" is a claim CLAUDE.md makes; this measures it.
+
+    `test_shutdown_unwinds_everything` registers ONE capability, so it asserts
+    that shutdown runs an inverse and nothing about the order it runs them in.
+    Dropping `reversed` from `shutdown` left it green — and shutdown is the
+    path every deploy takes, where a provider torn down first means a
+    dependent's inverse runs against a pool that is already closed.
+    """
+    log: list[str] = []
+
+    async def setup(ctx: Context) -> AsyncIterator[Inv]:
+        ctx.get("db")
+
+        async def down() -> None:
+            log.append("down:reports")
+
+        yield down
+
+    async def probe(ctx: Context) -> ProbeResult:
+        return ok() if ctx.has("db") else problem("db unavailable")
+
+    k = Kernel()
+    k.register_core(provider("db", "db", log=log))
+    k.register_core(
+        CapabilitySpec(name="reports", setup=setup, probe=probe, requires=frozenset({"db"}))
+    )
+    await k.boot()
+    await k.shutdown()
+
+    assert log == ["down:reports", "down:db"], (
+        f"shutdown unwound {log}; the provider went first, so the dependent's "
+        "inverse ran against something already torn down"
+    )
+    assert k.active() == frozenset()
