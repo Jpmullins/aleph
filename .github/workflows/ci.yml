@@ -171,6 +171,17 @@ jobs:
       - name: alembic check (no model drift)
         working-directory: apps/api
         run: uv run alembic check
+
+      # 26 revisions, every one with a `downgrade()` body, and not one had ever
+      # been executed: `grep -rn downgrade .github/ scripts/ tests/` returned
+      # nothing. CI enforced `alembic check` for the FORWARD path, so the reverse
+      # path was entirely unguarded — 26 functions written correctly and read by
+      # nothing. Runs against a scratch database it creates and drops, because
+      # downgrading the dev database would destroy the corpus and a check nobody
+      # dares run is not a check.
+      - name: migration round trip (downgrade actually runs)
+        run: ./scripts/check-migration-roundtrip.sh
+
       - run: uv run pytest -m integration -q
 
   acceptance:

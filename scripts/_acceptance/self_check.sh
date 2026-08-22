@@ -189,6 +189,14 @@ if (echo > "/dev/tcp/$_PG_HOST/$_PG_PORT") >/dev/null 2>&1; then
     's/            src\.status = "indexed"\n        await session\.commit\(\)/            src.status = "indexed"\n        await session.rollback()/' \
     "uv run pytest tests/integration/test_chunk_embed_degrades.py::test_dead_embedder_still_writes_chunks -q -p no:randomly"
 
+  # 26 downgrades had never been executed. This is the slowest probe here (it
+  # creates a scratch database) and it is worth it: the forward path was guarded
+  # by `alembic check` and the reverse path by nothing at all.
+  probe "the migration round trip notices a broken downgrade" \
+    apps/api/alembic/versions/20260821_2330_rs1_chunks_before_embeddings.py \
+    's/def downgrade\(\) -> None:/def downgrade() -> None:\n    op.drop_table("projects")/' \
+    "./scripts/check-migration-roundtrip.sh"
+
   # A run whose owner died must be failed, not left claiming to run.
   probe "the startup reaper actually fails a stale run" \
     packages/aleph-db/src/aleph_db/repos/agent_runs.py \
