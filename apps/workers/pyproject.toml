@@ -24,6 +24,10 @@ dependencies = [
     "aleph-wiki",
     "aleph-assistant",
     "aleph-reviewer",
+    # gateway.py opens a project's ConnectorCredential to reach its endpoint.
+    # It resolved transitively via aleph-research/aleph-reviewer before, which
+    # is the shape of dependency that disappears the day one of those drops it.
+    "aleph-connectors",
 ]
 
 [build-system]

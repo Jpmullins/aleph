@@ -172,6 +172,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "python-multipart" },
+    { name = "pyyaml" },
     { name = "redis" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "uvicorn", extra = ["standard"] },
@@ -213,6 +214,7 @@ requires-dist = [
     { name = "pydantic", specifier = "==2.13.4" },
     { name = "pydantic-settings", specifier = "==2.14.2" },
     { name = "python-multipart", specifier = "==0.0.31" },
+    { name = "pyyaml", specifier = ">=6,<7" },
     { name = "redis", specifier = ">=5,<6" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = "==2.0.50" },
     { name = "uvicorn", extras = ["standard"], specifier = "==0.48.0" },
@@ -776,6 +778,7 @@ version = "0.1.0"
 source = { editable = "apps/workers" }
 dependencies = [
     { name = "aleph-assistant" },
+    { name = "aleph-connectors" },
     { name = "aleph-core" },
     { name = "aleph-db" },
     { name = "aleph-models" },
@@ -800,6 +803,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aleph-assistant", editable = "packages/aleph-assistant" },
+    { name = "aleph-connectors", editable = "packages/aleph-connectors" },
     { name = "aleph-core", editable = "packages/aleph-core" },
     { name = "aleph-db", editable = "packages/aleph-db" },
     { name = "aleph-models", editable = "packages/aleph-models" },

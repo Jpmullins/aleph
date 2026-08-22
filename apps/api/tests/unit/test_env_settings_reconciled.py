@@ -50,6 +50,10 @@ ALEPH_KEY_IGNORE: dict[str, str] = {
     "ALEPH_MODEL_HINTS_PATH": (
         "operator-supplied rates file path, read from os.environ by aleph-models"
     ),
+    "ALEPH_HARNESS_PROFILES_PATH": (
+        "operator-supplied per-model harness profile file, read from os.environ"
+        " by aleph-api"
+    ),
 }
 
 
