@@ -137,12 +137,22 @@ STREAM_BUDGET_S = 4.0
 #: Statuses that mean the handler never ran. 422 is FastAPI's body/param
 #: validator; everything else in the table (2xx, 404, 409, 204) is the handler
 #: or a dependency below it answering.
-_VALIDATION_ONLY = frozenset({422})
+#: Statuses that mean the request never reached a handler.
+#:
+#: 404 is in here and that is the whole point. It was not, and `project_scope_dep`
+#: answers 404 for a project that does not resolve — so a fixture in which ZERO
+#: handlers run scored 123 of 126 "reached", higher than the healthy 84, because
+#: the real 422s were displaced by 404s from the dependency. The guard passed
+#: most loudly exactly when the thing it guards was most broken.
+_NOT_REACHED = frozenset({401, 403, 404, 405, 422})
 
-#: Floor on how many driven pairs must get past validation. Measured on the tree
-#: that added this test: 84 of 126 driven pairs (128 in the table, less the two
-#: in `NEVER_DRIVEN`).
-MIN_HANDLERS_REACHED = 78
+#: Floor on how many driven pairs must get past validation.
+#:
+#: **63 of 126**, measured 2026-08-22 after `_NOT_REACHED` was corrected. The
+#: previous 78 was derived from a count of 84 that included every 404 and 403 —
+#: i.e. from responses produced BEFORE a handler ran. The honest number is
+#: lower, and the floor sits just under it.
+MIN_HANDLERS_REACHED = 58
 
 #: Floor on the size of the route table itself, so a wiring regression that
 #: unmounts half the routers cannot make this suite pass by having less to do.
@@ -303,8 +313,15 @@ def test_the_handlers_were_actually_reached(run: Run) -> None:
     This is the guard on the fixture: if the project stops resolving, or a path
     param value stops matching its annotation, every affected route answers
     before its handler and the count collapses.
+
+    "Reached" is defined by EXCLUSION and the exclusion set is the load-bearing
+    part. It was `{422}` alone, and `project_scope_dep` answers **404** — so
+    pointing the fixture at a nonexistent project, which stops every handler in
+    the suite from running, moved this number UP from 84 to 123 and the test
+    passed. A guard that scores higher the more broken its subject is, is
+    pointed the wrong way round.
     """
-    reached = [o for o in run.outcomes if o.status not in _VALIDATION_ONLY]
+    reached = [o for o in run.outcomes if o.status not in _NOT_REACHED]
     assert len(reached) >= MIN_HANDLERS_REACHED, (
         f"only {len(reached)} of {len(run.outcomes)} driven route-methods got "
         "past validation — the fixture is not producing a usable project, or a "
