@@ -40,7 +40,15 @@ if not block:
 
 entries: list[tuple[str, str]] = []
 for line in block.group(1).splitlines():
-    match = re.match(r"\s+([@\w./-]+):\s*[\"']?([^\"'#]+?)[\"']?\s*(?:#.*)?$", line)
+    # The key may be quoted and may name a PARENT
+    # (`"minimatch@3>brace-expansion"`), which is how a floor is applied to one
+    # consumer and not to every consumer. Both forms were silently skipped by
+    # the first version of this pattern, so the check reported "4 overrides"
+    # over a block of seven — an override this sweep cannot see is exactly the
+    # stale override it exists to catch.
+    match = re.match(
+        r"""\s+["']?([@\w./>-]+)["']?:\s*["']?([^"'#]+?)["']?\s*(?:#.*)?$""", line
+    )
     if match:
         entries.append((match.group(1), match.group(2).strip()))
 
@@ -51,8 +59,14 @@ if not entries:
 
 
 def floor_of(spec: str) -> tuple[int, ...] | None:
-    """The `>=X.Y.Z` floor an override asserts, as a comparable tuple."""
-    found = re.search(r">=\s*(\d+)\.(\d+)\.(\d+)", spec)
+    """The lower bound an override asserts, as a comparable tuple.
+
+    `>` as well as `>=`. A spec written `>8.5.17` — which is the natural way to
+    say "above the advisory" — matched nothing, so the entry was skipped
+    entirely and did not even appear in the count. Two of the six overrides
+    were invisible for that reason.
+    """
+    found = re.search(r">=?\s*(\d+)\.(\d+)\.(\d+)", spec)
     return tuple(int(g) for g in found.groups()) if found else None
 
 
@@ -75,7 +89,9 @@ def versions_requested(package: str) -> set[str]:
 
 stale: list[str] = []
 checked = 0
-for package, spec in entries:
+for key, spec in entries:
+    # `minimatch@3>brace-expansion` overrides `brace-expansion` for one parent.
+    package = key.rsplit(">", 1)[-1]
     floor = floor_of(spec)
     if floor is None:
         # An exact pin or a range with no lower bound. Nothing to compare.
@@ -93,7 +109,7 @@ for package, spec in entries:
     )
     if not resolved:
         stale.append(
-            f"{package}: overridden to {spec!r}, and the lockfile resolves no "
+            f"{key}: overridden to {spec!r}, and the lockfile resolves no "
             "version of it at all — nothing depends on this package any more"
         )
         continue

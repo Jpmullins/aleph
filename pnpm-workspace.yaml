@@ -18,6 +18,27 @@ allowBuilds:
 
 # Security overrides: force transitive deps to patched versions (Dependabot).
 overrides:
-  postcss: ">=8.5.10" # nested-source-map parse vuln — <8.5.10
+  # Floors raised 2026-08-22: `pnpm audit` reported 12 HIGH advisories, and two
+  # of the pins below were the cause — an override floor that sits under a
+  # newly published advisory silently holds the tree at a vulnerable version
+  # while looking like a security measure. `check-security-overrides.sh` proves
+  # each entry still resolves; it cannot know what the advisory floor has moved
+  # to, so `pnpm audit --audit-level high` in the `security` workflow is the
+  # half that does.
+  postcss: ">8.5.17" # was >=8.5.10 — advisory now covers <=8.5.17
   dompurify: ">=3.4.11 <4" # XSS via mXSS — <=3.4.10 (transitive via @a2ui/markdown-it + mermaid)
-  js-yaml: ">=4.2.0 <5" # <=4.1.1 (transitive, dev-only via eslint; pin to 4.x — eslint needs the 4.x API)
+  js-yaml: ">=4.3.1 <5" # was >=4.2.0 — advisory now covers <4.3.1; stay on 4.x, eslint needs that API
+  # Two DISJOINT vulnerable ranges (<1.1.18, and >=3.0.0 <5.0.9) and the tree
+  # resolves both a 1.x and a 5.x, so the spec has to be disjoint too.
+  # `>=5.0.9` alone does not work: brace-expansion 5 changed its export shape
+  # and `minimatch@3` calls it as a function, so forcing every consumer onto
+  # 5.x fails eslint at startup with `TypeError: expand is not a function`.
+  # Raising a floor is not free — it can move a transitive dependency across a
+  # breaking change, and the only thing that catches that is running the app.
+  # Per-PARENT, because a disjoint range is not enough: pnpm picks the highest
+  # version satisfying all consumers, so `>=1.1.18 <2 || >=5.0.9` still put
+  # 5.0.9 under minimatch@3 and broke it the same way.
+  "minimatch@3>brace-expansion": ">=1.1.18 <2"
+  brace-expansion: ">=5.0.9"
+  linkify-it: ">5.0.1" # <=5.0.1 (transitive via markdown-it)
+  nanoid: ">=3.3.18 <4" # <3.3.18; stay on 3.x — postcss 8 depends on it
