@@ -555,6 +555,8 @@ run_shell P12 "every security override still names a package the lockfile resolv
   "./scripts/check-security-overrides.sh 2>&1 | tail -1"
 run_shell P5b "tracked code does not import untracked modules" \
   "./scripts/check-imports-resolve.sh 2>&1 | tail -1"
+run_shell P13 "every gate row appears on the scoreboard" \
+  "./scripts/check-acceptance-rows.sh 2>&1 | tail -1"
 run_shell E8 "every web module is reachable from an entry point" \
   "./scripts/check-web-dead-code.sh 2>&1 | tail -1"
 run_shell E9 "no unused class selector in the stylesheets" \

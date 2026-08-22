@@ -45,6 +45,11 @@ The composability substrate. Everything else mounts on it.
 | A4 | Generation loader — a plugin's behaviour is replaceable with no restart | `packages/aleph-kernel/tests/test_replace.py` — load g1, call it, replace with g2, call it, assert new behaviour AND that a reference captured under g1 still sees g1's code (Theorem 63). In-memory: nothing in the running app calls `replace` | ✅ |
 | A5 | Boot manifest — the protected set is declared in one signed file | `acceptance.sh::protected_set_matches_manifest`; asserts the active core set equals the manifest's support set, and that `deactivate` has exactly one call site | ✅ |
 | A6 | Agent-facing plugin API | `packages/aleph-kernel/tests/test_agent_api.py` — register, activate, deactivate, and the guard that a protected capability has no addressable id. In-memory: `AgentPluginAPI` has one non-test importer in the tree and it is `scripts/_acceptance/kernel_boot.py` | ✅ |
+| A7 | An installed plugin survives the process that installed it | `acceptance.sh` A7 — `tests/integration/test_plugin_durability.py`; the AST gate runs BEFORE the row is written, a failed mount rolls it back, and one bad row cannot stop a process starting | ✅ |
+| A8 | The kernel is reachable, and a refusal matches its own preview | `acceptance.sh` A8 — `tests/integration/test_plugin_routes.py`; `preview_removal` and the refusal read the same declaration graph, so a refusal is predictable | ✅ |
+| A9 | A plugin can add a pane, and a broken one cannot blank the workspace | `acceptance.sh` A9 — `tests/integration/test_plugin_panes.py`; each pane builds in its own try/except, so one plugin's exception is one error surface rather than the end of the multiplexed stream | ✅ |
+| A10 | The manifest and the composition root agree, and a probe notices a dead dependency | `acceptance.sh` A10 — `tests/integration/test_capability_probes.py`; an engine constructs fine against an unreachable host, so only a probe issuing a real query can tell | ✅ |
+| A11 | A plugin's declared schema becomes a settings screen that reads back | `acceptance.sh` A11 — `tests/integration/test_plugin_settings_contract.py`; `settings_card.py` was 279 working lines whose first caller was the SAVE handler, so the screen could only be seen by writing to it | ✅ |
 
 **A-complete when:** an agent can add and remove a capability at runtime, cannot
 remove a protected one, and a faulty plugin cannot take the process down.
@@ -68,6 +73,7 @@ The central defect. The wiki bet was never placed because none of this worked.
 | B8 | An empty search reports honestly instead of confabulating | a probe over `aleph_assistant.retrieval.router` asserting `_MISS_REASON` names the cause and that the `list_pages` fallback is gone | ✅ |
 | B9 | Corpus search is *wired*, not merely built | a probe over `aleph_assistant.retrieval.router` asserting it calls `search_corpus` and feeds the hits to the composer | ✅ |
 | B11 | An unreachable embedder degrades to keyword search, out loud | `tests/integration/test_chunk_embed_degrades.py` and `packages/aleph-assistant/tests/test_router_degradation.py` — chunks are written before they are embedded, and the reply says which half of search ran | ✅ |
+| B1e | Every dialog goes through Modal.tsx | `acceptance.sh` B1e — one focus trap and one escape handler, not per-dialog copies; a hand-rolled dialog is a keyboard trap nothing reports | ✅ |
 
 **B-complete when:** B1 and B2 are green, and B6 reports a recall number that
 the belief engine has to beat.
@@ -109,6 +115,9 @@ Replaces the wiki as the knowledge substrate. See `belief-engine.md`.
 | C7 | Every written citation carries a source anchor | `tests/e2e/test_belief_spine.py::test_every_written_citation_carries_a_source_id`, `::test_a_fabricated_quote_is_refused` — `source_id`, `verbatim` and the char span are all set. Replaces `source_page_id`, which no writer ever populated | ✅ |
 | C9 | A concurrent wiki commit does not lose work | `tests/integration/test_commit_revision_concurrency.py` — 8 real concurrent sessions on both the by-title and the by-ID branch, plus `scripts/check-page-lock.sh`. In part C because `commit_revision` **is** the claim-write path: every claim in the database was written through it, so a commit it loses is claims it loses | ✅ |
 | C8 | The belief graph is rebuildable from the RKS | `tests/e2e/test_belief_spine.py::test_the_belief_graph_rebuilds_from_its_sources`, `::test_rebuilding_twice_is_idempotent`, `::test_a_rebuild_does_not_destroy_human_corrections` | ✅ |
+| C9a | No unlocked wiki page read in the create-or-lock path | `acceptance.sh` C9a — the by-title path returns the page unlocked and computes `revision_no` as `max+1`, which is the non-atomic branch agents actually use | ✅ |
+| C11 | The Inspector renders a failed run, naming the tool and the error | `acceptance.sh` C11 — `tests/integration/test_inspector_surface.py`; the only place an agent failure had been legible was the API container's stderr | ✅ |
+| C12 | Claims are embedded at write time, and searchable — graph hop included | `acceptance.sh` C12 — the HNSW index on `wiki_claims.embedding` had never had anything to index | ✅ |
 
 > **⚠ These rows measure the machinery, not its use.** `BeliefService` has never
 > run in production: the live database holds 796 claims with **zero** verbatim
@@ -152,6 +161,7 @@ The product thesis: an agent that authors plugins for itself.
 | D4 | Spawn ledger — depth, fan-out and budget brakes | `test_spawn_ledger.py`, 13 **pure in-memory** tests. The row used to claim an integration test asserting "parent/child/budget rows"; there is no database anywhere in that file, and `SpawnLedger` has zero callers outside it, so no subagent Aleph actually spawns is braked by it | 🟨 |
 | D5 | Probation and rollback | `test_probation.py`: a capability whose probe fails on the 2nd call is retired automatically and the system is unchanged afterwards. In-memory, and honest about it — degradation is defined against the capability's own probe, not against production behaviour | ✅ |
 | D6 | The claude-science research skills are ported (Apache-2.0, with NOTICE) | `test_ported_skills.py`: `skills/literature-review/` loads through the gate and its helpers are callable. **The running agent cannot see it** — the assistant's skills root is `apps/api/src/aleph_api/skills/`, which holds `ach`, `report-authoring`, `research` and `wiki-style`, and not this one. The port is real; the wiring is absent | 🟨 |
+| D8 | An authored skill survives the conversation that wrote it | `acceptance.sh` D8 — a skill written in one thread is visible in another; number 4 of the eight | ✅ |
 
 **D-complete when:** the assistant — not a unit test — can add a capability, the
 capability survives a restart, and the system survives it being bad. Today none
@@ -222,6 +232,9 @@ green.
 | F1 | The agent endpoint is authenticated and derives project scope server-side | `packages/aleph-security/tests/test_request_context.py`, plus `apps/api/tests/unit/test_copilotkit_auth.py` and `test_agent_thread_scope.py` — a forged project id in client state is rejected and the endpoint is off the middleware skip list | ✅ |
 | F2 | Untrusted ingested text is defanged at the boundary | `packages/aleph-rks/tests/test_ingest_defang.py` and `packages/aleph-core/tests/test_grounding.py` — homoglyph control tokens, U+2028/2029, bidi marks and NUL are handled at ingest | ✅ |
 | F3 | Agent tokens are scoped and expire | `packages/aleph-security/tests` — an expired or wrong-project token is rejected | ✅ |
+| F4 | The runtime bridge is not an any-origin, any-host proxy | `acceptance.sh` F4 — `scripts/_acceptance/runtime_bridge_probe.mjs` | ✅ |
+| F5 | The bridge refuses an unlisted origin and forwards the caller's credential | `acceptance.sh` F5 — needs node; skipped, not passed, when node is absent | ✅ |
+| F8 | Dispatch redacts before writing the append-only tables | `acceptance.sh` F8 — `tests/integration/test_action_params_are_redacted.py`; a settings value reaches `card_actions` AND the ledger, so a credential there is plaintext forever | ✅ |
 
 **F1 blocks any deployment.** Every HTTP route is correctly gated; the agent
 reaches around all of them.
@@ -236,6 +249,8 @@ one the configured gateway actually serves.
 | # | part | check | status |
 |---|---|---|---|
 | H1 | Every model bound in any `ModelProfile` is served, and the embedder emits the column's dimension | `acceptance.sh::H1` — reads every binding from `model_profiles`, diffs against `/v1/models`, then *calls* the embedder and compares its width to `EMBEDDING_DIM` | ✅ |
+| H2 | A real chat turn: upstream request count and time to first token | `acceptance.sh` H2 — `scripts/_acceptance/agent_turn_probe.py`; needs `ALEPH_ACCEPTANCE_DRIVE_AGENT=1` and spends tokens, so it SKIPs by default | ✅ |
+| H8 | A real vault export conforms to OKF v0.1, evidence chain included | `acceptance.sh` H8 — `scripts/_acceptance/okf_export_probe.py`; needs a database with a corpus to export | ✅ |
 
 Both assertions have been observed failing: binding a nonexistent model reports
 it with the capabilities that referenced it, and an embedder whose width differs
@@ -256,6 +271,7 @@ The instruments. Without these, nothing above can be trusted.
 | G1 | Audit assertions observe behaviour, not shape | each `audit/checks/*.sh` must fail when its subject is broken; `wiki-first-retrieval.sh` rewritten as a known-answer probe | ✅ |
 | G2 | CI runs at least one behavioural gate | `ci.yml` contains a job that exercises a running system | ✅ |
 | G3 | The comprehensive check | `./scripts/acceptance.sh` runs every part's check and prints a per-part table with an overall verdict | ✅ |
+| G1a | The retrieval audit check is a known-answer probe, not a length assertion | `acceptance.sh` G1a — `assert len(result) > 0` is the failure mode this whole document exists to prevent, and one audit check had it | ✅ |
 
 ---
 
@@ -273,3 +289,17 @@ The instruments. Without these, nothing above can be trusted.
    mode: a beautiful system whose probes are `assert len(result) > 0`.
 
 Point 4 is the one that matters. Everything else is bookkeeping.
+
+---
+
+## P — The platform gates
+
+Not a product part: the checks that keep the other parts honest. They live here
+because `acceptance.sh` runs them and a row it runs with no row here is a check
+nobody can see.
+
+| # | part | check | status |
+|---|---|---|---|
+| P5b | Tracked code does not import untracked modules | `acceptance.sh` P5b — `scripts/check-imports-resolve.sh`; the caller landing without the callee is a clean-checkout ImportError that the author's own working tree cannot reproduce | ✅ |
+| P12 | Every security override still names a package the lockfile resolves | `acceptance.sh` P12 — `scripts/check-security-overrides.sh`; a stale override is a pin against a package that is no longer there, which reads as protection and is not | ✅ |
+| P13 | Every gate row appears on the scoreboard | `acceptance.sh` P13 — `scripts/check-acceptance-rows.sh`; the gate ran 64 checks while this table listed 46, and the whole plugin cluster A7-A11 — what CLAUDE.md calls the product — appeared on no scoreboard. Also refuses a prose citation naming a row that does not exist | ✅ |

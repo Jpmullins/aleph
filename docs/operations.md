@@ -459,6 +459,11 @@ light.
   this measures the gap rather than asserting it is zero.
 - `check-sweeps-are-wired.sh` — every `scripts/check-*.sh` is run by `ci.yml`, `acceptance.sh` or
   `self_check.sh`. An unwired sweep is a file, not a gate.
+- `check-acceptance-rows.sh` — every row `acceptance.sh` runs has a row in
+  `docs/acceptance.md`. The gate ran 64 checks while the table listed 46; the whole
+  plugin cluster A7-A11 was invisible, and eight of CLAUDE.md's own evidence citations
+  named rows that did not exist. A row id is not a path, so `check-dead-refs.sh` could
+  not see it, and rule 9 runs the other direction.
 - `check-imports-resolve.sh` — every module a tracked file imports is itself tracked. `main.py` was
   committed importing two route modules that were never `git add`ed, so a clean checkout raised
   `ImportError` inside `create_app()` and the API could not start — while every local gate stayed

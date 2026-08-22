@@ -243,6 +243,21 @@ probe "check-acceptance-claims notices a bare ::test_id no file defines" \
   's|apps/api/tests/unit/test_agent_cost_callback.py::test_no_usage_writes_an_unpriced_row_rather_than_nothing|::test_no_usage_writes_unknown_row|' \
   "./scripts/check-acceptance-claims.sh"
 
+# The scoreboard's two missing edges. acceptance.sh ran 64 checks while
+# docs/acceptance.md listed 46 — the plugin cluster A7-A11, which CLAUDE.md
+# calls the product, was on no scoreboard at all, and CLAUDE.md cited two rows
+# (C10, F7) that existed nowhere. A row id is not a path, so check-dead-refs
+# could not see either.
+probe "check-acceptance-rows notices a gate row on no scoreboard" \
+  docs/acceptance.md \
+  's/^\| B1e \|/| B1x |/' \
+  "./scripts/check-acceptance-rows.sh"
+
+probe "check-acceptance-rows notices prose citing a row that does not exist" \
+  CLAUDE.md \
+  's/acceptance A8\./acceptance A99./' \
+  "./scripts/check-acceptance-rows.sh"
+
 # The mutation that matters is not "delete the rule" — it is "widen the allow",
 # which is how this gate silently reopens.
 #

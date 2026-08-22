@@ -408,10 +408,10 @@ below only with a test that would have caught them.
   itself a password rendered `variant: "obscured"` — hidden on screen, and persisted verbatim to
   `card_actions` and the ledger. Refused at the generator, redacted at the persistence boundary.
   → `packages/aleph-a2ui/tests/test_secret_redaction.py`,
-  `tests/integration/test_action_params_are_redacted.py`, acceptance F7/F8.
+  `tests/integration/test_action_params_are_redacted.py`, acceptance F8.
 - **The Inspector.** A chat turn is a recorded run with a tool timeline, and there is a pane that
   shows it — the only place an agent failure had been legible was the API container's stderr.
-  → `tests/integration/test_inspector_surface.py`, acceptance C10/C11.
+  → `tests/integration/test_inspector_surface.py`, acceptance C11.
 - **The composition root has tests.** 783 lines deciding what a running Aleph consists of, and zero
   tests over it. A probe now demonstrably notices a dead dependency — an engine constructs fine
   against an unreachable host, so only a probe issuing a real query can tell.
