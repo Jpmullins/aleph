@@ -167,3 +167,93 @@ async def test_a_probe_that_raises_retires_the_capability() -> None:
     report = await api.check_health()
     assert "connection reset" in report["x"]
     assert "x" not in kernel.active()
+
+
+# ---------------------------------------------------------------------------
+# A probe that never returns
+#
+# A probe is a liveness check against something external, so "it never came
+# back" is a normal outcome and it has to be a REPORTED one. Observed in
+# practice: a port-forwarder had taken Redis's port on the host, so `ping()`
+# accepted the TCP connection and never replied — `boot()` hung forever and the
+# process reported nothing at all. No failure, no log line, no exit. Forty
+# minutes of silence is worse than a red light.
+# ---------------------------------------------------------------------------
+
+
+async def test_a_probe_that_never_answers_is_a_failure_not_a_hang() -> None:
+    import asyncio
+
+    from aleph_kernel.errors import ProbeFailed
+
+    async def setup(ctx: Context) -> AsyncIterator[Inv]:
+        ctx.provide("wedged:key", "value")
+        if False:  # pragma: no cover
+            yield
+
+    async def probe(_ctx: Context) -> ProbeResult:
+        await asyncio.sleep(3600)  # a service that accepts and never answers
+        return ok("unreachable")  # pragma: no cover
+
+    kernel = Kernel(probe_timeout_s=0.05)
+    kernel.register_dynamic(
+        CapabilitySpec(name="wedged", setup=setup, probe=probe, provides=frozenset({"wedged:key"}))
+    )
+
+    with pytest.raises(ProbeFailed, match="did not answer"):
+        await asyncio.wait_for(kernel.boot(), timeout=5)
+
+
+async def test_a_timed_out_probe_unwinds_like_any_other_failure() -> None:
+    """A hang must not leak what setup built — the capability is absent, not
+    half-present."""
+    import asyncio
+
+    from aleph_kernel.errors import ProbeFailed
+
+    closed: list[str] = []
+
+    async def setup(ctx: Context) -> AsyncIterator[Inv]:
+        ctx.provide("wedged:key", "value")
+
+        async def close() -> None:
+            closed.append("closed")
+
+        yield close
+
+    async def probe(_ctx: Context) -> ProbeResult:
+        await asyncio.sleep(3600)
+        return ok("unreachable")  # pragma: no cover
+
+    kernel = Kernel(probe_timeout_s=0.05)
+    kernel.register_dynamic(
+        CapabilitySpec(name="wedged", setup=setup, probe=probe, provides=frozenset({"wedged:key"}))
+    )
+    with pytest.raises(ProbeFailed):
+        await kernel.boot()
+
+    assert closed == ["closed"], "a timed-out probe leaked what setup had built"
+    assert not kernel.is_provided("wedged:key")
+
+
+async def test_a_probe_inside_the_deadline_is_untouched() -> None:
+    """The deadline must not be a latency budget nobody asked for: a probe that
+    does real work — a round trip to Postgres, a write and read through the
+    asset store — has to keep passing."""
+    import asyncio
+
+    async def setup(ctx: Context) -> AsyncIterator[Inv]:
+        ctx.provide("slow:key", "value")
+        if False:  # pragma: no cover
+            yield
+
+    async def probe(_ctx: Context) -> ProbeResult:
+        await asyncio.sleep(0.01)
+        return ok("answered, slowly")
+
+    kernel = Kernel(probe_timeout_s=1.0)
+    kernel.register_dynamic(
+        CapabilitySpec(name="slow", setup=setup, probe=probe, provides=frozenset({"slow:key"}))
+    )
+    await kernel.boot()
+    assert kernel.is_provided("slow:key")

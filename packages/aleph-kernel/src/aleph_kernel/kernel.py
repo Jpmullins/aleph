@@ -68,10 +68,19 @@ class _Mounted:
 class Kernel:
     """Owns the capability graph and every transition of it."""
 
-    def __init__(self) -> None:
+    #: How long a capability's probe may take before it counts as failed.
+    #:
+    #: Generous, because a probe legitimately does real work — a round trip to
+    #: Postgres, a write and read through the asset store. Bounded, because an
+    #: unbounded probe turns a dependency that hangs into a process that never
+    #: reports.
+    DEFAULT_PROBE_TIMEOUT_S = 30.0
+
+    def __init__(self, *, probe_timeout_s: float = DEFAULT_PROBE_TIMEOUT_S) -> None:
         self._store = Store()
         self._mounted: dict[str, _Mounted] = {}
         self._lock = asyncio.Lock()
+        self._probe_timeout_s = probe_timeout_s
 
     # -- registration --------------------------------------------------------
 
@@ -250,8 +259,29 @@ class Kernel:
             # The probe gate. Runs against the live system, with the same scoped
             # context the capability itself gets — so a probe can only use what
             # the capability declared, and cannot fake a dependency it lacks.
+            #
+            # And it runs under a DEADLINE. A probe is a liveness check against
+            # something external, so "it never came back" is a normal outcome
+            # and it has to be a reported one. Without this, a service that
+            # accepts a TCP connection and then never answers — a stale
+            # forwarded port, a wedged proxy, a firewall that drops rather than
+            # rejects — hangs `boot()` forever, and the process reports nothing
+            # at all: no failure, no log line, no exit. Observed exactly that:
+            # a port-forwarder had taken 6379 on the host, so `redis.ping()`
+            # accepted the connection and never replied, and every acceptance
+            # run sat silent for forty minutes.
+            #
+            # A hang reported as a failure is strictly better than a hang: the
+            # capability unwinds, the operator is told which one and how long it
+            # waited, and the gate goes red instead of going quiet.
             try:
-                result = await spec.probe(ctx)
+                result = await asyncio.wait_for(spec.probe(ctx), timeout=self._probe_timeout_s)
+            except TimeoutError as exc:
+                await scope.unwind()
+                mounted.state = State.FAILED
+                mounted.failure = f"probe did not answer within {self._probe_timeout_s}s"
+                span.set_attribute("aleph.kernel.outcome", "probe_timeout")
+                raise ProbeFailed(name, mounted.failure) from exc
             except Exception as exc:
                 await scope.unwind()
                 mounted.state = State.FAILED
