@@ -9,6 +9,9 @@ from aleph_models.client import (
     ChatResponse,
     EmbedResponse,
     LiteLLMClient,
+    RerankResponse,
+    RerankResult,
+    RerankUnsupported,
     ToolSchema,
 )
 from aleph_models.discovery import (
@@ -34,6 +37,9 @@ __all__ = [
     "EmbedResponse",
     "LiteLLMClient",
     "PricingTable",
+    "RerankResponse",
+    "RerankResult",
+    "RerankUnsupported",
     "ResolvedBinding",
     "ToolSchema",
     "discover_models",

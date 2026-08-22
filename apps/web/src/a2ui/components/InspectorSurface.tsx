@@ -27,6 +27,10 @@ import type { RendererProps } from "./_shared";
 interface RunRow {
   id: string;
   status: string;
+  /** "assistant" for a chat turn; a job kind for a background ticket. The
+   *  server used to filter the list to assistant runs only, so a ticket could
+   *  never appear here at all. */
+  agent_kind?: string | null;
   started_at?: string | null;
   completed_at?: string | null;
   duration_ms?: number | null;
@@ -43,6 +47,10 @@ interface EventRow {
   error_class?: string | null;
   error?: string | null;
   at?: string | null;
+  /** The hand-off: a `background_task_dispatched` event names the ticket the
+   *  turn started. Without it the row renders as an event naming nothing. */
+  child_agent_run_id?: string | null;
+  phase?: string | null;
 }
 
 interface InspectorProps {
@@ -142,6 +150,11 @@ export function InspectorSurface({ component }: RendererProps) {
                   <span>{clock(run.started_at)}</span>
                   <span>{millis(run.duration_ms)}</span>
                 </div>
+                {run.agent_kind && run.agent_kind !== "assistant" ? (
+                  <div className="mt-0.5 font-mono text-[10px]" data-testid="run-kind">
+                    {run.agent_kind}
+                  </div>
+                ) : null}
               </li>
             );
           })}
@@ -225,6 +238,14 @@ function ToolCallRow({ event }: { event: EventRow }) {
       {args.length > 0 ? (
         <div className="mt-0.5 font-mono text-[10px] text-ink-muted" data-testid="tool-args">
           {args.map(([k, v]) => `${k}=${String(v)}`).join("  ")}
+        </div>
+      ) : null}
+      {event.child_agent_run_id ? (
+        <div
+          className="mt-0.5 font-mono text-[10px] text-ink-muted"
+          data-testid="dispatch-handoff"
+        >
+          {`started ${event.phase ?? "a background job"} → ticket ${event.child_agent_run_id}`}
         </div>
       ) : null}
       {failed ? (

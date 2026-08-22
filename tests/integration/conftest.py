@@ -138,6 +138,24 @@ def maker(engine: AsyncEngine) -> Callable[[], AsyncSession]:
 
 
 @pytest.fixture
+async def second_project(
+    engine: AsyncEngine, maker: Callable[[], AsyncSession]
+) -> AsyncIterator[uuid.UUID]:
+    """A SECOND project, for the tests that check one cannot reach the other.
+
+    A cross-project test needs two real ids with independent teardown; reusing
+    `committed_project` and inventing the other id tests nothing, because the
+    invented one has no rows to leak into.
+    """
+    project_id = uuid.uuid4()
+    yield project_id
+    async with maker() as s:
+        for statement in _TEARDOWN_SQL:
+            await s.execute(text(statement), {"pid": project_id})
+        await s.commit()
+
+
+@pytest.fixture
 async def committed_project(
     engine: AsyncEngine, maker: Callable[[], AsyncSession]
 ) -> AsyncIterator[uuid.UUID]:

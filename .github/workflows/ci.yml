@@ -176,6 +176,8 @@ jobs:
       # them one at a time.
       - name: Every sweep is actually run by something
         run: ./scripts/check-sweeps-are-wired.sh
+      - name: Tracked code does not import untracked modules
+        run: ./scripts/check-imports-resolve.sh
 
   images:
     name: images build

@@ -49,6 +49,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+from aleph_core.errors import ValidationFailed
 from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
 from aleph_db.models.agent import AgentEvent, AgentRun
@@ -232,6 +233,26 @@ async def create_ticket(
     await session.flush()
 
     if parent_agent_run_id is not None:
+        # The parent must be in THIS project. `agent_events` carries no
+        # `project_id` and no foreign key on `agent_run_id`, so without this
+        # check the row below is written against whatever UUID the request body
+        # names — and a caller with EDITOR on project A could post a run id
+        # owned by project B and have a `background_task_dispatched` row appear
+        # in B's timeline, naming A's child run. That was reachable from a
+        # prompt: the module docstring applies exactly this reasoning to reads
+        # and stopped short of the write.
+        #
+        # The error does not distinguish "no such run" from "a run in another
+        # project", so it cannot be used to probe for run ids either.
+        parent_project = (
+            await session.execute(
+                select(AgentRun.project_id).where(AgentRun.id == parent_agent_run_id)
+            )
+        ).scalar_one_or_none()
+        if parent_project != project_id:
+            msg = "parent_agent_run_id does not name an agent run in this project"
+            raise ValidationFailed(msg)
+
         # The hand-off, written where the conversation is already being read.
         # Without this the ticket exists but the turn that created it shows a
         # gap, and "the assistant said it started something" is unverifiable

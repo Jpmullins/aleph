@@ -345,6 +345,11 @@ class FakeGateway:
                 Route("/v1/models", self._v1_models, methods=["GET"]),
                 Route("/v1/chat/completions", self._chat, methods=["POST"]),
                 Route("/v1/embeddings", self._embeddings, methods=["POST"]),
+                # Routed, and it 400s a chat model rather than 404-ing. That
+                # is exactly what the deployed gateway does — WS-RS6 verified
+                # it by hand — and the difference decides whether Aleph reads
+                # "this model is not a reranker" or "the gateway is down".
+                Route("/v1/rerank", self._rerank, methods=["POST"]),
                 # A real gateway 404s an unknown route as JSON, and code that
                 # only ever saw a Starlette plaintext 404 mis-reports it.
                 Route(
@@ -541,6 +546,49 @@ class FakeGateway:
             }
         )
 
+    async def _rerank(self, request: Request) -> Response:
+        """Cohere-shaped rerank. Only a `mode="rerank"` model is accepted.
+
+        No model in :data:`DEFAULT_MODELS` has that mode, on purpose: the
+        default gateway here reproduces the deployment Aleph runs against,
+        where `/v1/rerank` exists and nothing can serve it. A test that wants a
+        working reranker adds one.
+        """
+        payload = await self._record(request)
+        denied = self._auth_error(request)
+        if denied is not None:
+            return denied
+        scripted = await self._next_scripted()
+        if scripted is not None:
+            return scripted
+        resolved = self._resolve(payload, expected_mode="rerank")
+        if isinstance(resolved, Response):
+            return resolved
+        model = resolved
+
+        raw = (payload or {}).get("documents")
+        documents = [str(d) for d in cast("list[Any]", raw or [])]
+        query = str((payload or {}).get("query") or "")
+        top_n = (payload or {}).get("top_n")
+        limit = top_n if isinstance(top_n, int) and top_n > 0 else len(documents)
+        scored = sorted(
+            ((index, _overlap_score(query, document)) for index, document in enumerate(documents)),
+            key=lambda pair: (-pair[1], pair[0]),
+        )
+        return JSONResponse(
+            {
+                "id": f"rerank-fake-{self.request_count}",
+                "model": model.id,
+                "results": [
+                    {"index": index, "relevance_score": score} for index, score in scored[:limit]
+                ],
+                # Cohere bills rerank in search units and reports no tokens.
+                # Emitted in that shape so the cost path is exercised against
+                # the response a real reranker sends, not a convenient one.
+                "meta": {"billed_units": {"search_units": 1}},
+            }
+        )
+
     async def _not_found(self, request: Request) -> Response:
         await self._record(request)
         return JSONResponse(
@@ -678,6 +726,20 @@ class FakeGateway:
         if model.upstream is not None:
             row["litellm_params"] = {"model": model.upstream}
         return row
+
+
+def _overlap_score(query: str, document: str) -> float:
+    """Word overlap, in [0, 1]. Crude, deterministic, and INPUT-DERIVED.
+
+    Constant scores would make every ordering assertion downstream vacuous —
+    the caller would pass whether or not it read the response — which is the
+    same reasoning as `_token_estimate` below.
+    """
+    terms = {w for w in query.lower().split() if w}
+    if not terms:
+        return 0.0
+    words = {w for w in document.lower().split() if w}
+    return len(terms & words) / len(terms)
 
 
 def _token_estimate(messages: object) -> int:

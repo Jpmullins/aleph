@@ -118,6 +118,43 @@ class EmbedResponse(BaseModel):
     trace_id: str | None = None
 
 
+class RerankResult(BaseModel):
+    """One reranked document: its position in the INPUT list, and its score.
+
+    ``index`` refers to the caller's ``documents`` list, not to any ordering the
+    gateway invented — a reranker that returned scores without the index they
+    belong to would be unusable, and Cohere-shaped responses omit the documents
+    themselves by default.
+    """
+
+    index: int
+    relevance_score: float
+
+
+class RerankResponse(BaseModel):
+    model: str
+    #: Best first. Only the documents the gateway chose to return: `top_n` may
+    #: be smaller than the input, so absence is not a score of zero.
+    results: list[RerankResult]
+    latency_ms: int
+    model_call_id: str
+    trace_id: str | None = None
+
+
+class RerankUnsupported(Exception):
+    """The gateway answered, and the bound model cannot rerank.
+
+    Distinct from :class:`aleph_core.errors.GatewayUnavailable` because the two
+    need opposite responses: a gateway that is down should be retried, and a
+    model that is not a reranker should never be sent there again. Aleph's own
+    deployment is the second case — ``POST /v1/rerank`` is routed (it validates
+    the model name rather than 404-ing) and no model the key can reach serves
+    ``mode="rerank"`` — so this is the path that actually runs, not a corner
+    case. :mod:`aleph_rks.rerank` catches it and falls back to the LLM
+    reranker, once, remembering the answer.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Idempotency cache
 # ---------------------------------------------------------------------------
@@ -178,6 +215,69 @@ def _warn_unpriced(model: str, capability: str, purpose: str) -> None:
             "rates are read from /model/info, or bind a model the gateway prices"
         ),
     )
+
+
+#: Statuses from ``/v1/rerank`` that mean "this model is not a reranker".
+#:
+#: 400 is what the deployed gateway actually returns for a chat model
+#: ("Invalid model name passed in model=…"); 404 is what a gateway with no
+#: rerank route at all returns; 422 and 501 are the other shapes seen in the
+#: OpenAI-compatible ecosystem. 401/403/429/5xx are absent on purpose — those
+#: are outages or credential problems and must not be reported as a capability
+#: gap, or an operator goes and edits the model profile to fix an expired key.
+_RERANK_UNSUPPORTED_STATUSES = frozenset({400, 404, 422, 501})
+
+
+def _rerank_input_tokens(body: dict[str, Any]) -> int:
+    """Tokens the gateway says it read, in whichever place it put them.
+
+    Rerank responses have no agreed usage shape: LiteLLM passes Cohere's
+    ``meta.billed_units.search_units`` through untouched, some backends emit an
+    OpenAI-style ``usage.prompt_tokens``, and plenty emit nothing. Zero is the
+    honest answer for the last case — the row is still written, and
+    `pricing_source` records that the number is not from the gateway.
+    """
+    usage = body.get("usage")
+    if isinstance(usage, dict):
+        raw = cast("dict[str, object]", usage).get("prompt_tokens")
+        if raw is not None:
+            return int(raw)  # type: ignore[arg-type]
+    meta = body.get("meta")
+    if isinstance(meta, dict):
+        billed = cast("dict[str, object]", meta).get("billed_units")
+        if isinstance(billed, dict):
+            raw = cast("dict[str, object]", billed).get("input_tokens")
+            if raw is not None:
+                return int(raw)  # type: ignore[arg-type]
+    return 0
+
+
+def _rerank_results(body: dict[str, Any], document_count: int) -> list[RerankResult]:
+    """Parse the results array, dropping anything that cannot address a document.
+
+    An out-of-range or missing ``index`` is dropped rather than clamped. The
+    index is the ONLY link back to the caller's list, so a wrong one silently
+    reorders the wrong passage — which looks exactly like a reranker that made a
+    bad judgement and is impossible to tell apart downstream.
+    """
+    raw = body.get("results")
+    if not isinstance(raw, list):
+        return []
+    out: list[RerankResult] = []
+    for item in cast("list[object]", raw):
+        if not isinstance(item, dict):
+            continue
+        row = cast("dict[str, object]", item)
+        index = row.get("index")
+        if not isinstance(index, int) or isinstance(index, bool):
+            continue
+        if not 0 <= index < document_count:
+            continue
+        score = row.get("relevance_score", row.get("score"))
+        if not isinstance(score, int | float) or isinstance(score, bool):
+            continue
+        out.append(RerankResult(index=index, relevance_score=float(score)))
+    return out
 
 
 def _cache_write_tokens(usage: object, details: object) -> int:
@@ -555,6 +655,148 @@ class LiteLLMClient:
             embeddings=embeddings,
             input_tokens=input_tokens,
             cost_usd=str(cost),
+            latency_ms=latency_ms,
+            model_call_id=str(model_call_id),
+            trace_id=trace_id,
+        )
+
+    async def rerank(
+        self,
+        *,
+        principal: Principal,
+        project_id: UUID,
+        agent_run_id: UUID | None,
+        profile_bindings: dict[str, Any],
+        query: str,
+        documents: list[str],
+        top_n: int | None = None,
+        purpose: str,
+    ) -> RerankResponse:
+        """Cross-encoder rerank via ``POST /v1/rerank``.
+
+        The third verb on this client, and the first one whose model may not
+        exist. ``Capability.RERANK`` has been an enum member with no
+        implementation since it was written; this is the transport half.
+
+        **A 4xx from this route is a statement about the model, not the
+        gateway.** The configured endpoint routes ``/v1/rerank`` — it answers
+        400 "Invalid model name passed in model=…" rather than 404 — and none
+        of the 26 models the key can reach is a reranker. So the honest
+        outcome for a non-rerank model is :class:`RerankUnsupported`, which
+        callers can act on, rather than a generic transport error that looks
+        like an outage and gets retried.
+
+        401/403 are deliberately NOT translated: an expired key is an outage,
+        and reporting it as "this model cannot rerank" would send an operator
+        to the model profile to fix a credential.
+        """
+        del principal
+        binding = resolve_binding(profile_bindings, Capability.RERANK)
+        payload: dict[str, Any] = {
+            "model": binding.model,
+            "query": query,
+            "documents": documents,
+        }
+        if top_n is not None:
+            payload["top_n"] = top_n
+
+        attrs = {
+            "aleph.project_id": str(project_id),
+            "aleph.capability": Capability.RERANK.value,
+            "aleph.model": binding.model,
+            "aleph.purpose": purpose,
+            "aleph.rerank.documents": len(documents),
+            "gen_ai.system": "litellm",
+            "gen_ai.request.model": binding.model,
+        }
+
+        started_at = time.monotonic()
+        with start_span("litellm.rerank", **attrs) as span:
+            try:
+                body = await self._post_with_retry("/v1/rerank", payload)
+            except httpx.HTTPStatusError as exc:
+                record_llm_request(
+                    capability=Capability.RERANK.value,
+                    purpose=purpose,
+                    outcome="error",
+                    duration_s=time.monotonic() - started_at,
+                )
+                if exc.response.status_code in _RERANK_UNSUPPORTED_STATUSES:
+                    msg = (
+                        f"the gateway will not rerank with '{binding.model}': "
+                        f"HTTP {exc.response.status_code} {exc.response.text[:300]}"
+                    )
+                    raise RerankUnsupported(msg) from exc
+                raise
+            except Exception:
+                record_llm_request(
+                    capability=Capability.RERANK.value,
+                    purpose=purpose,
+                    outcome="error",
+                    duration_s=time.monotonic() - started_at,
+                )
+                raise
+            elapsed_s = time.monotonic() - started_at
+            latency_ms = int(elapsed_s * 1000)
+            record_llm_request(
+                capability=Capability.RERANK.value,
+                purpose=purpose,
+                outcome="ok",
+                duration_s=elapsed_s,
+            )
+
+            # Rerank endpoints bill in "search units", not tokens, and most
+            # report nothing at all. The ModelCall row is written regardless —
+            # rule 5 is that every gateway call is ledgered, and a call that
+            # writes no row is a call that cannot be found later. An unpriced
+            # one is marked `unknown`, never a silent $0.
+            input_tokens = _rerank_input_tokens(body)
+            priced = self._pricing.breakdown(
+                model=binding.model,
+                input_tokens=input_tokens,
+                cached_tokens=0,
+                completion_tokens=0,
+            )
+            cost, savings = priced.cost_usd, priced.cache_savings_usd
+            if not priced.priced:
+                _warn_unpriced(binding.model, Capability.RERANK.value, purpose)
+            record_llm_usage(
+                capability=Capability.RERANK.value,
+                purpose=purpose,
+                pricing_source=priced.source,
+                input_tokens=input_tokens,
+                output_tokens=0,
+                cost_usd=cost,
+            )
+            span.set_attribute("aleph.pricing_source", priced.source)
+            span.set_attribute("gen_ai.usage.input_tokens", input_tokens)
+            span.set_attribute("aleph.cost_usd", float(cost))
+            span.set_attribute("aleph.latency_ms", latency_ms)
+            trace_id = current_trace_id()
+
+            model_call_id = await self._record_call(
+                project_id=project_id,
+                agent_run_id=agent_run_id,
+                capability=Capability.RERANK.value,
+                model=binding.model,
+                purpose=purpose,
+                input_tokens=input_tokens,
+                cached_tokens=0,
+                cache_write_tokens=0,
+                completion_tokens=0,
+                cost=cost,
+                savings=savings,
+                pricing_source=priced.source,
+                input_rate_usd=priced.input_rate_usd,
+                output_rate_usd=priced.output_rate_usd,
+                latency_ms=latency_ms,
+                trace_id=trace_id,
+                timestamp=utcnow(),
+            )
+
+        return RerankResponse(
+            model=binding.model,
+            results=_rerank_results(body, len(documents)),
             latency_ms=latency_ms,
             model_call_id=str(model_call_id),
             trace_id=trace_id,

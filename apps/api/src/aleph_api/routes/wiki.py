@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
@@ -15,7 +16,7 @@ from sqlalchemy import func, select
 
 from aleph_api.deps import LedgerDep, LiteLLMDep, PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
-from aleph_artifacts.exporters.vault import VaultPage, render_vault
+from aleph_artifacts.exporters.vault import VaultExport, VaultPage, render_vault
 from aleph_artifacts.models import RenderedAsset
 from aleph_artifacts.render_service import record_render
 from aleph_connectors.models import ApprovalDecision
@@ -27,6 +28,14 @@ from aleph_db.repos import model_profile as profile_repo
 from aleph_observability.tracing import current_trace_id
 from aleph_security.roles import ProjectRole, require_at_least
 from aleph_wiki.classify import classify_pages, propose_schema
+from aleph_wiki.export_evidence import (
+    EvidenceCounts,
+    PageEvidence,
+    attach_evidence,
+    count_evidence,
+    evidence_files,
+)
+from aleph_wiki.export_service import load_page_evidence
 from aleph_wiki.feedback_service import write_feedback
 from aleph_wiki.html_compiler import compile_page_html
 from aleph_wiki.index_service import IndexService
@@ -1025,6 +1034,26 @@ class VaultDanglingOut(BaseModel):
     display: str
 
 
+class VaultEvidenceOut(BaseModel):
+    """How much of the belief layer the bundle carries.
+
+    Reported even when every number is zero, and that is the point: the sidecar
+    is absent both when a project has no claims and when `?evidence=false` was
+    passed, and those are different facts. A count of 0 next to
+    `included: true` says "measured, and the belief layer has never run here" —
+    which a missing file cannot say.
+    """
+
+    included: bool
+    claims: int
+    citations: int
+    #: Citations carrying the whole chain: a source, a verbatim quote, and the
+    #: character span it occupies. On the live corpus this is roughly half of
+    #: `citations`, so the two numbers must not be collapsed into one.
+    anchored_citations: int
+    pages_with_claims: int
+
+
 class VaultExportOut(BaseModel):
     """What `?dry_run=true` reports instead of bytes."""
 
@@ -1033,9 +1062,14 @@ class VaultExportOut(BaseModel):
     page_count: int
     files: list[str]
     dangling: list[VaultDanglingOut]
+    evidence: VaultEvidenceOut
 
 
-async def _vault_pages(session: SessionDep, project_id: UUID) -> list[VaultPage]:
+async def _vault_pages(
+    session: SessionDep,
+    project_id: UUID,
+    evidence: Mapping[UUID, PageEvidence],
+) -> list[VaultPage]:
     """The exportable corpus: every non-stub page, with its current body.
 
     Stubs are excluded — 779 of the 844 live pages are stubs, and a stub is a
@@ -1047,6 +1081,11 @@ async def _vault_pages(session: SessionDep, project_id: UUID) -> list[VaultPage]
     it has governance fields, and nobody has written it. Dropping it would make
     the file count quietly disagree with `count(*) where not is_stub`, which is
     the number anyone checking this export will run.
+
+    `evidence` maps page id → the live claims on that page. Where there are
+    any, the page's body gains a generated `## Evidence` section: the wiki is
+    rendered FROM the belief layer, and prose exported without the claims and
+    quotes behind it is the conclusion with the reasoning deleted.
     """
     rows = (
         await session.execute(
@@ -1061,7 +1100,11 @@ async def _vault_pages(session: SessionDep, project_id: UUID) -> list[VaultPage]
         VaultPage(
             title=page.title,
             slug=page.slug,
-            body_md=body or "",
+            body_md=(
+                attach_evidence(body or "", evidence[page.id])
+                if page.id in evidence
+                else (body or "")
+            ),
             page_type=page.page_type,
             category=page.category,
             tags=tuple(str(t) for t in (page.tags or [])),
@@ -1085,6 +1128,7 @@ async def export_vault(
     principal: PrincipalDep,
     dialect: Annotated[str, Query(pattern="^(obsidian|okf)$")] = "obsidian",
     dry_run: Annotated[bool, Query()] = False,
+    evidence: Annotated[bool, Query()] = True,
 ) -> Response:
     """Export the wiki as a markdown vault: one `.md` per non-stub page + `index.md`.
 
@@ -1092,11 +1136,21 @@ async def export_vault(
     `[text](./slug.md)` and stamps `okf_version: "0.1"` on the index, which is
     what makes the bundle readable by anything other than Obsidian.
 
-    `?dry_run=true` returns the file list and the dangling-link report as JSON
-    instead of the zip. That is the only way the dangling report is legible: a
-    link the exporter could not resolve is written out as plain text rather than
-    as a link into nowhere, so a caller who only ever downloads the zip would
-    never learn that anything was dropped.
+    `?evidence=true` (the default) carries the belief layer out with the prose:
+    each page gains a generated `## Evidence` section listing its live claims
+    with their verbatim quotes and character spans, and the bundle gains
+    `evidence.json`, the same chain in a lossless machine-readable form —
+    claim → citation → source → chunk → span. Pass `evidence=false` for the
+    prose-only vault. A page is rendered from claims; an export that ships only
+    the rendering hands somebody the conclusions and none of the reasons, and
+    it cannot be re-imported as knowledge.
+
+    `?dry_run=true` returns the file list, the dangling-link report and the
+    evidence counts as JSON instead of the zip. That is the only way either
+    report is legible: a link the exporter could not resolve is written out as
+    plain text rather than as a link into nowhere, and the sidecar is absent
+    from a project with no claims — so a caller who only ever downloads the zip
+    would never learn that anything was dropped or that nothing was measured.
     """
     require_at_least(principal, project_id, at_least=ProjectRole.VIEWER)
     project = (
@@ -1106,16 +1160,28 @@ async def export_vault(
         msg = f"project not found: {project_id}"
         raise NotFound(msg)
 
-    pages = await _vault_pages(session, project_id)
+    evidence_by_page = await load_page_evidence(session, project_id) if evidence else {}
+    pages = await _vault_pages(session, project_id, evidence_by_page)
     export = render_vault(pages, dialect=dialect, project_title=project.title)
+
+    # Sorted by slug so two exports of an unchanged corpus produce identical
+    # bytes; `dict.values()` order is insertion order, which is the query's
+    # order today and nobody's contract.
+    page_evidence = sorted(evidence_by_page.values(), key=lambda p: (p.slug, p.title))
+    counts = count_evidence(page_evidence)
+    extra = evidence_files(page_evidence, project_title=project.title, dialect=export.dialect)
 
     if dry_run:
         return JSONResponse(
             VaultExportOut(
                 dialect=export.dialect,
                 project_title=project.title,
+                # From the pre-merge export: `page_count` counts every
+                # non-reserved file, so a merged bundle would report
+                # `evidence.json` as a page.
                 page_count=export.page_count,
-                files=sorted(export.files),
+                files=sorted({**export.files, **extra}),
+                evidence=_evidence_out(included=evidence, counts=counts),
                 dangling=[
                     VaultDanglingOut(
                         from_slug=d.from_slug,
@@ -1128,10 +1194,23 @@ async def export_vault(
             ).model_dump()
         )
 
-    payload = export.to_bytes()
+    # One zip writer, reused: `VaultExport.to_bytes` pins entry order and
+    # timestamps, and a second writer here would produce a bundle that differs
+    # from the vault exporter's on every byte for no reason anybody could see.
+    # This merged object exists only to be zipped — read its `page_count` and
+    # you get the sidecar counted as a page, which is why every count above and
+    # below comes from `export`, not from this.
+    payload = VaultExport(
+        dialect=export.dialect,
+        files={**export.files, **extra},
+        dangling=export.dangling,
+    ).to_bytes()
     # A full-corpus export is data egress, so it is a ledger event even though
     # it mutates nothing: "who took a copy of the wiki, and when" is exactly the
-    # question an append-only action log exists to answer.
+    # question an append-only action log exists to answer. The evidence counts
+    # are in the row because the quotes are somebody else's copyrighted text —
+    # "a copy of the wiki left" and "4,082 verbatim source quotes left with it"
+    # are different events and the log has to be able to tell them apart.
     await ledger.append(
         project_id=project_id,
         actor_id=principal.user_id,
@@ -1144,6 +1223,10 @@ async def export_vault(
             "page_count": export.page_count,
             "dangling_links": len(export.dangling),
             "bytes": len(payload),
+            "evidence_included": evidence,
+            "claims": counts.claims,
+            "citations": counts.citations,
+            "anchored_citations": counts.anchored_citations,
         },
         trace_id=current_trace_id(),
     )
@@ -1157,7 +1240,19 @@ async def export_vault(
             "X-Vault-Dialect": export.dialect,
             "X-Vault-Page-Count": str(export.page_count),
             "X-Vault-Dangling-Links": str(len(export.dangling)),
+            "X-Vault-Claims": str(counts.claims),
+            "X-Vault-Anchored-Citations": str(counts.anchored_citations),
         },
+    )
+
+
+def _evidence_out(*, included: bool, counts: EvidenceCounts) -> VaultEvidenceOut:
+    return VaultEvidenceOut(
+        included=included,
+        claims=counts.claims,
+        citations=counts.citations,
+        anchored_citations=counts.anchored_citations,
+        pages_with_claims=counts.pages_with_claims,
     )
 
 

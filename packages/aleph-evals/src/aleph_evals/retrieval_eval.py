@@ -146,12 +146,32 @@ def _ndcg_at(ordered: list[Any], wanted: set[Any], cutoff: int) -> float:
     from a binary set produces a number with more precision than the data.
     The ideal ranking puts every wanted source first, so the denominator is the
     DCG of `min(len(wanted), cutoff)` hits.
+
+    **Each wanted source is credited once, at its best position.** `ordered` is
+    a list of source ids taken from CHUNK hits, so one source appears once per
+    chunk it contributed — and the first version of this function added a gain
+    term for every one of them while the ideal denominator counted DISTINCT
+    sources. That made the metric unbounded above:
+
+        _ndcg_at(["src-A"] * 3,  {"src-A"}, 10) == 2.1309
+        _ndcg_at(["src-A"] * 10, {"src-A"}, 10) == 4.5436
+
+    A retrieval that returned the same correct source ten times scored 4.54 out
+    of a possible 1.00, and it scored higher the more it repeated itself. The
+    figure recorded as "nDCG@10 0.681" was produced by that function and was
+    not an nDCG.
+
+    Crediting the first occurrence is what binary relevance means when the
+    ranked list is of chunks and the label is on the source: the source is
+    either found or not, and finding it twice is not twice as good.
     """
     import math
 
     dcg = 0.0
+    credited: set[Any] = set()
     for position, source in enumerate(ordered[:cutoff], start=1):
-        if source in wanted:
+        if source in wanted and source not in credited:
+            credited.add(source)
             dcg += 1.0 / math.log2(position + 1)
     ideal = sum(1.0 / math.log2(i + 1) for i in range(1, min(len(wanted), cutoff) + 1))
     return dcg / ideal if ideal else 0.0

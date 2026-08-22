@@ -337,3 +337,66 @@ points, and that is where the separation lives.
 `WS-RS5` criterion 6 (abstain rate ≥ 0.80) therefore stays **unmet**, and the
 eval reports `abstain 0.00` rather than omitting the row. A metric that is
 silently absent reads as a metric that passed.
+
+---
+
+## D11 · A long job returns a ticket; there is no `AsyncSubAgent` — 2026-08-22
+
+**The choice.** When the assistant is asked for work measured in minutes —
+reindex the corpus, sweep every page for review — it starts a **background
+task** and hands back a ticket id, then answers. It does not hold the turn open.
+The ticket is an `agent_runs` row; progress is `agent_events`; the three verbs
+are `start_background_task`, `check_background_task`, `cancel_background_task`.
+
+**What was rejected, and why.** The obvious shape is an `AsyncSubAgent`: a
+subagent the orchestrator spawns without awaiting, whose result arrives later on
+the same graph. deepagents can express it, and it keeps everything inside the
+agent framework, which is genuinely attractive.
+
+It was rejected for three reasons, in order of weight.
+
+1. **A detached coroutine has no record.** The whole point of this workstream is
+   that a user can ask "is that still running?" twenty minutes and one page
+   reload later. An in-process task's state lives in the process; a ticket's
+   lives in Postgres. The reload is not an edge case — it is the normal way
+   somebody checks on long work.
+
+2. **Cancellation has to be a checkpoint, not a signal.** Cancelling an
+   `AsyncSubAgent` means cancelling a task, which lands wherever the coroutine
+   happened to be — possibly mid-write. A ticket sets a flag; the handler reads
+   it between units of work and stops cleanly at a known point. The difference
+   is whether "stop the sweep" stops it at page 40 or lets it finish all 200 and
+   then relabels the row `cancelled`.
+
+3. **The work does not belong in the API process.** A reindex fans out one job
+   per document. Running that inside the request process couples the assistant's
+   responsiveness to the size of the corpus, which is exactly the coupling being
+   removed.
+
+**What this costs.** Two processes now hold two halves of one vocabulary — the
+API validates against `BACKGROUND_TASK_KINDS`, the worker dispatches on
+`BACKGROUND_TASK_HANDLERS`, and apps may not import apps. Nothing but
+`apps/workers/tests/test_background_task_kinds.py` stops them drifting, and it
+fails in both directions: a kind with no handler is a ticket that can only fail,
+and a handler nobody can request is dead code that reads as capability.
+
+**What was nearly lost to it.** The first pass shipped the routes, the record
+layer, the worker supervisor and the cancellation machinery with **no consumer**
+— no agent tool, no UI, nothing. A `grep` for `background-tasks` found the route
+file, its own test, and one docstring. The mechanism was complete and
+unreachable, which is the dominant defect class in this codebase and the reason
+`CLAUDE.md` says to ship a consumer with every producer.
+
+Two more things were true and untested at that point, both found by adversarial
+review rather than by the suite:
+
+- The cancellation checkpoint existed in the two shipping handlers and **no test
+  touched it** — deleting `if await task.cancelled(): break` from both left every
+  test green. The only mid-flight cancel test ran a fixture handler that supplied
+  its own checkpoint. The plan's own risk note said it: *a flag nobody checks
+  looks identical to a flag that works until you test it.*
+- `parent_agent_run_id` was written straight into `agent_events`, which carries
+  no `project_id` and no foreign key — so a caller with EDITOR on project A could
+  name a run owned by project B and put a dispatch row in B's timeline.
+  Reachable from a prompt. It is now refused, with the same answer for "no such
+  run" so the field cannot be used to probe for ids.

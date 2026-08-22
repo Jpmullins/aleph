@@ -46,6 +46,7 @@ from aleph_a2ui.surface_streamer import (
 from aleph_api.deps import PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep, assert_stream_access
 from aleph_core.errors import NotFound, ValidationFailed
+from aleph_db.repos.background_tasks import BACKGROUND_TASK_KINDS
 from aleph_wiki.models import Citation, PageMergeProposal, SourcePage, WikiPage
 
 if TYPE_CHECKING:
@@ -316,6 +317,14 @@ async def _build_tab_messages(
 #: quietly showing the most recent N looks identical to one showing all of them,
 #: and the difference matters the moment somebody asks "did it run at all
 #: yesterday".
+#: Run kinds the Inspector lists. `assistant` is a chat turn; the rest are the
+#: background tickets a turn can dispatch, and they belong in the same timeline
+#: because the point of the pane is to show what a conversation caused.
+#: Imported from the repository rather than spelled here so a new kind appears
+#: in the Inspector the day it is added, which is the drift that made the
+#: original `== "assistant"` filter wrong and silent.
+_INSPECTOR_RUN_KINDS = ("assistant", *BACKGROUND_TASK_KINDS)
+
 INSPECTOR_RUN_LIMIT = 50
 INSPECTOR_EVENT_LIMIT = 500
 
@@ -1155,7 +1164,17 @@ async def _inspector_messages(
         (
             await session.execute(
                 _select(AgentRun)
-                .where(AgentRun.project_id == project_id, AgentRun.agent_kind == "assistant")
+                .where(
+                    AgentRun.project_id == project_id,
+                    # Chat turns AND the background tickets they dispatch. The
+                    # filter was `== "assistant"`, and a ticket's agent_kind is
+                    # its job kind (`reindex_corpus`, `review_sweep`), so no
+                    # ticket could ever appear here and there was no way to
+                    # select one. Reusing `agent_runs` instead of a new table
+                    # was justified in two production docstrings by "the
+                    # Inspector reads it with no change"; it did not.
+                    AgentRun.agent_kind.in_(_INSPECTOR_RUN_KINDS),
+                )
                 .order_by(AgentRun.started_at.desc().nullslast())
                 .limit(INSPECTOR_RUN_LIMIT)
             )
@@ -1178,6 +1197,10 @@ async def _inspector_messages(
             # arbitrary length and a surface payload is not the place to
             # discover that.
             "error_text": (row.error_text or None) if row.error_text else None,
+            # Which kind of run this is, so the pane can tell a conversation
+            # from a job it started rather than showing an undifferentiated
+            # list of ids.
+            "agent_kind": row.agent_kind,
         }
 
     runs = [_run_dict(r) for r in rows]
@@ -1228,6 +1251,12 @@ async def _inspector_messages(
                     "args": payload.get("args"),
                     "error_class": payload.get("error_class"),
                     "error": payload.get("error"),
+                    # The hand-off. Without this a `background_task_dispatched`
+                    # row renders as a bare event naming nothing, and the link
+                    # from a turn to the job it started — the whole reason the
+                    # dispatch event is written — is invisible.
+                    "child_agent_run_id": payload.get("child_agent_run_id"),
+                    "phase": payload.get("phase"),
                     "at": event.timestamp.isoformat() if event.timestamp else None,
                 }
             )

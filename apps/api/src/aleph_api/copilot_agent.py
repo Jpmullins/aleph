@@ -1828,6 +1828,135 @@ async def plugin_health(config: RunnableConfig) -> str:
     return "\n".join(f"- {name}: {state}" for name, state in sorted(health.items()))
 
 
+# ---------------------------------------------------------------------------
+# WS-H6: long jobs return a ticket
+# ---------------------------------------------------------------------------
+#
+# The routes, the ticket record, the worker job and the cancellation machinery
+# all shipped first, and nothing could reach any of it: `grep -rn
+# "background-tasks"` found the route file, its test, and one docstring. A
+# reindex or a review sweep started inline still blocks the turn for minutes,
+# which is the entire problem the workstream exists to solve.
+#
+# These three tools are that consumer. They self-call over HTTP with the run's
+# own agent token rather than touching the database, which is the same path
+# `start_research` takes and the same rule the workers follow: agents never
+# write state directly.
+
+
+@tool
+async def start_background_task(kind: str, config: RunnableConfig) -> str:
+    """Start a long job and get a ticket back immediately, instead of waiting.
+
+    Use this for work measured in minutes rather than seconds — reindexing the
+    corpus, sweeping pages for review. You get a ticket id straight away and the
+    conversation continues; call `check_background_task` with that id to see
+    progress, and `cancel_background_task` to stop it.
+
+    Call this with no `kind` you have not seen listed: the error names the kinds
+    that exist.
+    """
+    import httpx
+
+    settings = _runtime.get("settings")
+    project_id = await _authorized(await _project_id_from_config(config))
+    if settings is None or project_id is None:
+        return "Background work is unavailable (no project scope on this run)."
+    # The parent link, so the Inspector can show the hand-off on the turn that
+    # made it rather than as an orphan run.
+    from aleph_api.chat_runs import run_id_from_config
+
+    parent = run_id_from_config(dict(config)) if config else None
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{settings.aleph_self_url}/v1/projects/{project_id}/background-tasks",
+                json={
+                    "kind": kind,
+                    "params": {},
+                    "parent_agent_run_id": str(parent) if parent else None,
+                },
+                headers=await _self_headers(project_id, settings=settings),
+            )
+    except Exception as exc:
+        return f"Could not start that job: {exc}"
+    if resp.status_code >= 400:
+        return f"Could not start {kind!r} ({resp.status_code}): {resp.text[:300]}"
+    body = resp.json()
+    return (
+        f"Started {body['kind']} in the background. Ticket "
+        f"{body['agent_run_id']} — it is {body['status']} now. Ask me to check "
+        "on it whenever you like; I will not block on it."
+    )
+
+
+@tool
+async def check_background_task(ticket_id: str, config: RunnableConfig) -> str:
+    """Report a background job's real progress: phase, units done, status.
+
+    The numbers come from the job's own recorded events, not from an estimate.
+    A ticket that has not reported a phase yet has genuinely not started one.
+    """
+    import httpx
+
+    settings = _runtime.get("settings")
+    project_id = await _authorized(await _project_id_from_config(config))
+    if settings is None or project_id is None:
+        return "Background work is unavailable (no project scope on this run)."
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                f"{settings.aleph_self_url}/v1/projects/{project_id}/background-tasks/{ticket_id}",
+                headers=await _self_headers(project_id, settings=settings),
+            )
+    except Exception as exc:
+        return f"Could not check that ticket: {exc}"
+    if resp.status_code == 404:
+        return f"No background job with ticket {ticket_id} in this project."
+    if resp.status_code >= 400:
+        return f"Could not check {ticket_id} ({resp.status_code}): {resp.text[:300]}"
+    body = resp.json()
+    phase = body.get("phase") or "not started"
+    done = body.get("units_done")
+    total = body.get("units_total")
+    progress = f", {done}/{total}" if done is not None and total else ""
+    error = f" — {body['error_text']}" if body.get("error_text") else ""
+    return f"{body['kind']} is {body['status']} (phase: {phase}{progress}){error}"
+
+
+@tool
+async def cancel_background_task(ticket_id: str, config: RunnableConfig) -> str:
+    """Stop a running background job. It stops at its next checkpoint.
+
+    Cancelling is a real stop, not a relabel: the handler checks between units
+    of work, so a sweep that has done 40 of 200 pages does not go on to do the
+    other 160.
+    """
+    import httpx
+
+    settings = _runtime.get("settings")
+    project_id = await _authorized(await _project_id_from_config(config))
+    if settings is None or project_id is None:
+        return "Background work is unavailable (no project scope on this run)."
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{settings.aleph_self_url}/v1/projects/{project_id}"
+                f"/background-tasks/{ticket_id}/cancel",
+                headers=await _self_headers(project_id, settings=settings),
+            )
+    except Exception as exc:
+        return f"Could not cancel that ticket: {exc}"
+    if resp.status_code == 404:
+        return f"No background job with ticket {ticket_id} in this project."
+    if resp.status_code >= 400:
+        return f"Could not cancel {ticket_id} ({resp.status_code}): {resp.text[:300]}"
+    body = resp.json()
+    if not body.get("cancelled"):
+        return f"Ticket {ticket_id} was already {body.get('status', 'finished')}."
+    return f"Cancelling {ticket_id}. It stops at its next checkpoint."
+
+
 _ORCHESTRATOR_TOOLS: tuple[Any, ...] = (
     search_wiki,
     wiki_curation_status,
@@ -1840,6 +1969,10 @@ _ORCHESTRATOR_TOOLS: tuple[Any, ...] = (
     pin_to_brief,
     compose_dossier,
     spotlight,
+    # WS-H6: long jobs return a ticket instead of blocking the turn.
+    start_background_task,
+    check_background_task,
+    cancel_background_task,
     # WS-A2: the kernel, reachable.
     list_capabilities,
     preview_removal,

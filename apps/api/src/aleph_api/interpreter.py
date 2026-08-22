@@ -137,6 +137,10 @@ PTC_ALLOWLIST: Final[tuple[str, ...]] = (
     "list_capabilities",
     "preview_removal",
     "plugin_health",
+    # WS-H6. Reading a ticket's progress is a pure read of rows the job wrote,
+    # and it is the one of the three a loop genuinely wants: "poll until this
+    # finishes" is the natural shape, and it costs a SELECT.
+    "check_background_task",
 )
 
 #: The orchestrator tools deliberately NOT exposed, and why. This is half of a
@@ -165,6 +169,17 @@ PTC_WITHHELD: Final[dict[str, str]] = {
         "removes capability other things may be standing on. The blast-radius "
         "refusal still holds, but `force=True` is reachable and a loop that can "
         "force is a loop that can dismantle the system it is running on"
+    ),
+    # WS-H6. Both cross the boundary from reading to spending.
+    "start_background_task": (
+        "each call fans out up to MAX_UNITS_PER_TASK jobs onto the bus, every "
+        "one of which costs gateway calls. PTC bypasses interrupt_on, so a loop "
+        "that starts tasks is a loop that bills the project with no gate"
+    ),
+    "cancel_background_task": (
+        "stops work somebody else may be waiting on, and the ticket id comes "
+        "from the model. A loop that can cancel by id can cancel a sweep it did "
+        "not start"
     ),
 }
 

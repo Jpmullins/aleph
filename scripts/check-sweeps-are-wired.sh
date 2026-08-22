@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Every `scripts/check-*.sh` is run by something.
+# Every `scripts/check-*.sh` and `scripts/check-*.py` is run by something.
 #
 # This exists because the same defect landed three times in three consecutive
 # batches of work, each time in a sweep whose whole purpose was to prevent that
@@ -29,11 +29,19 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# A sweep counts as wired if one of these names it. The three top-level gates,
+# plus the acceptance probes: `check-okf.py` needs an exported vault before it
+# has anything to read, so its consumer is `okf_export_probe.py`, which builds
+# one and is itself run by acceptance.sh. A probe that nothing runs is caught
+# by acceptance.sh's own MISSING status, so this does not open a hole.
 CONSUMERS=(
   ".github/workflows/ci.yml"
   "scripts/acceptance.sh"
   "scripts/_acceptance/self_check.sh"
 )
+for probe in scripts/_acceptance/*.py scripts/_acceptance/*.mjs; do
+  [ -e "$probe" ] && CONSUMERS+=("$probe")
+done
 
 # Sweeps that legitimately have no consumer, each with a reason. Keep this
 # empty if you can: an allowlist is where this check goes to die.
@@ -48,7 +56,12 @@ declare_allowed() {
 
 unwired=()
 total=0
-for path in scripts/check-*.sh; do
+# `.sh` AND `.py`. The glob was `.sh` only, so `scripts/check-okf.py` — six
+# validation rules for the export format — was invisible to the sweep whose one
+# job is finding sweeps nobody runs. It had no consumer at all: not ci.yml, not
+# acceptance.sh, not self_check.sh, only a mention in prose.
+for path in scripts/check-*.sh scripts/check-*.py; do
+  [ -e "$path" ] || continue
   name="$(basename "$path")"
   total=$((total + 1))
   declare_allowed "$name" && continue

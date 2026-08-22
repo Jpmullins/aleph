@@ -321,6 +321,20 @@ def main(argv: list[str]) -> int:
         files = _load(path)
         problems = check_bundle(files)
         concepts = sum(1 for n in files if n.endswith(".md") and _stem(n) not in RESERVED_STEMS)
+        if not concepts:
+            # A bundle with nothing in it satisfies every rule below, and
+            # printed "✓ 0 concept(s) conform to OKF v0.1" — which is what a
+            # green looks like when an export produced nothing at all. A
+            # validator that passes on an empty input is measuring the
+            # validator.
+            problems.append(
+                Problem(
+                    str(path),
+                    "bundle-empty",
+                    "the bundle contains no concept documents, so every rule "
+                    "below is vacuous — this is an empty export, not a valid one",
+                )
+            )
         if problems:
             failed = True
             print(f"✗ {path}: {len(problems)} OKF v0.1 problem(s) over {concepts} concept(s)")

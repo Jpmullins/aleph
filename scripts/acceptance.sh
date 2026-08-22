@@ -526,6 +526,20 @@ fi
 
 # The three web sweeps, all written in the same change and none of them wired
 # into anything that runs.
+# H8. The OKF validator had no consumer at all — `check-sweeps-are-wired.sh`
+# globbed `.sh` only, so it could not see a `.py` sweep. This exports two real
+# vaults (the largest, and the one whose evidence chain is most populated) and
+# validates the bytes, because a claim about a FILE FORMAT is worth what a
+# validator says about the actual file.
+if [ -n "${DATABASE_URL:-}${ALEPH_DATABASE_URL:-}" ]; then
+  run_shell H8 "a real vault export conforms to OKF v0.1, evidence chain included" \
+    "uv run python scripts/_acceptance/okf_export_probe.py 2>&1 | tail -2"
+else
+  skip H8 "needs a database with a corpus to export"
+fi
+
+run_shell P5b "tracked code does not import untracked modules" \
+  "./scripts/check-imports-resolve.sh 2>&1 | tail -1"
 run_shell E8 "every web module is reachable from an entry point" \
   "./scripts/check-web-dead-code.sh 2>&1 | tail -1"
 run_shell E9 "no unused class selector in the stylesheets" \

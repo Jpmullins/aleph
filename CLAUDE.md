@@ -52,8 +52,16 @@ which supersedes the old decision that the wiki was being deleted.
   **The 0.91 laboratory number is gone, and the real one is worse.** `WS-RS5` landed: the eval now
   runs the production chunker, embeds the same string ingest embeds, and reports nDCG and MRR
   alongside recall. Measured against a 738-document set built from this instance's own corpus
-  (`python -m aleph_evals.build_retrieval_set`): **nDCG@10 0.681, MRR 0.443, recall@1 0.34, @3 0.51,
-  @8 0.64, @20 0.78.** The old 12-document set scored **recall@1 = 1.00** — saturated, and unable to
+  (`python -m aleph_evals.build_retrieval_set`): **MRR 0.443, recall@1 0.34, @3 0.51, @8 0.64,
+  @20 0.78.** The nDCG figure first recorded here — 0.681 — was **withdrawn on 2026-08-22**: the
+  metric was unbounded above. `_ndcg_at` credited a source once per CHUNK it contributed while the
+  ideal denominator counted distinct sources, so ten chunks from the one correct source scored
+  4.54 out of a possible 1.00 and scored higher the more the ranking repeated itself. Fixed
+  (each source credited once, at its best position) and pinned by
+  `packages/aleph-evals/tests/test_ndcg.py`, which asserts the bound exhaustively over every
+  ranking of up to four hits. **The nDCG number has not been re-measured on the 738-document set
+  since the fix** — the recall figures are unaffected, and no nDCG should be quoted until that run
+  happens. The old 12-document set scored **recall@1 = 1.00** — saturated, and unable to
   resolve any change RS6 or RS10 might make. The generated set is NOT committed: the corpus is
   published papers and redistributing them is not the eval's call. Point `ALEPH_RETRIEVAL_DATASET`
   at a generated one; CI measures the small committed set, lexical-only, with a floor on recall@1.

@@ -9,6 +9,7 @@ dependencies = [
     "jsonschema>=4.25,<5",
     "aleph-core",
     "aleph-db",
+    "aleph-kernel",
     "aleph-observability",
     "aleph-security",
 ]

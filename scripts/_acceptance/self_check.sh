@@ -406,6 +406,27 @@ if [ -f scripts/check-sweeps-are-wired.sh ]; then
   rm -f "$ORPHAN"
 fi
 
+# The import sweep, mutated by UNTRACKING a module rather than by editing a
+# file: the defect it exists for is invisible in the working tree, so a normal
+# `probe` (which edits and restores content) could not express it. The file
+# stays on disk throughout; only the index changes, and it is restored either
+# way.
+IMPORT_SUBJECT="apps/api/src/aleph_api/routes/background_tasks.py"
+if git ls-files --error-unmatch "$IMPORT_SUBJECT" >/dev/null 2>&1; then
+  git rm --cached -q "$IMPORT_SUBJECT"
+  if ./scripts/check-imports-resolve.sh >/dev/null 2>&1; then
+    printf '  \033[31m%-8s\033[0m %s — check stayed GREEN while broken\n' \
+      "CANNOT" "an import of an untracked module is noticed"
+    BAD=$((BAD+1))
+  else
+    printf '  \033[32m%-8s\033[0m %s\n' "can fail" "an import of an untracked module is noticed"
+    OK=$((OK+1))
+  fi
+  git add -f "$IMPORT_SUBJECT"
+else
+  printf '  \033[33m%-8s\033[0m %s\n' "skip" "$IMPORT_SUBJECT is not tracked — cannot untrack it"
+fi
+
 probe "the runtime bridge check notices an any-origin proxy" \
   apps/copilot-runtime/src/server.ts \
   's/^  cors: \{$/  cors: true, \/\/ probe\n  _unused: {/m' \

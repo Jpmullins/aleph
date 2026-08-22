@@ -106,6 +106,7 @@ source = { editable = "packages/aleph-a2ui" }
 dependencies = [
     { name = "aleph-core" },
     { name = "aleph-db" },
+    { name = "aleph-kernel" },
     { name = "aleph-observability" },
     { name = "aleph-security" },
     { name = "jsonschema" },
@@ -122,6 +123,7 @@ mcp = [
 requires-dist = [
     { name = "aleph-core", editable = "packages/aleph-core" },
     { name = "aleph-db", editable = "packages/aleph-db" },
+    { name = "aleph-kernel", editable = "packages/aleph-kernel" },
     { name = "aleph-observability", editable = "packages/aleph-observability" },
     { name = "aleph-security", editable = "packages/aleph-security" },
     { name = "jsonschema", specifier = ">=4.25,<5" },

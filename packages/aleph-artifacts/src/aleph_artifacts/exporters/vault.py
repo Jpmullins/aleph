@@ -308,9 +308,27 @@ def _filenames(pages: Sequence[VaultPage]) -> dict[str, str]:
     return out
 
 
+def _escape_display(display: str) -> str:
+    """Escape brackets in a link's visible text.
+
+    A page titled `[e2e] theme diff project` rendered as
+    `[[e2e] theme diff project](./slug.md)`. That is not an Obsidian wikilink —
+    it is a markdown link whose label opens with `[` — but every reader that
+    scans for `[[` sees one, including this repo's own "no Obsidian syntax in
+    the okf dialect" check, and a markdown parser closes the label at the FIRST
+    `]`, so the rendered link text becomes `[e2e` and the rest leaks into the
+    page as prose.
+
+    Titles are free text. Nothing stops a page being called `Attention [2017]`
+    or `The [[wikilink]] problem`, and both are reasonable titles.
+    """
+    return display.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+
 def _link(*, stem: str, display: str, anchor: str, dialect: str) -> str:
     if dialect == "okf":
-        return f"[{display}](./{stem}.md" + (f"#{anchor})" if anchor else ")")
+        safe = _escape_display(display)
+        return f"[{safe}](./{stem}.md" + (f"#{anchor})" if anchor else ")")
     inner = f"{stem}#{anchor}" if anchor else stem
     # `[[attention]]` reads as "attention" in Obsidian, so the author's
     # capitalisation is kept as an explicit display whenever it differs from the

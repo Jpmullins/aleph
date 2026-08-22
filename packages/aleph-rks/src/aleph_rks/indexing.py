@@ -165,7 +165,69 @@ async def _upsert_index_record(
     existing.indexed_at = utcnow()
 
 
-def embedding_text(*, chunk_text: str, title: str | None = None) -> str:
+#: Is the chunk embedded with its document's title and section heading, or bare?
+#:
+#: **False, and flipping it is a migration, not a setting.** That is why it is a
+#: module constant rather than an environment variable: an operator who can flip
+#: it from a `.env` can put the index into a state where half the corpus is
+#: embedded one way and half the other, silently, with new documents ranking
+#: against old ones on an unequal footing. A mixed index is worse than either
+#: representation and nothing would report it.
+#:
+#: What flipping it costs, and what makes it safe: the representation is part of
+#: :func:`index_signature`, so every `RetrievalIndexRecord` written under the
+#: old representation immediately reads as *stale* and
+#: `aleph_rks.retrieval.reembed_for_project` re-embeds it. Flipping this
+#: constant therefore means (1) a code change, (2) running the re-embed for
+#: every project, and (3) paying for it. Until step 2 finishes the index is
+#: mixed — which is exactly why the staleness has to be visible in a row rather
+#: than inferred.
+#:
+#: **Measured before shipping it off, and it did not earn the migration.**
+#: 738 documents from this instance's own corpus, 4,245 production-chunked
+#: passages, 236 questions, the same seeded set for both arms:
+#:
+#: | representation | nDCG@10 | MRR   | r@1  | r@20 |
+#: |----------------|---------|-------|------|------|
+#: | chunk only     | 0.567   | 0.495 | 0.38 | 0.84 |
+#: | + title        | 0.541   | 0.472 | 0.37 | 0.81 |
+#:
+#: Worse on every metric, and still worse with the reranker on top of it
+#: (0.642 vs 0.645 nDCG@10, r@20 0.84 vs 0.87). One caveat, stated because it
+#: bounds the claim: every chunk in that corpus has `section_path = None`, so
+#: what was measured is the title prefix alone. Only 751 of 10,098 live chunks
+#: carry a heading path either — the shipped PDF parsers extract almost no
+#: structure (`docs/measurements/pdf-parsers.md`) — so the heading half of this
+#: representation has very little to work with on a real Aleph corpus.
+CONTEXTUAL_EMBEDDING = False
+
+#: Tag appended to the recorded embedder identity when
+#: :data:`CONTEXTUAL_EMBEDDING` is on. Versioned (`ctx1`) because a later change
+#: to *how* the context is composed is as much a re-embed as turning it on.
+CONTEXTUAL_TAG = "ctx1"
+
+
+def index_signature(model: str, *, contextual: bool | None = None) -> str:
+    """The embedder identity recorded on an index, including the representation.
+
+    `RetrievalIndexRecord.embedder_model` used to hold the model name alone, so
+    two chunks embedded from *different strings* by the same model were
+    indistinguishable — and the staleness check
+    (`embedder_model != current_model`) could not see a representation change at
+    all. Folding the representation into the identity means the existing
+    re-embed machinery repairs it with no new column and no new migration.
+    """
+    use = CONTEXTUAL_EMBEDDING if contextual is None else contextual
+    return f"{model}+{CONTEXTUAL_TAG}" if use else model
+
+
+def embedding_text(
+    *,
+    chunk_text: str,
+    title: str | None = None,
+    section_path: str | None = None,
+    contextual: bool | None = None,
+) -> str:
     """The exact string that gets embedded. ONE definition, two callers.
 
     The eval embedded `f"{title}. {text}"` while this path embedded `r.text`,
@@ -173,20 +235,43 @@ def embedding_text(*, chunk_text: str, title: str | None = None) -> str:
     better-conditioned corpus than production produces. Not a large gap, and
     entirely invisible: both sides looked correct in isolation.
 
-    **It returns the chunk text unchanged, and `title` is deliberately unused.**
-    Prefixing the title is a real technique and it may well be worth adopting —
-    but not as a side effect of reconciling an eval. There are already
-    thousands of chunks in the production index embedded WITHOUT it, and
-    changing this function alone would leave the index holding two
-    representations of the same corpus, silently, with new documents ranking
-    against old ones on an unequal footing. Adopting it means a deliberate
-    re-embed of everything, which is `WS-RS4`'s business.
+    **With :data:`CONTEXTUAL_EMBEDDING` off — the default — it returns the chunk
+    unchanged and every argument but `chunk_text` is ignored.** That is the
+    shipped behaviour and it is what `packages/aleph-evals/tests/
+    test_eval_matches_production.py` pins.
 
-    `title` stays in the signature so the decision has somewhere to land, and so
-    the eval passes what it knows rather than pretending it does not have it.
+    With it on, the chunk is prefixed with the document title and the heading
+    path it sits under. The intent is the well-known one: a chunk that says
+    "this doubled throughput" is unretrievable by the name of the thing it
+    doubled, because the name is in the heading three paragraphs up. Whether
+    that is worth a full re-embed is a measurement, and on this instance's
+    corpus it was not — see the WS-RS6 report and :data:`CONTEXTUAL_EMBEDDING`.
+
+    `contextual` overrides the module default. It exists so a measurement can
+    run both arms in one process without mutating global state, NOT as a
+    per-call setting: two call sites disagreeing about it would produce exactly
+    the mixed index the constant exists to prevent.
     """
-    _ = title
-    return chunk_text
+    use = CONTEXTUAL_EMBEDDING if contextual is None else contextual
+    if not use:
+        return chunk_text
+    # Heading path first as a plain phrase: `section_path` is stored slugified
+    # ("methods > sample-preparation"), and hyphens survive tokenisation badly
+    # in both legs. The separator is a newline rather than ". " so the prefix
+    # cannot be mistaken for the passage's own first sentence.
+    lead = [part for part in (title, _readable_section(section_path)) if part]
+    if not lead:
+        return chunk_text
+    return "\n".join([*lead, "", chunk_text])
+
+
+def _readable_section(section_path: str | None) -> str | None:
+    """`methods > sample-prep` → `Methods > Sample Prep`, or None."""
+    if not section_path:
+        return None
+    parts = [part.strip().replace("-", " ").strip() for part in section_path.split(">")]
+    titled = [part.title() for part in parts if part]
+    return " > ".join(titled) or None
 
 
 async def index_normalized_document(
@@ -309,7 +394,11 @@ async def index_normalized_document(
         rows = list(
             (
                 await session.execute(
-                    select(DocumentChunk.id, DocumentChunk.text)
+                    # `section_path` is selected because `embedding_text` may
+                    # need it. Selecting it unconditionally rather than behind
+                    # the flag keeps ONE query shape: a query that changes with
+                    # a constant is a second code path nothing exercises.
+                    select(DocumentChunk.id, DocumentChunk.text, DocumentChunk.section_path)
                     .where(
                         DocumentChunk.normalized_document_id == normalized_id,
                         DocumentChunk.embedding.is_(None),
@@ -318,6 +407,15 @@ async def index_normalized_document(
                 )
             ).all()
         )
+        # The document's own title, for the contextual representation. Read
+        # here rather than passed in because `index_normalized_document` is
+        # entered from three places (ingest, backfill, the repair pass) and
+        # only one of them has a `Source` in hand — a parameter would have been
+        # None on the other two and the representation would have differed by
+        # caller, which is the mixed-index failure with extra steps.
+        source_title = (
+            await session.execute(select(Source.title).where(Source.id == source_id))
+        ).scalar_one_or_none()
     if not rows:
         # Every chunk already carries a vector — nothing to do, and saying so is
         # what makes a repair pass idempotent.
@@ -328,12 +426,12 @@ async def index_normalized_document(
                 source_id=source_id,
                 chunk_count=chunk_count,
                 state="embedded",
-                embedder_model=embed_model,
+                embedder_model=index_signature(embed_model),
                 degraded_reason=None,
                 created_by=principal.user_id,
             )
             await session.commit()
-        return IndexOutcome(chunk_count, "embedded", embed_model, None)
+        return IndexOutcome(chunk_count, "embedded", index_signature(embed_model), None)
 
     try:
         if not is_known_embedding_model(embed_model):
@@ -361,7 +459,14 @@ async def index_normalized_document(
             project_id=project_id,
             agent_run_id=agent_run_id,
             profile_bindings=profile_bindings,
-            texts=[embedding_text(chunk_text=r.text) for r in rows],
+            texts=[
+                embedding_text(
+                    chunk_text=r.text,
+                    title=source_title,
+                    section_path=r.section_path,
+                )
+                for r in rows
+            ],
             purpose=purpose,
         )
     except Exception as exc:
@@ -378,7 +483,7 @@ async def index_normalized_document(
             await session.execute(
                 update(DocumentChunk)
                 .where(DocumentChunk.id == row.id)
-                .values(embedding=embedding, embedder_model=result.model)
+                .values(embedding=embedding, embedder_model=index_signature(result.model))
             )
         await _upsert_index_record(
             session,
@@ -386,10 +491,13 @@ async def index_normalized_document(
             source_id=source_id,
             chunk_count=chunk_count,
             state="embedded",
-            embedder_model=result.model,
+            # The signature, not the bare model name: what was embedded is the
+            # model AND the string it was given, and a staleness check that
+            # cannot see the second cannot repair a representation change.
+            embedder_model=index_signature(result.model),
             degraded_reason=None,
             created_by=principal.user_id,
         )
         await session.commit()
 
-    return IndexOutcome(chunk_count, "embedded", result.model, None)
+    return IndexOutcome(chunk_count, "embedded", index_signature(result.model), None)

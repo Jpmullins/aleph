@@ -43,6 +43,22 @@ _RAW: Final[dict[str, Any]] = json.loads(CATALOG_PATH.read_text(encoding="utf-8"
 _RENDER: Final[dict[str, Any]] = json.loads(RENDER_CATALOG_PATH.read_text(encoding="utf-8"))
 
 CATALOG_VERSION: Final[str] = _RAW["version"]
+
+#: The WIRE id of the human-owned catalog — what `createSurface.catalogId`
+#: carries and what the client looks up.
+#:
+#: It read `"aleph-v1"` until WS-A3b, and nothing on the client has ever
+#: declared a catalog by that name. `a2ui_handlers.connector_settings_surface`
+#: stamps this value, so every generated settings screen created a surface
+#: naming a catalog that does not exist —
+#: `MessageProcessor.processCreateSurfaceMessage` raises `Catalog not found`,
+#: and the pane dies rather than rendering. Two ids for one catalog (`aleph-v1`
+#: in the file, `aleph://v1` in the code) is exactly the drift
+#: `docs/research/a2ui.md:477` flagged and nothing acted on.
+#:
+#: See `aleph_a2ui.plugin_catalogs` for the convention this now follows and for
+#: `aleph://v1`, which remains registered as an alias because the
+#: copilot-runtime bridge still stamps it.
 CATALOG_ID: Final[str] = _RAW["catalogId"]
 
 #: `name -> JSON Schema`. The `agent` block an entry may also carry belongs to
@@ -74,6 +90,16 @@ _RENDER_COMPONENTS: Final[dict[str, Any]] = _RENDER["components"]
 #: `DataBinding`, ...). Merged into each component schema at validation time so
 #: a component can be validated standalone.
 _RENDER_DEFS: Final[dict[str, Any]] = _RENDER["$defs"]
+
+#: Names of the functions the renderer's catalog can invoke — `formatDate`,
+#: `equals`, `openUrl` and the rest of `@a2ui/react`'s `basicCatalog`. Extracted
+#: rather than listed, for the reason the components are: a hand-kept second
+#: copy is what `check-agent-catalog-covers-renderer.sh` exists to catch.
+#: `aleph_a2ui.plugin_catalogs` needs them because a plugin shadowing a core
+#: FUNCTION breaks a surface exactly as thoroughly as one shadowing a card, and
+#: silently — `Function not found in catalog` is thrown at render time, in one
+#: renderer, on one surface.
+_RENDER_FUNCTIONS: Final[list[str]] = list(_RENDER.get("functions", ()))
 
 _ACTIONS: Final[dict[str, Any]] = _RAW["actions"]
 

@@ -189,7 +189,16 @@ async function extract() {
         defs,
       );
     }
-    return { $comment: BANNER, catalogId: catalog.id, $defs: defs, components };
+    // Function NAMES, not schemas. The collision check in
+    // `aleph_a2ui.plugin_catalogs` refuses a plugin whose component *or
+    // function* name is already core's, and it cannot do the second half from
+    // a list nobody maintains — the twenty-five basic-catalog functions
+    // (`formatDate`, `equals`, `openUrl`, ...) exist only inside
+    // `@a2ui/react`'s `basicCatalog`. Deriving them here is the same rule the
+    // component list already follows: what the agent is told is a projection
+    // of what the browser can draw.
+    const functions = [...catalog.functions.keys()].sort();
+    return { $comment: BANNER, catalogId: catalog.id, $defs: defs, components, functions };
   } finally {
     await server.close();
   }

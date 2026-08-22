@@ -3,7 +3,7 @@
   "$id": "https://aleph.research/a2ui/catalog/v1.json",
   "title": "Aleph A2UI Catalog",
   "version": "1.0.0",
-  "catalogId": "aleph-v1",
+  "catalogId": "aleph://core@1",
   "agentCatalogId": "aleph://v1",
   "components": {
     "ApprovalCard": {
