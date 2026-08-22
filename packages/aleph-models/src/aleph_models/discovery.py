@@ -415,19 +415,36 @@ CAPABILITY_POLICIES: dict[Capability, CapabilityPolicy] = {
     Capability.EXTRACTION: CapabilityPolicy(mode="chat", tier="light", needs_function_calling=True),
     Capability.CLASSIFICATION: CapabilityPolicy(mode="chat", tier="light"),
     Capability.EMBEDDING: CapabilityPolicy(mode="embedding", tier="light"),
+    # Restored 2026-08-22, with its consumer. `ListwiseLlmReranker` reorders a
+    # window of retrieved chunks, and it does that by asking a CHAT model —
+    # there is no separate reranker endpoint involved. The policy that used to
+    # sit here said `mode="rerank"`, which matched nothing on any gateway Aleph
+    # has been pointed at, so the capability was permanently unbound even
+    # before the consumer went missing.
+    #
+    # `tier="light"` because the judgement is "which of these forty passages
+    # answer this question", not synthesis, and it runs on the latency path of
+    # every assistant search. `min_input_tokens` is 32k so a forty-chunk window
+    # fits: a model that cannot hold the window would silently rerank a
+    # truncated one.
+    Capability.RERANK: CapabilityPolicy(mode="chat", tier="light", min_input_tokens=32_000),
 }
 
-#: `Capability.RERANK` is deliberately absent, and its absence is the point.
+#: **History, kept because the rule it produced is still load-bearing.**
 #:
-#: Aleph contains no reranker: nothing anywhere resolves that capability, so a
-#: model bound to it would never be called. The policy that used to sit here
-#: (`mode="rerank"`) matched nothing on any gateway Aleph has been pointed at,
-#: so every single `autoconfigure` run reported `rerank` in its `unbound` list
-#: — a permanent red mark for a capability that was never going to be bound,
-#: which is how an operator learns to ignore the list that also names the real
-#: failures. `tests/unit/test_capability_offers.py` keeps the three lists
-#: (the Settings picker, this table, and the code that resolves a capability)
-#: in step, so re-adding it requires shipping the consumer too.
+#: `Capability.RERANK` was REMOVED from this table on 2026-08-21 and restored on
+#: 2026-08-22. It was removed because nothing in Aleph resolved it: a model
+#: bound to it would never have been called, and every `autoconfigure` run
+#: reported `rerank` in its `unbound` list — a permanent red mark for a
+#: capability that was never going to bind, which is how an operator learns to
+#: ignore the list that also names the real failures.
+#:
+#: It is back because the consumer now exists and runs on the production path:
+#: `aleph_assistant.retrieval.router._search_corpus` calls `reranker_for` and
+#: passes the result to `search_corpus`. `tests/unit/test_capability_offers.py`
+#: keeps the three lists — the Settings picker, this table, and the code that
+#: resolves a capability — in step in BOTH directions, so neither an offer
+#: nobody resolves nor a resolver nobody offers can ship.
 
 
 def candidates_for(

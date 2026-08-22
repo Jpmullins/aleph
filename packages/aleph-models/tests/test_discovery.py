@@ -309,10 +309,20 @@ class TestSelectionRefuses:
 
 
 class TestSelectionChooses:
-    def test_every_other_capability_is_bound_on_the_real_gateway(self) -> None:
+    def test_every_capability_binds_on_the_real_gateway(self) -> None:
+        """Nothing is left unbound, `rerank` included.
+
+        This asserted `missing == ["rerank"]` until 2026-08-22: the capability
+        had no policy, so autoconfigure could never bind it and every run
+        printed it in the unbound list. The policy is back — `mode="chat"`,
+        because a listwise reranker reorders by asking a chat model and no
+        gateway advertises a `rerank` mode — so there is nothing left to
+        exempt. An expected-failure list with one permanent entry teaches an
+        operator to skim the list that also names the real failures.
+        """
         bindings = select_default_bindings(_models(), unreachable=UNREACHABLE)
         missing = [c.value for c in Capability if c.value not in bindings]
-        assert missing == ["rerank"], f"unexpectedly unbound: {missing}"
+        assert missing == [], f"unexpectedly unbound: {missing}"
 
     def test_heavy_capabilities_prefer_the_newer_model_when_tied(self) -> None:
         """Both Opuses are identical on price, context and flags — take the later."""
@@ -349,19 +359,22 @@ class TestDeterminism:
         assert forward == reverse
 
 
-def test_every_capability_has_a_policy_or_is_deliberately_unbindable() -> None:
+def test_every_capability_has_a_policy() -> None:
     """A capability with no policy can never be bound, silently.
 
-    `RERANK` is the one deliberate exception, and it is named here rather than
-    left to a set difference so that adding a NEW enum member without a policy
-    still fails. Aleph contains no reranker: nothing resolves that capability,
-    so its policy could only ever produce a permanent entry in every
-    autoconfigure run's `unbound` list and a Settings row an operator could set
-    and never observe. `tests/unit/test_capability_offers.py` keeps the picker,
-    this table and the call sites in step.
+    There is no exception any more. `RERANK` was the one, from 2026-08-21 to
+    2026-08-22, because nothing in Aleph resolved it — a model bound to it
+    would never have been called, so the policy could only produce a permanent
+    entry in every autoconfigure run's `unbound` list and a Settings row an
+    operator could set and never observe. It has a consumer now
+    (`aleph_assistant.retrieval.router._search_corpus`), so it has a policy.
+
+    Stated as an exact set equality rather than a subset, so a NEW enum member
+    with no policy fails here instead of becoming silently unbindable.
     """
-    assert Capability.RERANK not in CAPABILITY_POLICIES
-    assert set(CAPABILITY_POLICIES) | {Capability.RERANK} == set(Capability)
+    assert set(CAPABILITY_POLICIES) == set(Capability), (
+        f"no policy for: {sorted(c.value for c in set(Capability) - set(CAPABILITY_POLICIES))}"
+    )
 
 
 class TestRestrictedKeyFallback:

@@ -180,3 +180,80 @@ def test_the_composed_body_names_the_degradation() -> None:
 
 def test_an_undegraded_body_is_returned_untouched() -> None:
     assert _with_degradation("Here is what I found.", None) == "Here is what I found."
+
+
+# ---------------------------------------------------------------------------
+# The reranker reaches the production search
+# ---------------------------------------------------------------------------
+#
+# `Capability.RERANK` shipped with the reranker written, tested and unreachable.
+# `search_corpus` had four production call sites and not one passed `reranker=`;
+# forcing the parameter to None broke four tests inside the reranker's own file
+# and nothing else in 1,450. `reranker_for` had zero non-test callers, and the
+# capability was absent from `CAPABILITY_POLICIES` and from the Settings picker,
+# so even a call site would have resolved to `NoReranker` on every project that
+# exists.
+#
+# These pin the wiring at the one place production enters it.
+
+
+async def test_the_production_search_is_given_a_reranker(
+    patched_search: dict[str, Any],
+    gateway: tuple[FakeGateway, LiteLLMClient],
+) -> None:
+    """`_search_corpus` must pass one, not leave the parameter at its default."""
+    _fake, client = gateway
+    router = _router(client, patched_search)
+
+    await router._search_corpus(
+        principal=object(),  # type: ignore[arg-type]
+        project_id=uuid.uuid4(),
+        agent_run_id=None,
+        profile_bindings={
+            "embedding": {"model": RIGHT_EMBEDDER},
+            "rerank": {"model": "bedrock-claude-haiku-4.5"},
+        },
+        query="what did the survey find",
+        budget=8,
+    )
+
+    assert "reranker" in patched_search, (
+        "search_corpus was called without a reranker at all — the capability "
+        "resolves to NoReranker on every project no matter what is bound"
+    )
+    reranker = patched_search["reranker"]
+    assert reranker is not None
+    assert type(reranker).__name__ != "NoReranker", (
+        "a bound rerank capability still produced a NoReranker; the binding is "
+        f"not reaching reranker_for (got {reranker!r})"
+    )
+
+
+async def test_an_unbound_rerank_capability_degrades_rather_than_raising(
+    patched_search: dict[str, Any],
+    gateway: tuple[FakeGateway, LiteLLMClient],
+) -> None:
+    """A fresh project binds nothing until autoconfigure runs.
+
+    That must produce fused order with a recorded reason, the way an unbound
+    embedder produces lexical-only — not an exception on the search path.
+    """
+    _fake, client = gateway
+    router = _router(client, patched_search)
+
+    await router._search_corpus(
+        principal=object(),  # type: ignore[arg-type]
+        project_id=uuid.uuid4(),
+        agent_run_id=None,
+        profile_bindings={"embedding": {"model": RIGHT_EMBEDDER}},
+        query="what did the survey find",
+        budget=8,
+    )
+
+    reranker = patched_search.get("reranker")
+    assert reranker is not None, "an unbound capability must still yield a reranker object"
+    assert type(reranker).__name__ == "NoReranker"
+    assert getattr(reranker, "skipped_reason", None), (
+        "a reranker that stood down must say why; a silent skip is "
+        "indistinguishable from a reranker that ran and changed nothing"
+    )

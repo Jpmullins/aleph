@@ -25,6 +25,7 @@ from aleph_core.schemas.model_profile import Capability
 from aleph_models.client import ChatMessage
 from aleph_observability.tracing import start_span
 from aleph_rks.models import Source
+from aleph_rks.rerank import reranker_for
 from aleph_rks.retrieval import descend_into_source, search_corpus
 from aleph_wiki.index_service import IndexService, PageSelectionResult
 from aleph_wiki.models import WikiPage, WikiRevision
@@ -420,6 +421,22 @@ class WikiFirstRetrievalRouter:
             # arbitrary dense ranking into the result.
             self._degraded = "embedder_unavailable"
 
+        # The reranker this project's profile earns, or a `NoReranker` that
+        # records why it stood down. `reranker_for` never raises and never
+        # returns None: an unbound capability is a normal state, and it degrades
+        # to fused order the way an unbound embedder degrades to lexical-only.
+        #
+        # This is the production caller `Capability.RERANK` shipped without.
+        # `search_corpus` had four call sites and not one passed `reranker=`, so
+        # forcing the parameter to None broke four tests in the reranker's own
+        # file and nothing else in 1,450.
+        reranker = reranker_for(
+            client=self._litellm,
+            principal=principal,
+            project_id=project_id,
+            profile_bindings=profile_bindings,
+            agent_run_id=agent_run_id,
+        )
         async with self._maker() as session:
             hits = await search_corpus(
                 session,
@@ -427,6 +444,7 @@ class WikiFirstRetrievalRouter:
                 query_text=query,
                 query_embedding=query_vector,
                 top_k=budget,
+                reranker=reranker,
             )
             short_ids = await _source_short_ids(session, {h.source_id for h in hits if h.source_id})
 

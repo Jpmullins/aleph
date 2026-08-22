@@ -49,16 +49,48 @@ def test_the_exemptions_are_all_still_needed() -> None:
     )
 
 
-def test_rerank_is_gone_from_all_three_lists() -> None:
-    """The defect this sweep was written for, pinned by name."""
+def test_rerank_is_in_all_three_lists_now_that_it_has_a_consumer() -> None:
+    """The inverse of the test that used to stand here, and the same rule.
+
+    `rerank` was removed from all three lists on 2026-08-21 because nothing in
+    Aleph resolved it: a model bound to it would never have been called, and
+    every `autoconfigure` run reported it permanently unbound. It is back on
+    2026-08-22 because `aleph_assistant.retrieval.router._search_corpus` calls
+    `reranker_for` and passes the result to `search_corpus`.
+
+    The rule never changed — an offer with no resolver, and a resolver with no
+    offer, are both defects — and `test_every_offered_capability_has_a_policy_
+    and_a_caller` enforces it generally. This names `rerank` specifically
+    because it is the capability that has now been wrong in both directions.
+    """
     drawers = (ROOT / "apps/web/src/components/Drawers.tsx").read_text(encoding="utf-8")
     discovery = (ROOT / "packages/aleph-models/src/aleph_models/discovery.py").read_text(
         encoding="utf-8"
     )
     members = {"RERANK": "rerank"}
-    assert "rerank" not in offered_capabilities(drawers)
-    assert "rerank" not in help_capabilities(drawers)
-    assert "rerank" not in policy_capabilities(discovery, members)
+    assert "rerank" in offered_capabilities(drawers), "the Settings picker does not offer it"
+    assert "rerank" in help_capabilities(drawers), "offered with no help string"
+    assert "rerank" in policy_capabilities(discovery, members), (
+        "no CAPABILITY_POLICIES entry, so autoconfigure can never bind it"
+    )
+
+
+def test_the_rerank_policy_asks_for_a_chat_model() -> None:
+    """`mode="rerank"` is why it was unbindable even before the consumer went.
+
+    No gateway Aleph has been pointed at advertises a `rerank` mode.
+    `ListwiseLlmReranker` reorders by asking a chat model, so that is what the
+    policy must select for — a policy that matches nothing is indistinguishable
+    from no policy at all, except that it also prints a red line every run.
+    """
+    from aleph_core.schemas.model_profile import Capability
+    from aleph_models.discovery import CAPABILITY_POLICIES
+
+    policy = CAPABILITY_POLICIES[Capability.RERANK]
+    assert policy.mode == "chat", f"a {policy.mode!r} model will never be found"
+    # The window has to hold the candidate list it is asked to reorder.
+    assert policy.min_input_tokens is not None
+    assert policy.min_input_tokens >= 32_000
 
 
 # --- the parsers, against synthetic sources -------------------------------
