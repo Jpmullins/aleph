@@ -130,6 +130,13 @@ PTC_ALLOWLIST: Final[tuple[str, ...]] = (
     "wiki_lint_report",
     "list_connectors",
     "diagnose_platform",
+    # WS-A2. Both are pure reads over the kernel's declaration graph and change
+    # nothing — `preview_removal` in particular is the one an agent should be
+    # able to call freely, since the whole design is that a refusal must be
+    # predictable before it is attempted.
+    "list_capabilities",
+    "preview_removal",
+    "plugin_health",
 )
 
 #: The orchestrator tools deliberately NOT exposed, and why. This is half of a
@@ -146,6 +153,19 @@ PTC_WITHHELD: Final[dict[str, str]] = {
     "pin_to_brief": "writes a Briefs card; a loop would paper the tab",
     "compose_dossier": "writes a Briefs card; same",
     "spotlight": "mutates Briefs ordering through the audited action router",
+    # WS-A2. These are the two that change what the system CAN DO, which is a
+    # larger thing than any other tool here changes.
+    "author_plugin": (
+        "installs code this process will execute and an instruction the model "
+        "will follow. PTC bypasses interrupt_on, so a loop could author "
+        "plugins with no gate between the model and the kernel — the one place "
+        "that must stay a deliberate act"
+    ),
+    "disable_plugin": (
+        "removes capability other things may be standing on. The blast-radius "
+        "refusal still holds, but `force=True` is reachable and a loop that can "
+        "force is a loop that can dismantle the system it is running on"
+    ),
 }
 
 #: Appended to the system prompt on every model call, after the REPL's own

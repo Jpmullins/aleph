@@ -1631,6 +1631,203 @@ def subagent_model(settings: Settings, name: str, *, capability: Any = None) -> 
 #: stops being true when somebody adds the twelfth tool.
 #: (The UI-driving `open_page` / `focus_tab` / `highlight_claim` are CopilotKit
 #: frontend tools and live in the browser, not here.)
+
+# ---------------------------------------------------------------------------
+# The kernel, reachable by the agent. WS-A2.
+# ---------------------------------------------------------------------------
+#
+# "An agent that authors plugins for itself and activates or deactivates them as
+# needed… The kernel is the product." — CLAUDE.md, first substantive line.
+#
+# The kernel was built, guarded and tested, and until these tools
+# `grep -rn "AgentPluginAPI" apps/api/src` returned 0. The product was a library
+# whose only non-test importer was an acceptance probe.
+#
+# Every one of these resolves scope through `_authorized`, so they inherit the
+# agent-scope defence already in place rather than inventing a second one.
+
+
+#: Fallback actor when a tool runs with no bound principal — a direct caller or
+#: a test. Never reached on the chat path, where  has already
+#: failed closed on an unbound principal.
+_SYSTEM_ACTOR = UUID(int=0)
+
+
+def _agent_plugin_api() -> Any:
+    from aleph_kernel.agent_api import AgentPluginAPI
+
+    kernel = _runtime.get("kernel")
+    if kernel is None:
+        msg = "the kernel is not mounted on this process"
+        raise RuntimeError(msg)
+    return AgentPluginAPI(kernel)
+
+
+@tool
+async def list_capabilities(config: RunnableConfig) -> str:
+    """List every capability this system has, and whether you may turn it off.
+
+    Use this before proposing any change to the system's own abilities. A
+    capability with `plugin_id: null` is core: it is not merely protected, it
+    has no handle you could pass anywhere, so there is nothing to attempt.
+    """
+    await _authorized(await _project_id_from_config(config))
+    views = _agent_plugin_api().inspect()
+    if not views:
+        return "No capabilities are mounted on this process."
+    lines = []
+    for v in views:
+        handle = v.plugin_id or "core (no handle — cannot be addressed)"
+        lines.append(
+            f"- {v.name} [{v.state}] provides={list(v.provides)} "
+            f"requires={list(v.requires)} removable={v.removable} handle={handle}"
+        )
+    return "\n".join(lines)
+
+
+@tool
+async def preview_removal(plugin_id: str, config: RunnableConfig) -> str:
+    """Say what ELSE would stop if this plugin were turned off. Changes nothing.
+
+    Always call this before `disable_plugin`. The blast radius is computed from
+    the declaration graph, so the answer here is exactly the refusal you would
+    get — a refusal you could not have predicted is indistinguishable from a
+    broken tool.
+    """
+    await _authorized(await _project_id_from_config(config))
+    for v in _agent_plugin_api().inspect():
+        if v.plugin_id == plugin_id:
+            also = list(getattr(v, "would_also_stop", ()) or ())
+            if not also:
+                return f"Disabling {v.name} would stop nothing else."
+            return (
+                f"Disabling {v.name} would ALSO stop: {', '.join(sorted(also))}. "
+                "Disabling it will be refused unless you accept breaking those."
+            )
+    return (
+        f"No addressable plugin {plugin_id!r}. Core capability is mounted from the "
+        "boot manifest and has no plugin id — it cannot be named here at all."
+    )
+
+
+@tool
+async def author_plugin(
+    name: str,
+    instructions: str,
+    config: RunnableConfig,
+    code: str = "",
+    requires: list[str] | None = None,
+) -> str:
+    """Write a new plugin for yourself, durably.
+
+    `instructions` is a SKILL.md document with `---` front matter carrying at
+    least `name` and `description`. `code` is optional Python defining helpers;
+    it is checked before it is stored and before it ever runs — a top-level call
+    outside a small allowlist is refused, so importing your plugin cannot have a
+    side effect.
+
+    The plugin is recorded in the database, so it is still there after a restart
+    and the background workers can load it too.
+    """
+    project_id = await _authorized(await _project_id_from_config(config))
+    if project_id is None:
+        return "No project in scope; cannot install a plugin."
+
+    from aleph_db.repos.ledger import LedgerWriter
+    from aleph_kernel.skills import SkillRejected
+    from aleph_runtime.plugin_service import PluginDraft, PluginService
+
+    session_maker = _runtime.get("session_maker")
+    if session_maker is None:
+        return "No database bound on this process; cannot install a plugin durably."
+    principal = current_principal()
+    try:
+        async with session_maker() as session:
+            row = await PluginService(session).install(
+                project_id=project_id,
+                actor_id=principal.user_id if principal else _SYSTEM_ACTOR,
+                draft=PluginDraft(
+                    name=name,
+                    instructions=instructions,
+                    code=code,
+                    requires=tuple(requires or ()),
+                ),
+                ledger=LedgerWriter(session),
+                kernel=_runtime.get("kernel"),
+            )
+            await session.commit()
+    except SkillRejected as exc:
+        # The violations, verbatim. An agent told only "rejected" writes the
+        # same plugin again.
+        return f"Refused: {exc}"
+    return (
+        f"Installed {row.name!r} (v{row.major_version}). It will still be here "
+        "after a restart, and the workers can load it too."
+    )
+
+
+@tool
+async def disable_plugin(plugin_id: str, config: RunnableConfig, force: bool = False) -> str:
+    """Turn off a plugin you installed. Refused if something depends on it.
+
+    Call `preview_removal` first. `force` accepts breaking the plugins named
+    there; it can never reach core capability, because core capability has no
+    id to pass here.
+    """
+    project_id = await _authorized(await _project_id_from_config(config))
+    if project_id is None:
+        return "No project in scope."
+
+    from uuid import UUID as _UUID
+
+    from aleph_kernel.kernel import PluginId
+
+    api = _agent_plugin_api()
+    known = {v.plugin_id: v.name for v in api.inspect() if v.plugin_id}
+    if plugin_id not in known:
+        return (
+            f"No addressable plugin {plugin_id!r}. Core capability has no plugin "
+            "id and cannot be disabled."
+        )
+    outcome = await api.disable(PluginId(_UUID(plugin_id)), force=force)
+    # `installed=True` means REFUSED: the plugin is still installed. The field
+    # answers "is it installed", not "did the call succeed".
+    if outcome.installed:
+        return f"Refused: {outcome.detail}"
+
+    from aleph_db.repos.ledger import LedgerWriter
+    from aleph_runtime.plugin_service import PluginService
+
+    session_maker = _runtime.get("session_maker")
+    principal = current_principal()
+    if session_maker is None:
+        # The kernel already dropped it; the row just cannot be updated here.
+        return f"Disabled {known[plugin_id]!r} in this process (no database bound)."
+    async with session_maker() as session:
+        await PluginService(session).disable(
+            project_id=project_id,
+            actor_id=principal.user_id if principal else _SYSTEM_ACTOR,
+            name=known[plugin_id],
+            ledger=LedgerWriter(session),
+        )
+        await session.commit()
+    return f"Disabled {known[plugin_id]!r}. The record is kept, so it can be turned back on."
+
+
+@tool
+async def plugin_health(config: RunnableConfig) -> str:
+    """Re-run every capability's own probe and report what answered.
+
+    A capability that cannot answer a live query is reported here rather than
+    discovered by the next thing that needs it.
+    """
+    await _authorized(await _project_id_from_config(config))
+    health = await _agent_plugin_api().check_health()
+    if not health:
+        return "No capabilities to probe."
+    return "\n".join(f"- {name}: {state}" for name, state in sorted(health.items()))
+
+
 _ORCHESTRATOR_TOOLS: tuple[Any, ...] = (
     search_wiki,
     wiki_curation_status,
@@ -1643,6 +1840,12 @@ _ORCHESTRATOR_TOOLS: tuple[Any, ...] = (
     pin_to_brief,
     compose_dossier,
     spotlight,
+    # WS-A2: the kernel, reachable.
+    list_capabilities,
+    preview_removal,
+    author_plugin,
+    disable_plugin,
+    plugin_health,
 )
 
 

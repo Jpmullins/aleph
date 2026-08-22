@@ -254,6 +254,11 @@ if [ $NEEDS_SERVICES -eq 1 ]; then
 else
   skip A7 "needs postgres"
 fi
+# A8: the guardrail gets its first caller. Until WS-A2,
+# `grep -rn AgentPluginAPI apps/api/src` returned 0 — the thing CLAUDE.md calls
+# the product had no HTTP route, no agent tool and no graph node.
+run_shell A8 "the kernel is reachable, and a refusal matches its own preview" \
+  "uv run pytest -m integration tests/integration/test_plugin_routes.py -q -p no:randomly 2>&1 | tail -1"
 
 # ---------------------------------------------------------------------------
 # B — Retrieval

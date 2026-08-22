@@ -23,7 +23,9 @@ from aleph_api.routes import (
     artifacts,
     assets,
     assistant,
+    background_tasks,
     cards,
+    catalogs,
     changes,
     connector_credentials,
     connectors,
@@ -37,6 +39,7 @@ from aleph_api.routes import (
     metrics,
     model_profile,
     notes,
+    plugins,
     projects,
     reviews,
     scholar,
@@ -136,6 +139,10 @@ def create_app() -> FastAPI:
     app.include_router(me.router)
     app.include_router(projects.router)
     app.include_router(agent_events.router)
+    app.include_router(background_tasks.router)
+    # WS-A2. Until this line `grep -rn AgentPluginAPI apps/api/src` was 0:
+    # the guardrail everyone calls the product had no caller at all.
+    app.include_router(plugins.router)
     app.include_router(ledger.router)
     app.include_router(cost.router)
     app.include_router(model_profile.router)
@@ -159,6 +166,7 @@ def create_app() -> FastAPI:
     app.include_router(cards.router)
     app.include_router(agent_actions.router)
     app.include_router(surfaces.router)
+    app.include_router(catalogs.router)
     app.include_router(changes.router)
     # Inc 5
     app.include_router(reviews.router)
