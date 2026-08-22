@@ -34,6 +34,10 @@ def settings() -> Settings:
         litellm_base_url="http://localhost:18999",
         insights_litellm_api_key="test-key",
         aleph_agent_token_secret="test-secret",
+        # WS-P7: credential encryption has its own required key now. It is
+        # never the signing secret, and it is not padded — hence 64 bytes here
+        # rather than "test-secret".
+        aleph_credential_master_key="c" * 64,
     )
 
 

@@ -34,6 +34,7 @@ from aleph_api.routes import (
     hypotheses,
     ledger,
     me,
+    metrics,
     model_profile,
     notes,
     projects,
@@ -126,6 +127,12 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health.router)
+    # NOT public. `/metrics` is deliberately absent from
+    # `middleware/auth.py::_PUBLIC_PATHS`, and the handler additionally refuses
+    # any peer that is neither loopback nor bearing ALEPH_METRICS_TOKEN —
+    # port 8000 is published on 0.0.0.0, so route-level auth is the only thing
+    # standing between the network and this endpoint. See routes/metrics.py.
+    app.include_router(metrics.router)
     app.include_router(me.router)
     app.include_router(projects.router)
     app.include_router(agent_events.router)

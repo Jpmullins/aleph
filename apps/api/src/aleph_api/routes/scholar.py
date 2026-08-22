@@ -36,7 +36,7 @@ from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
 from aleph_connectors.credentials import (
     ConnectorCredentialService,
-    LibsodiumSealedBoxCipher,
+    credential_cipher,
 )
 from aleph_core.errors import NotFound, PermissionDenied
 from aleph_rks.models import Connector, ConnectorBinding
@@ -305,11 +305,17 @@ async def expand_citations(
 
 
 def _credential_service(request: Request, session: Any) -> ConnectorCredentialService:
-    secret = request.app.state.settings.aleph_agent_token_secret.encode("utf-8")
-    master = secret if len(secret) >= 32 else secret.ljust(32, b"0")
-    cipher = LibsodiumSealedBoxCipher(master_secret=master)
+    s = request.app.state.settings
+    # The Consensus OAuth grant is the sharpest case for splitting the keys: it
+    # is a live third-party authorization Aleph cannot re-derive, bootstrapped
+    # by hand through scripts/connect-consensus.py, and rotating the agent-token
+    # signing secret used to destroy it silently.
+    cipher = credential_cipher(
+        master_key=s.aleph_credential_master_key,
+        legacy_key=s.credential_legacy_key,
+    )
     # No dev-default fallback: the Consensus OAuth blob is always
-    # project-specific (bootstrapped by scripts/connect-consensus.py).
+    # project-specific.
     return ConnectorCredentialService(session, cipher=cipher)
 
 

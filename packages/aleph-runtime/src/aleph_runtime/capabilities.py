@@ -33,6 +33,13 @@ from aleph_db.session import async_engine_for, async_sessionmaker_for
 from aleph_kernel import CapabilitySpec, Context, ProbeResult, ok, problem
 from aleph_models.client import LiteLLMClient
 from aleph_models.discovery import GatewayCatalog
+from aleph_models.limiter import (
+    LimiterConfig,
+    close_gateway_clients,
+    configure_limits,
+    limiter_for,
+    reset_limiters,
+)
 from aleph_models.pricing import get_default_pricing
 from aleph_observability import (
     configure_logging,
@@ -66,6 +73,7 @@ HTTP_AUTH = "http.auth"
 HTTP_CONSENSUS = "http.consensus_token"
 REDIS = "redis"
 LITELLM = "litellm"
+GATEWAY_LIMITER = "gateway.limiter"
 PRICING = "pricing"
 GATEWAY_CATALOG = "models.gateway_catalog"
 ASSET_STORE = "asset_store"
@@ -235,6 +243,85 @@ def redis_client() -> CapabilitySpec:
     )
 
 
+def gateway_limiter() -> CapabilitySpec:
+    """One metered door per model endpoint, and the shared clients that use it.
+
+    Nothing in Aleph counted in-flight gateway requests before this. Four
+    separate things fan out at once — an assistant turn running every tool call
+    together, `autoconfigure` probing every advertised model in one `gather`,
+    the compose healthcheck, and ten worker jobs — and Aleph connects OUT to
+    whatever endpoint the operator has, every one of which has a ceiling.
+
+    Mounted as its own capability rather than folded into `models` because the
+    door outlives any one client: the agent's `ChatOpenAI` builds its own HTTP
+    client and reaches the same endpoint through the same limiter, and MEP-4's
+    per-project endpoints will each want one.
+
+    Limits come from Settings when it carries the fields and from the
+    environment otherwise (`ALEPH_GATEWAY_MAX_CONCURRENCY`, `ALEPH_GATEWAY_RPM`,
+    `ALEPH_GATEWAY_QUEUE_TIMEOUT_S`) — see `LimiterConfig.from_settings`.
+    """
+
+    async def setup(ctx: Context) -> AsyncIterator[Callable[[], Awaitable[None]]]:
+        settings: Settings = ctx.get(SETTINGS)
+        config = LimiterConfig.from_settings(settings)
+        # Set the process default BEFORE building the door, so a call site that
+        # was never handed a limiter — `probe_model` reached through
+        # `autoconfigure_bindings`, which knows nothing about limits — builds
+        # its endpoint's door with the configured ceiling rather than the
+        # shipped one.
+        configure_limits(config)
+        limiter = limiter_for(settings.litellm_base_url, config=config)
+
+        async def _release() -> None:
+            # Both halves: the clients hold sockets and need a running loop to
+            # close, and the registry is process-global, so a second boot in the
+            # same process (the test suite, and `--reload`) must not inherit the
+            # first boot's ceilings.
+            await close_gateway_clients()
+            reset_limiters()
+
+        yield _release
+
+        ctx.provide(GATEWAY_LIMITER, limiter)
+
+    async def probe(ctx: Context) -> ProbeResult:
+        # The read path is admission. A ceiling of zero, or a semaphore that
+        # never hands anything back, is a process that boots cleanly and then
+        # hangs on its first model call with no error anywhere — so take a slot
+        # and give it back, and refuse to come up if that does not work.
+        limiter = ctx.get(GATEWAY_LIMITER)
+        # The CONFIGURED value, not `limiter.max_concurrency`, which clamps to 1
+        # so a misconfiguration cannot deadlock the process. Reading the clamped
+        # number here would make this branch unreachable — a check that cannot
+        # fail, in a probe whose whole job is to fail.
+        configured = limiter.config.max_concurrency
+        if configured < 1:
+            return problem(
+                f"the gateway concurrency ceiling is configured as {configured}; "
+                f"set ALEPH_GATEWAY_MAX_CONCURRENCY to a positive number"
+            )
+        if not limiter.endpoint:
+            return problem(
+                "the gateway limiter is keyed on an empty endpoint; LITELLM_BASE_URL is unset, "
+                "so every endpoint would share one door"
+            )
+        async with limiter.slot(purpose="probe"):
+            pass
+        if limiter.stats.in_flight != 0:
+            return problem(f"a released slot left in_flight at {limiter.stats.in_flight}")
+        rate = f"{limiter.config.rpm:g}/min" if limiter.config.rpm > 0 else "no rate limit"
+        return ok(f"{limiter.max_concurrency} concurrent to {limiter.endpoint} ({rate})")
+
+    return CapabilitySpec(
+        name="gateway_limiter",
+        setup=setup,
+        probe=probe,
+        requires=frozenset({SETTINGS}),
+        provides=frozenset({GATEWAY_LIMITER}),
+    )
+
+
 def models() -> CapabilitySpec:
     """The LLM gateway client, its pricing table, and the catalog behind both."""
 
@@ -251,10 +338,16 @@ def models() -> CapabilitySpec:
         # process booting, and calls made meanwhile record
         # `pricing_source="unknown"` instead of a fabricated $0.
         pricing = get_default_pricing()
+        # Both the catalog and the client take the SAME door — one endpoint,
+        # one ceiling. Discovery is not exempt from the limit it exists to
+        # describe: a 40-model gateway means 40 probes, which is the largest
+        # single burst Aleph produces.
+        limiter = ctx.get(GATEWAY_LIMITER)
         catalog = GatewayCatalog(
             base_url=settings.litellm_base_url,
             api_key=settings.insights_litellm_api_key,
             client=ctx.get(HTTP_GATEWAY),
+            limiter=limiter,
         )
         await catalog.refresh_pricing(pricing)
         client = LiteLLMClient(
@@ -264,6 +357,7 @@ def models() -> CapabilitySpec:
             pricing=pricing,
             session_maker=ctx.get(DB_SESSIONS),
             redis_client=ctx.get(REDIS),
+            limiter=limiter,
         )
         ctx.provide(PRICING, pricing)
         ctx.provide(LITELLM, client)
@@ -335,7 +429,7 @@ def models() -> CapabilitySpec:
         name="models",
         setup=setup,
         probe=probe,
-        requires=frozenset({SETTINGS, HTTP_GATEWAY, DB_SESSIONS, REDIS}),
+        requires=frozenset({SETTINGS, HTTP_GATEWAY, DB_SESSIONS, REDIS, GATEWAY_LIMITER}),
         provides=frozenset({LITELLM, PRICING, GATEWAY_CATALOG}),
     )
 
@@ -529,6 +623,7 @@ def core_capabilities(settings: Settings) -> tuple[CapabilitySpec, ...]:
         database(),
         http_clients(),
         redis_client(),
+        gateway_limiter(),
         models(),
         assets(),
         scholar(),
@@ -593,6 +688,7 @@ __all__ = [
     "DB_ENGINE",
     "DB_SESSIONS",
     "GATEWAY_CATALOG",
+    "GATEWAY_LIMITER",
     "HTTP_AUTH",
     "HTTP_CONSENSUS",
     "HTTP_GATEWAY",

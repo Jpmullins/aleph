@@ -151,12 +151,22 @@ probe "check-acceptance-claims notices a cited test that does not exist" \
   's/packages\/aleph-core\/tests\/test_rrf.py/packages\/aleph-core\/tests\/test_no_such_thing.py/' \
   "./scripts/check-acceptance-claims.sh"
 
-# The mutation that matters here is not "delete the rule" — it is "add an allow
-# ahead of the deny", which is what WS-H1 will legitimately want to do and is
-# the way this gate silently reopens.
-probe "check-agent-fs-permissions notices an allow ahead of the deny" \
+# The mutation that matters is not "delete the rule" — it is "widen the allow",
+# which is how this gate silently reopens.
+#
+# WS-H1 has now legitimately added an allow ahead of the deny, for exactly one
+# nested prefix. So the dangerous version is no longer "an allow exists"; it is
+# an allow on the WHOLE of `/skills/**`, which reopens every bundled SKILL.md
+# while still looking like the narrow rule.
+#
+# The previous mutation here targeted the inline `permissions=[` literal, and
+# WS-H1 moved the rules into a function — so it matched nothing and the probe
+# passed without ever breaking anything. A no-op mutation reports "can fail"
+# and proves precisely nothing, which is the failure this whole file exists to
+# prevent, occurring inside it.
+probe "check-agent-fs-permissions notices an allow widened to all of /skills" \
   apps/api/src/aleph_api/copilot_agent.py \
-  's/        permissions=\[\n            FilesystemPermission/        permissions=[\n            FilesystemPermission(operations=["write"], paths=["\/skills\/**"], mode="allow"),\n            FilesystemPermission/' \
+  's/paths=\[f"\{AUTHORED_PREFIX\}\*\*"\], mode="allow"/paths=["\/skills\/**"], mode="allow"/' \
   "./scripts/check-agent-fs-permissions.sh"
 
 # The mutation that defeated the FIRST version of this sweep: `with_for_update()`
@@ -292,6 +302,44 @@ PYEOF
 else
   printf '  \033[90m%-8s\033[0m gateway-binding mutation (needs postgres + gateway)\n' "skip"
 fi
+
+# ---------------------------------------------------------------------------
+# The web sweeps and the bridge checks.
+#
+# All four were written correctly and wired into nothing — not acceptance, not
+# CI, not here. That is the defect class CLAUDE.md names as dominant, and it is
+# worse inside a sweep than in product code, because the sweep is what was
+# supposed to catch it. Wiring them into the gate is half; proving each can go
+# red is the half that makes the green mean something.
+# ---------------------------------------------------------------------------
+
+if [ -f apps/web/src/components/Rail.tsx ]; then
+  # A module nothing imports. Created and removed here rather than mutated,
+  # because unreachability is about the import GRAPH and no edit to an existing
+  # file can produce it.
+  cat > apps/web/src/components/__selfcheck_orphan.tsx <<'ORPHAN'
+export const orphan = () => null;
+ORPHAN
+  if ./scripts/check-web-dead-code.sh >/dev/null 2>&1; then
+    printf '  \033[31m%-8s\033[0m %s — check stayed GREEN while broken\n' \
+      "CANNOT" "web dead-code sweep notices an unreachable module"
+    BAD=$((BAD+1))
+  else
+    printf '  \033[32m%-8s\033[0m %s\n' "can fail" "web dead-code sweep notices an unreachable module"
+    OK=$((OK+1))
+  fi
+  rm -f apps/web/src/components/__selfcheck_orphan.tsx
+fi
+
+probe "the runtime bridge check notices an any-origin proxy" \
+  apps/copilot-runtime/src/server.ts \
+  's/^  cors: \{$/  cors: true, \/\/ probe\n  _unused: {/m' \
+  "./scripts/check-runtime-bridge.sh"
+
+probe "the runtime bridge check notices a credential-less browser" \
+  apps/web/src/lib/copilot.tsx \
+  's/^      headers=\{headers\}$/      \/\/ probe removed/m' \
+  "./scripts/check-runtime-bridge.sh"
 
 echo
 if [ -n "$(git status --porcelain 2>/dev/null)" ] && [ ${#MUTATED[@]} -gt 0 ]; then

@@ -1,5 +1,10 @@
 """OTEL + Langfuse + structlog wiring."""
 
+from aleph_observability.http_metrics import (
+    HttpMetricsMiddleware,
+    install_http_metrics,
+    is_http_metrics_installed,
+)
 from aleph_observability.langfuse_client import (
     LangfuseClient,
     init_langfuse,
@@ -10,7 +15,35 @@ from aleph_observability.langfuse_reader import (
     ErrorObservation,
     LangfuseReader,
 )
-from aleph_observability.logging import bind_request_context, configure_logging
+from aleph_observability.logging import (
+    SPAN_PROJECT_ID,
+    SPAN_REQUEST_ID,
+    SPAN_USER_ID,
+    bind_request_context,
+    configure_logging,
+)
+from aleph_observability.metrics import (
+    AGENT_RUNS,
+    HTTP_DURATION,
+    HTTP_REQUESTS,
+    LLM_COST,
+    LLM_DURATION,
+    LLM_REQUESTS,
+    LLM_TOKENS,
+    QUEUE_DEPTH,
+    STAGE_DURATION,
+    UNMATCHED_ROUTE,
+    init_metrics,
+    record_http_request,
+    record_llm_request,
+    record_llm_usage,
+    record_stage,
+    render_prometheus,
+    replace_agent_run_counts,
+    replace_queue_depths,
+    sample_value,
+    shutdown_metrics,
+)
 from aleph_observability.tracing import (
     current_trace_id,
     init_otel,
@@ -22,19 +55,45 @@ from aleph_observability.tracing import (
 )
 
 __all__ = [
+    "AGENT_RUNS",
+    "HTTP_DURATION",
+    "HTTP_REQUESTS",
+    "LLM_COST",
+    "LLM_DURATION",
+    "LLM_REQUESTS",
+    "LLM_TOKENS",
+    "QUEUE_DEPTH",
+    "SPAN_PROJECT_ID",
+    "SPAN_REQUEST_ID",
+    "SPAN_USER_ID",
+    "STAGE_DURATION",
+    "UNMATCHED_ROUTE",
     "DiagnosticSnapshot",
     "ErrorObservation",
+    "HttpMetricsMiddleware",
     "LangfuseClient",
     "LangfuseReader",
     "bind_request_context",
     "configure_logging",
     "current_trace_id",
     "init_langfuse",
+    "init_metrics",
     "init_otel",
+    "install_http_metrics",
     "instrument_fastapi",
     "instrument_httpx",
     "instrument_sqlalchemy",
+    "is_http_metrics_installed",
+    "record_http_request",
+    "record_llm_request",
+    "record_llm_usage",
+    "record_stage",
+    "render_prometheus",
+    "replace_agent_run_counts",
+    "replace_queue_depths",
+    "sample_value",
     "shutdown_langfuse",
+    "shutdown_metrics",
     "shutdown_otel",
     "start_span",
 ]

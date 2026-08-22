@@ -130,6 +130,26 @@ jobs:
       - name: The documented lint count matches the code
         run: ./scripts/check-lint-count.sh
 
+      # The bridge on :4000 drives the agent with no authentication of its own.
+      # It ran `cors: true` — every origin, with credentials — published on
+      # every interface, so any page the user had open could drive their
+      # assistant.
+      - name: The runtime bridge is not an any-origin, any-host proxy
+        run: ./scripts/check-runtime-bridge.sh
+
+      # These four were written in the same change and wired into NOTHING —
+      # not acceptance, not CI, not the self-check. A sweep with no consumer is
+      # the defect class this repo names as dominant, and it is worse in a
+      # sweep than in product code: the sweep is what was meant to catch it.
+      - name: Every web module is reachable from an entry point
+        run: ./scripts/check-web-dead-code.sh
+
+      - name: No unused class selector in the stylesheets
+        run: ./scripts/check-web-dead-css.sh
+
+      - name: Design-token drift does not grow
+        run: ./scripts/check-web-drift.sh
+
   python-unit:
     name: unit tests
     runs-on: ubuntu-latest

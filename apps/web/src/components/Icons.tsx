@@ -120,30 +120,9 @@ export const Icons = {
       <path d="M4 16v2.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V16" />
     </Svg>
   ),
-  back: (p: IconProps = {}) => (
-    <Svg {...p}>
-      <path d="M14 6l-6 6 6 6" />
-    </Svg>
-  ),
   plus: (p: IconProps = {}) => (
     <Svg {...p}>
       <path d="M12 5v14M5 12h14" />
-    </Svg>
-  ),
-  close: (p: IconProps = {}) => (
-    <Svg {...p}>
-      <path d="M6 6l12 12M18 6L6 18" />
-    </Svg>
-  ),
-  sun: (p: IconProps = {}) => (
-    <Svg {...p}>
-      <circle cx="12" cy="12" r="4" />
-      <path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4" />
-    </Svg>
-  ),
-  moon: (p: IconProps = {}) => (
-    <Svg {...p}>
-      <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z" />
     </Svg>
   ),
 } as const;

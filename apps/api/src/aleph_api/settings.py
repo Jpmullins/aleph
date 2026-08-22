@@ -9,7 +9,10 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from aleph_connectors.keys import legacy_read_key, master_key_bytes
 
 
 class Settings(BaseSettings):
@@ -72,8 +75,28 @@ class Settings(BaseSettings):
     local_dev_email: str = "dev@aleph.local"
     local_dev_display_name: str = "Local Dev"
 
-    # Agent-token signing
+    # Agent-token signing. This secret does ONE job: it signs the short-lived
+    # HS256 tokens workers use to call back into the API. It used to do three,
+    # and the third was encrypting every stored connector credential — so the
+    # correct response to a leaked signing key (rotate it) destroyed every
+    # third-party API key and OAuth grant in the deployment, with no warning and
+    # no way back. See `aleph_connectors.keys`.
     aleph_agent_token_secret: str
+
+    # Credential encryption. Separate from the signing secret above, and that
+    # separation is the entire point of WS-P7. Required, and validated here so a
+    # bad value fails at boot rather than at the first decrypt — which is a
+    # background job whose only symptom is a connector quietly dropping out of
+    # the research loop.
+    aleph_credential_master_key: str
+
+    # The key that opens credentials written BEFORE the split (`key_version`
+    # `v1`). Leave unset and the agent-token secret is assumed, because that is
+    # in fact what encrypted them. Set it explicitly only if the signing secret
+    # has already been rotated, in which case the old value lives nowhere else.
+    # Remove it once `python -m aleph_connectors.reencrypt --dry-run` reports
+    # zero rows — see the rotation procedure in docs/operations.md.
+    aleph_credential_legacy_key: str = ""
 
     # Self URL. Agent tools that re-enter the API over HTTP (ingest_source,
     # start_research) call this base so the agent never touches the DB or
@@ -120,6 +143,27 @@ class Settings(BaseSettings):
     bootstrap_auto_enabled: bool = True
     bootstrap_max_topics: int = 3
     bootstrap_depth: Literal["shallow", "deep"] = "shallow"
+
+    @field_validator("aleph_credential_master_key")
+    @classmethod
+    def _check_master_key(cls, value: str) -> str:
+        """Refuse a short or placeholder master key AT BOOT.
+
+        `get_settings()` is called from the lifespan, so this fires when the
+        process starts rather than at the first decrypt. The rejected values are
+        the two that used to be silently tolerated: anything under 32 bytes (the
+        old code right-padded it with ASCII zeros, so the cipher's own length
+        guard could never fire) and the `.env.example` placeholder, which is
+        exactly 32 characters and therefore passes a length check while being
+        published in this repository.
+        """
+        master_key_bytes(value)
+        return value
+
+    @property
+    def credential_legacy_key(self) -> str:
+        """The secret that opens `v1` credential rows."""
+        return legacy_read_key(self.aleph_credential_legacy_key, self.aleph_agent_token_secret)
 
 
 @lru_cache(maxsize=1)

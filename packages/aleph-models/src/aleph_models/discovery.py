@@ -45,6 +45,7 @@ import structlog
 
 from aleph_core.schemas.model_profile import Capability
 from aleph_models.hints import apply_hints
+from aleph_models.limiter import GatewayLimiter, limiter_for
 from aleph_models.pricing import PricingTable
 
 _log = structlog.get_logger(__name__)
@@ -244,6 +245,7 @@ async def discover_models(
     api_key: str,
     client: httpx.AsyncClient | None = None,
     timeout_s: float = 20.0,
+    limiter: GatewayLimiter | None = None,
 ) -> list[DiscoveredModel]:
     """What the gateway serves, using the richest endpoint the key may call.
 
@@ -269,8 +271,10 @@ async def discover_models(
     http = client or httpx.AsyncClient(timeout=timeout_s)
     base = base_url.rstrip("/")
     headers = {"Authorization": f"Bearer {api_key}"}
+    door = limiter or limiter_for(base_url)
     try:
-        resp = await http.get(f"{base}{_MODEL_INFO_PATH}", headers=headers)
+        async with door.slot(purpose="discover"):
+            resp = await http.get(f"{base}{_MODEL_INFO_PATH}", headers=headers)
         if resp.status_code in (401, 403):
             _log.info(
                 "gateway.model_info_forbidden",
@@ -287,7 +291,8 @@ async def discover_models(
         else:
             resp.raise_for_status()
 
-        listing = await http.get(f"{base}{_V1_MODELS_PATH}", headers=headers)
+        async with door.slot(purpose="discover"):
+            listing = await http.get(f"{base}{_V1_MODELS_PATH}", headers=headers)
         listing.raise_for_status()
         return apply_hints(parse_v1_models(listing.json()))
     finally:
@@ -302,6 +307,7 @@ async def probe_model(
     model: DiscoveredModel,
     client: httpx.AsyncClient | None = None,
     timeout_s: float = 45.0,
+    limiter: GatewayLimiter | None = None,
 ) -> str | None:
     """Actually call `model`. Returns ``None`` if it works, else the error.
 
@@ -310,28 +316,48 @@ async def probe_model(
     then fails at invocation because the underlying Bedrock model needs an
     inference-profile ARN. Binding it by default would have produced a system
     that passes every startup check and fails on first use.
+
+    **A 429 is not a failed probe.** It says the gateway routed the request to
+    this model and the deployment is over its budget *right now* — a statement
+    about the minute, not about the model. Folding it into `unreachable`
+    disqualified a perfectly good model for being busy, and the sweep that
+    generated the load was this function called against every advertised model
+    at once: the probe caused the throttling that then deleted its own
+    candidates. Bindings would come out different depending on how busy the
+    gateway was when somebody pressed the button, with nothing in the result to
+    say so.
     """
     owned = client is None
     http = client or httpx.AsyncClient(timeout=timeout_s)
     url = f"{base_url.rstrip('/')}"
     headers = {"Authorization": f"Bearer {api_key}"}
+    door = limiter or limiter_for(base_url)
     try:
-        if model.mode == "embedding":
-            resp = await http.post(
-                f"{url}/v1/embeddings",
-                headers=headers,
-                json={"model": model.id, "input": ["ping"]},
+        async with door.slot(purpose="probe"):
+            if model.mode == "embedding":
+                resp = await http.post(
+                    f"{url}/v1/embeddings",
+                    headers=headers,
+                    json={"model": model.id, "input": ["ping"]},
+                )
+            else:
+                resp = await http.post(
+                    f"{url}/v1/chat/completions",
+                    headers=headers,
+                    json={
+                        "model": model.id,
+                        "messages": [{"role": "user", "content": "ping"}],
+                        "max_tokens": 4,
+                    },
+                )
+        if resp.status_code == 429:
+            _log.info(
+                "gateway.probe_rate_limited",
+                model=model.id,
+                retry_after=resp.headers.get("Retry-After"),
+                impact="counted as reachable; a busy minute must not change what gets bound",
             )
-        else:
-            resp = await http.post(
-                f"{url}/v1/chat/completions",
-                headers=headers,
-                json={
-                    "model": model.id,
-                    "messages": [{"role": "user", "content": "ping"}],
-                    "max_tokens": 4,
-                },
-            )
+            return None
         if resp.status_code >= 400:
             return f"HTTP {resp.status_code}: {resp.text[:300]}"
         body: object = resp.json()
@@ -389,8 +415,19 @@ CAPABILITY_POLICIES: dict[Capability, CapabilityPolicy] = {
     Capability.EXTRACTION: CapabilityPolicy(mode="chat", tier="light", needs_function_calling=True),
     Capability.CLASSIFICATION: CapabilityPolicy(mode="chat", tier="light"),
     Capability.EMBEDDING: CapabilityPolicy(mode="embedding", tier="light"),
-    Capability.RERANK: CapabilityPolicy(mode="rerank", tier="light"),
 }
+
+#: `Capability.RERANK` is deliberately absent, and its absence is the point.
+#:
+#: Aleph contains no reranker: nothing anywhere resolves that capability, so a
+#: model bound to it would never be called. The policy that used to sit here
+#: (`mode="rerank"`) matched nothing on any gateway Aleph has been pointed at,
+#: so every single `autoconfigure` run reported `rerank` in its `unbound` list
+#: — a permanent red mark for a capability that was never going to be bound,
+#: which is how an operator learns to ignore the list that also names the real
+#: failures. `tests/unit/test_capability_offers.py` keeps the three lists
+#: (the Settings picker, this table, and the code that resolves a capability)
+#: in step, so re-adding it requires shipping the consumer too.
 
 
 def candidates_for(
@@ -493,8 +530,16 @@ def unpriced_bindings(
 
 
 def unbound_capabilities(bindings: dict[str, Any]) -> list[Capability]:
-    """Capabilities this gateway cannot serve — reported, never papered over."""
-    return [c for c in Capability if c.value not in bindings]
+    """Capabilities this gateway cannot serve — reported, never papered over.
+
+    Scoped to `CAPABILITY_POLICIES` rather than to every member of the enum,
+    because those are two different questions. "No model here qualifies for
+    `page_selection`" is a gateway problem an operator can act on; "there is no
+    policy for `rerank`" is a statement about Aleph, is true on every gateway
+    forever, and reporting it beside the real ones is what makes the list
+    ignorable.
+    """
+    return [c for c in CAPABILITY_POLICIES if c.value not in bindings]
 
 
 def capabilities_for(model: DiscoveredModel) -> list[str]:
@@ -524,11 +569,13 @@ class GatewayCatalog:
         api_key: str,
         client: httpx.AsyncClient | None = None,
         ttl_s: float = 300.0,
+        limiter: GatewayLimiter | None = None,
     ) -> None:
         self._base_url = base_url
         self._api_key = api_key
         self._client = client
         self._ttl_s = ttl_s
+        self._limiter = limiter
         self._models: list[DiscoveredModel] = []
         self._fetched_at: float | None = None
 
@@ -543,7 +590,10 @@ class GatewayCatalog:
         if not force and self._is_fresh():
             return list(self._models)
         self._models = await discover_models(
-            base_url=self._base_url, api_key=self._api_key, client=self._client
+            base_url=self._base_url,
+            api_key=self._api_key,
+            client=self._client,
+            limiter=self._limiter,
         )
         self._fetched_at = time.monotonic()
         return list(self._models)

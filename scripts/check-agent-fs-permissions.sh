@@ -51,11 +51,28 @@ for node in ast.walk(tree):
         continue
     for kw in node.keywords:
         if kw.arg == "permissions":
-            rules = eval(  # noqa: S307 - a literal from our own source
-                compile(ast.Expression(kw.value), "<permissions>", "eval"),
-                {"FilesystemPermission": FilesystemPermission},
-                {},
-            )
+            # WS-H1 moved the rules out of the call into
+            # `_agent_filesystem_permissions()`, because the tests needed to
+            # read them from more than one file. This used to `eval` the
+            # literal and died with `NameError` the moment it became a call —
+            # a correct signal, delivered as a traceback.
+            #
+            # Both halves are checked now, which the literal version could not:
+            # the call site passes exactly that function's result, and the
+            # rules are what the function returns. Before, the list could have
+            # been moved out of the call entirely and this sweep would have
+            # gone on evaluating a literal nothing used.
+            expression = ast.unparse(kw.value)
+            if expression != "_agent_filesystem_permissions()":
+                print(
+                    "✗ the agent's filesystem rules no longer come from "
+                    f"_agent_filesystem_permissions(): {expression}",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            from aleph_api.copilot_agent import _agent_filesystem_permissions
+
+            rules = list(_agent_filesystem_permissions())
 
 if rules is None:
     print(
@@ -74,6 +91,20 @@ for path in ("/skills/research/SKILL.md", "/skills/anything-at-all/SKILL.md"):
 # Reading must still work, or the agent cannot follow its own instructions.
 if _check_fs_permission(rules, "read", "/skills/research/SKILL.md") != "allow":
     problems.append("reading /skills is denied — the agent cannot read its own orders")
+
+# The OTHER direction, and it belongs here for the same reason as the deny.
+#
+# WS-H1 opened exactly one prefix for writing so the agent can author a skill
+# for itself. Stating only the deny leaves this sweep green when that allow is
+# deleted — the self-improvement loop switches off silently, and the check that
+# is supposed to know what the policy IS reports that the policy is intact.
+# Order is first-match-wins, so the allow must also still precede the deny; a
+# rule list where the deny wins for this path fails right here.
+if _check_fs_permission(rules, "write", "/skills/authored/learned-thing/SKILL.md") != "allow":
+    problems.append(
+        "writes to /skills/authored/** are denied — the agent cannot author a skill "
+        "(WS-H1). Either the allow rule is gone, or it now sits AFTER the deny."
+    )
 
 # --- 2. no read-write backend rooted in the application source tree ---------
 for source in sorted(pathlib.Path("apps").rglob("*.py")):

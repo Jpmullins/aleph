@@ -431,6 +431,17 @@ run_pytest F1 "agent endpoint is authenticated; project scope is authorized" \
 run_pytest F2 "untrusted ingested text is defanged at the boundary" \
   packages/aleph-rks/tests/test_ingest_defang.py packages/aleph-core/tests/test_grounding.py
 run_pytest F3 "agent token scoping" packages/aleph-security/tests
+# F6 is RED on purpose. Four of six Dockerfiles still run as root
+# (`apps/web/Dockerfile.dev`, `apps/workers/Dockerfile`, and two more the sweep
+# names), so this check exits 1 today and goes green when they are fixed.
+#
+# Wiring it RED rather than leaving it unwired is the whole point. It was
+# written, it was correct, and NOTHING RAN IT — not acceptance, not CI, not the
+# self-check. A sweep with no consumer is the defect class CLAUDE.md names as
+# dominant, and it is worse in a sweep than in product code: the sweep is what
+# was supposed to catch that class.
+run_expected_red_shell F6 "4 of 6 Dockerfiles still run as root" \
+  "./scripts/check-compose-hardening.sh"
 # F4 checks where the port is published and whether the origin list is shared.
 # F5 BOOTS the bridge and checks what it does on the wire — a source grep for
 # `cors:` passes against a config that does not do what it says.
@@ -442,6 +453,15 @@ if command -v node >/dev/null 2>&1; then
 else
   skip F5 "node is not available to boot the bridge"
 fi
+
+# The three web sweeps, all written in the same change and none of them wired
+# into anything that runs.
+run_shell E8 "every web module is reachable from an entry point" \
+  "./scripts/check-web-dead-code.sh 2>&1 | tail -1"
+run_shell E9 "no unused class selector in the stylesheets" \
+  "./scripts/check-web-dead-css.sh 2>&1 | tail -1"
+run_shell E10 "design-token drift does not grow" \
+  "./scripts/check-web-drift.sh 2>&1 | tail -1"
 
 # ---------------------------------------------------------------------------
 # G — Verification infrastructure

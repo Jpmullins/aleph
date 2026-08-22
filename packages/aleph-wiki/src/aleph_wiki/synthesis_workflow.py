@@ -47,9 +47,35 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class ResearchSourceRef:
+    """One citation of one research report, anchored to an exact span.
+
+    This used to be three fields — short id, title, url — and that was the whole
+    provenance a research citation carried. A `[cN]` marker meant "the Nth thing
+    the run downloaded", assigned by position in a list, because the composer
+    was never shown any source text to cite from. The live database holds the
+    result: 831 citations, 830 with no quote and no chunk anchor.
+
+    The last four fields are the anchor, and none of them is optional. A
+    research citation that cannot name the chunk it came from, quote it, and
+    give its character span in the normalized document is decoration, and
+    pyright refuses to construct one.
+
+    `char_start`/`char_end` index the NORMALIZED DOCUMENT, not the chunk:
+    `aleph_research.evidence.anchor_body` adds the chunk's own document offsets
+    to the offsets `aleph_core.grounding.ground` returns within the chunk.
+    """
+
     source_short_id: str
     title: str
     url: str | None
+    #: The `document_chunks` row the quote was taken from.
+    chunk_id: UUID
+    char_start: int
+    char_end: int
+    #: The SOURCE's spelling of the quote, not the composer's. The two differ
+    #: whenever grounding's Unicode normalisation did any work, and the source's
+    #: is the one that can be re-checked against the document later.
+    quote: str
 
 
 @dataclass(frozen=True)

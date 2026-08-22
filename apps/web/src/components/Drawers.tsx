@@ -186,7 +186,6 @@ const CAPABILITIES = [
   "vision",
   "code",
   "embedding",
-  "rerank",
 ] as const;
 
 const CAPABILITY_HELP: Record<string, string> = {
@@ -198,7 +197,6 @@ const CAPABILITY_HELP: Record<string, string> = {
   vision: "Reads figures and scanned pages",
   code: "Writes the sandboxed analysis code",
   embedding: "Vectorises chunks for intra-source descent",
-  rerank: "Reorders retrieved chunks",
 };
 
 /** "$5.50 / $27.50 per Mtok", or a plain marker when the gateway gives no price. */

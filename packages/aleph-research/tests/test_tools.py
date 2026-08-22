@@ -113,6 +113,9 @@ async def test_disabled_connector_never_instantiated() -> None:
         session_maker=lambda: session,  # type: ignore[arg-type]
         project_id=uuid4(),
         agent_token_secret="test-secret",
+        # WS-P7: the credential key is its own argument and is not padded.
+        # `agent_token_secret` remains only as the v1 read key.
+        credential_master_key="c" * 64,
         auth_mode="local",
         factories=factories,  # type: ignore[arg-type]
     )
@@ -142,6 +145,9 @@ async def test_missing_credential_skips_with_warning_not_fatal(
         session_maker=lambda: session,  # type: ignore[arg-type]
         project_id=uuid4(),
         agent_token_secret="test-secret",
+        # WS-P7: the credential key is its own argument and is not padded.
+        # `agent_token_secret` remains only as the v1 read key.
+        credential_master_key="c" * 64,
         auth_mode="local",
         factories=factories,  # type: ignore[arg-type]
         on_skip=on_skip,
@@ -164,6 +170,9 @@ async def test_env_fallback_credential_binds_in_local_mode(
         session_maker=lambda: session,  # type: ignore[arg-type]
         project_id=uuid4(),
         agent_token_secret="test-secret",
+        # WS-P7: the credential key is its own argument and is not padded.
+        # `agent_token_secret` remains only as the v1 read key.
+        credential_master_key="c" * 64,
         auth_mode="local",
         factories=factories,  # type: ignore[arg-type]
     )

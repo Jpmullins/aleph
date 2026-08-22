@@ -10,6 +10,7 @@ listens to the same OTEL provider so spans flow into both backends.
 
 from __future__ import annotations
 
+import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
@@ -19,6 +20,8 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace import Span, Status, StatusCode
+
+from aleph_observability.metrics import record_stage
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -86,17 +89,35 @@ def start_span(name: str, **attrs: Any) -> Iterator[Span]:
     """Open a span with the given name and attributes.
 
     On exception, the span is marked ERROR and the exception is recorded.
+
+    Every span also records `aleph_stage_duration_seconds{stage=name}`. That is
+    not decoration: it is how ingest (`worker.normalize`, `worker.chunk_embed`),
+    retrieval (`assistant.retrieve`), the wiki curator, the reviewers and the
+    builder all get a latency number without a second instrumentation pass over
+    files this workstream does not own. The span answers "why was THIS one
+    slow"; the histogram answers "is this stage getting slower", and only the
+    second one can be alerted on.
+
+    `name` must be a literal, or drawn from a bounded set (the one f-string in
+    the tree interpolates a subagent name). It becomes a metric label, and a
+    span name carrying an id is how a metrics endpoint turns into an outage —
+    `metrics._LabelGuard` bounds the damage and says so in the log.
     """
     tracer = _tracer()
+    started = time.perf_counter()
+    outcome = "ok"
     with tracer.start_as_current_span(name) as span:
         for k, v in attrs.items():
             span.set_attribute(k, v)
         try:
             yield span
         except Exception as exc:
+            outcome = "error"
             span.record_exception(exc)
             span.set_status(Status(StatusCode.ERROR, str(exc)))
             raise
+        finally:
+            record_stage(stage=name, outcome=outcome, duration_s=time.perf_counter() - started)
 
 
 def current_trace_id() -> str | None:
@@ -109,9 +130,23 @@ def current_trace_id() -> str | None:
 
 
 def instrument_fastapi(app: FastAPI) -> None:
+    """Trace and measure every HTTP request.
+
+    Order matters. `FastAPIInstrumentor` wraps the built middleware stack, so
+    the metrics wrapper is installed AFTER it and therefore sits outside it: the
+    latency recorded is the one the caller experienced, tracing and auth
+    included, not the one the handler experienced.
+
+    The metrics wrapper is deliberately not an `app.add_middleware` entry — see
+    `http_metrics` for why, and for the test that pins it, since it is invisible
+    to `app.user_middleware`.
+    """
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
+    from aleph_observability.http_metrics import install_http_metrics
+
     FastAPIInstrumentor.instrument_app(app)
+    install_http_metrics(app)
 
 
 def instrument_httpx() -> None:

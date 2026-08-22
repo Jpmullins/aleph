@@ -19,6 +19,7 @@ from aleph_connectors.credentials import (
     ConnectorCredential,
     ConnectorCredentialService,
     LibsodiumSealedBoxCipher,
+    credential_cipher,
 )
 from aleph_core.errors import NotFound
 from aleph_rks.models import Connector
@@ -43,15 +44,24 @@ class CredentialOut(BaseModel):
     status: str | None = None
 
 
-def _master_secret(request: Request) -> bytes:
-    s = request.app.state.settings.aleph_agent_token_secret.encode("utf-8")
-    # 32 bytes minimum; the token secret is generated with openssl rand -hex 32
-    # (64 hex chars = 32 bytes), so even the byte-form satisfies the cipher.
-    return s if len(s) >= 32 else s.ljust(32, b"0")
+def _cipher(request: Request) -> LibsodiumSealedBoxCipher:
+    """One shared factory, one key.
+
+    This function used to derive its own master secret from
+    `aleph_agent_token_secret` and pad it to 32 bytes — one of three call sites
+    that each did that separately. `credential_cipher` is now the only way a
+    cipher is built anywhere in the repo, and it takes the credential master key
+    and nothing else.
+    """
+    s = request.app.state.settings
+    return credential_cipher(
+        master_key=s.aleph_credential_master_key,
+        legacy_key=s.credential_legacy_key,
+    )
 
 
 def _service(request: Request, session) -> ConnectorCredentialService:
-    cipher = LibsodiumSealedBoxCipher(master_secret=_master_secret(request))
+    cipher = _cipher(request)
     # Pull dev-default fallbacks from env.
     import os
 
@@ -100,7 +110,7 @@ async def list_creds(
         .scalars()
         .all()
     }
-    cipher = LibsodiumSealedBoxCipher(master_secret=_master_secret(request))
+    cipher = _cipher(request)
     out: list[CredentialOut] = []
     for c in connectors:
         row = cred_rows.get(c.id)
@@ -124,7 +134,11 @@ def _blob_status(cipher: LibsodiumSealedBoxCipher, row: ConnectorCredential) -> 
     import json
 
     try:
-        plaintext = cipher.decrypt(project_id=row.project_id, cipher_blob=bytes(row.cipher_blob))
+        plaintext = cipher.decrypt(
+            project_id=row.project_id,
+            cipher_blob=bytes(row.cipher_blob),
+            key_version=row.key_version,
+        )
         parsed = json.loads(plaintext)
     except Exception:
         return None

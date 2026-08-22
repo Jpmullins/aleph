@@ -5,7 +5,10 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from aleph_connectors.keys import legacy_read_key, master_key_bytes
 
 
 class WorkerSettings(BaseSettings):
@@ -46,7 +49,18 @@ class WorkerSettings(BaseSettings):
     insights_litellm_api_key: str
 
     aleph_api_internal_url: str
+    #: Signs the short-lived callback tokens. ONE job — see
+    #: `aleph_api.settings.Settings.aleph_agent_token_secret`.
     aleph_agent_token_secret: str
+
+    #: Encrypts stored connector credentials. Workers decrypt them in-process
+    #: when binding the research loop's tools, so the worker needs the same key
+    #: the API has — and needs to fail at startup, not at the first research run,
+    #: if it is missing or too short.
+    aleph_credential_master_key: str
+    #: Opens pre-split (`v1`) rows; defaults to the agent-token secret, which is
+    #: what encrypted them. See docs/operations.md, "Rotating a secret".
+    aleph_credential_legacy_key: str = ""
 
     # Concurrency bound: arq_max_jobs caps concurrent jobs per worker
     # process. Lower it on memory-constrained hosts.
@@ -74,6 +88,22 @@ class WorkerSettings(BaseSettings):
     # Credential env fallback gate (mirrors aleph_api.settings.Settings):
     # container-env API keys are honored only under local auth mode.
     aleph_auth_mode: str = "local"
+
+    @field_validator("aleph_credential_master_key")
+    @classmethod
+    def _check_master_key(cls, value: str) -> str:
+        """Same boot-time refusal as the API. A worker that starts with a bad
+        credential key does not fail until a research run tries to decrypt, and
+        that failure is swallowed by design — `resolve_bound_tools` skips a
+        connector whose credential will not open rather than aborting the run.
+        So without this the symptom is "the research loop found less than it
+        used to", which nobody traces back to a secret."""
+        master_key_bytes(value)
+        return value
+
+    @property
+    def credential_legacy_key(self) -> str:
+        return legacy_read_key(self.aleph_credential_legacy_key, self.aleph_agent_token_secret)
 
 
 @lru_cache(maxsize=1)

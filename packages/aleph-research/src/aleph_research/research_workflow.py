@@ -19,9 +19,20 @@ no polling, no slots:
 * **reflect** (LLM, ``research.reflect``): decide gaps → new subqueries,
   or done. Bounds: ``max_iterations``; plateau cutoff: an iteration that
   ingests 0 new sources stops the loop regardless.
-* **compose** (LLM, ``research.compose``): write ``body_md`` citing
-  sources as ``[cN]`` markers, normalize with the LLM-free
-  ``style_pass``, and build a :class:`ResearchReport`.
+* **compose** (LLM, ``research.compose``): retrieve an *evidence pack*
+  from the chunks of the sources this run ingested — one marker per
+  CHUNK, under a hard character budget (:mod:`aleph_research.evidence`)
+  — write ``body_md`` citing those markers, require a verbatim quote per
+  marker and ground it against the chunk it claims to come from,
+  normalize with the LLM-free ``style_pass``, and build a
+  :class:`ResearchReport` whose every citation carries a chunk id and a
+  character span.
+
+  This node used to build the model's entire evidence context as
+  ``"\n".join(f"c{i}: {title} — {url}")``. Titles and links: no source
+  text reached the model at any point, so the report was written from
+  the model's own recollection and the citation numbers were assigned by
+  position in a list. That is the defect ``WS-RS7`` exists to remove.
 * **synthesize**: hand the report to the unchanged ``SynthesisWorkflow``
   and enqueue ``curate_page_job`` per committed page.
 
@@ -36,10 +47,12 @@ with ``@with_phase`` so Activity streams progress automatically.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from time import monotonic
 from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 # UUID must be importable at runtime: LangGraph's StateGraph resolves the
@@ -48,6 +61,7 @@ from uuid import UUID
 
 import structlog
 from langgraph.graph import END, START, StateGraph
+from sqlalchemy import func, select
 
 from aleph_connectors.base import ConnectorContext, ConnectorResult, SearchQuery
 from aleph_core.ids import uuid7
@@ -58,10 +72,24 @@ from aleph_db.repos.agent_events import with_phase
 from aleph_db.repos.ledger import LedgerWriter
 from aleph_models.client import ChatMessage
 from aleph_observability.tracing import start_span
+from aleph_research.evidence import (
+    EVIDENCE_CHAR_BUDGET,
+    ChunkRef,
+    EvidenceCard,
+    anchor_body,
+    extract_claims,
+    render_pack,
+    renumber_markers,
+    select_cards,
+    split_evidence_block,
+)
+from aleph_rks.models import DocumentChunk, Source
+from aleph_rks.retrieval import descend_into_source, search_corpus
 from aleph_rks.source_service import mark_status, register_uploaded_source
 from aleph_scholar.dois import normalize_doi
 from aleph_security.agent_token import mint_agent_token
 from aleph_wiki.synthesis_workflow import (
+    ResearchClaim,
     ResearchReport,
     ResearchSourceRef,
     SynthesisState,
@@ -104,6 +132,16 @@ class ResearchLimits:
     max_iterations: int = 3
     max_sources_per_iter: int = 6
     max_total_sources: int = 15
+    #: How long compose waits for the sources this run ingested to become
+    #: retrievable. Ingest ENQUEUES `normalize_job`; normalize enqueues
+    #: `chunk_embed`. Both run in another worker task, so at the moment the
+    #: graph reaches compose the chunks of everything it just downloaded
+    #: usually do not exist yet — and an evidence pack built a second too
+    #: early is empty, which reads exactly like "these documents say nothing".
+    #: Bounded because arq's `job_timeout` for this worker is 600s and the
+    #: loop has already spent several LLM calls by here.
+    index_wait_seconds: float = 90.0
+    index_poll_seconds: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -126,6 +164,11 @@ class Candidate:
 @dataclass(frozen=True)
 class IngestedSource:
     short_id: str
+    #: Required, not optional. Compose retrieves the run's own chunks by
+    #: `document_chunks.source_id`, so a source this loop cannot name by id is
+    #: a source it cannot read — and a `None` here would degrade that to an
+    #: empty pack rather than a type error.
+    source_id: UUID
     title: str
     url: str | None
     kind: str
@@ -172,6 +215,12 @@ class ResearchState(TypedDict):
     topic: str
     depth: NotRequired[str]
     subqueries: NotRequired[list[Subquery]]
+    #: Every question this run has asked — the plan's, plus reflect's gap
+    #: queries. `subqueries` is overwritten each iteration with the CURRENT
+    #: batch, so by compose time it holds only the last reflect's gaps; the
+    #: evidence pack has to retrieve against everything the run set out to
+    #: answer, not against whatever it asked most recently.
+    plan_subqueries: NotRequired[list[Subquery]]
     iteration: NotRequired[int]
     candidates: NotRequired[list[Candidate]]
     seen_keys: NotRequired[list[str]]
@@ -321,21 +370,48 @@ def build_report(
     topic: str,
     body_md: str,
     summary: str,
-    sources: Sequence[IngestedSource],
+    refs_by_marker: dict[str, ResearchSourceRef],
+    claims: Sequence[ResearchClaim],
 ) -> ResearchReport:
-    """Map ingested sources to ``c1..cN`` markers and build the report."""
-    refs = [
-        ResearchSourceRef(source_short_id=s.short_id, title=s.title, url=s.url) for s in sources
-    ]
-    citations_by_marker = {f"c{i}": ref for i, ref in enumerate(refs, start=1)}
+    """Assemble the report from ALREADY-ANCHORED citations.
+
+    Two things changed here, and both were defects.
+
+    ``refs_by_marker`` used to be built as ``{f"c{i}": ingested[i]}`` — the
+    marker was a position in the download list, so ``[c3]`` asserted nothing
+    about what any document said. It is now keyed by the chunk a grounded quote
+    came from.
+
+    ``claims`` used to be empty, unconditionally. The loop wrote citation
+    markers into prose and then discarded the statements they were attached to,
+    so ``_node_commit_revision`` iterated an empty list and the research path
+    wrote no claims and no citations at all. Measured on the live stack before
+    this change: seven succeeded research runs, seven synthesis proposals, zero
+    citations on any synthesis page.
+
+    ``sources`` is the distinct sources actually cited, in marker order — one
+    ref per source, carrying that source's first anchored span.
+    """
+    seen: set[str] = set()
+    sources: list[ResearchSourceRef] = []
+    for marker in sorted(refs_by_marker, key=_marker_ordinal):
+        ref = refs_by_marker[marker]
+        if ref.source_short_id in seen:
+            continue
+        seen.add(ref.source_short_id)
+        sources.append(ref)
     return ResearchReport(
         topic=topic,
         body_md=body_md,
         summary=summary,
-        sources=refs,
-        citations_by_marker=citations_by_marker,
-        claims=[],
+        sources=sources,
+        citations_by_marker=dict(refs_by_marker),
+        claims=list(claims),
     )
+
+
+def _marker_ordinal(marker: str) -> int:
+    return int(marker[1:]) if marker[1:].isdigit() else 0
 
 
 def dedup_key(candidate: Candidate) -> str:
@@ -423,14 +499,31 @@ _REFLECT_SYS = (
     "missing (do not repeat ground already covered)."
 )
 
+#: The composer is given passages, not a bibliography, and it has to prove it
+#: read them. The quote block is the proof: `anchor_body` grounds every quote
+#: against the chunk it names, and a quote that is not there fails the run. The
+#: previous prompt asked for markers "exactly matching the numbered source list"
+#: — a list of titles and URLs — which is a request the model can satisfy
+#: without having read anything at all.
 _COMPOSE_SYS = (
     "You write a well-structured research report in Markdown for a project "
-    "wiki. Cite sources inline with [cN] markers exactly matching the "
-    "numbered source list you are given (e.g. [c1], [c3]); cite every "
-    "substantive claim; never invent markers beyond the list. Use ## "
-    "section headings. Wrap key concepts in [[wikilinks]] when they merit "
-    "their own wiki page. Do not add a references section — the wiki "
-    "renders citations from the markers."
+    "wiki, using ONLY the evidence cards you are given. Each card is a "
+    "verbatim passage from a source, labelled [cN].\n\n"
+    "Rules:\n"
+    "1. Cite with the card labels: [c1], [c3]. Never invent a label.\n"
+    "2. Every substantive sentence carries the [cN] of the card supporting "
+    "it. Write nothing the cards do not support.\n"
+    "3. Use ## section headings. Wrap key concepts in [[wikilinks]] when they "
+    "merit their own wiki page. Do not add a references section — the wiki "
+    "renders citations from the markers.\n"
+    "4. After the body, and nothing after it, emit exactly one block:\n\n"
+    "<!--aleph:evidence\n"
+    '{"quotes": {"c1": "...", "c3": "..."}}\n'
+    "-->\n\n"
+    "For every [cN] you cited, the value is one or two sentences COPIED "
+    "CHARACTER FOR CHARACTER from card cN. Not a paraphrase, not a summary, "
+    "not a sentence you wrote. A quote that is not present in its card fails "
+    "the run, and a marker you cite without quoting is deleted from the report."
 )
 
 
@@ -498,7 +591,13 @@ async def _node_plan(state: ResearchState) -> dict[str, Any]:
             json_mode=True,
         )
         subqueries = parse_plan(content, topic=state["topic"], bound_kinds=bound_kinds)
-        return {"subqueries": subqueries, "iteration": state.get("iteration", 0)}
+        return {
+            "subqueries": subqueries,
+            # Kept separately because `subqueries` is overwritten by every
+            # reflect; compose retrieves against every question the run asked.
+            "plan_subqueries": subqueries,
+            "iteration": state.get("iteration", 0),
+        }
 
 
 @with_phase("search", ctx_getter=lambda: _ctx())
@@ -785,6 +884,7 @@ async def _node_ingest(state: ResearchState) -> dict[str, Any]:
             new_entries.append(
                 IngestedSource(
                     short_id=short_id,
+                    source_id=source_id,
                     title=title,
                     url=cand.url,
                     kind=cand.kind,
@@ -833,9 +933,11 @@ async def _node_reflect(state: ResearchState) -> dict[str, Any]:
         done, gaps = parse_reflect(content)
         if done:
             return {"research_done": True}
+        gap_subqueries = [Subquery(query=g) for g in gaps]
         return {
             "research_done": False,
-            "subqueries": [Subquery(query=g) for g in gaps],
+            "subqueries": gap_subqueries,
+            "plan_subqueries": (state.get("plan_subqueries") or []) + gap_subqueries,
             "iteration": iteration + 1,
         }
 
@@ -844,35 +946,349 @@ def route_after_reflect(state: ResearchState) -> str:
     return "compose" if state.get("research_done", True) else "search"
 
 
+# ---------------------------------------------------------------------------
+# Evidence retrieval — the half of the evidence pack that needs a database and
+# a gateway. The selection policy and the grounding are pure and live in
+# `aleph_research.evidence`.
+# ---------------------------------------------------------------------------
+
+#: Questions the evidence pack retrieves against: the topic, then the run's
+#: sub-questions. Capped because each one costs a `search_corpus` round trip
+#: plus a share of the character budget, and past ~6 the round-robin gives
+#: every question one card and nothing gets depth.
+_MAX_EVIDENCE_QUERIES = 6
+
+#: Over-fetch per question. `search_corpus` has no source filter (that is
+#: `aleph_rks.retrieval`, which this workstream does not own), so hits from
+#: sources this run did not ingest are dropped afterwards — in a project with a
+#: pre-existing corpus that can be most of them.
+_CORPUS_TOP_K = 18
+_CORPUS_PER_SOURCE_CAP = 3
+
+#: Depth: how many of the strongest sources get a second, source-pinned pass,
+#: and how much of each. `descend_into_source` IS scoped, so these hits never
+#: need filtering.
+_DESCEND_TOP_SOURCES = 3
+_DESCENT_TOP_K = 3
+
+
+async def _await_chunks(state: ResearchState, source_ids: set[UUID]) -> dict[UUID, int]:
+    """Block until this run's sources are retrievable, or the deadline passes.
+
+    Ingest ENQUEUES `normalize_job`, which enqueues `chunk_embed`; both run in
+    another worker task. Without this barrier compose reaches the corpus
+    milliseconds after the download and finds nothing — and an empty evidence
+    pack is indistinguishable, from inside compose, from "these documents are
+    about something else".
+
+    Returns chunk counts per source. A source that never appears is named in
+    the log: a research run that quietly composed from two of the six documents
+    it downloaded is the failure this whole workstream is about.
+
+    Deliberately not reaped or retried here — `reap_stale_runs` owns dead index
+    jobs. This only waits, and only for as long as `limits.index_wait_seconds`.
+    """
+    ctx = _ctx()
+    if not source_ids:
+        return {}
+    deadline = monotonic() + ctx.limits.index_wait_seconds
+    counts: dict[UUID, int] = {}
+    while True:
+        async with ctx.session_maker() as session:
+            rows = (
+                await session.execute(
+                    select(DocumentChunk.source_id, func.count())
+                    .where(DocumentChunk.source_id.in_(source_ids))
+                    .group_by(DocumentChunk.source_id)
+                )
+            ).all()
+            counts = {row[0]: int(row[1]) for row in rows}
+            waiting = source_ids - set(counts)
+            if waiting:
+                # A source whose ingest FAILED will never produce a chunk.
+                # Waiting the full deadline for it delays every run that hits
+                # one bad PDF by the whole budget.
+                dead = set(
+                    (
+                        await session.execute(
+                            select(Source.id).where(
+                                Source.id.in_(waiting), Source.status == "failed"
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                waiting -= dead
+        if not waiting or monotonic() >= deadline:
+            if waiting:
+                _log.warning(
+                    "research.evidence.sources_not_indexed",
+                    project_id=str(state["project_id"]),
+                    waited_seconds=round(ctx.limits.index_wait_seconds, 1),
+                    not_indexed=[str(sid) for sid in sorted(waiting, key=str)],
+                    indexed=len(counts),
+                )
+            return counts
+        await asyncio.sleep(ctx.limits.index_poll_seconds)
+
+
+def _evidence_queries(state: ResearchState) -> list[str]:
+    """The topic first, then every distinct sub-question the run asked."""
+    queries: list[str] = [state["topic"].strip()]
+    for sub in state.get("plan_subqueries") or state.get("subqueries") or []:
+        q = sub.query.strip()
+        if q and q not in queries:
+            queries.append(q)
+    # An empty query text would reach `or_tsquery` as an empty tsquery, which
+    # matches nothing while looking like a search that ran.
+    return [q for q in queries[:_MAX_EVIDENCE_QUERIES] if q] or [state["topic"]]
+
+
+async def _embed_queries(state: ResearchState, queries: Sequence[str]) -> list[list[float] | None]:
+    """Embed the questions, or degrade to lexical-only OUT LOUD.
+
+    `search_corpus` reads `None` as "run the lexical leg only". Handing it a
+    zero vector instead looks equivalent and is not: cosine distance to the
+    zero vector is degenerate, so the dense leg returns an arbitrary page of
+    rows and RRF fuses that noise as though it were a ranking.
+    """
+    ctx = _ctx()
+    try:
+        result = await ctx.litellm.embed(
+            principal=ctx.principal,
+            project_id=state["project_id"],
+            agent_run_id=state["agent_run_id"],
+            profile_bindings=ctx.profile_bindings,
+            input=list(queries),
+            purpose="research.evidence.query_embed",
+        )
+    except Exception as exc:
+        _log.warning(
+            "research.evidence.embed_failed",
+            project_id=str(state["project_id"]),
+            error=f"{type(exc).__name__}: {exc}"[:200],
+        )
+        return [None] * len(queries)
+    vectors = list(result.embeddings)
+    if len(vectors) != len(queries):
+        _log.warning(
+            "research.evidence.embed_count_mismatch",
+            expected=len(queries),
+            got=len(vectors),
+        )
+        return [None] * len(queries)
+    return list(vectors)
+
+
+async def _chunk_refs(
+    session: AsyncSession,
+    *,
+    hits: Sequence[Any],
+    by_source: dict[UUID, IngestedSource],
+) -> dict[UUID, ChunkRef]:
+    """Turn `ChunkHit`s into citable refs by reading each chunk's document span.
+
+    `ChunkHit` carries text and a score but not `char_start`/`char_end`, and
+    those are what make a marker resolve to an exact span of the document. They
+    are read here rather than added to `ChunkHit` because `aleph_rks.retrieval`
+    belongs to another workstream.
+    """
+    chunk_ids = {h.chunk_id for h in hits}
+    if not chunk_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(
+                DocumentChunk.id,
+                DocumentChunk.source_id,
+                DocumentChunk.text,
+                DocumentChunk.section_path,
+                DocumentChunk.char_start,
+                DocumentChunk.char_end,
+            ).where(DocumentChunk.id.in_(chunk_ids))
+        )
+    ).all()
+    refs: dict[UUID, ChunkRef] = {}
+    for row in rows:
+        source = by_source.get(row.source_id)
+        if source is None:
+            continue
+        refs[row.id] = ChunkRef(
+            chunk_id=row.id,
+            source_id=row.source_id,
+            source_short_id=source.short_id,
+            title=source.title,
+            url=source.url,
+            section_path=row.section_path,
+            text=row.text,
+            char_start=row.char_start,
+            char_end=row.char_end,
+        )
+    return refs
+
+
+async def _gather_evidence(
+    state: ResearchState, ingested: Sequence[IngestedSource]
+) -> list[EvidenceCard]:
+    """Retrieve the pack: breadth across the run's questions, then depth."""
+    ctx = _ctx()
+    by_source = {s.source_id: s for s in ingested}
+    await _await_chunks(state, set(by_source))
+
+    queries = _evidence_queries(state)
+    vectors = await _embed_queries(state, queries)
+
+    async with ctx.session_maker() as session:
+        breadth_hits: list[list[Any]] = []
+        for query, vector in zip(queries, vectors, strict=True):
+            hits = await search_corpus(
+                session,
+                project_id=state["project_id"],
+                query_text=query,
+                query_embedding=vector,
+                top_k=_CORPUS_TOP_K,
+                per_source_cap=_CORPUS_PER_SOURCE_CAP,
+            )
+            breadth_hits.append([h for h in hits if h.source_id in by_source])
+
+        # Depth into the sources the breadth pass ranked highest. If breadth
+        # returned nothing at all — a lexical-only leg against a question whose
+        # words appear in no chunk — fall back to descending into the run's own
+        # sources with the topic, so a pack is still built from what was read.
+        ranked: list[UUID] = []
+        for rank in range(_CORPUS_TOP_K):
+            for lst in breadth_hits:
+                if rank < len(lst) and lst[rank].source_id not in ranked:
+                    ranked.append(lst[rank].source_id)
+        if not ranked:
+            ranked = list(by_source)
+        depth_hits: list[Any] = []
+        for source_id in ranked[:_DESCEND_TOP_SOURCES]:
+            depth_hits.extend(
+                await descend_into_source(
+                    session,
+                    project_id=state["project_id"],
+                    source_id=source_id,
+                    query_text=queries[0],
+                    query_embedding=vectors[0],
+                    top_k=_DESCENT_TOP_K,
+                )
+            )
+
+        refs = await _chunk_refs(
+            session,
+            hits=[h for lst in breadth_hits for h in lst] + depth_hits,
+            by_source=by_source,
+        )
+
+    breadth = [[refs[h.chunk_id] for h in lst if h.chunk_id in refs] for lst in breadth_hits]
+    depth = [refs[h.chunk_id] for h in depth_hits if h.chunk_id in refs]
+    return select_cards(breadth=breadth, depth=depth)
+
+
 @with_phase("compose", ctx_getter=lambda: _ctx())
 async def _node_compose(state: ResearchState) -> dict[str, Any]:
     with start_span(
         "research.node.compose",
         **{"aleph.node": "compose", "aleph.project_id": str(state["project_id"])},
-    ):
+    ) as span:
         ctx = _ctx()
         ingested = state.get("ingested") or []
         if not ingested:
             msg = "research ingested no sources; nothing to compose"
             raise RuntimeError(msg)
-        listing = "\n".join(
-            f"c{i}: {s.title}" + (f" — {s.url}" if s.url else "")
-            for i, s in enumerate(ingested, start=1)
-        )
+
+        cards = await _gather_evidence(state, ingested)
+        if not cards:
+            # Loud, not degraded. Composing from titles is precisely the defect
+            # this node was rebuilt to remove, so "no evidence" fails the run
+            # with a diagnosis instead of producing a confident, sourceless
+            # report that looks exactly like a good one.
+            msg = (
+                f"research retrieved no evidence: {len(ingested)} source(s) ingested, "
+                "0 retrievable chunks. The sources may still be normalizing or "
+                "chunking (see research.evidence.sources_not_indexed), or the "
+                "index may be empty."
+            )
+            raise RuntimeError(msg)
+        pack = render_pack(cards)
+        span.set_attribute("aleph.evidence.cards", len(cards))
+        span.set_attribute("aleph.evidence.chars", len(pack))
+        span.set_attribute("aleph.evidence.budget_chars", EVIDENCE_CHAR_BUDGET)
+
         content = await _chat(
             state,
             capability=Capability.SYNTHESIS,
             purpose="research.compose",
             system=_COMPOSE_SYS,
-            user=(f"Topic: {state['topic']}\n\nSources (cite inline as [cN]):\n{listing}"),
+            user=(
+                f"Topic: {state['topic']}\n\n"
+                f"Evidence cards (cite inline as [cN], then quote each one you "
+                f"cite):\n\n{pack}"
+            ),
             max_tokens=4000,
             temperature=0.3,
         )
-        body_md = sanitize_markers(content, len(ingested))
+
+        body_md, quotes = split_evidence_block(content)
+        body_md = sanitize_markers(body_md, len(cards))
+        anchored = anchor_body(body_md=body_md, cards=cards, quotes=quotes)
+        if not anchored.refs_by_marker:
+            msg = (
+                f"research composed a report anchored to nothing: {len(cards)} evidence "
+                f"card(s) offered, {len(quotes)} quote(s) returned, 0 grounded. An "
+                "unanchored research report is the defect, not the fallback."
+            )
+            raise RuntimeError(msg)
+        if anchored.unquoted_markers:
+            _log.warning(
+                "research.compose.unquoted_markers",
+                project_id=str(state["project_id"]),
+                markers=anchored.unquoted_markers,
+            )
+
+        # Renumber BEFORE style_pass, which renumbers `[cN]` to first-appearance
+        # order itself and knows nothing about the marker→chunk map. The old
+        # code built that map by list position and then let style_pass shuffle
+        # the body underneath it.
+        body_md, refs_by_marker = renumber_markers(anchored.body_md, anchored.refs_by_marker)
         body_md = ctx.scholar.style_pass(body_md)
+        # style_pass is now a no-op for numbering — the markers are already in
+        # first-appearance order — but assert it rather than assume it: a
+        # renumbering here would silently re-point every citation at the wrong
+        # chunk, which is the exact class of defect being removed.
+        stray = set(_CITE_MARKER_RE.findall(body_md))
+        known = {m[1:] for m in refs_by_marker}
+        if not stray <= known:
+            msg = (
+                "style_pass renumbered citation markers out from under the "
+                f"marker→chunk map (unmapped: {sorted(stray - known)})"
+            )
+            raise RuntimeError(msg)
+        # And keep the map to exactly what the final body cites, so
+        # `report.sources` is the sources actually cited rather than the ones
+        # cited by a draft that no longer exists.
+        present = {f"c{d}" for d in stray}
+        refs_by_marker = {m: r for m, r in refs_by_marker.items() if m in present}
+        if not refs_by_marker:
+            msg = "the style pass removed every citation marker; nothing is anchored"
+            raise RuntimeError(msg)
+
+        # Claims come from the FINAL body — after renumbering and after
+        # style_pass — so a claim's markers are the markers the commit will
+        # see. `build_report` used to pass an empty claim list here, which is why
+        # the research path has written zero claims and zero citations to date.
+        claims = extract_claims(body_md, known_markers=set(refs_by_marker))
         summary = summarize_body(body_md, fallback=state["topic"])
+        span.set_attribute("aleph.evidence.anchored_citations", len(refs_by_marker))
+        span.set_attribute("aleph.evidence.claims", len(claims))
         report = build_report(
-            topic=state["topic"], body_md=body_md, summary=summary, sources=ingested
+            topic=state["topic"],
+            body_md=body_md,
+            summary=summary,
+            refs_by_marker=refs_by_marker,
+            claims=claims,
         )
         return {"report": report}
 

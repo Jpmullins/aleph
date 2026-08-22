@@ -603,10 +603,20 @@ services:
       retries: 10
       start_period: 20s
 
-  # Creates the buckets, once. MinIO does not create them on demand and neither
-  # Langfuse nor Aleph's S3 asset backend creates its own: the first write to a
-  # bucket that does not exist is a NoSuchBucket error at request time, long
-  # after everything reported healthy.
+  # Creates the buckets, once, for LANGFUSE. MinIO does not create them on
+  # demand and Langfuse does not create its own, so its first write to a
+  # missing bucket fails at request time — long after everything reported
+  # healthy.
+  #
+  # NOT for Aleph's asset store, and the distinction is worth keeping straight:
+  # `S3AssetStore.__init__` calls `bucket_exists` and `make_bucket`
+  # (`packages/aleph-rks/src/aleph_rks/asset_store.py:240`), so it has always
+  # created its own. An earlier version of this comment claimed otherwise. It
+  # made the service look more load-bearing than it is, and it was a defect
+  # narrative the code flatly contradicts — which is the one thing CLAUDE.md
+  # opens by forbidding. `aleph-assets` is still created here so the bucket
+  # exists with the right policy before anything writes to it, not because
+  # nothing else would.
   minio-buckets:
     image: minio/mc:RELEASE.2024-10-08T09-37-26Z
     profiles: [s3, tracing]

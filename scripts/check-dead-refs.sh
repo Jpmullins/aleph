@@ -71,6 +71,11 @@ ALLOW = {
     # Illustrative paths in prose that describe a shape rather than a file.
     "packages/aleph-xxx",
     "apps/api/alembic/versions/YYYYMMDD_HHMM_",
+    # Created and deleted inside one self-check probe. Unreachability is a
+    # property of the import GRAPH, so no edit to an existing file can produce
+    # it — the probe has to add a module and remove it again. The path is
+    # correctly absent between runs, and that is the point rather than a defect.
+    "apps/web/src/components/__selfcheck_orphan.tsx",
 }
 
 problems: list[str] = []

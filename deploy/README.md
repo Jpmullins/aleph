@@ -12,6 +12,13 @@ Then open <http://localhost:5173>.
 started. Every service declares a readiness healthcheck, and the API's calls
 `/readyz`, which round-trips the database, the queue and the asset store.
 
+Every long-running service also carries `restart: unless-stopped`, so a crash or
+a host reboot brings it back on its own. The one exception is a container the
+operator stopped or killed by hand — `unless-stopped` honours that deliberately,
+so `docker kill aleph-api-1` leaves it stopped and `docker compose up -d api`
+is how you bring it back. See [`../docs/operations.md`](../docs/operations.md)
+for the measured behaviour, the memory caps, and log rotation.
+
 ## Aleph serves no models
 
 There is no inference server in this stack and there should never be one. Aleph
@@ -43,11 +50,24 @@ or not your models are reachable, and reports the endpoint's status separately.
 Gating boot on it would mean a typo in one URL looks identical to a broken
 database.
 
+```bash
+LITELLM_BASE_URL=http://127.0.0.1:1 \
+  docker compose -f deploy/compose/docker-compose.yml up -d --wait   # exits 0
+curl -sf localhost:8000/readyz | jq .checks.litellm_gateway
+# { "ok": false, "checked_age_s": 12.5, "max_age_s": 30.0,
+#   "last_success_age_s": null, "stale": true, "in_verdict": false }
+```
+
+The gateway leg publishes the age of its own answer, so a cached "fine" cannot
+outlive the endpoint: `ok` goes false within `max_age_s` of the gateway dying.
+`/readyz?strict=1` puts the gateway back in the verdict and returns 503 — use it
+to ask "can this answer a question", never as a container healthcheck.
+
 ## What runs by default
 
 | service | port | what it is |
 |---|---|---|
-| `web` | 5173 | the workbench |
+| `web` | 5173 | the workbench (the DEV image — see *Serving the built UI* below) |
 | `api` | 8000 | HTTP + SSE, hosts the agent, owns migrations |
 | `copilot-runtime` | 4000 | Node bridge between the agent and the browser |
 | `workers` | — | ingest, research, reviewers |
@@ -65,12 +85,34 @@ both apps declare `service_completed_successfully` on it.
 docker compose -f deploy/compose/docker-compose.yml --profile tracing up -d --wait
 ```
 
-- **`tracing`** — Langfuse (:3000), ClickHouse, and an OTel collector. Off by
-  default because it roughly doubles the stack for something you only need when
-  you are debugging agent behaviour. The tracing env vars stay set with the
-  profile off; the exporters simply fail to deliver.
+- **`tracing`** — Langfuse (:3000), ClickHouse, an OTel collector, **and MinIO**:
+  Langfuse 3 ingests through an object store and has no filesystem mode. Two
+  one-shots run first — `langfuse-db` creates the `langfuse` Postgres database
+  and `minio-buckets` creates the buckets, because nothing else does and the
+  failure otherwise arrives as a crash loop, or — for Langfuse — a `NoSuchBucket`
+  at request time. Aleph's own S3 asset store is not in that group: it calls
+  `bucket_exists`/`make_bucket` on construction and always has.
+  Off by default because it roughly doubles the stack for something you only need
+  when you are debugging agent behaviour.
 - **`s3`** — MinIO, for when you want assets in an object store rather than on
   the local filesystem. Set `ALEPH_ASSET_BACKEND=s3` as well.
+
+## Serving the built UI
+
+The stack runs `apps/web/Dockerfile.dev`: a Vite dev server with the source
+bind-mounted, so an edit on your machine is live in the browser.
+`apps/web/Dockerfile` is the production image — a compiled bundle behind nginx,
+no Node at runtime, uid 101.
+
+`import.meta.env.VITE_*` is substituted at **build** time, so the API URL is
+baked into the bundle. Setting it in the container environment does nothing.
+
+```bash
+docker build -f apps/web/Dockerfile \
+  --build-arg VITE_API_BASE_URL=https://aleph.example.com \
+  --build-arg VITE_COPILOT_RUNTIME_URL=https://aleph.example.com/api/copilotkit \
+  -t aleph-web:prod .
+```
 
 ## How code-runner is contained
 
@@ -102,7 +144,19 @@ restarting — a dependency change rebuilds, a source change does not.
 docker compose -f deploy/compose/docker-compose.yml ps          # who is unhealthy
 docker compose -f deploy/compose/docker-compose.yml logs -f api
 curl -s localhost:8000/readyz | jq                              # which dependency failed
+./scripts/check-compose-hardening.sh                            # is this file still sane
 ```
+
+Two failure shapes worth recognising, because both were live in this file and
+both look like something else:
+
+- **`Up N seconds (health: starting)`, forever.** A memory cap below the working
+  set: the kernel kills the container, the restart policy restarts it, and the
+  loop reads as a slow boot. `docker inspect <c> --format '{{.State.OOMKilled}}'`.
+- **`unhealthy` on a service that is answering fine.** A healthcheck that cannot
+  pass — a probe naming a binary the image does not contain, or `localhost`
+  resolving to an address family the server did not bind. Run the healthcheck's
+  own command with `docker exec` and read the error rather than the verdict.
 
 `/readyz` names the failing dependency rather than returning a bare 503, so the
 answer to "why won't it start" is usually one command.

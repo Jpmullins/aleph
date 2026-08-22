@@ -165,6 +165,30 @@ async def _upsert_index_record(
     existing.indexed_at = utcnow()
 
 
+def embedding_text(*, chunk_text: str, title: str | None = None) -> str:
+    """The exact string that gets embedded. ONE definition, two callers.
+
+    The eval embedded `f"{title}. {text}"` while this path embedded `r.text`,
+    so every retrieval number ever reported was measured against a
+    better-conditioned corpus than production produces. Not a large gap, and
+    entirely invisible: both sides looked correct in isolation.
+
+    **It returns the chunk text unchanged, and `title` is deliberately unused.**
+    Prefixing the title is a real technique and it may well be worth adopting —
+    but not as a side effect of reconciling an eval. There are already
+    thousands of chunks in the production index embedded WITHOUT it, and
+    changing this function alone would leave the index holding two
+    representations of the same corpus, silently, with new documents ranking
+    against old ones on an unequal footing. Adopting it means a deliberate
+    re-embed of everything, which is `WS-RS4`'s business.
+
+    `title` stays in the signature so the decision has somewhere to land, and so
+    the eval passes what it knows rather than pretending it does not have it.
+    """
+    _ = title
+    return chunk_text
+
+
 async def index_normalized_document(
     *,
     maker: Callable[[], Any],
@@ -337,7 +361,7 @@ async def index_normalized_document(
             project_id=project_id,
             agent_run_id=agent_run_id,
             profile_bindings=profile_bindings,
-            texts=[r.text for r in rows],
+            texts=[embedding_text(chunk_text=r.text) for r in rows],
             purpose=purpose,
         )
     except Exception as exc:

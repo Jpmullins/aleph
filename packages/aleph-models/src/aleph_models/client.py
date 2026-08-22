@@ -29,12 +29,16 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from aleph_core.errors import GatewayUnavailable, ValidationFailed
 from aleph_core.schemas.model_profile import Capability
 from aleph_core.time import utcnow
+from aleph_models.limiter import GatewayLimiter, limiter_for
 from aleph_models.pricing import PricingTable
 from aleph_models.profile import resolve_binding
 from aleph_models.retry import gateway_retry
+from aleph_observability.metrics import record_llm_request, record_llm_usage
 from aleph_observability.tracing import current_trace_id, start_span
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -207,6 +211,8 @@ class LiteLLMClient:
         session_maker: async_sessionmaker[AsyncSession],
         redis_client: Redis | None = None,
         idempotency_ttl_seconds: int = 86_400,
+        limiter: GatewayLimiter | None = None,
+        retry_sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
         if not base_url:
             msg = "LITELLM_BASE_URL is required"
@@ -222,10 +228,31 @@ class LiteLLMClient:
         self._session_maker = session_maker
         self._idem = _IdemCache(redis=redis_client)
         self._idem_ttl = idempotency_ttl_seconds
+        # Defaulted, not required. A limiter that only applies when someone
+        # remembers to pass one is not a ceiling — and there are call sites
+        # (`aleph_models.autoconfigure` → `probe_model`) that are handed an HTTP
+        # client and know nothing about limits. `limiter_for` is keyed by
+        # endpoint, so every client built against the same gateway shares one
+        # door whether or not it was given one.
+        self._limiter = limiter or limiter_for(base_url)
+        # Test seam only: proving a `Retry-After: 7` is honoured costs seven
+        # seconds of wall clock otherwise, which is why it was never proved.
+        self._retry_sleep = retry_sleep
 
     # ---- public API --------------------------------------------------------
 
     async def health(self) -> bool:
+        """Is the gateway answering? Deliberately NOT behind the concurrency door.
+
+        `/readyz` calls this, compose wires `/readyz` as the API's healthcheck,
+        and Docker restarts a container that fails it. Queueing a health probe
+        behind eight in-flight agent calls would report "the gateway is down"
+        whenever the gateway is merely busy, and the cure — restarting Aleph —
+        does nothing about somebody else's endpoint while taking the whole stack
+        with it. The frequency of this probe is bounded where it belongs, by the
+        30s cached leg in `routes/health.py`, not by a ceiling meant to protect
+        the gateway from Aleph's fan-out.
+        """
         try:
             resp = await self._http.get(
                 f"{self._base_url}/v1/models",
@@ -237,11 +264,12 @@ class LiteLLMClient:
             return False
 
     async def list_models(self) -> list[str]:
-        resp = await self._http.get(
-            f"{self._base_url}/v1/models",
-            headers={"Authorization": f"Bearer {self._api_key}"},
-            timeout=10.0,
-        )
+        async with self._limiter.slot(purpose="list_models"):
+            resp = await self._http.get(
+                f"{self._base_url}/v1/models",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                timeout=10.0,
+            )
         if resp.status_code != 200:
             msg = f"litellm gateway list_models failed: {resp.status_code}"
             raise GatewayUnavailable(msg)
@@ -314,8 +342,31 @@ class LiteLLMClient:
 
         started_at = time.monotonic()
         with start_span("litellm.chat", **attrs) as span:
-            body = await self._post_with_retry("/v1/chat/completions", payload)
-            latency_ms = int((time.monotonic() - started_at) * 1000)
+            # WS-P9. The failure path is counted too, and that is the whole
+            # point: a counter that only moves on success cannot tell "the
+            # gateway is down" from "nobody is calling it", and those need
+            # opposite responses. `aleph_llm_requests_total{purpose,outcome}`
+            # is also the series that characterises backlog E5 ("weirdly rate
+            # limited") — per-purpose request rate is exactly the number that
+            # confirms or drops the subagent fan-out hypothesis.
+            try:
+                body = await self._post_with_retry("/v1/chat/completions", payload)
+            except Exception:
+                record_llm_request(
+                    capability=capability.value,
+                    purpose=purpose,
+                    outcome="error",
+                    duration_s=time.monotonic() - started_at,
+                )
+                raise
+            elapsed_s = time.monotonic() - started_at
+            latency_ms = int(elapsed_s * 1000)
+            record_llm_request(
+                capability=capability.value,
+                purpose=purpose,
+                outcome="ok",
+                duration_s=elapsed_s,
+            )
 
             usage = body.get("usage") or {}
             input_tokens = int(usage.get("prompt_tokens", 0))
@@ -341,6 +392,16 @@ class LiteLLMClient:
             if not priced.priced:
                 _warn_unpriced(binding.model, capability.value, purpose)
 
+            # The label that makes "what share of our spend is unpriced" one
+            # query instead of an anecdote — backlog E4.
+            record_llm_usage(
+                capability=capability.value,
+                purpose=purpose,
+                pricing_source=priced.source,
+                input_tokens=input_tokens,
+                output_tokens=completion_tokens,
+                cost_usd=cost,
+            )
             span.set_attribute("aleph.pricing_source", priced.source)
             span.set_attribute("gen_ai.usage.input_tokens", input_tokens)
             span.set_attribute("gen_ai.usage.cached_tokens", cached_tokens)
@@ -423,8 +484,26 @@ class LiteLLMClient:
 
         started_at = time.monotonic()
         with start_span("litellm.embed", **attrs) as span:
-            body = await self._post_with_retry("/v1/embeddings", payload)
-            latency_ms = int((time.monotonic() - started_at) * 1000)
+            # See `chat` — the embedder is the leg whose silent death emptied
+            # the whole retrieval index (WS-RS1), and it had no counter.
+            try:
+                body = await self._post_with_retry("/v1/embeddings", payload)
+            except Exception:
+                record_llm_request(
+                    capability=Capability.EMBEDDING.value,
+                    purpose=purpose,
+                    outcome="error",
+                    duration_s=time.monotonic() - started_at,
+                )
+                raise
+            elapsed_s = time.monotonic() - started_at
+            latency_ms = int(elapsed_s * 1000)
+            record_llm_request(
+                capability=Capability.EMBEDDING.value,
+                purpose=purpose,
+                outcome="ok",
+                duration_s=elapsed_s,
+            )
 
             usage = body.get("usage") or {}
             input_tokens = int(usage.get("prompt_tokens", 0))
@@ -437,6 +516,14 @@ class LiteLLMClient:
             cost, savings = priced.cost_usd, priced.cache_savings_usd
             if not priced.priced:
                 _warn_unpriced(binding.model, Capability.EMBEDDING.value, purpose)
+            record_llm_usage(
+                capability=Capability.EMBEDDING.value,
+                purpose=purpose,
+                pricing_source=priced.source,
+                input_tokens=input_tokens,
+                output_tokens=0,
+                cost_usd=cost,
+            )
             span.set_attribute("aleph.pricing_source", priced.source)
             span.set_attribute("gen_ai.usage.input_tokens", input_tokens)
             span.set_attribute("aleph.cost_usd", float(cost))
@@ -483,12 +570,17 @@ class LiteLLMClient:
         }
         url = f"{self._base_url}{path}"
 
-        async for attempt in gateway_retry():
+        # The slot is taken per ATTEMPT, not per call: a retry is another
+        # request arriving at the same endpoint, and a limiter that counts the
+        # first attempt only under-reports exactly when the gateway is already
+        # over its budget.
+        async for attempt in gateway_retry(sleep=self._retry_sleep):
             with attempt:
-                resp = await self._http.post(url, json=payload, headers=headers, timeout=120.0)
-                if resp.status_code >= 400:
-                    resp.raise_for_status()
-                return resp.json()
+                async with self._limiter.slot(purpose=path):
+                    resp = await self._http.post(url, json=payload, headers=headers, timeout=120.0)
+                    if resp.status_code >= 400:
+                        resp.raise_for_status()
+                    return resp.json()
         # gateway_retry().reraise=True guarantees we raise instead of falling through.
         msg = "gateway retry exhausted"
         raise GatewayUnavailable(msg)

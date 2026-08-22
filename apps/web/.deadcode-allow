@@ -1,0 +1,33 @@
+# Modules under apps/web/src that nothing imports and that stay anyway.
+#
+# Read by scripts/check-web-dead-code.sh. One entry per line:
+#
+#     <path relative to apps/web/src>   <BACKLOG-ID>   <YYYY-MM-DD>   # why
+#
+# e.g.  components/Inspector.tsx        WS-C3b         2026-08-21     # lands with the pane
+#
+# The backlog id and the date are required by the parser, not by convention: an
+# exemption with neither is indistinguishable from having never looked, and this
+# file exists precisely so that keeping dead code is a dated decision somebody
+# made rather than the default. The sweep also fails on a stale entry — one
+# naming a file that is gone, or one that has become reachable — because an
+# allowlist nobody prunes is how the next real finding gets hidden.
+#
+# ---------------------------------------------------------------------------
+# Nothing is exempt today, and one entry was deliberately NOT written here.
+#
+# components/ActivityCard.tsx (349 lines) was the only consumer of the agent's
+# streamed `todos` plan and the only user of `useAgent`. It has not rendered
+# since the workspace shell was rebuilt — ProjectWorkspace stopped mounting it —
+# so the plan view was already gone; keeping the file would have preserved the
+# appearance of a feature, not the feature. It was deleted rather than exempted
+# because WS-C3b (the Inspector pane) rebuilds this view and its own acceptance
+# criterion requires the file to be absent, and because a reader grepping for
+# `useAgent` was being told Aleph consumed agent state when nothing did.
+#
+# The cost is real and is recorded here rather than in a commit message:
+# `GET /v1/projects/{id}/agent-events/stream` now has no client at all until
+# WS-C3b ships. The reference implementation of the SSE ticker and of the
+# `write_todos` rendering is in git history — it was `components/ActivityCard.tsx`
+# under apps/web/src, removed by WS-UI-1 on 2026-08-21.
+# ---------------------------------------------------------------------------

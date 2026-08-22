@@ -29,9 +29,11 @@ from sqlalchemy import and_, select
 from aleph_connectors.arxiv import ArxivConnector
 from aleph_connectors.credentials import (
     ConnectorCredentialService,
-    LibsodiumSealedBoxCipher,
+    credential_cipher,
+    credential_cipher_from_env,
 )
 from aleph_connectors.exa import ExaConnector
+from aleph_connectors.keys import legacy_read_key
 from aleph_connectors.lens import LensConnector
 from aleph_connectors.openalex import OpenAlexConnector
 from aleph_connectors.rss import RSSConnector
@@ -84,11 +86,6 @@ def dev_credential_defaults(auth_mode: str) -> dict[str, str]:
     if auth_mode != "local":
         return {}
     return {kind: os.environ.get(env, "") or "" for kind, env in _DEV_ENV_KEYS.items()}
-
-
-def master_secret_bytes(agent_token_secret: str) -> bytes:
-    s = agent_token_secret.encode("utf-8")
-    return s if len(s) >= 32 else s.ljust(32, b"0")
 
 
 @dataclass(frozen=True)
@@ -178,6 +175,8 @@ async def resolve_bound_tools(
     session_maker: async_sessionmaker[AsyncSession],
     project_id: UUID,
     agent_token_secret: str,
+    credential_master_key: str | None = None,
+    credential_legacy_key: str = "",
     auth_mode: str = "local",
     allowed: Sequence[str] | None = None,
     factories: Mapping[str, ConnectorFactory] | None = None,
@@ -188,6 +187,14 @@ async def resolve_bound_tools(
     A kind whose credential is missing or undecryptable is skipped with a
     warning (and the optional ``on_skip`` event callback), never fatal. Only
     enabled kinds are instantiated.
+
+    ``agent_token_secret`` no longer has anything to do with the credentials —
+    it is kept in the signature because callers in another workstream pass it
+    positionally by keyword and it is the pre-split ``v1`` read key. The
+    encryption key is ``credential_master_key``
+    (``ALEPH_CREDENTIAL_MASTER_KEY``); leaving it ``None`` reads it from the
+    process environment, which is what the worker callers do today because
+    their own signatures do not carry it yet.
     """
     facs: Mapping[str, ConnectorFactory] = (
         factories if factories is not None else RESEARCH_CONNECTOR_FACTORIES
@@ -196,7 +203,13 @@ async def resolve_bound_tools(
         rows = await connector_rows(session, project_id)
         kinds = effective_enabled_kinds(rows, allowed=allowed, registered=frozenset(facs))
         row_by_kind = {r.kind: r for r in rows}
-        cipher = LibsodiumSealedBoxCipher(master_secret=master_secret_bytes(agent_token_secret))
+        if credential_master_key is None:
+            cipher = credential_cipher_from_env()
+        else:
+            cipher = credential_cipher(
+                master_key=credential_master_key,
+                legacy_key=legacy_read_key(credential_legacy_key, agent_token_secret),
+            )
         svc = ConnectorCredentialService(
             session, cipher=cipher, dev_default_for=dev_credential_defaults(auth_mode)
         )

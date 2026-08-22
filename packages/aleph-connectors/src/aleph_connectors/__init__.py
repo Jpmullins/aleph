@@ -18,11 +18,22 @@ from aleph_connectors.credentials import (
     ConnectorCredentialService,
     CredentialCipher,
     LibsodiumSealedBoxCipher,
+    ReencryptReport,
+    credential_cipher,
+    credential_cipher_from_env,
+)
+from aleph_connectors.keys import (
+    CURRENT_KEY_VERSION,
+    LEGACY_KEY_VERSION,
+    MasterKeyRejected,
+    derive_project_key,
 )
 from aleph_connectors.models import SynthesisProposal
 from aleph_connectors.registry import ConnectorRegistry, get_registry
 
 __all__ = [
+    "CURRENT_KEY_VERSION",
+    "LEGACY_KEY_VERSION",
     "ConnectorBase",
     "ConnectorContext",
     "ConnectorCredential",
@@ -31,9 +42,14 @@ __all__ = [
     "ConnectorResult",
     "CredentialCipher",
     "LibsodiumSealedBoxCipher",
+    "MasterKeyRejected",
     "NotSupported",
     "RawPayload",
+    "ReencryptReport",
     "SearchQuery",
     "SynthesisProposal",
+    "credential_cipher",
+    "credential_cipher_from_env",
+    "derive_project_key",
     "get_registry",
 ]

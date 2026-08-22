@@ -25,15 +25,49 @@ import asyncio
 import json
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 # .../aleph-evals/src/aleph_evals/retrieval_eval.py
 #   parents[0]=aleph_evals  [1]=src  [2]=aleph-evals  <- datasets live here
-DATASET_DIR = Path(__file__).resolve().parents[2] / "datasets" / "retrieval"
+#: Where the labelled set lives.
+#:
+#: Overridable because the committed set is a 12-document toy — measured
+#: saturated at recall@1 = 1.00, so it cannot resolve any change RS6 or RS10
+#: might make. A real set is built from the operator's OWN ingested corpus
+#: (`python -m aleph_evals.build_retrieval_set`), and is not committed here:
+#: the material Aleph ingests is published papers, and shipping their full text
+#: in this repository is a licensing decision that belongs to whoever owns the
+#: repository, not to the eval.
+DATASET_DIR = Path(
+    os.environ.get(
+        "ALEPH_RETRIEVAL_DATASET",
+        str(Path(__file__).resolve().parents[2] / "datasets" / "retrieval"),
+    )
+)
 EMBEDDING_DIM = 1024
+
+
+#: Questions whose answer is deliberately NOT in the corpus.
+#:
+#: Without this category the eval cannot tell a system that says "I don't know"
+#: from one that confidently returns the nearest irrelevant passage — and every
+#: other metric here rewards the second. Scored on abstention, never on recall.
+UNANSWERABLE = "unanswerable"
+
+#: Cut-off for nDCG. Ten, because that is roughly what a person scans.
+NDCG_K = 10
+
+#: Recall cut-offs reported. @1 is what a single-answer surface shows; @20 is
+#: the ceiling a reranker has to work with.
+RECALL_KS = (1, 3, 8, 20)
+
+#: Chunks any one source may contribute. Mirrors the production default — the
+#: eval used to pass `None`, so the cap that stops one long document filling
+#: every slot was never exercised.
+PER_SOURCE_CAP = 3
 
 
 @dataclass(frozen=True)
@@ -42,6 +76,9 @@ class Question:
     question: str
     expect: tuple[str, ...]
     phrasing: str
+    #: `factual` or `unanswerable`. Defaulted so the existing 45-question set
+    #: loads unchanged rather than needing a migration to be readable.
+    category: str = "factual"
 
 
 @dataclass
@@ -52,16 +89,47 @@ class Report:
     hits: int
     by_phrasing: dict[str, tuple[int, int]]
     misses: list[tuple[str, str, str]]
+    #: Ranking quality, not just presence. Recall cannot tell "the answer was
+    #: first" from "the answer was eighth", so a reranker that reorders the same
+    #: eight results is worth exactly zero to it — which is the whole point of
+    #: WS-RS6.
+    ndcg: float = 0.0
+    mrr: float = 0.0
+    recall_at: dict[int, float] = field(default_factory=dict)
+    #: Unanswerable questions, scored on declining rather than on retrieving.
+    abstain_total: int = 0
+    abstain_correct: int = 0
 
     @property
     def recall(self) -> float:
         return self.hits / self.total if self.total else 0.0
 
+    @property
+    def abstain_rate(self) -> float:
+        return self.abstain_correct / self.abstain_total if self.abstain_total else 0.0
+
     def render(self) -> str:
         lines = [
             f"retrieval recall@{self.k} = {self.recall:.2f}  ({self.hits}/{self.total})",
             f"mode: {self.mode}",
+            f"  nDCG@{NDCG_K}  {self.ndcg:.3f}",
+            f"  MRR       {self.mrr:.3f}",
         ]
+        if self.recall_at:
+            lines.append(
+                "  recall    "
+                + "  ".join(f"@{n} {v:.2f}" for n, v in sorted(self.recall_at.items()))
+            )
+        if self.abstain_total:
+            lines.append(
+                f"  abstain   {self.abstain_rate:.2f}  "
+                f"({self.abstain_correct}/{self.abstain_total} unanswerable declined)"
+            )
+        else:
+            # Said rather than omitted. A metric that is silently absent reads
+            # as a metric that passed, which is how a gate certifies something
+            # it never measured.
+            lines.append(f"  abstain   n/a — the set has no '{UNANSWERABLE}' questions (WS-RS5)")
         for phrasing, (hit, total) in sorted(self.by_phrasing.items()):
             share = hit / total if total else 0.0
             lines.append(f"  {phrasing:<14} {share:.2f}  ({hit}/{total})")
@@ -69,6 +137,31 @@ class Report:
             lines.append(f"  misses ({len(self.misses)}):")
             lines.extend(f"    {qid}  expected {want}  — {q}" for qid, want, q in self.misses[:10])
         return "\n".join(lines)
+
+
+def _ndcg_at(ordered: list[Any], wanted: set[Any], cutoff: int) -> float:
+    """Binary-relevance nDCG. One graded scale, stated where it is computed.
+
+    Relevance is 0/1 because the labels are 0/1 — inventing graded relevance
+    from a binary set produces a number with more precision than the data.
+    The ideal ranking puts every wanted source first, so the denominator is the
+    DCG of `min(len(wanted), cutoff)` hits.
+    """
+    import math
+
+    dcg = 0.0
+    for position, source in enumerate(ordered[:cutoff], start=1):
+        if source in wanted:
+            dcg += 1.0 / math.log2(position + 1)
+    ideal = sum(1.0 / math.log2(i + 1) for i in range(1, min(len(wanted), cutoff) + 1))
+    return dcg / ideal if ideal else 0.0
+
+
+def _title_of(corpus: list[dict[str, Any]], doc_id: str) -> str:
+    for doc in corpus:
+        if doc["doc_id"] == doc_id:
+            return str(doc.get("title", ""))
+    return ""
 
 
 def _load(path: Path) -> list[dict[str, Any]]:
@@ -186,6 +279,8 @@ async def run(k: int = 8) -> Report:
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     from aleph_core.ids import uuid7
+    from aleph_rks.chunking import Chunk, chunk_markdown
+    from aleph_rks.indexing import embedding_text
     from aleph_rks.models import DocumentChunk
     from aleph_rks.retrieval import search_corpus
 
@@ -201,6 +296,7 @@ async def run(k: int = 8) -> Report:
             question=row["question"],
             expect=tuple(row["expect"]),
             phrasing=row.get("phrasing", "unspecified"),
+            category=row.get("category", "factual"),
         )
         for row in _load(DATASET_DIR / "questions.jsonl")
     ]
@@ -211,14 +307,35 @@ async def run(k: int = 8) -> Report:
     doc_to_source: dict[str, UUID] = {}
 
     try:
-        # Seed. One source per document, one chunk per document — the unit under
-        # test is retrieval, not chunking.
+        # Seed through the REAL chunker.
+        #
+        # This used to write one chunk per document, with `section_path=None`
+        # and `char_start=0`, and then disable the diversity cap because there
+        # was only one chunk per source anyway. So the eval measured retrieval
+        # over a corpus that had never been chunked — no overlap, no section
+        # paths, no competition between passages of the same document, and the
+        # per-source cap (which exists to stop one document flooding the
+        # results) never exercised at all. Every one of those is a thing
+        # production does and the measurement did not.
         embed, mode = await _embedder(maker)
+
+        seeded: list[tuple[str, Chunk]] = []
+        for doc in corpus:
+            for chunk in chunk_markdown(doc["text"]):
+                seeded.append((doc["doc_id"], chunk))
 
         # Embed the corpus in one batch. Seeding zero vectors while querying a
         # real one would leave the dense leg ranking nothing and quietly report
         # the lexical number as "hybrid".
-        bodies = [f"{doc['title']}. {doc['text']}" for doc in corpus]
+        #
+        # `embedding_text` is the SAME function the ingest path calls. The eval
+        # used to embed `f"{title}. {text}"` while production embedded the raw
+        # chunk, so every number ever reported was measured against a
+        # better-conditioned corpus than the running system produces.
+        bodies = [
+            embedding_text(chunk_text=chunk.text, title=_title_of(corpus, doc_id))
+            for doc_id, chunk in seeded
+        ]
         doc_vectors: list[list[float]] | None = None
         if mode.startswith("hybrid"):
             bound_for_seed = await _embedding_model(maker)
@@ -226,25 +343,28 @@ async def run(k: int = 8) -> Report:
             doc_vectors = _gateway_embed(str(model), bodies)
 
         async with maker() as session:
-            for ordinal, doc in enumerate(corpus):
-                source_id = uuid7()
-                doc_to_source[doc["doc_id"]] = source_id
-                body = bodies[ordinal]
+            for doc in corpus:
+                doc_to_source[doc["doc_id"]] = uuid7()
+            for index, (doc_id, chunk) in enumerate(seeded):
+                source_id = doc_to_source[doc_id]
                 session.add(
                     DocumentChunk(
                         id=uuid7(),
                         project_id=project_id,
                         source_id=source_id,
                         normalized_document_id=uuid7(),
-                        ordinal=ordinal,
-                        text=body,
+                        ordinal=chunk.ordinal,
+                        # The chunk's own text, so `char_start`/`char_end` index
+                        # the document exactly — the invariant
+                        # `test_chunk_offsets.py` pins on the production path.
+                        text=chunk.text,
                         text_tsv="",  # trigger fills this
-                        section_path=None,
-                        char_start=0,
-                        char_end=len(body),
-                        token_count=len(body.split()),
+                        section_path=chunk.section_path,
+                        char_start=chunk.char_start,
+                        char_end=chunk.char_end,
+                        token_count=chunk.token_count,
                         embedding=(
-                            doc_vectors[ordinal] if doc_vectors is not None else _zero_vector()
+                            doc_vectors[index] if doc_vectors is not None else _zero_vector()
                         ),
                         embedder_model="eval-fixture",
                     )
@@ -254,6 +374,10 @@ async def run(k: int = 8) -> Report:
         hits = 0
         by_phrasing: dict[str, list[int]] = {}
         misses: list[tuple[str, str, str]] = []
+        ranks: list[int | None] = []
+        gains: list[float] = []
+        abstain_total = 0
+        abstain_correct = 0
 
         async with maker() as session:
             for question in questions:
@@ -262,11 +386,29 @@ async def run(k: int = 8) -> Report:
                     project_id=project_id,
                     query_text=question.question,
                     query_embedding=embed(question.question),
-                    top_k=k,
-                    per_source_cap=None,  # one chunk per source anyway
+                    top_k=max(k, NDCG_K),
+                    # The real cap, not `None`.
+                    #
+                    # It was disabled with the comment "one chunk per source
+                    # anyway", which was true of the old one-chunk-per-document
+                    # seeding and is not true now. The cap exists to stop a
+                    # single long document filling every slot, and a measurement
+                    # that switches it off cannot see it working — or failing.
+                    per_source_cap=PER_SOURCE_CAP,
                 )
-                got_sources = {h.source_id for h in found}
                 wanted = {doc_to_source[d] for d in question.expect}
+
+                # An unanswerable question has no correct source, so "did we
+                # retrieve it" is meaningless. What matters is whether the
+                # system declines — an eval that scores these like any other
+                # question rewards confident retrieval of irrelevant passages.
+                if question.category == UNANSWERABLE:
+                    abstain_total += 1
+                    abstain_correct += int(not found)
+                    continue
+
+                ordered = [h.source_id for h in found]
+                got_sources = set(ordered)
                 ok = bool(got_sources & wanted)
                 hits += ok
                 bucket = by_phrasing.setdefault(question.phrasing, [0, 0])
@@ -275,13 +417,30 @@ async def run(k: int = 8) -> Report:
                 if not ok:
                     misses.append((question.id, ",".join(question.expect), question.question))
 
+                rank = next(
+                    (i + 1 for i, src in enumerate(ordered) if src in wanted),
+                    None,
+                )
+                ranks.append(rank)
+                gains.append(_ndcg_at(ordered, wanted, NDCG_K))
+
+        answerable = len(ranks)
         return Report(
             mode=mode,
             k=k,
-            total=len(questions),
+            total=answerable,
             hits=hits,
             by_phrasing={p: (h, t) for p, (h, t) in by_phrasing.items()},
             misses=misses,
+            ndcg=(sum(gains) / len(gains)) if gains else 0.0,
+            mrr=(sum(1.0 / r for r in ranks if r is not None) / len(ranks) if ranks else 0.0),
+            recall_at={
+                n: sum(1 for r in ranks if r is not None and r <= n) / len(ranks) for n in RECALL_KS
+            }
+            if ranks
+            else {},
+            abstain_total=abstain_total,
+            abstain_correct=abstain_correct,
         )
     finally:
         # The fixture project is scratch; leave nothing behind.

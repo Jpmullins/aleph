@@ -280,10 +280,19 @@ class TestSelectionRefuses:
         assert _by_id(_models())[chosen].mode == "embedding"
 
     def test_capability_with_no_qualifying_model_is_left_unbound(self) -> None:
-        """Better an honest error at resolution than a wrong model at runtime."""
-        bindings = select_default_bindings(_models())
-        assert Capability.RERANK.value not in bindings
-        assert unbound_capabilities(bindings) == [Capability.RERANK]
+        """Better an honest error at resolution than a wrong model at runtime.
+
+        Demonstrated on `embedding` against a gateway serving only chat models.
+        It used to be demonstrated on `rerank`, which was a weaker test than it
+        looked: rerank had no policy that any gateway could ever satisfy, so it
+        was unbound on every input and the assertion held whatever the selection
+        logic did. Removing an embedder is a real gateway shape — a chat-only
+        endpoint — and it is the one that takes retrieval down.
+        """
+        chat_only = [m for m in _models() if m.mode != "embedding"]
+        bindings = select_default_bindings(chat_only)
+        assert Capability.EMBEDDING.value not in bindings
+        assert unbound_capabilities(bindings) == [Capability.EMBEDDING]
 
     def test_unreachable_models_are_excluded(self) -> None:
         """Advertised is not the same as reachable — both Sonnets 4xx on call."""
@@ -340,9 +349,19 @@ class TestDeterminism:
         assert forward == reverse
 
 
-def test_every_capability_has_a_policy() -> None:
-    """A capability with no policy can never be bound, silently."""
-    assert set(CAPABILITY_POLICIES) == set(Capability)
+def test_every_capability_has_a_policy_or_is_deliberately_unbindable() -> None:
+    """A capability with no policy can never be bound, silently.
+
+    `RERANK` is the one deliberate exception, and it is named here rather than
+    left to a set difference so that adding a NEW enum member without a policy
+    still fails. Aleph contains no reranker: nothing resolves that capability,
+    so its policy could only ever produce a permanent entry in every
+    autoconfigure run's `unbound` list and a Settings row an operator could set
+    and never observe. `tests/unit/test_capability_offers.py` keeps the picker,
+    this table and the call sites in step.
+    """
+    assert Capability.RERANK not in CAPABILITY_POLICIES
+    assert set(CAPABILITY_POLICIES) | {Capability.RERANK} == set(Capability)
 
 
 class TestRestrictedKeyFallback:
