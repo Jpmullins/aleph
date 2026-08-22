@@ -132,6 +132,31 @@ comprehensively and correctly. `docs/decisions.md` D1 records why.
   chain is exact: `packages/aleph-rks/tests/test_chunk_offsets.py` asserts
   `markdown[char_start:char_end] == chunk.text` over real documents.
 
+### The plugin cluster, end to end
+
+As of 2026-08-22 the thing CLAUDE.md opens by describing actually works, and it is worth knowing the
+shape before touching any of it:
+
+1. **Author** — `POST /v1/projects/{id}/plugins`, or the agent's `author_plugin` tool. The AST gate
+   runs BEFORE anything is stored, so source with an import-time side effect leaves no row.
+2. **Durable** — `plugins` table, `aleph_runtime.plugin_service`. Survives a restart; the workers
+   reconstitute from it. A plugin that fails to mount is recorded `failed` with its reason rather
+   than blocking every other plugin, which is the failure `Kernel.unregister` exists for.
+3. **Reachable** — `aleph_kernel.agent_api.AgentPluginAPI`, five agent tools and five routes.
+   `preview_removal` and the refusal read the same graph, so a refusal is always predictable.
+   `author_plugin` and `disable_plugin` are withheld from the interpreter loop
+   (`interpreter.PTC_WITHHELD`): PTC bypasses `interrupt_on`, and a loop that can force a disable
+   can dismantle the system it runs on.
+4. **A pane** — `PaneKind(builder=...)`. Each pane builds inside its own try/except, so a plugin's
+   exception becomes one error surface rather than ending the multiplexed stream.
+5. **Configurable** — `UIContribution` declares a JSON Schema and `settings_card` renders it with no
+   browser code. Values land in `plugin_settings`. **A field declaring itself a secret is refused**,
+   and secret-shaped keys are redacted before persistence — a settings value reaches `card_actions`
+   AND the append-only ledger, so a credential there is plaintext forever. Credentials go through
+   `ConnectorCredential`.
+
+Core capability has no `plugin_id` at any layer. It is not refused, it is unnameable.
+
 ### A standing constraint
 
 **Reference implementations are read, not depended on.** `deepseek-harness`, `cordis`, `prime-agent`
@@ -206,7 +231,7 @@ apps/
 packages/
   aleph-core          primitives, Pydantic schemas, UUIDv7, grounding/defang. LEAF — imports nothing else.
   aleph-kernel        the composability kernel — effects, capabilities, manifest, AST gate, skills, spawn ledger
-  aleph-runtime       the composition root — shared services as kernel capabilities, each with a probe
+  aleph-runtime       composition root — services as kernel capabilities; plugin durability + UI contributions
   aleph-db            SQLAlchemy ORM + repositories + ledger
   aleph-security      auth, Principal, JWT, role gates, agent tokens
   aleph-observability OTEL + Langfuse + structlog
@@ -227,8 +252,9 @@ packages/
   aleph-wiki          the wiki knowledge plugin — pages, schema, lint, hubs; hosts the Claim Spine write path
 ```
 
-21 workspace packages. `docs/acceptance.md` E4 asserts the count does not grow; the reduction comes
-with the wiki deletion.
+23 workspace packages. `docs/acceptance.md` E4 asserts the count does not grow. There is no
+reduction coming: `docs/decisions.md` D1 reversed the wiki deletion, and both knowledge plugins
+stay.
 
 **Strict DAG, higher → lower.** `aleph-core` is the leaf. Apps depend on packages; packages never
 depend on apps; no cycles. `aleph-scholar` carries no workspace deps.
@@ -321,21 +347,64 @@ below only with a test that would have caught them.
 - **`commit_revision` is not atomic on the path agents use.** It only row-locks when given a
   `page_id`; the by-title path (`_lock_or_create_page` with `page_id=None`) returns the page unlocked
   and computes `revision_no` as `max+1`.
-- **Cost attribution has a hole.** `AgentCostCallbackHandler` writes a `ModelCall` only when the
-  response carries token usage *and* a project id is resolvable from the run metadata; a
-  `ChatOpenAI` response without usage (no `stream_usage=True`, or a provider that omits it) is
-  silently uncosted. `test_skips_when_no_usage` / `test_skips_when_no_project_id` pin the current
-  behaviour, not the desired one. Measured 2026-08-21:
-  `select count(*) from model_calls where pricing_source='unknown' or agent_run_id is null` returns
-  **159**, and `agent_run_id` is unconditionally NULL on the agent path because the only two minters
-  of it are `_self_headers` and `a2ui_handlers`, neither of which the chat path goes through.
-  `WS-C3a` creates the run, `WS-D2` attributes to it, `WS-MEP-1` prices it.
 - **A green `audit/run.sh` is weaker evidence than it looks.** It probes a live stack, and a check
   whose precondition is missing exits `skip` (e.g. "no project has recorded LLM spend yet"). `run.sh`
   labels skips rather than hiding them, but a run over an empty stack exercises almost nothing while
   reporting no failures. `scripts/acceptance.sh` — which counts skips separately and can verify its
   own checks fail (`--self-check`) — is the gate to trust.
 ### Fixed, with the test that pins each
+
+**2026-08-22 (the plugin cluster, and the instruments)**
+
+- **Cost attribution closed, in three deploys, and the third was found by a probe rather than by
+  reading.** The agent path had no price list and no run to attribute to. Fixing it took: pricing
+  (`WS-MEP-1`); reading the run id from `get_config()` rather than `runtime.config`, which
+  LangGraph's `Runtime` deliberately does not have; and threading it into the retrieval router,
+  whose three further model calls happen a layer below the middleware. Number 5 is **0 since the
+  recorded cutoff** (`docs/attribution-cutoff.txt`), with the all-time count printed beside it —
+  D9 keeps the historical rows rather than editing an append-only ledger to improve a number.
+  → `tests/integration/test_chat_turn_is_recorded.py`,
+  `apps/api/tests/unit/test_agent_cost_attribution.py`, acceptance H2.
+- **The kernel is reachable.** `grep -rn "AgentPluginAPI" apps/api/src` returned **0**: the guardrail
+  this project calls the product had no HTTP route, no agent tool and no graph node. Five tools and
+  five routes now, with preview and refusal reading the same declaration graph.
+  → `tests/integration/test_plugin_routes.py`, acceptance A8.
+- **A plugin survives the process that installed it.** There was no plugin table anywhere in the
+  schema, so an agent that improved itself forgot at the next deploy. The AST gate runs BEFORE the
+  row is written; a failed mount rolls it back; one bad row cannot stop a process starting.
+  → `tests/integration/test_plugin_durability.py`, acceptance A7.
+- **A plugin can add a pane, and a broken one cannot blank the workspace.** `PANE_REGISTRY.extend()`
+  advertised itself as the plugin seam while the thing that BUILT a pane was an if/elif chain that
+  raised on unknown names — inside an unguarded loop feeding the one multiplexed SSE connection every
+  pane reads from. → `tests/integration/test_plugin_panes.py`, acceptance A9.
+- **A declared schema becomes a settings screen you can open.** `settings_card.py` was 279 working
+  lines with no importer outside its own tests; its first caller was the SAVE handler, so the screen
+  could only be seen by writing to it. → `tests/integration/test_plugin_settings_contract.py`,
+  acceptance A11.
+- **A settings secret no longer lands in plaintext in two append-only tables.** A field declaring
+  itself a password rendered `variant: "obscured"` — hidden on screen, and persisted verbatim to
+  `card_actions` and the ledger. Refused at the generator, redacted at the persistence boundary.
+  → `packages/aleph-a2ui/tests/test_secret_redaction.py`,
+  `tests/integration/test_action_params_are_redacted.py`, acceptance F7/F8.
+- **The Inspector.** A chat turn is a recorded run with a tool timeline, and there is a pane that
+  shows it — the only place an agent failure had been legible was the API container's stderr.
+  → `tests/integration/test_inspector_surface.py`, acceptance C10/C11.
+- **The composition root has tests.** 783 lines deciding what a running Aleph consists of, and zero
+  tests over it. A probe now demonstrably notices a dead dependency — an engine constructs fine
+  against an unreachable host, so only a probe issuing a real query can tell.
+  → `tests/integration/test_capability_probes.py`, acceptance A10.
+
+**Instruments that could not fail, and now can**
+
+- The eval **scorers graded the fixture's own answer** — `_run_dataset` loaded a JSON file and scored
+  it without executing anything. `pass_rate: 1.0` meant the file agreed with itself.
+- `python -m aleph_evals` printed `selected_datasets: []` and **exited 0**.
+- `--min-recall` gated the top-k hit rate, which is 1.00 on the committed set whatever retrieval
+  does. It gates recall@1 now, and the plan's own suggested mutation turns it red.
+- Two **self-check probes mutated nothing** — a `^` anchor under `perl -0`, and a probe naming a
+  migration a newer one displaced. A no-op mutation is now a hard failure.
+- **Seven correct sweeps had no consumer**, across three batches. `check-sweeps-are-wired.sh` fails
+  the build on the eighth.
 
 **2026-08-21 (executing `docs/plan.md`)**
 
@@ -513,7 +582,8 @@ of the eight are failing and three are not yet measurable; each says which.
 
 - `docs/architecture.md` — what exists today, honestly, including the security posture
 - `docs/acceptance.md` — the parts table. Note Part E is withdrawn (there is no wiki deletion)
-- `docs/belief-engine.md` — the Claim Spine design; note it has never run
+- `docs/belief-engine.md` — the Claim Spine design. It RUNS now (`WS-RS8`): claims carry verbatim
+  quotes and document-relative spans, and are embedded at write time (`WS-RS10`)
 - `docs/wiki-schema.md` — the wiki's governance: schema, statuses, thresholds, lint, links
 - `docs/operations.md` — stack, migrations, gates, pointing Aleph at any OpenAI-compatible endpoint
 - `docs/html/` — `plan.html` and `backlog.html`, the same content as readable standalone pages
