@@ -168,6 +168,18 @@ sessions.
 _DEV_USER_UUID = uuid.uuid5(uuid.NAMESPACE_DNS, "dev@aleph.local")
 
 
+def _dev_actor_id() -> uuid.UUID:
+    """Who a recorded chat turn is attributed to.
+
+    Aleph runs single-user in `local` mode, so this is the JIT-provisioned dev
+    principal — the same identity the auth middleware synthesizes, so the
+    `agent_runs.created_by` on a chat turn matches the `created_by` on
+    everything else that turn writes. `WS-D2` replaces it with the real
+    principal once the cost path carries one.
+    """
+    return _DEV_USER_UUID
+
+
 def _dev_principal(settings: Any) -> Principal:
     """Build the fixed local-dev principal for service calls from agent tools.
 
@@ -1715,7 +1727,10 @@ def build_assistant_deep_agent(
         # ended the turn — and every tool resolved its project scope OUTSIDE
         # its own try block, so even the guarded ones were guarded against the
         # wrong thing.
-        middleware=[AlephAgentMiddleware(), CopilotKitMiddleware()],
+        middleware=[
+            AlephAgentMiddleware(session_maker=_runtime.get("session_maker")),
+            CopilotKitMiddleware(),
+        ],
         backend=_memory_backend,
         store=store,
         checkpointer=checkpointer if checkpointer is not None else MemorySaver(),

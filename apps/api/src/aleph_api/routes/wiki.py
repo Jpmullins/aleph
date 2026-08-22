@@ -3,23 +3,26 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Query, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 
 from aleph_api.deps import LedgerDep, LiteLLMDep, PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
+from aleph_artifacts.exporters.vault import VaultPage, render_vault
 from aleph_artifacts.models import RenderedAsset
 from aleph_artifacts.render_service import record_render
 from aleph_connectors.models import ApprovalDecision
 from aleph_core.errors import NotFound, ValidationFailed
 from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
+from aleph_db.models import Project
 from aleph_db.repos import model_profile as profile_repo
 from aleph_observability.tracing import current_trace_id
 from aleph_security.roles import ProjectRole, require_at_least
@@ -29,7 +32,7 @@ from aleph_wiki.html_compiler import compile_page_html
 from aleph_wiki.index_service import IndexService
 from aleph_wiki.links import resolve_broken_links
 from aleph_wiki.lint import lint_wiki
-from aleph_wiki.models import WikiClaim, WikiLink, WikiPage, WikiRevision
+from aleph_wiki.models import WikiClaim, WikiIndex, WikiLink, WikiPage, WikiRevision
 from aleph_wiki.navigation import HubPlan, build_index, plan_hubs, sync_hubs
 from aleph_wiki.schema import Category, WikiSchema
 from aleph_wiki.schema_service import SchemaService
@@ -999,3 +1002,169 @@ async def resolve_wiki_links(
         by_slug=result.by_slug,
         summary=result.summary(),
     )
+
+
+# --- vault export ----------------------------------------------------------
+#
+# Three places in the tree said an Aleph project "opens as an Obsidian vault"
+# and nothing anywhere wrote one out. This is the read path for that claim: the
+# wiki as markdown files on disk, in a zip, in either of two link dialects.
+#
+# It matters beyond interoperability. An export is what makes the knowledge
+# layer leaveable, and `docs/decisions.md` D1 leaves the wiki's storage
+# expected to move; a corpus with no way out is a corpus held hostage to
+# whichever schema happens to be current.
+
+
+class VaultDanglingOut(BaseModel):
+    """A link the export could not point at a file in the bundle."""
+
+    from_slug: str
+    from_title: str
+    target: str
+    display: str
+
+
+class VaultExportOut(BaseModel):
+    """What `?dry_run=true` reports instead of bytes."""
+
+    dialect: str
+    project_title: str
+    page_count: int
+    files: list[str]
+    dangling: list[VaultDanglingOut]
+
+
+async def _vault_pages(session: SessionDep, project_id: UUID) -> list[VaultPage]:
+    """The exportable corpus: every non-stub page, with its current body.
+
+    Stubs are excluded — 779 of the 844 live pages are stubs, and a stub is a
+    red link somebody's prose created, not a document. Exporting them would
+    produce a vault that is 92% empty files.
+
+    A non-stub page with no current revision IS exported, with the empty body it
+    has. It is one page on the live corpus and it is real data: the page exists,
+    it has governance fields, and nobody has written it. Dropping it would make
+    the file count quietly disagree with `count(*) where not is_stub`, which is
+    the number anyone checking this export will run.
+    """
+    rows = (
+        await session.execute(
+            select(WikiPage, WikiRevision.body_md, WikiIndex.aliases_jsonb)
+            .outerjoin(WikiRevision, WikiRevision.id == WikiPage.current_revision_id)
+            .outerjoin(WikiIndex, WikiIndex.page_id == WikiPage.id)
+            .where(WikiPage.project_id == project_id, WikiPage.is_stub.is_(False))
+            .order_by(WikiPage.slug)
+        )
+    ).all()
+    return [
+        VaultPage(
+            title=page.title,
+            slug=page.slug,
+            body_md=body or "",
+            page_type=page.page_type,
+            category=page.category,
+            tags=tuple(str(t) for t in (page.tags or [])),
+            related=tuple(str(r) for r in (page.related or [])),
+            aliases=tuple(str(a) for a in (aliases or [])),
+            confidence=page.confidence,
+            contested=page.contested,
+            contradictions=tuple(str(c) for c in (page.contradictions or [])),
+            created=page.created_at.date() if page.created_at else None,
+            updated=page.updated_at.date() if page.updated_at else None,
+        )
+        for page, body, aliases in rows
+    ]
+
+
+@router.post("/{project_id}/export/vault")
+async def export_vault(
+    project_id: ProjectScopeDep,
+    session: SessionDep,
+    ledger: LedgerDep,
+    principal: PrincipalDep,
+    dialect: Annotated[str, Query(pattern="^(obsidian|okf)$")] = "obsidian",
+    dry_run: Annotated[bool, Query()] = False,
+) -> Response:
+    """Export the wiki as a markdown vault: one `.md` per non-stub page + `index.md`.
+
+    `dialect=obsidian` emits `[[wikilinks]]`; `dialect=okf` emits
+    `[text](./slug.md)` and stamps `okf_version: "0.1"` on the index, which is
+    what makes the bundle readable by anything other than Obsidian.
+
+    `?dry_run=true` returns the file list and the dangling-link report as JSON
+    instead of the zip. That is the only way the dangling report is legible: a
+    link the exporter could not resolve is written out as plain text rather than
+    as a link into nowhere, so a caller who only ever downloads the zip would
+    never learn that anything was dropped.
+    """
+    require_at_least(principal, project_id, at_least=ProjectRole.VIEWER)
+    project = (
+        await session.execute(select(Project).where(Project.id == project_id))
+    ).scalar_one_or_none()
+    if project is None:
+        msg = f"project not found: {project_id}"
+        raise NotFound(msg)
+
+    pages = await _vault_pages(session, project_id)
+    export = render_vault(pages, dialect=dialect, project_title=project.title)
+
+    if dry_run:
+        return JSONResponse(
+            VaultExportOut(
+                dialect=export.dialect,
+                project_title=project.title,
+                page_count=export.page_count,
+                files=sorted(export.files),
+                dangling=[
+                    VaultDanglingOut(
+                        from_slug=d.from_slug,
+                        from_title=d.from_title,
+                        target=d.target,
+                        display=d.display,
+                    )
+                    for d in export.dangling
+                ],
+            ).model_dump()
+        )
+
+    payload = export.to_bytes()
+    # A full-corpus export is data egress, so it is a ledger event even though
+    # it mutates nothing: "who took a copy of the wiki, and when" is exactly the
+    # question an append-only action log exists to answer.
+    await ledger.append(
+        project_id=project_id,
+        actor_id=principal.user_id,
+        actor_kind=principal.actor_kind,
+        action_kind="wiki.vault.export",
+        target_id=project_id,
+        target_kind="project",
+        payload={
+            "dialect": export.dialect,
+            "page_count": export.page_count,
+            "dangling_links": len(export.dangling),
+            "bytes": len(payload),
+        },
+        trace_id=current_trace_id(),
+    )
+    await session.commit()
+    slug = _slugify_filename(project.title) or "wiki"
+    return Response(
+        content=payload,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{slug}-vault-{export.dialect}.zip"',
+            "X-Vault-Dialect": export.dialect,
+            "X-Vault-Page-Count": str(export.page_count),
+            "X-Vault-Dangling-Links": str(len(export.dangling)),
+        },
+    )
+
+
+def _slugify_filename(title: str) -> str:
+    """A project title reduced to something safe in a `Content-Disposition`.
+
+    Not cosmetic: a title containing a quote or a newline would break out of the
+    header value, and a header injection through a filename is a real one.
+    """
+    return re.sub(r"[^a-z0-9]+", "-", title.strip().lower()).strip("-")[:64]

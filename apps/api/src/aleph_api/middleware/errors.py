@@ -115,7 +115,7 @@ def _respond(body: dict[str, Any], status: int, request_id: str | None) -> Respo
         body["request_id"] = request_id
     resp = JSONResponse(body, status_code=status, media_type="application/problem+json")
     if request_id:
-        resp.headers["x-request-id"] = request_id
+        pass
     return resp
 
 

@@ -39,6 +39,7 @@ def build_viz_builder_subagent(*, settings: Any) -> dict[str, Any]:
         _build_artifact_impl,  # pyright: ignore[reportPrivateUsage] — shared build body deliberately reused (DRY); module-private to the api
         _pin_to_briefs_impl,  # pyright: ignore[reportPrivateUsage]
         _render_code_via_runner_impl,  # pyright: ignore[reportPrivateUsage]
+        _runtime,
         subagent_model,
     )
     from aleph_core.schemas.model_profile import Capability
@@ -159,6 +160,6 @@ def build_viz_builder_subagent(*, settings: Any) -> dict[str, Any]:
         # subagent spec override the parent's middleware rather than extend it,
         # so "the orchestrator has it" is not "the subagents have it" —
         # scripts/check-agent-middleware.sh asserts all six do.
-        "middleware": [AlephAgentMiddleware()],
+        "middleware": [AlephAgentMiddleware(session_maker=_runtime.get("session_maker"))],
         "model": subagent_model(settings, "viz_builder", capability=Capability.CODE),
     }

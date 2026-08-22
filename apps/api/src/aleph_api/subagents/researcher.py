@@ -341,6 +341,6 @@ def build_researcher_subagent(*, settings: Any) -> dict[str, Any]:
         # subagent spec override the parent's middleware rather than extend it,
         # so "the orchestrator has it" is not "the subagents have it" —
         # scripts/check-agent-middleware.sh asserts all six do.
-        "middleware": [AlephAgentMiddleware()],
+        "middleware": [AlephAgentMiddleware(session_maker=_runtime.get("session_maker"))],
         "model": subagent_model(settings, "researcher"),
     }

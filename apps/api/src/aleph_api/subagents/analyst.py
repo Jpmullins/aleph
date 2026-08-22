@@ -32,6 +32,7 @@ def build_analyst_subagent(*, settings: Any) -> dict[str, Any]:
         _add_hypothesis_evidence_impl,  # pyright: ignore[reportPrivateUsage] — shared body deliberately reused (DRY); module-private to the api
         _create_hypothesis_impl,  # pyright: ignore[reportPrivateUsage] — shared body deliberately reused (DRY); module-private to the api
         _list_hypotheses_impl,  # pyright: ignore[reportPrivateUsage] — shared body deliberately reused (DRY); module-private to the api
+        _runtime,
         subagent_model,
     )
 
@@ -95,6 +96,6 @@ def build_analyst_subagent(*, settings: Any) -> dict[str, Any]:
         # subagent spec override the parent's middleware rather than extend it,
         # so "the orchestrator has it" is not "the subagents have it" —
         # scripts/check-agent-middleware.sh asserts all six do.
-        "middleware": [AlephAgentMiddleware()],
+        "middleware": [AlephAgentMiddleware(session_maker=_runtime.get("session_maker"))],
         "model": subagent_model(settings, "analyst"),
     }

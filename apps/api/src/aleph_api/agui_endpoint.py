@@ -57,6 +57,15 @@ _log = structlog.get_logger(__name__)
 #: beats two mechanisms fighting over one header.
 RUN_ID_HEADER = "X-Aleph-Run-Id"
 
+#: The recorded `agent_runs.id` for this turn, so a client — or a person with
+#: curl — can open the Inspector on the exact run it just drove.
+AGENT_RUN_HEADER = "X-Aleph-Agent-Run-Id"
+
+#: Substring identifying an encoded RUN_ERROR frame. Matched on the encoded text
+#: rather than re-inspecting the event, because the encoder owns the wire format
+#: and the alternative is decoding what we just encoded.
+RUN_ERROR_MARKER = '"RUN_ERROR"'
+
 #: Events after which nothing may be emitted. A run ends once.
 _TERMINAL = frozenset({EventType.RUN_ERROR, EventType.RUN_FINISHED})
 
@@ -112,8 +121,21 @@ async def _guarded_events(
             )
 
 
-def add_aleph_agui_endpoint(app: FastAPI, agent: Any, *, path: str) -> None:
-    """Mount `agent` at `path` as an AG-UI SSE endpoint that reports failure."""
+def add_aleph_agui_endpoint(
+    app: FastAPI,
+    agent: Any,
+    *,
+    path: str,
+    recorder: Any = None,
+) -> None:
+    """Mount `agent` at `path` as an AG-UI SSE endpoint that reports failure.
+
+    ``recorder`` is a :class:`aleph_api.chat_runs.ChatRunRecorder` when one is
+    available. It is optional so this route stays testable with no database —
+    but when it is absent, a turn produces no `agent_runs` row and the Inspector
+    has nothing to show, which is the state this whole workstream removes. The
+    lifespan always passes one.
+    """
 
     @app.post(path)
     async def aleph_agui_endpoint(input_data: RunAgentInput, request: Request) -> StreamingResponse:
@@ -124,11 +146,50 @@ def add_aleph_agui_endpoint(app: FastAPI, agent: Any, *, path: str) -> None:
         request_agent = agent.clone()
         run_id = uuid.uuid4().hex
 
-        return StreamingResponse(
-            _guarded_events(request_agent, input_data, encoder, run_id),
-            media_type=encoder.get_content_type(),
-            headers={RUN_ID_HEADER: run_id},
-        )
+        chat_run = None
+        if recorder is not None:
+            chat_run = await recorder.begin(getattr(input_data, "thread_id", None))
+            if chat_run is not None:
+                # `LangGraphAgent.config` is a documented constructor field that
+                # `clone()` copies and that the agent merges into the graph's
+                # `configurable`. Setting it on the CLONE is what makes the run id
+                # per-request; setting it on the shared agent would leak one
+                # turn's id into every concurrent turn.
+                #
+                # `configurable`, not `metadata` — that distinction is why
+                # `model_calls.agent_run_id` was NULL for the whole life of that
+                # column, and it is what deepagents forwards to subagents.
+                from aleph_api.chat_runs import RUN_ID_KEY
+
+                existing = dict(getattr(request_agent, "config", None) or {})
+                configurable = dict(existing.get("configurable") or {})
+                configurable[RUN_ID_KEY] = str(chat_run.run_id)
+                existing["configurable"] = configurable
+                request_agent.config = existing
+
+        async def stream() -> AsyncIterator[str]:
+            status = "completed"
+            error: str | None = None
+            try:
+                async for frame in _guarded_events(request_agent, input_data, encoder, run_id):
+                    if RUN_ERROR_MARKER in frame:
+                        status = "failed"
+                    yield frame
+            except BaseException as exc:  # includes cancellation on a dropped client
+                status = "failed"
+                error = f"{type(exc).__name__}: {exc}"
+                raise
+            finally:
+                # A run that stops is a run that reports — including when the
+                # browser navigated away mid-stream, which is the case that
+                # would otherwise leave the row `running` until the reaper.
+                if recorder is not None and chat_run is not None:
+                    await recorder.finish(chat_run, status=status, error_text=error)
+
+        headers = {RUN_ID_HEADER: run_id}
+        if chat_run is not None:
+            headers[AGENT_RUN_HEADER] = str(chat_run.run_id)
+        return StreamingResponse(stream(), media_type=encoder.get_content_type(), headers=headers)
 
     @app.get(f"{path}/health")
     def health() -> dict[str, Any]:

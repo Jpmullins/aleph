@@ -178,19 +178,40 @@ def maker(engine: AsyncEngine) -> Callable[[], AsyncSession]:
 
 @pytest.fixture
 async def project_id(maker: Callable[[], AsyncSession]) -> AsyncIterator[uuid.UUID]:
-    """One committed, throwaway project id, deleted afterwards."""
+    """One committed, throwaway project id, deleted afterwards.
+
+    `lock_timeout` so a teardown that cannot get its locks FAILS instead of
+    hanging the suite forever. It should never fire — the `session` fixture is
+    closed first, see below — but "the test run wedged" is the worst possible
+    way to learn that ordering broke.
+    """
     pid = uuid7()
     try:
         yield pid
     finally:
         async with maker() as s:
+            await s.execute(text("SET lock_timeout = '15s'"))
             for statement in _TEARDOWN_SQL:
                 await s.execute(text(statement), {"pid": pid})
             await s.commit()
 
 
 @pytest.fixture
-async def session(maker: Callable[[], AsyncSession]) -> AsyncIterator[AsyncSession]:
+async def session(
+    maker: Callable[[], AsyncSession],
+    project_id: uuid.UUID,  # unused on purpose: ordering only, see the docstring
+) -> AsyncIterator[AsyncSession]:
+    """One session per test, closed BEFORE the teardown deletes run.
+
+    `project_id` is requested purely for its ordering effect and is never used:
+    fixtures finalise in reverse setup order, so naming it here guarantees this
+    session — and any transaction still open on it — is closed before the
+    teardown DELETEs go looking for the same rows.
+
+    Without that the teardown blocked indefinitely on row locks the moment a
+    test failed mid-transaction, which is precisely when a developer least
+    wants the suite to stop responding rather than report.
+    """
     async with maker() as s:
         yield s
 

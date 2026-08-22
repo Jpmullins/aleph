@@ -35,6 +35,15 @@ import structlog
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
+from aleph_api.chat_runs import (
+    TOOL_FAILED,
+    TOOL_FINISHED,
+    TOOL_STARTED,
+    ToolEventClock,
+    record_tool_event,
+    run_id_from_config,
+    subagent_from_config,
+)
 from aleph_core.errors import AlephError, NotFound, PermissionDenied
 
 if TYPE_CHECKING:
@@ -65,6 +74,21 @@ def _advice_for(exc: BaseException) -> str:
         if isinstance(exc, kind):
             return advice
     return "Try a different approach, or tell the analyst what you were unable to do."
+
+
+#: How much of a tool's arguments to keep on the timeline. A tool argument can
+#: be a whole document; an Inspector row is not the place for it.
+_MAX_ARG_CHARS = 400
+
+
+def _truncate_args(args: object) -> dict[str, Any]:
+    if not isinstance(args, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key, value in args.items():
+        text = value if isinstance(value, str) else repr(value)
+        out[str(key)] = text if len(text) <= _MAX_ARG_CHARS else text[:_MAX_ARG_CHARS] + "…"
+    return out
 
 
 def describe_tool_failure(tool_name: str, exc: BaseException) -> str:
@@ -196,11 +220,18 @@ class AlephAgentMiddleware(AgentMiddleware):
         settings: Any = None,
         sleeper: Callable[[float], Awaitable[None]] | None = None,
         jitter: Callable[[], float] | None = None,
+        session_maker: Callable[[], Any] | None = None,
     ) -> None:
         super().__init__()
         self._settings_override = settings
         self._sleep = sleeper if sleeper is not None else asyncio.sleep
         self._jitter_source = jitter if jitter is not None else (lambda: random.random() * 0.25)
+        # When present, every tool call is recorded as an `AgentEvent` against
+        # the run the endpoint minted. Optional so the guard is testable with no
+        # database — but a turn with no recorder produces no timeline, which is
+        # the state WS-C3a removes. The subagents get it from `bind_runtime`.
+        self._session_maker = session_maker
+        self._clock = ToolEventClock()
 
     def _settings(self) -> Any:
         if self._settings_override is not None:
@@ -217,8 +248,23 @@ class AlephAgentMiddleware(AgentMiddleware):
         tool_call = request.tool_call
         name = str(tool_call.get("name", "a tool"))
         call_id = str(tool_call.get("id") or "")
+        run_id, subagent = self._attribution(request)
+        await self._record(
+            run_id,
+            TOOL_STARTED,
+            {
+                "tool": name,
+                "tool_call_id": call_id,
+                "subagent": subagent,
+                # The arguments, so a timeline shows WHAT was asked rather than
+                # only that something was. Truncated: a tool argument can carry
+                # a whole document.
+                "args": _truncate_args(tool_call.get("args")),
+            },
+        )
+        self._clock.start(call_id)
         try:
-            return await handler(request)
+            result = await handler(request)
         except PermissionDenied as exc:
             # Logged at its own level and under its own event, because "the
             # agent kept hitting a project it may not touch" is a security
@@ -229,6 +275,7 @@ class AlephAgentMiddleware(AgentMiddleware):
                 tool_call_id=call_id,
                 error=str(exc),
             )
+            await self._record_failure(run_id, name, call_id, subagent, exc)
             return ToolMessage(
                 content=describe_tool_failure(name, exc),
                 tool_call_id=call_id,
@@ -243,12 +290,57 @@ class AlephAgentMiddleware(AgentMiddleware):
                 tool_call_id=call_id,
                 error=f"{type(exc).__name__}: {exc}",
             )
+            await self._record_failure(run_id, name, call_id, subagent, exc)
             return ToolMessage(
                 content=describe_tool_failure(name, exc),
                 tool_call_id=call_id,
                 name=name,
                 status="error",
             )
+        await self._record(
+            run_id,
+            TOOL_FINISHED,
+            {
+                "tool": name,
+                "tool_call_id": call_id,
+                "subagent": subagent,
+                "duration_ms": self._clock.finish(call_id),
+                "outcome": "ok",
+            },
+        )
+        return result
+
+    def _attribution(self, request: ToolCallRequest) -> tuple[Any, str]:
+        """The run this tool call belongs to, and who is running it."""
+        config = getattr(getattr(request, "runtime", None), "config", None)
+        return run_id_from_config(config), subagent_from_config(config)
+
+    async def _record(self, run_id: Any, kind: str, payload: dict[str, Any]) -> None:
+        if self._session_maker is None or run_id is None:
+            return
+        await record_tool_event(
+            self._session_maker, agent_run_id=run_id, kind=kind, payload=payload
+        )
+
+    async def _record_failure(
+        self, run_id: Any, name: str, call_id: str, subagent: str, exc: BaseException
+    ) -> None:
+        await self._record(
+            run_id,
+            TOOL_FAILED,
+            {
+                "tool": name,
+                "tool_call_id": call_id,
+                "subagent": subagent,
+                "duration_ms": self._clock.finish(call_id),
+                "outcome": "failed",
+                # The exception CLASS, not the message: a message can carry a
+                # user's query or a row of data, and this row is read by an
+                # Inspector pane rather than by an operator with a shell.
+                "error_class": type(exc).__name__,
+                "error": str(exc)[:512],
+            },
+        )
 
     async def awrap_model_call(
         self,

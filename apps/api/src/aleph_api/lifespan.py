@@ -142,6 +142,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             settings=settings,
             store=reader.get(AGENT_STORE),
             checkpointer=agent_checkpointer,
+            session_maker=session_maker,
         )
 
         yield

@@ -34,6 +34,7 @@ def build_reviewer_subagent(*, settings: Any) -> dict[str, Any]:
     from aleph_api.agent_middleware import AlephAgentMiddleware
     from aleph_api.copilot_agent import (
         _project_id_from_config,  # pyright: ignore[reportPrivateUsage] — shared scope resolver reused (DRY); module-private to the api
+        _runtime,
         subagent_model,
     )
     from aleph_core.schemas.model_profile import Capability
@@ -93,6 +94,6 @@ def build_reviewer_subagent(*, settings: Any) -> dict[str, Any]:
         # subagent spec override the parent's middleware rather than extend it,
         # so "the orchestrator has it" is not "the subagents have it" —
         # scripts/check-agent-middleware.sh asserts all six do.
-        "middleware": [AlephAgentMiddleware()],
+        "middleware": [AlephAgentMiddleware(session_maker=_runtime.get("session_maker"))],
         "model": subagent_model(settings, "reviewer", capability=Capability.JUDGE),
     }

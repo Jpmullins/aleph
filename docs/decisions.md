@@ -174,3 +174,61 @@ reasons. A merge is an approval, not an inference.
 
 **Standing.** Hash-chained and append-only. If the write and its ledger entry
 can come apart, the ledger records what was attempted rather than what happened.
+
+---
+
+## D8 · Subagent attribution comes from the config, not from the experimental event stream
+
+**Decided 2026-08-21. Closes the open question in `plan.md` `WS-C3a` / backlog H7.**
+
+### The question
+
+The Inspector needs to say *which* agent did a thing — orchestrator, retriever,
+researcher, and so on — and not merely that a thing happened. Deep Agents ships
+a live subagent stream that looks like the obvious source, and the backlog
+assumed it.
+
+### What was actually checked
+
+Two facts in the installed libraries, both verified rather than remembered:
+
+1. **`ag_ui_langgraph` hardcodes `version="v2"`.** `agent.py:589` builds its
+   stream kwargs with `version="v2"` and passes `subgraphs=...`.
+2. **`astream_events(version="v3")` refuses those kwargs.** LangGraph's
+   `_reject_v3_invariant_kwargs` (`pregel/main.py:378-390`) raises `TypeError`
+   on `stream_mode` or `subgraphs`, because v3 owns both: "stream_mode is built
+   from the transformer mux, subgraphs is forced True so nested namespaces flow
+   through scoped muxes."
+
+So moving to the newer stream is not a flag — it means owning the event
+translation that `ag_ui_langgraph` currently does, on an API whose kwargs
+contract has already changed once.
+
+### The decision
+
+**Attribution comes from `config["configurable"]`, on the tool-call path.**
+`AlephAgentMiddleware` reads the run id and the subagent name there and writes
+them onto every `agent_events` row. That channel is not a workaround: it is the
+one deepagents forwards to subagents, and it is the same channel the agent's
+tools already read their project scope from.
+
+### Why this is the better answer regardless
+
+The event stream reports *what the framework emitted*; the config reports *what
+Aleph asked for*. Aleph needs the second. A subagent that never streams an event
+still has a run id, and a timeline built from the framework's own event vocabulary
+would change shape whenever that vocabulary did.
+
+There is also a specific trap this avoids. `model_calls.agent_run_id` existed as
+a column and was **unconditionally NULL for the whole life of the feature**,
+because its reader looked in `metadata` while nothing ever wrote it there.
+`configurable` is the channel that is actually forwarded;
+`tests/integration/test_chat_turn_is_recorded.py::test_the_run_id_travels_in_configurable_not_metadata`
+pins the distinction so it cannot be re-made quietly.
+
+### Revisit when
+
+`ag_ui_langgraph` moves to `version="v3"` itself, or Aleph has a reason to own
+the event translation for something other than attribution. `stream.subagents`
+is not adopted; `deepagents.SubagentRunStream` stays unused.
+

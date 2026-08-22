@@ -72,6 +72,13 @@ def app(monkeypatch: pytest.MonkeyPatch):
         msg = f"deliberate failure in {project_id}"
         raise RuntimeError(msg)
 
+    @application.post("/v1/projects/{project_id}/expected-boom")
+    async def _expected(project_id: str) -> None:  # pyright: ignore[reportUnusedFunction]
+        from aleph_core.errors import NotFound
+
+        msg = f"no such thing in {project_id}"
+        raise NotFound(msg)
+
     return application
 
 
@@ -111,6 +118,21 @@ async def test_problem_body_carries_the_request_id(app: Any) -> None:
         f"RFC 7807 body has no request id: {sorted(body)}. The id then only "
         "exists in a header the person reporting the bug never sees."
     )
+
+
+async def test_an_expected_error_is_correlated_too(app: Any) -> None:
+    """A 404 nobody can locate is the same problem in a smaller size.
+
+    `AlephError` responses are the ones a user actually reports ("it says not
+    found and I don't know why"), and they went back with no id either.
+    """
+    resp = await _post(
+        app, f"/v1/projects/{PROJECT_ID}/expected-boom", **{"x-request-id": "RID-404"}
+    )
+
+    assert resp.status_code == 404
+    assert resp.headers.get("x-request-id") == "RID-404"
+    assert resp.json()["request_id"] == "RID-404"
 
 
 async def test_log_line_names_the_request_the_user_and_the_project(app: Any) -> None:

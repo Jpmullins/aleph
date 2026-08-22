@@ -37,6 +37,7 @@ def setup_copilotkit(
     settings: Settings,
     store: AsyncPostgresStore,
     checkpointer: object = None,
+    session_maker: object = None,
 ) -> None:
     """Build the assistant Deep Agent and mount its AG-UI endpoint.
 
@@ -51,9 +52,28 @@ def setup_copilotkit(
     from copilotkit import LangGraphAGUIAgent
 
     from aleph_api.agui_endpoint import add_aleph_agui_endpoint
-    from aleph_api.copilot_agent import build_assistant_deep_agent
+    from aleph_api.chat_runs import ChatRunRecorder
+    from aleph_api.copilot_agent import (
+        _dev_actor_id,
+        _project_id_from_thread_id,
+        build_assistant_deep_agent,
+    )
 
     graph = build_assistant_deep_agent(settings=settings, store=store, checkpointer=checkpointer)
+    # Every turn becomes an `agent_runs` row. Nothing about a chat turn was
+    # written down before this: no record that it happened, which tools it
+    # called, how long they took, which subagent did what, or how it ended —
+    # while `agent_runs` and the `/agent-events` SSE route already existed and
+    # were used only by the worker jobs.
+    recorder = (
+        ChatRunRecorder(
+            session_maker=session_maker,
+            project_resolver=_project_id_from_thread_id,
+            actor_id=_dev_actor_id(),
+        )
+        if session_maker is not None
+        else None
+    )
     add_aleph_agui_endpoint(
         app,
         LangGraphAGUIAgent(
@@ -65,4 +85,5 @@ def setup_copilotkit(
             graph=graph,
         ),
         path=_AGENT_PATH,
+        recorder=recorder,
     )

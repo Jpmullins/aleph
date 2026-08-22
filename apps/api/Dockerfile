@@ -2,9 +2,9 @@
 # builds a fortnight apart shipped different interpreters, different OpenSSL and
 # different Debian packages with nothing in the diff to say so, and a CVE scan of
 # "the image we build" named an image nobody could reproduce. The tag is kept in
-# the line so a human can still read which base this is; the digest is what
-# docker resolves. `.github/dependabot.yml`'s docker ecosystem is what moves it
-# forward, and `.github/workflows/security.yml` scans exactly this digest.
+# the line so a human can read which base this is; the digest is what docker
+# resolves. `.github/dependabot.yml`'s docker ecosystem is what moves it forward,
+# and `.github/workflows/security.yml` scans exactly this digest.
 # Resolved 2026-08-21 with `docker buildx imagetools inspect python:3.13-slim`
 # — the multi-arch INDEX digest, so it resolves on linux/amd64 and linux/arm64
 # alike; a per-platform manifest digest would break every non-amd64 build.
@@ -22,9 +22,10 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 # ^ WeasyPrint runtime libs (aleph-artifacts is in the API's dep closure).
 
-# Pinned by digest for the same reason as the base: `uv:0.5.21` is a tag, and a
-# retagged 0.5.21 would silently change the binary that resolves every Python
-# dependency in this image. Resolved 2026-08-21 with
+# Pinned by digest for the same reason as the base, and it matters more here:
+# this binary resolves every Python dependency in the image. `uv:0.5.21` is a
+# tag, so a retagged 0.5.21 would silently change the resolver with the base
+# still looking reproducible. Resolved 2026-08-21 with
 # `docker buildx imagetools inspect ghcr.io/astral-sh/uv:0.5.21`.
 COPY --from=ghcr.io/astral-sh/uv:0.5.21@sha256:87d729f94c87d0aade077260d07d899848f027b7ef37e734dca711c7ceffd3cf /uv /usr/local/bin/uv
 
