@@ -47,6 +47,53 @@ _KIND_MAP: dict[str, tuple[str, str, str, str]] = {
 }
 
 
+def card_payload(
+    card_kind: str,
+    *,
+    card_id: UUID,
+    title: str,
+    asset_uri: str,
+    inline_spec: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """The A2UI payload for a pinned code_runner artifact.
+
+    Every branch writes its component name and its props as LITERALS. The
+    payload used to be assembled as `{"type": card_kind, "props": props}` with
+    both halves held in variables, which is invisible to
+    `scripts/check-surface-bindings.sh`: that sweep reads emission sites
+    statically, so a runtime component name tells it nothing about which props
+    reach which zod schema. This worker is the only producer of `ImageCard` and
+    `HtmlFrameCard` anywhere in Aleph, and neither card was ever compared
+    against the schema that has to declare its props for the binder to resolve
+    them. `ChartCard.artifact_version_id` was shipped here and read by nothing.
+
+    Unknown kinds raise rather than falling through to `HtmlFrameCard`, which is
+    what the old `else` did: a new entry in `_KIND_MAP` would have been pinned
+    as an interactive HTML frame pointing at bytes of some other type.
+    """
+    ref = f"pinned-{card_id}"
+    if card_kind == "ChartCard":
+        return {
+            "type": "ChartCard",
+            "id": ref,
+            "props": {"title": title, "vega_lite_spec": inline_spec or {}},
+        }
+    if card_kind == "ImageCard":
+        return {
+            "type": "ImageCard",
+            "id": ref,
+            "props": {"title": title, "src": asset_uri, "alt": title},
+        }
+    if card_kind == "HtmlFrameCard":
+        return {
+            "type": "HtmlFrameCard",
+            "id": ref,
+            "props": {"title": title, "src": asset_uri},
+        }
+    msg = f"no card payload for {card_kind!r}"
+    raise ValueError(msg)
+
+
 async def _finish_run(maker: Any, run_id: UUID, *, status: str, error_text: str | None) -> None:
     async with maker() as session:
         run = await session.get(AgentRun, run_id)
@@ -190,18 +237,13 @@ async def render_code_artifact_job(
         card_id: UUID | None = None
         if pin:
             card_id = uuid7()
-            asset_uri = f"/v1/projects/{project_id}/assets/artifact-version/{version.id}"
-            if card_kind == "ChartCard":
-                props: dict[str, Any] = {
-                    "title": title,
-                    "vega_lite_spec": inline_spec or {},
-                    "artifact_version_id": str(version.id),
-                }
-            elif card_kind == "ImageCard":
-                props = {"title": title, "src": asset_uri, "alt": title}
-            else:  # HtmlFrameCard
-                props = {"title": title, "src": asset_uri}
-            payload = {"type": card_kind, "id": f"pinned-{card_id}", "props": props}
+            payload = card_payload(
+                card_kind,
+                card_id=card_id,
+                title=title,
+                asset_uri=f"/v1/projects/{project_id}/assets/artifact-version/{version.id}",
+                inline_spec=inline_spec,
+            )
             pin_event = await ledger.append(
                 project_id=project_id,
                 actor_id=principal.user_id,
@@ -209,7 +251,18 @@ async def render_code_artifact_job(
                 action_kind="card.pin",
                 target_id=card_id,
                 target_kind="interactive_card",
-                payload={"card_kind": card_kind, "title": title, "pinned_to": "briefs"},
+                payload={
+                    "card_kind": card_kind,
+                    "title": title,
+                    "pinned_to": "briefs",
+                    # Provenance lives HERE, not in the card props. It used to
+                    # ride along as `ChartCard.artifact_version_id`, which the
+                    # A2UI binder drops (no zod declaration reads it) and no
+                    # view has ever rendered — a link written into a payload
+                    # whose only consumer is the browser, and dropped there.
+                    # The ledger is append-only and the Inspector reads it.
+                    "artifact_version_id": str(version.id),
+                },
                 trace_id=None,
             )
             await pin_card(

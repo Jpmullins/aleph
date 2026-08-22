@@ -580,11 +580,18 @@ class BeliefService:
         project_id: UUID,
         claim_id: UUID,
         replacement: ClaimUpsert,
+        embed: ClaimEmbedder | None = None,
     ) -> UpsertResult:
         """Replace a belief with a revised one, keeping the old row walkable.
 
         Refuses to supersede a user-authored claim from an agent origin. The
         refusal is structural — an agent cannot phrase its way past it.
+
+        ``embed`` is forwarded, because a superseding claim has DIFFERENT text
+        and therefore a different `claim_key`: it is a brand-new row, not an
+        update to the one being replaced, and it inherits nothing — including
+        the old row's vector. Without this the revision of an embedded belief
+        is silently less findable than the belief it corrects.
         """
         old = (
             await self._session.execute(select(WikiClaim).where(WikiClaim.id == claim_id))
@@ -597,7 +604,11 @@ class BeliefService:
             raise PermissionDenied(msg)
 
         result = await self.upsert_claim(
-            principal=principal, ledger=ledger, project_id=project_id, draft=replacement
+            principal=principal,
+            ledger=ledger,
+            project_id=project_id,
+            draft=replacement,
+            embed=embed,
         )
         if result.claim_id != claim_id:
             old.superseded_by = result.claim_id
@@ -665,6 +676,7 @@ class BeliefService:
         project_id: UUID,
         extract: Extractor,
         sources: Sequence[SourceText],
+        embed: ClaimEmbedder | None = None,
     ) -> RebuildResult:
         """Re-derive the belief graph from its sources.
 
@@ -685,6 +697,16 @@ class BeliefService:
 
         Idempotent: running twice over the same sources leaves the same graph,
         because identity is `claim_key` and evidence is deduped by locator.
+
+        ``embed`` matters more here than anywhere else, and it was missing.
+        Two comments on the live write path — in `upsert_claim` and in
+        `_node_claim_extraction` — justify leaving `embedding` NULL by saying
+        that "`BeliefService.rebuild` re-derives later". It could not: rebuild
+        called `upsert_claim` with no embedder, so the designated repair for a
+        NULL vector produced NULL vectors. Passing nothing is still allowed —
+        the rebuild machinery has to stay runnable with no gateway, which is
+        the same reason `extract` is injected — but it is now a choice the
+        caller makes rather than one the method makes for it.
         """
         with start_span("belief.rebuild", **{"aleph.project_id": str(project_id)}) as span:
             before = {c.claim_key for c in await self.live_claims(project_id=project_id)}
@@ -698,6 +720,7 @@ class BeliefService:
                         ledger=ledger,
                         project_id=project_id,
                         draft=draft,
+                        embed=embed,
                     )
                     written += result.citations_written
                     rejected += len(result.citations_rejected)

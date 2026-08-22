@@ -22,14 +22,23 @@ already shipped in some other form:
   separately from `last_probe_ok` because a reachable gateway advertising zero
   models is a real and bad answer that a boolean hides.
 
-**No production caller yet.** The routes and the settings pane are the rest of
-MEP-4/5; the running processes still take their endpoint from Settings, and
-`resolve`'s `fallback_*` arguments exist so the first caller can adopt the row
-without a flag day — a project with no row keeps the deployment default.
+**Who calls this.** `apps/api/src/aleph_api/routes/gateway_endpoints.py` — list,
+upsert, delete, test-connection and the per-project model list — and
+`routes/model_profile.py`, whose autoconfigure and `GET /v1/gateway/models` both
+resolve through :class:`ProjectGatewayCatalogs` rather than reading a catalog
+built once at boot. `resolve`'s `fallback_*` arguments are what makes that
+adoption safe without a flag day: a project with no row keeps the deployment
+default, and `source` says which of the two it got.
+
+**Still on Settings, and not by choice:** the agent path
+(`copilot_agent._gateway_chat_model`), `app.state.litellm`, and the workers'
+`ctx["litellm_client"]`. Those are MEP-6 and they are outside this module.
 """
 
 from __future__ import annotations
 
+import hashlib
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
@@ -42,7 +51,7 @@ from aleph_core.errors import NotFound, ValidationFailed
 from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
 from aleph_db.models.gateway_endpoint import GatewayEndpoint
-from aleph_models.discovery import discover_models
+from aleph_models.discovery import GatewayCatalog, discover_models
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,7 +63,10 @@ __all__ = [
     "EndpointCipher",
     "EndpointProbe",
     "GatewayEndpointService",
+    "ProjectGatewayCatalogs",
     "ResolvedEndpoint",
+    "redact_secret",
+    "settings_endpoint",
 ]
 
 _log = structlog.get_logger(__name__)
@@ -107,6 +119,130 @@ class EndpointProbe:
     #: Replacing them with "connection failed" is what sends an operator
     #: looking for a network fault when the answer was "invalid api key".
     error: str | None = None
+    #: Whether this key may call the admin `/model/info` route. `False` is the
+    #: NORMAL answer for a LiteLLM virtual key and is not a failure — but it
+    #: decides whether the model list carries modes, windows and rates or only
+    #: ids, which is the difference between autoconfigure binding on evidence
+    #: and binding on a hints file. `None` means the endpoint could not be
+    #: reached at all, so the question was never answered.
+    model_info_allowed: bool | None = None
+    #: The ids it advertised. `model_count` is not derived from this in the
+    #: response so that a truncated list can never make the count look wrong.
+    models: tuple[str, ...] = ()
+
+
+#: The admin route whose reachability decides how much metadata discovery gets.
+#: Duplicated from `discovery._MODEL_INFO_PATH` rather than imported, because
+#: that name is private and pyright strict refuses the cross-module read. The
+#: cost of the duplication is bounded: if the two ever disagree, discovery still
+#: returns the right models and only `model_info_allowed` is wrong — and
+#: `test_a_probe_reports_whether_the_admin_route_was_allowed` drives both halves
+#: against the same fake, so the disagreement is a failing test rather than a
+#: quietly wrong flag.
+MODEL_INFO_PATH = "/model/info"
+
+#: Below this length a "secret" is more likely to be a substring of ordinary
+#: prose than a credential, and blanking it would corrupt the operator-facing
+#: error text this whole path exists to preserve.
+_MIN_REDACTABLE = 8
+
+
+def redact_secret(text: str, secret: str) -> str:
+    """Blank an endpoint's own api key out of text that is about to be returned.
+
+    The test-connection route returns the gateway's words verbatim, which is the
+    point of it — "something went wrong" sends an operator looking for a network
+    fault when the answer was "invalid api key". But some gateways echo the
+    bearer token back in their 401 body, and a verbatim relay of that puts the
+    key in an HTTP response, in `last_probe_error`, and in every log line that
+    quotes it. Both criteria hold only if the one value we already know is a
+    secret is removed on the way out.
+    """
+    if not secret or len(secret) < _MIN_REDACTABLE:
+        return text
+    return text.replace(secret, "[redacted]")
+
+
+def settings_endpoint(*, base_url: str, api_key: str) -> ResolvedEndpoint:
+    """The deployment default, in the shape everything else resolves to.
+
+    So that the un-scoped `GET /v1/gateway/models` and a project with no row of
+    its own go through the SAME cache entry and the same code path, instead of
+    one reading a catalog built at boot and the other building its own.
+    """
+    return ResolvedEndpoint(
+        base_url=base_url.rstrip("/"),
+        api_key=api_key,
+        name="deployment default",
+        endpoint_id=None,
+        source=SOURCE_SETTINGS,
+    )
+
+
+class ProjectGatewayCatalogs:
+    """One `GatewayCatalog` per distinct endpoint, bounded.
+
+    The thing this replaces is a single `GatewayCatalog` built at boot from
+    `LITELLM_BASE_URL` and read by every project — which is why `GET
+    /v1/gateway/models` answered with the same list no matter whose project
+    asked. A catalog per project would be wrong in the other direction: two
+    projects pointed at the same endpoint should share one cache and one TTL.
+    So the key is the ENDPOINT, not the project.
+
+    The key is `(base_url, digest of the api key)` and deliberately NOT the
+    endpoint id: two rows in two projects naming the same gateway with the same
+    key see the same models, and giving them separate caches would double the
+    discovery traffic to prove it. The api key is in the key because rotating
+    one without changing the URL must invalidate the cache — otherwise the new
+    key does not take effect until the TTL expires and the failure presents as
+    "it worked yesterday". A digest is enough to notice the change and useless
+    to anything that dumps this dict.
+
+    Bounded because it is process-wide and keyed on operator-supplied data: an
+    unbounded dict keyed on `base_url` is a memory leak with an HTTP route in
+    front of it. Eviction is LRU and costs one rediscovery, never correctness —
+    a `GatewayCatalog` owns no connection, only a cached list.
+    """
+
+    def __init__(
+        self,
+        *,
+        client: httpx.AsyncClient | None = None,
+        ttl_s: float = 300.0,
+        max_entries: int = 32,
+        limiter: GatewayLimiter | None = None,
+    ) -> None:
+        self._client = client
+        self._ttl_s = ttl_s
+        self._max_entries = max(1, max_entries)
+        self._limiter = limiter
+        self._catalogs: OrderedDict[str, GatewayCatalog] = OrderedDict()
+
+    @staticmethod
+    def key_for(resolved: ResolvedEndpoint) -> str:
+        digest = hashlib.sha256(resolved.api_key.encode()).hexdigest()[:16]
+        return f"{resolved.base_url}|{digest}"
+
+    def __len__(self) -> int:
+        return len(self._catalogs)
+
+    def for_endpoint(self, resolved: ResolvedEndpoint) -> GatewayCatalog:
+        key = self.key_for(resolved)
+        existing = self._catalogs.get(key)
+        if existing is not None:
+            self._catalogs.move_to_end(key)
+            return existing
+        catalog = GatewayCatalog(
+            base_url=resolved.base_url,
+            api_key=resolved.api_key,
+            client=self._client,
+            ttl_s=self._ttl_s,
+            limiter=self._limiter,
+        )
+        self._catalogs[key] = catalog
+        while len(self._catalogs) > self._max_entries:
+            self._catalogs.popitem(last=False)
+        return catalog
 
 
 def _endpoint_error(endpoint: GatewayEndpoint, exc: Exception) -> ValidationFailed:
@@ -238,6 +374,26 @@ class GatewayEndpointService:
 
     # -- read ----------------------------------------------------------------
 
+    async def get_by_id(self, *, project_id: UUID, endpoint_id: UUID) -> GatewayEndpoint:
+        """One row, scoped. `NotFound` when it belongs to somebody else.
+
+        Scoped on the READ, not only on the write: an id is guessable in
+        principle and a route that loads by id alone hands another tenant's
+        endpoint — base URL, probe errors and all — to whoever asks.
+        """
+        row = (
+            await self._session.execute(
+                select(GatewayEndpoint).where(
+                    GatewayEndpoint.project_id == project_id,
+                    GatewayEndpoint.id == endpoint_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            msg = f"gateway endpoint {endpoint_id} not found in project {project_id}"
+            raise NotFound(msg)
+        return row
+
     async def list_for_project(self, project_id: UUID) -> list[GatewayEndpoint]:
         rows = (
             (
@@ -281,13 +437,7 @@ class GatewayEndpointService:
                     f"default was supplied; there is nowhere to send a model call"
                 )
                 raise NotFound(msg)
-            return ResolvedEndpoint(
-                base_url=fallback_base_url.rstrip("/"),
-                api_key=fallback_api_key,
-                name="deployment default",
-                endpoint_id=None,
-                source=SOURCE_SETTINGS,
-            )
+            return settings_endpoint(base_url=fallback_base_url, api_key=fallback_api_key)
         else:
             defaults = [r for r in rows if r.is_default]
             if len(defaults) == 1:
@@ -342,17 +492,7 @@ class GatewayEndpointService:
         ever tried" are different states, and only one of them needs an
         operator; storing nothing on failure collapses them.
         """
-        row = (
-            await self._session.execute(
-                select(GatewayEndpoint).where(
-                    GatewayEndpoint.project_id == project_id,
-                    GatewayEndpoint.id == endpoint_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if row is None:
-            msg = f"gateway endpoint {endpoint_id} not found in project {project_id}"
-            raise NotFound(msg)
+        row = await self.get_by_id(project_id=project_id, endpoint_id=endpoint_id)
 
         result = await self._ask(row, project_id=project_id, client=client, limiter=limiter)
         row.last_probe_at = utcnow()
@@ -377,22 +517,65 @@ class GatewayEndpointService:
             # probe: the operator asked "is this endpoint usable", and the
             # answer is no, for a reason worth reading.
             return EndpointProbe(ok=False, model_count=0, error=str(exc)[:2048])
+
+        # Asked BEFORE the list, and separately, because the answer is not
+        # derivable from the list: `metadata_available` looks the same whether
+        # the gateway described a model or `aleph_models.hints` did. One extra
+        # GET on an operator-initiated button is a fair price for the
+        # difference between "your key is restricted, that is normal" and "your
+        # gateway is telling us nothing and we do not know why".
+        allowed = await self._model_info_allowed(row.base_url, api_key, client)
+
         try:
             models = await discover_models(
                 base_url=row.base_url, api_key=api_key, client=client, limiter=limiter
             )
         except httpx.HTTPStatusError as exc:
             body = exc.response.text.strip()[:1500]
-            return EndpointProbe(
-                ok=False,
-                model_count=0,
-                error=f"HTTP {exc.response.status_code} from {exc.request.url}: {body}"[:2048],
-            )
+            error = f"HTTP {exc.response.status_code} from {exc.request.url}: {body}"
         except httpx.HTTPError as exc:
+            # `ConnectError`, `ReadTimeout`, `InvalidURL` — the operator typed
+            # the host wrong, and the type name is most of the diagnosis.
+            error = f"{type(exc).__name__}: {exc}"
+        else:
             return EndpointProbe(
-                ok=False, model_count=0, error=f"{type(exc).__name__}: {exc}"[:2048]
+                ok=True,
+                model_count=len(models),
+                error=None,
+                model_info_allowed=allowed,
+                models=tuple(m.id for m in models),
             )
-        return EndpointProbe(ok=True, model_count=len(models), error=None)
+        return EndpointProbe(
+            ok=False,
+            model_count=0,
+            error=redact_secret(error, api_key)[:2048],
+            model_info_allowed=allowed,
+        )
+
+    async def _model_info_allowed(
+        self, base_url: str, api_key: str, client: httpx.AsyncClient | None
+    ) -> bool | None:
+        """Whether this key may call the admin route. `None` when unreachable.
+
+        Never raises: an endpoint that cannot be reached has not answered this
+        question, and reporting `False` would tell an operator their key is
+        restricted when the truth is that their URL is wrong.
+        """
+        owned = client is None
+        http = client or httpx.AsyncClient(timeout=20.0)
+        try:
+            resp = await http.get(
+                f"{base_url.rstrip('/')}{MODEL_INFO_PATH}",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        except httpx.HTTPError:
+            return None
+        finally:
+            if owned:
+                await http.aclose()
+        if resp.status_code in (401, 403):
+            return False
+        return resp.status_code < 400
 
     # -- delete --------------------------------------------------------------
 
@@ -403,19 +586,17 @@ class GatewayEndpointService:
         actor_id: UUID,
         actor_kind: str,
         project_id: UUID,
-        name: str,
-    ) -> bool:
-        row = (
-            await self._session.execute(
-                select(GatewayEndpoint).where(
-                    GatewayEndpoint.project_id == project_id,
-                    GatewayEndpoint.name == name,
-                )
-            )
-        ).scalar_one_or_none()
-        if row is None:
-            return False
-        target = row.id
+        endpoint_id: UUID,
+    ) -> str:
+        """Remove one endpoint. Returns its name, for the caller's message.
+
+        Addressed by id rather than by name because that is how the route
+        addresses it, and a second addressing scheme is a second way for a
+        delete to hit the wrong row. `NotFound` — not a `False` nobody checks —
+        when it is not this project's.
+        """
+        row = await self.get_by_id(project_id=project_id, endpoint_id=endpoint_id)
+        name = row.name
         await self._session.delete(row)
         await self._session.flush()
 
@@ -426,9 +607,9 @@ class GatewayEndpointService:
             actor_id=actor_id,
             actor_kind=actor_kind,
             action_kind="gateway_endpoint.delete",
-            target_id=target,
+            target_id=endpoint_id,
             target_kind="gateway_endpoint",
             payload={"name": name},
             trace_id=current_trace_id(),
         )
-        return True
+        return name

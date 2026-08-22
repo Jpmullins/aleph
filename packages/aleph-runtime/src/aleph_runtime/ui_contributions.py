@@ -21,6 +21,33 @@ reviewed by a person, `authored` was written by an agent. It is on the
 contribution because the interface should be able to say where a screen came
 from — an agent-authored settings page and a core one are not the same
 proposition, and rendering them identically is a decision nobody made.
+
+**And trust is a DISPLAY attribute. Nothing branches on it, on purpose.**
+`WS-A4` criterion 6 asked for two things: that the tier be observable at the
+API, and that an `authored`-tier save return `requires_approval: true` while a
+`core` save does not. The first is built — `_plugins_section` serves it on the
+settings surface and `CapabilityOut.trust` serves it on
+`GET /v1/projects/{id}/plugins`, where `core` is derived from unaddressability
+rather than taken from the plugin's own claim — a contribution that declares
+itself `core` while holding a `PluginId` is downgraded to `authored`, because
+an agent-installed plugin describing itself as shipped-with-Aleph is the one
+direction in which a wrong answer flatters.
+
+The second was deliberately NOT built, and this is the record of why. A save
+that returns `requires_approval: true` and is stored anyway is a flag with no
+consumer — the dominant defect class in this codebase, and the exact shape of
+the four other holes `WS-A4` was opened to close. A save that returns it and is
+NOT stored needs a pending-value store, an approver, a route to approve on and a
+screen to approve from; that is a feature, not the closing clause of a criterion
+about a dataclass field. Until an approver exists, `authored` changes what a
+screen SAYS about itself and changes nothing about what saving does.
+
+What actually gates an agent-authored plugin today is stronger than an approval
+flag and already runs: the AST gate refuses import-time side effects before a
+row is written, `require_at_least(..., ProjectRole.OWNER)` means only an owner
+may install one at all, the probe gate refuses one that cannot prove it works,
+and `settings_card` REFUSES a secret-shaped field outright rather than asking
+anybody to approve it.
 """
 
 from __future__ import annotations

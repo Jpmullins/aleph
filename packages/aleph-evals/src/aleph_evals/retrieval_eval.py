@@ -69,6 +69,17 @@ RECALL_KS = (1, 3, 8, 20)
 #: every slot was never exercised.
 PER_SOURCE_CAP = 3
 
+#: The two indexes a question can be answered from.
+#:
+#: `chunks` is `aleph_rks.retrieval.search_corpus` over passages — what the
+#: project COLLECTED. `claims` is `aleph_wiki.claim_search.search_claims` over
+#: live beliefs — what the project CONCLUDED. `docs/decisions.md` D1 settles
+#: that both stay, so this is a measurement and never a gate: there is no
+#: `--min-claim-gain`, because a number that decided which plugin survives
+#: would be re-litigating a decision the project has already made.
+CHUNKS = "chunks"
+CLAIMS = "claims"
+
 
 @dataclass(frozen=True)
 class Question:
@@ -89,6 +100,10 @@ class Report:
     hits: int
     by_phrasing: dict[str, tuple[int, int]]
     misses: list[tuple[str, str, str]]
+    #: `chunks` or `claims` — which index this run searched. On the report
+    #: rather than only in the mode string because `--surface both` prints two
+    #: of these and the reader has to be able to tell them apart at a glance.
+    surface: str = CHUNKS
     #: Ranking quality, not just presence. Recall cannot tell "the answer was
     #: first" from "the answer was eighth", so a reranker that reorders the same
     #: eight results is worth exactly zero to it — which is the whole point of
@@ -99,6 +114,19 @@ class Report:
     #: Unanswerable questions, scored on declining rather than on retrieving.
     abstain_total: int = 0
     abstain_correct: int = 0
+    #: Claim surface only. `graph_hop_results` counts results reached ONLY by
+    #: walking `claim_edges`; `graph_hop_only_hits` counts questions whose ONLY
+    #: correct result arrived that way. The second is the one that matters:
+    #: WS-RS10 c6 asks whether the hop contributes, and a hop that returns
+    #: plenty of neighbours which are never the answer contributes nothing.
+    graph_hop_results: int = 0
+    graph_hop_only_hits: int = 0
+    #: Whether the hop was enabled at all, so "0" cannot be read as "measured
+    #: and found worthless" when it means "switched off".
+    graph_hop_enabled: bool = False
+    #: Claims that were never seeded because the dataset carries none.
+    claims_seeded: int = 0
+    edges_seeded: int = 0
 
     @property
     def recall(self) -> float:
@@ -110,11 +138,26 @@ class Report:
 
     def render(self) -> str:
         lines = [
-            f"retrieval recall@{self.k} = {self.recall:.2f}  ({self.hits}/{self.total})",
+            f"{self.surface} recall@{self.k} = {self.recall:.2f}  ({self.hits}/{self.total})",
             f"mode: {self.mode}",
             f"  nDCG@{NDCG_K}  {self.ndcg:.3f}",
             f"  MRR       {self.mrr:.3f}",
         ]
+        if self.surface == CLAIMS:
+            lines.append(f"  seeded    {self.claims_seeded} claims, {self.edges_seeded} edges")
+            if not self.graph_hop_enabled:
+                lines.append("  graph hop off (--no-graph-hop)")
+            else:
+                # Both numbers, always. "reached" alone reads as a
+                # contribution; the hop earns its keep only when a
+                # graph-reached claim is the ONLY correct result for a
+                # question, and on a graph with no traversable edges that is
+                # structurally zero — which is WS-RS9 c4 showing up here.
+                lines.append(
+                    f"  graph hop {self.graph_hop_results} result(s) reached only via "
+                    f"claim_edges; {self.graph_hop_only_hits} question(s) answered ONLY "
+                    "by one"
+                )
         if self.recall_at:
             lines.append(
                 "  recall    "
@@ -467,7 +510,155 @@ async def _reranker(maker: Any, *, enabled: bool) -> tuple[Any, str]:
     return built, f"on ({label})"
 
 
-async def run(k: int = 8, *, rerank: bool = False) -> Report:
+class NoClaimLayer(SystemExit):
+    """The dataset carries no claims, so there is nothing to search.
+
+    A hard stop rather than a zeroed report. `--surface claims` returning
+    "recall 0.00" for a set with no claims file is indistinguishable from a
+    claim layer that retrieves nothing, and the second is a finding while the
+    first is a missing input.
+    """
+
+
+async def _seed_claims(
+    maker: Any,
+    *,
+    project_id: Any,
+    mode: str,
+    embedding_model: tuple[str, str] | None,
+) -> tuple[dict[UUID, str], int]:
+    """Seed the claim surface from the dataset, and return `claim_id -> doc_id`.
+
+    The claims are REAL — `build_retrieval_set` reads live `wiki_claims` whose
+    citations are anchored to a chunk of the corpus it emitted, and assigns
+    each to exactly one document. Nothing here invents a proposition, which is
+    the whole reason the claim layer is worth measuring: a synthesized claim
+    would just be the chunk text under a different table name, and comparing
+    two spellings of the same string measures the SQL.
+
+    Vectors are computed here rather than copied from `wiki_claims.embedding`.
+    Not a shortcut — the opposite. The eval seeds a scratch project and embeds
+    its corpus with the deployed embedder, so embedding the claims the same way
+    is the only setting in which the chunks column and the claims column are
+    measuring retrieval instead of measuring which of the two happened to have
+    been embedded on this instance. (Which, as of WS-RS10, is neither: the
+    column is NULL on every row.)
+
+    `claim_key` is left NULL on purpose. Postgres treats NULLs as distinct in a
+    unique index, so `uq_claims_project_key` cannot trip on two dataset claims
+    that normalize to the same key — a collision in a throwaway project would
+    abort the seed and read as a database problem.
+    """
+    from aleph_core.ids import uuid7
+    from aleph_evals.build_retrieval_set import TRAVERSABLE_EDGE_KINDS
+    from aleph_wiki.claim_search import TRAVERSABLE_EDGES
+    from aleph_wiki.models import ClaimEdge, WikiClaim
+
+    # The builder writes a data file; `search_claims` decides what it walks. If
+    # the two lists drift, the dataset silently stops containing the edges the
+    # search would have followed and the graph hop measures zero for a reason
+    # that has nothing to do with the graph.
+    if set(TRAVERSABLE_EDGE_KINDS) != set(TRAVERSABLE_EDGES):
+        msg = (
+            "the dataset builder and search_claims disagree about which edge kinds "
+            f"are traversable: builder {sorted(TRAVERSABLE_EDGE_KINDS)} vs search "
+            f"{sorted(TRAVERSABLE_EDGES)}"
+        )
+        raise SystemExit(msg)
+
+    claims_path = DATASET_DIR / "claims.jsonl"
+    if not claims_path.exists():
+        msg = (
+            f"{claims_path} does not exist, so --surface claims has nothing to search. "
+            "The committed 12-document set predates the claim layer; build one from "
+            "your own corpus with `python -m aleph_evals.build_retrieval_set --out DIR` "
+            "and point ALEPH_RETRIEVAL_DATASET at it."
+        )
+        raise NoClaimLayer(msg)
+
+    rows = _load(claims_path)
+    if not rows:
+        msg = (
+            f"{claims_path} is empty: no live claim in this instance has a citation "
+            "anchored to a chunk of this corpus. That is a fact about the claim layer "
+            "(WS-RS8), not a retrieval result, so it is not scored as one."
+        )
+        raise NoClaimLayer(msg)
+
+    edge_path = DATASET_DIR / "claim_edges.jsonl"
+    edge_rows = _load(edge_path) if edge_path.exists() else []
+
+    vectors: list[list[float]] | None = None
+    if mode.startswith("hybrid") and embedding_model is not None:
+        vectors = _gateway_embed(embedding_model[0], [str(r["text"]) for r in rows])
+
+    # A dataset id is a string from a file; the row needs a UUID and the two
+    # must agree, so the mapping is built from the ids actually inserted.
+    claim_to_doc: dict[UUID, str] = {}
+    by_dataset_id: dict[str, UUID] = {}
+    # One page per document. `WikiClaim.page_id` is NOT NULL with no foreign
+    # key, so a synthetic id is legal — and giving claims from one document a
+    # shared page is what production looks like.
+    page_of: dict[str, UUID] = {}
+    author = uuid7()
+
+    async with maker() as session:
+        for index, row in enumerate(rows):
+            doc_id = str(row["doc_id"])
+            claim_id = uuid7()
+            by_dataset_id[str(row["claim_id"])] = claim_id
+            claim_to_doc[claim_id] = doc_id
+            session.add(
+                WikiClaim(
+                    id=claim_id,
+                    project_id=project_id,
+                    page_id=page_of.setdefault(doc_id, uuid7()),
+                    revision_id=None,
+                    section_anchor=None,
+                    text=str(row["text"])[:2048],
+                    claim_key=None,
+                    origin="agent",
+                    evidence_tier="stated",
+                    rationale="",
+                    embedding=(vectors[index] if vectors is not None else None),
+                    confidence="weakly_supported",
+                    status="active",
+                    created_by=author,
+                )
+            )
+        await session.commit()
+
+        edges = 0
+        for edge in edge_rows:
+            src = by_dataset_id.get(str(edge["src"]))
+            dst = by_dataset_id.get(str(edge["dst"]))
+            if src is None or dst is None or src == dst:
+                continue
+            session.add(
+                ClaimEdge(
+                    id=uuid7(),
+                    project_id=project_id,
+                    src_claim_id=src,
+                    dst_claim_id=dst,
+                    kind=str(edge["kind"])[:16],
+                    weight=1.0,
+                    rationale="",
+                    created_by=author,
+                )
+            )
+            edges += 1
+        await session.commit()
+
+    return claim_to_doc, edges
+
+
+async def run(
+    k: int = 8,
+    *,
+    rerank: bool = False,
+    surface: str = CHUNKS,
+    walk_graph: bool = True,
+) -> Report:
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     from aleph_core.ids import uuid7
@@ -475,6 +666,7 @@ async def run(k: int = 8, *, rerank: bool = False) -> Report:
     from aleph_rks.indexing import embedding_text
     from aleph_rks.models import DocumentChunk
     from aleph_rks.retrieval import search_corpus
+    from aleph_wiki.claim_search import search_claims
 
     url = os.environ.get("ALEPH_DATABASE_URL") or os.environ.get("DATABASE_URL")
     if not url:
@@ -513,49 +705,64 @@ async def run(k: int = 8, *, rerank: bool = False) -> Report:
         reranker, rerank_mode = await _reranker(maker, enabled=rerank)
         mode = f"{mode} · rerank {rerank_mode}"
 
-        seeded: list[tuple[str, Chunk]] = []
-        for doc in corpus:
-            for chunk in chunk_markdown(doc["text"]):
-                seeded.append((doc["doc_id"], chunk))
-
-        # Embed the corpus in one batch. Seeding zero vectors while querying a
-        # real one would leave the dense leg ranking nothing and quietly report
-        # the lexical number as "hybrid".
-        #
-        # `embedding_text` is the SAME function the ingest path calls. The eval
-        # used to embed `f"{title}. {text}"` while production embedded the raw
-        # chunk, so every number ever reported was measured against a
-        # better-conditioned corpus than the running system produces.
-        bodies = [
-            embedding_text(chunk_text=chunk.text, title=_title_of(corpus, doc_id))
-            for doc_id, chunk in seeded
-        ]
-        doc_vectors: list[list[float]] | None = None
-        if mode.startswith("hybrid"):
-            bound_for_seed = await _embedding_model(maker)
-            model = bound_for_seed[0] if bound_for_seed else None
-            doc_vectors = _gateway_embed(str(model), bodies)
-
         for doc in corpus:
             doc_to_source[doc["doc_id"]] = uuid7()
 
-        # Committed in batches.
-        #
-        # This was one session and one flush for the whole corpus. Twelve
-        # documents meant twelve rows; a real corpus means thousands, and
-        # asyncpg drops the connection mid-`executemany` — `connection was
-        # closed in the middle of operation`, after several minutes of
-        # embedding, with nothing salvaged. Like the `413` on the embed side,
-        # the old set was too small for the transport to matter.
-        for offset in range(0, len(seeded), SEED_BATCH):
-            await _seed_batch(
+        claim_to_doc: dict[UUID, str] = {}
+        claims_seeded = 0
+        edges_seeded = 0
+
+        if surface == CHUNKS:
+            seeded: list[tuple[str, Chunk]] = []
+            for doc in corpus:
+                for chunk in chunk_markdown(doc["text"]):
+                    seeded.append((doc["doc_id"], chunk))
+
+            # Embed the corpus in one batch. Seeding zero vectors while
+            # querying a real one would leave the dense leg ranking nothing and
+            # quietly report the lexical number as "hybrid".
+            #
+            # `embedding_text` is the SAME function the ingest path calls. The
+            # eval used to embed `f"{title}. {text}"` while production embedded
+            # the raw chunk, so every number ever reported was measured against
+            # a better-conditioned corpus than the running system produces.
+            bodies = [
+                embedding_text(chunk_text=chunk.text, title=_title_of(corpus, doc_id))
+                for doc_id, chunk in seeded
+            ]
+            doc_vectors: list[list[float]] | None = None
+            if mode.startswith("hybrid"):
+                bound_for_seed = await _embedding_model(maker)
+                model = bound_for_seed[0] if bound_for_seed else None
+                doc_vectors = _gateway_embed(str(model), bodies)
+
+            # Committed in batches.
+            #
+            # This was one session and one flush for the whole corpus. Twelve
+            # documents meant twelve rows; a real corpus means thousands, and
+            # asyncpg drops the connection mid-`executemany` — `connection was
+            # closed in the middle of operation`, after several minutes of
+            # embedding, with nothing salvaged. Like the `413` on the embed
+            # side, the old set was too small for the transport to matter.
+            for offset in range(0, len(seeded), SEED_BATCH):
+                await _seed_batch(
+                    maker,
+                    seeded[offset : offset + SEED_BATCH],
+                    doc_to_source=doc_to_source,
+                    vectors=doc_vectors,
+                    project_id=project_id,
+                    base=offset,
+                )
+        else:
+            claim_to_doc, edges_seeded = await _seed_claims(
                 maker,
-                seeded[offset : offset + SEED_BATCH],
-                doc_to_source=doc_to_source,
-                vectors=doc_vectors,
                 project_id=project_id,
-                base=offset,
+                mode=mode,
+                embedding_model=(
+                    (await _embedding_model(maker)) if mode.startswith("hybrid") else None
+                ),
             )
+            claims_seeded = len(claim_to_doc)
 
         hits = 0
         by_phrasing: dict[str, list[int]] = {}
@@ -564,25 +771,59 @@ async def run(k: int = 8, *, rerank: bool = False) -> Report:
         gains: list[float] = []
         abstain_total = 0
         abstain_correct = 0
+        graph_hop_results = 0
+        graph_hop_only_hits = 0
 
         async with maker() as session:
             for question in questions:
-                found = await search_corpus(
-                    session,
-                    project_id=project_id,
-                    query_text=question.question,
-                    query_embedding=embed(question.question),
-                    top_k=max(k, NDCG_K),
-                    # The real cap, not `None`.
-                    #
-                    # It was disabled with the comment "one chunk per source
-                    # anyway", which was true of the old one-chunk-per-document
-                    # seeding and is not true now. The cap exists to stop a
-                    # single long document filling every slot, and a measurement
-                    # that switches it off cannot see it working — or failing.
-                    per_source_cap=PER_SOURCE_CAP,
-                    reranker=reranker,
-                )
+                # `ordered` is a ranked list of EVAL SOURCE IDS in both arms,
+                # so every metric below is computed identically for chunks and
+                # for claims and the two columns are comparable. A chunk hit
+                # carries its source id directly; a claim hit is mapped through
+                # the document its evidence is anchored to — one document per
+                # claim, decided at build time, because crediting a claim to
+                # every part of its paper would score the claims arm correct
+                # for questions about passages it never mentions.
+                via_graph: list[bool] = []
+                if surface == CHUNKS:
+                    found = await search_corpus(
+                        session,
+                        project_id=project_id,
+                        query_text=question.question,
+                        query_embedding=embed(question.question),
+                        top_k=max(k, NDCG_K),
+                        # The real cap, not `None`.
+                        #
+                        # It was disabled with the comment "one chunk per
+                        # source anyway", which was true of the old
+                        # one-chunk-per-document seeding and is not true now.
+                        # The cap exists to stop a single long document filling
+                        # every slot, and a measurement that switches it off
+                        # cannot see it working — or failing.
+                        per_source_cap=PER_SOURCE_CAP,
+                        reranker=reranker,
+                    )
+                    ordered = [h.source_id for h in found]
+                    non_empty = bool(found)
+                else:
+                    claim_hits = await search_claims(
+                        session,
+                        project_id=project_id,
+                        query_text=question.question,
+                        query_embedding=embed(question.question),
+                        top_k=max(k, NDCG_K),
+                        walk_graph=walk_graph,
+                    )
+                    resolved = [
+                        (doc_to_source[claim_to_doc[h.claim_id]], h.via_graph)
+                        for h in claim_hits
+                        if h.claim_id in claim_to_doc
+                    ]
+                    ordered = [src for src, _ in resolved]
+                    via_graph = [flag for _, flag in resolved]
+                    graph_hop_results += sum(via_graph)
+                    non_empty = bool(claim_hits)
+
                 wanted = {doc_to_source[d] for d in question.expect}
 
                 # An unanswerable question has no correct source, so "did we
@@ -591,10 +832,9 @@ async def run(k: int = 8, *, rerank: bool = False) -> Report:
                 # question rewards confident retrieval of irrelevant passages.
                 if question.category == UNANSWERABLE:
                     abstain_total += 1
-                    abstain_correct += int(not found)
+                    abstain_correct += int(not non_empty)
                     continue
 
-                ordered = [h.source_id for h in found]
                 got_sources = set(ordered)
                 ok = bool(got_sources & wanted)
                 hits += ok
@@ -603,6 +843,19 @@ async def run(k: int = 8, *, rerank: bool = False) -> Report:
                 bucket[1] += 1
                 if not ok:
                     misses.append((question.id, ",".join(question.expect), question.question))
+
+                if ok and via_graph:
+                    # The hop's actual contribution: a question whose ONLY
+                    # correct result was reached by walking `claim_edges` is one
+                    # a passage index could not have answered. Counting
+                    # "neighbours returned" instead would credit the hop for
+                    # filling slots with claims nobody wanted.
+                    direct = any(
+                        src in wanted
+                        for src, flag in zip(ordered, via_graph, strict=True)
+                        if not flag
+                    )
+                    graph_hop_only_hits += int(not direct)
 
                 rank = next(
                     (i + 1 for i, src in enumerate(ordered) if src in wanted),
@@ -619,6 +872,7 @@ async def run(k: int = 8, *, rerank: bool = False) -> Report:
             hits=hits,
             by_phrasing={p: (h, t) for p, (h, t) in by_phrasing.items()},
             misses=misses,
+            surface=surface,
             ndcg=(sum(gains) / len(gains)) if gains else 0.0,
             mrr=(sum(1.0 / r for r in ranks if r is not None) / len(ranks) if ranks else 0.0),
             recall_at={
@@ -628,15 +882,34 @@ async def run(k: int = 8, *, rerank: bool = False) -> Report:
             else {},
             abstain_total=abstain_total,
             abstain_correct=abstain_correct,
+            graph_hop_results=graph_hop_results,
+            graph_hop_only_hits=graph_hop_only_hits,
+            graph_hop_enabled=walk_graph and surface == CLAIMS,
+            claims_seeded=claims_seeded,
+            edges_seeded=edges_seeded,
         )
     finally:
         # The fixture project is scratch; leave nothing behind.
+        #
+        # Both surfaces are cleaned unconditionally, not just the one this run
+        # seeded: a run that raised between seeding claims and switching
+        # surfaces would otherwise leave `wiki_claims` rows behind under a
+        # project id nothing else knows about, and they would show up forever
+        # in the `claim_key is null` health count.
+        #
+        # Edges before claims — `claim_edges.src_claim_id` is a foreign key to
+        # `wiki_claims.id`, so the other order fails on the constraint and the
+        # cleanup silently leaves both tables dirty.
         from sqlalchemy import delete
+
+        from aleph_wiki.models import ClaimEdge, WikiClaim
 
         async with maker() as session:
             await session.execute(
                 delete(DocumentChunk).where(DocumentChunk.project_id == project_id)
             )
+            await session.execute(delete(ClaimEdge).where(ClaimEdge.project_id == project_id))
+            await session.execute(delete(WikiClaim).where(WikiClaim.project_id == project_id))
             await session.commit()
         await engine.dispose()
 
@@ -703,6 +976,83 @@ def _both_arms(args: argparse.Namespace) -> int:
     return 0
 
 
+def _both_surfaces(args: argparse.Namespace) -> int:
+    """Chunks and claims over the same questions, printed side by side.
+
+    WS-RS10 c1/c3. The question is real and its answer is not known: a claim is
+    short, deduplicated and evidence-anchored, which should help retrieval; it
+    is also a lossy restatement of a passage, which should hurt. Until this
+    existed there was no number either way, and `docs/acceptance.md` was asking
+    for a comparison no command could produce.
+
+    **It is a measurement and it gates nothing.** `docs/decisions.md` D1 keeps
+    both knowledge plugins, so a threshold here would re-open a decision the
+    project has closed. The only non-zero exit is a missing claim layer, which
+    is a broken input rather than a result.
+
+    Three things the columns do not say on their own, printed with them:
+
+    * **The claim layer is smaller by construction.** It holds one row per
+      belief the project reached, against one row per ~1,900-character passage.
+      A lower recall on a hundredth of the rows is not the same failure as a
+      lower recall on the same rows.
+    * **Only chunk-anchored claims are in it.** A claim whose citations carry
+      no `chunk_id` cannot be attributed to a document, so it is dropped at
+      build time rather than credited to its whole source. On an instance with
+      many pre-RS8 thin citations that is most of the claim layer.
+    * **Reranking is applied to chunks only.** `search_claims` takes no
+      reranker, so `--rerank on --surface both` compares a reranked chunk arm
+      against an unreranked claim arm. Named rather than silently allowed.
+    """
+    k = args.k if args.k is not None else max(RECALL_KS)
+    print("chunk surface (search_corpus over passages)")
+    chunks = asyncio.run(run(k=k, rerank=args.rerank == "on", surface=CHUNKS))
+    print(chunks.render())
+    print()
+    print("claim surface (search_claims over live beliefs)")
+    try:
+        claims = asyncio.run(run(k=k, surface=CLAIMS, walk_graph=not args.no_graph_hop))
+    except NoClaimLayer as exc:
+        print(f"  n/a — {exc}")
+        return 1
+    print(claims.render())
+
+    print()
+    print(f"  {'metric':<12} {'chunks':>8} {'claims':>8} {'delta':>8}")
+    rows: list[tuple[str, float, float]] = [
+        (f"nDCG@{NDCG_K}", chunks.ndcg, claims.ndcg),
+        ("MRR", chunks.mrr, claims.mrr),
+    ]
+    for cut in sorted(set(chunks.recall_at) | set(claims.recall_at)):
+        rows.append(
+            (f"recall@{cut}", chunks.recall_at.get(cut, 0.0), claims.recall_at.get(cut, 0.0))
+        )
+    for label, a, b in rows:
+        print(f"  {label:<12} {a:>8.3f} {b:>8.3f} {b - a:>+8.3f}")
+
+    print(
+        f"\n  The claim arm searched {claims.claims_seeded} claims and "
+        f"{claims.edges_seeded} edges; the chunk arm searched the whole corpus. "
+        "A claim layer this much smaller is not a like-for-like index, and the "
+        "delta should be read as 'can the conclusions answer it at all', not as "
+        "'which retriever is better'."
+    )
+    if args.rerank == "on":
+        print(
+            "  NOTE: --rerank on applies to the CHUNK arm only. `search_claims` "
+            "takes no reranker, so this comparison is reranked-vs-unreranked."
+        )
+    if claims.graph_hop_enabled and claims.graph_hop_only_hits == 0:
+        print(
+            "  The graph hop answered 0 questions that were not already answered "
+            f"directly ({claims.graph_hop_results} neighbour(s) returned). On this "
+            "instance `claim_edges` holds no traversable rows at all, because "
+            "nothing in production writes `derived_from` — WS-RS9 c4. The hop "
+            "cannot be judged until it has a graph to walk."
+        )
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Retrieval recall against the real retriever")
     parser.add_argument(
@@ -742,7 +1092,31 @@ def main() -> int:
             f"nDCG@{NDCG_K} by at least this much. WS-RS6 asks for 0.05."
         ),
     )
+    parser.add_argument(
+        "--surface",
+        choices=(CHUNKS, CLAIMS, "both"),
+        default=CHUNKS,
+        help=(
+            "which index to search. `chunks` is search_corpus over passages — "
+            "what the project collected. `claims` is search_claims over live "
+            "beliefs — what it concluded. `both` prints the two side by side. "
+            "There is deliberately no floor on the comparison: decisions.md D1 "
+            "keeps both knowledge plugins, so this is a measurement."
+        ),
+    )
+    parser.add_argument(
+        "--no-graph-hop",
+        action="store_true",
+        help=(
+            "with --surface claims, do not walk `claim_edges` after fusion. The "
+            "control arm for WS-RS10 c6: a hop that changes nothing is a hop to "
+            "remove, and that cannot be established without running without it."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.surface == "both":
+        return _both_surfaces(args)
 
     if args.rerank == "both":
         return _both_arms(args)
@@ -757,7 +1131,12 @@ def main() -> int:
     # is computed from the rank of the first hit, so every cut-off comes out of
     # a single retrieval.
     report = asyncio.run(
-        run(k=args.k if args.k is not None else max(RECALL_KS), rerank=args.rerank == "on")
+        run(
+            k=args.k if args.k is not None else max(RECALL_KS),
+            rerank=args.rerank == "on",
+            surface=args.surface,
+            walk_graph=not args.no_graph_hop,
+        )
     )
     print(report.render())
     print()

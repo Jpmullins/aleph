@@ -546,3 +546,147 @@ async def test_a_plugin_declaring_its_own_component_name_installs(
         await session.commit()
     assert row.name == "charter"
     assert "ui:component:Chart" in list(row.provides or ())
+
+
+async def test_disable_accepts_the_capability_name_the_kernel_reports(
+    maker: Callable[[], AsyncSession], committed_project: uuid.UUID
+) -> None:
+    """The name the only two production callers actually hold.
+
+    Both `DELETE /v1/projects/{id}/plugins/{plugin_id}` and the agent's
+    `disable_plugin` tool read the name out of `AgentPluginAPI.inspect()`, which
+    reports the CAPABILITY name `skill.<row name>`. `disable` selects on
+    `Plugin.name`, which holds `<row name>`. So both matched no row, both
+    returned having written neither the row edit nor the `plugin.disable` ledger
+    event, and both reported success — the kernel half had genuinely retired the
+    capability, so the process and the database simply disagreed afterwards with
+    nothing anywhere saying so.
+
+    Pinned here as well as over HTTP because the agent tool lives in
+    `copilot_agent.py` and reaches this method directly; a fix that lived only
+    in the route would leave the agent path broken.
+    """
+    from aleph_db.models.ledger import ActionLedgerEvent
+    from aleph_kernel.skills import skill_capability_name
+    from aleph_runtime.plugin_service import PLUGIN_DISABLED
+
+    kernel = Kernel()
+    async with maker() as session:
+        row = await PluginService(session).install(
+            project_id=committed_project,
+            actor_id=ACTOR,
+            draft=_draft(name="capability-named"),
+            ledger=LedgerWriter(session),
+            kernel=kernel,
+        )
+        await session.commit()
+        row_name = row.name
+
+    capability = skill_capability_name(row_name)
+    assert capability != row_name, "the two spellings are the same; this test proves nothing"
+
+    async with maker() as session:
+        disabled = await PluginService(session).disable(
+            project_id=committed_project,
+            actor_id=ACTOR,
+            name=capability,
+            ledger=LedgerWriter(session),
+            kernel=kernel,
+        )
+        await session.commit()
+
+    assert disabled is not None, f"no row matched {capability!r}"
+    assert disabled.name == row_name
+
+    async with maker() as session:
+        state = (
+            await session.execute(
+                select(Plugin.state).where(Plugin.project_id == committed_project)
+            )
+        ).scalar_one()
+        events = list(
+            (
+                await session.execute(
+                    select(ActionLedgerEvent).where(
+                        ActionLedgerEvent.project_id == committed_project,
+                        ActionLedgerEvent.action_kind == PLUGIN_DISABLED,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert state == "disabled"
+    assert len(events) == 1
+    # The ROW name, not whatever the caller happened to pass. A ledger that
+    # records `skill.capability-named` names a row that does not exist.
+    assert events[0].payload_jsonb["name"] == row_name, events[0].payload_jsonb
+
+
+async def test_an_exact_row_name_wins_over_the_capability_prefix_fallback(
+    maker: Callable[[], AsyncSession], committed_project: uuid.UUID
+) -> None:
+    """A row genuinely called `skill.x` must not resolve to a row called `x`.
+
+    Stripping the prefix unconditionally would disable the wrong plugin —
+    silently, since both rows exist and both look plausible. `_row_for` runs the
+    exact lookup first for exactly this case, and this is the test that stops
+    someone simplifying it away.
+
+    The two rows are inserted directly rather than through `install`, because
+    `install` refuses the name: `PluginCatalog` rejects a `.`, asserted below so
+    the reason this state is unreachable today is written down next to the
+    defence against it rather than assumed. That regex lives in `aleph-a2ui`,
+    two packages away, and a correctness property of `disable` that rests on
+    somebody else's validator is a coincidence, not a guarantee.
+    """
+    from aleph_a2ui.plugin_catalogs import PluginCatalog
+    from aleph_core.ids import uuid7
+
+    service_name = "thing"
+    prefixed = f"skill.{service_name}"
+
+    with pytest.raises(ValueError, match="catalog id"):
+        PluginCatalog(name=prefixed, major=1)
+
+    async with maker() as session:
+        for name in (service_name, prefixed):
+            session.add(
+                Plugin(
+                    id=uuid7(),
+                    project_id=committed_project,
+                    name=name,
+                    major_version=1,
+                    source_kind="skill",
+                    instructions=_instructions(name),
+                    provides=[f"skill.{name}"],
+                    requires=[],
+                    config_schema={},
+                    state="installed",
+                    installed_by=ACTOR,
+                    created_by=ACTOR,
+                )
+            )
+        await session.commit()
+
+    async with maker() as session:
+        disabled = await PluginService(session).disable(
+            project_id=committed_project,
+            actor_id=ACTOR,
+            name=prefixed,
+            ledger=LedgerWriter(session),
+        )
+        await session.commit()
+
+    assert disabled is not None
+    assert disabled.name == prefixed, "the prefix fallback took precedence over a real row"
+
+    async with maker() as session:
+        states = dict(
+            (
+                await session.execute(
+                    select(Plugin.name, Plugin.state).where(Plugin.project_id == committed_project)
+                )
+            ).all()
+        )
+    assert states == {prefixed: "disabled", service_name: "installed"}, states

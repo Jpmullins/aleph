@@ -11,6 +11,11 @@ from pydantic import BaseModel, Field
 
 from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
+from aleph_api.routes.gateway_endpoints import (
+    gateway_catalogs,
+    model_out,
+    resolve_for_project,
+)
 from aleph_core.errors import NotFound
 from aleph_core.schemas.model_profile import (
     GatewayModelOut,
@@ -22,7 +27,7 @@ from aleph_core.schemas.model_profile import (
 from aleph_db.models.model_profile import ModelProfile
 from aleph_db.repos import model_profile as profile_repo
 from aleph_models.autoconfigure import autoconfigure_project
-from aleph_models.discovery import capabilities_for
+from aleph_models.endpoints import settings_endpoint
 from aleph_observability.tracing import current_trace_id
 from aleph_security.roles import ProjectRole, require_at_least
 
@@ -57,30 +62,25 @@ def _to_out(profile_row: ModelProfile) -> ModelProfileOut:
 async def list_gateway_models(request: Request, refresh: bool = False) -> list[GatewayModelOut]:
     """What the configured gateway actually serves.
 
-    The source of truth for the Settings model picker. Aleph has no committed
-    model list to fall back on — the one it used to ship named six models, none
-    of which existed on the real gateway — so an empty response here means the
-    gateway is unreachable, and is reported as such rather than filled in with
-    plausible names.
+    Aleph has no committed model list to fall back on — the one it used to ship
+    named six models, none of which existed on the real gateway — so an empty
+    response here means the gateway is unreachable, and is reported as such
+    rather than filled in with plausible names.
+
+    **This route knows no project, so it can only ever describe the DEPLOYMENT
+    DEFAULT.** It used to read a `GatewayCatalog` built once at boot, which made
+    that limitation invisible: every project saw the same list whether or not it
+    had an endpoint of its own. It now resolves the Settings endpoint through
+    the same per-endpoint cache every project-scoped read uses, so a project
+    with its own row and this route are visibly two different answers rather
+    than accidentally one. The per-project list —
+    `GET /v1/projects/{id}/gateway/models` — is the one to prefer.
     """
-    catalog = request.app.state.gateway_catalog
-    models = await catalog.models(force=refresh)
-    return [
-        GatewayModelOut(
-            id=m.id,
-            mode=m.mode,
-            max_input_tokens=m.max_input_tokens,
-            input_per_token=m.input_per_token,
-            output_per_token=m.output_per_token,
-            supports_vision=m.supports_vision,
-            supports_function_calling=m.supports_function_calling,
-            supports_reasoning=m.supports_reasoning,
-            supports_prompt_caching=m.supports_prompt_caching,
-            is_priced=m.is_priced,
-            capabilities=capabilities_for(m),
-        )
-        for m in models
-    ]
+    s = request.app.state.settings
+    catalog = gateway_catalogs(request).for_endpoint(
+        settings_endpoint(base_url=s.litellm_base_url, api_key=s.insights_litellm_api_key)
+    )
+    return [model_out(m) for m in await catalog.models(force=refresh)]
 
 
 class AutoconfigureOut(BaseModel):
@@ -119,18 +119,28 @@ async def autoconfigure_profile(
 
     Capabilities with no qualifying model are reported in `unbound` rather than
     pointed at something that cannot do the job.
+
+    **It binds against THIS PROJECT'S endpoint.** It used to be handed the
+    catalog and the credentials built at boot from `LITELLM_BASE_URL`, so a
+    project with a gateway endpoint of its own was configured from a list its
+    own gateway had never advertised and probed against a server it does not
+    use — binding names that 404 on first call. `resolve_for_project` returns
+    the project's row if it has one and the deployment default if it does not,
+    and the catalog, the base URL and the key below all come from that one
+    answer rather than from three places that can disagree.
     """
     require_at_least(principal, project_id, at_least=ProjectRole.OWNER)
 
+    resolved = await resolve_for_project(request, session, project_id)
     # The selection logic is shared with the worker job project creation
     # enqueues (`autoconfigure_profile_job`), so the two cannot drift into
     # binding different models from the same gateway.
     p, outcome = await autoconfigure_project(
         session,
         project_id=project_id,
-        catalog=request.app.state.gateway_catalog,
-        base_url=request.app.state.settings.litellm_base_url,
-        api_key=request.app.state.settings.insights_litellm_api_key,
+        catalog=gateway_catalogs(request).for_endpoint(resolved),
+        base_url=resolved.base_url,
+        api_key=resolved.api_key,
         http_client=request.app.state.gateway_http,
         probe=probe,
     )
@@ -148,6 +158,12 @@ async def autoconfigure_profile(
             "unreachable": sorted(outcome.unreachable),
             "probed": probe,
             "reembed_enqueued": outcome.embed_changed,
+            # WHICH gateway these names came from. Without it a binding that
+            # 404s is unattributable after the fact: the same model id means
+            # different things on two endpoints. The id and the source, never
+            # the key.
+            "endpoint_id": str(resolved.endpoint_id) if resolved.endpoint_id else None,
+            "endpoint_source": resolved.source,
         },
         trace_id=current_trace_id(),
     )

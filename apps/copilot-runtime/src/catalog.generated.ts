@@ -526,7 +526,6 @@ export const ALEPH_A2UI_CATALOG = {
         "badge_count": {
           "$ref": "#/$defs/DynamicNumber"
         },
-        "filters": {},
         "children": {
           "type": "array"
         }
@@ -616,17 +615,8 @@ export const ALEPH_A2UI_CATALOG = {
         "chart_id": {
           "$ref": "#/$defs/DynamicString"
         },
-        "chart_url": {
-          "$ref": "#/$defs/DynamicString"
-        },
-        "artifact_version_id": {
-          "$ref": "#/$defs/DynamicString"
-        },
         "vega_lite_spec": {
           "description": "A complete Vega-Lite spec with embedded data."
-        },
-        "open_action": {
-          "$ref": "#/$defs/Action"
         }
       },
       "required": [
@@ -1050,9 +1040,6 @@ export const ALEPH_A2UI_CATALOG = {
         },
         "to_body_md": {
           "$ref": "#/$defs/DynamicString"
-        },
-        "open_action": {
-          "$ref": "#/$defs/Action"
         }
       },
       "required": [
@@ -1237,9 +1224,6 @@ export const ALEPH_A2UI_CATALOG = {
           "$ref": "#/$defs/DynamicString"
         },
         "title": {
-          "$ref": "#/$defs/DynamicString"
-        },
-        "artifact_version_id": {
           "$ref": "#/$defs/DynamicString"
         }
       },
@@ -1512,9 +1496,6 @@ export const ALEPH_A2UI_CATALOG = {
           "$ref": "#/$defs/DynamicString"
         },
         "alt": {
-          "$ref": "#/$defs/DynamicString"
-        },
-        "artifact_version_id": {
           "$ref": "#/$defs/DynamicString"
         }
       },
@@ -1951,9 +1932,6 @@ export const ALEPH_A2UI_CATALOG = {
         },
         "_placeholder": {
           "$ref": "#/$defs/DynamicBoolean"
-        },
-        "open_action": {
-          "$ref": "#/$defs/Action"
         }
       },
       "required": [

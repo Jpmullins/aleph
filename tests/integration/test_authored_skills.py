@@ -318,3 +318,125 @@ async def test_a_failed_write_is_not_ledgered_as_authorship(
             .all()
         )
     assert rows == []
+
+
+async def test_the_authoring_session_sees_its_own_skill(store: Any) -> None:
+    """WS-H1 criterion 2 — the half that made the feature look broken.
+
+    `SkillsMiddleware` loads the skill list ONCE per thread: `before_agent`
+    returns immediately when `skills_metadata` is already in state (asserted
+    below, so a deepagents change that removed the short-circuit would tell us
+    this mechanism is no longer needed rather than leaving it running for a
+    reason that stopped being true). Without a refresh the agent writes a skill
+    and then cannot use it until the user starts a new conversation — the write
+    works, the ledger row is there, and the assistant behaves as though nothing
+    happened.
+
+    `_with_refreshed_metadata` is what closes it, and it had no test: the file's
+    `test_the_authored_write_is_observed` only asserts the middleware is in the
+    list, and `test_one_source_is_not_enough` calls `refresh_skill_metadata`
+    directly. This drives `awrap_tool_call` — the hook that actually runs — and
+    asserts the `Command` it returns carries the new skill.
+    """
+    from deepagents.middleware.skills import SkillsMiddleware
+    from langchain_core.messages import ToolMessage
+    from langgraph.types import Command
+
+    backend = _composite(store, ("project-a", "skills"))
+    path = f"{AUTHORED_PREFIX}probe-skill/SKILL.md"
+
+    # The upstream behaviour this whole mechanism exists to work around.
+    skills_mw = SkillsMiddleware(backend=backend, sources=list(SKILL_SOURCES))
+    assert skills_mw.before_agent({"skills_metadata": []}, None, None) is None  # ty: ignore
+
+    middleware = AuthoredSkillsMiddleware(backend_factory=lambda _rt: backend)
+
+    async def handler(request: Any) -> Any:
+        """The filesystem tool, doing what the filesystem tool does."""
+        await _write_skill(backend, "probe-skill")
+        return ToolMessage(content="ok", tool_call_id="c1", name="write_file")
+
+    before = await refresh_skill_metadata(backend, SKILL_SOURCES)
+    assert "probe-skill" not in {s["name"] for s in before}, (
+        "the skill already existed; this test would pass without the refresh"
+    )
+
+    result = await middleware.awrap_tool_call(_req(path), handler)
+
+    assert isinstance(result, Command), f"the tool result was not a state update: {result!r}"
+    update = result.update
+    assert isinstance(update, dict)
+    names = {s["name"] for s in update["skills_metadata"]}
+    assert "probe-skill" in names, names
+    # The bundled skills are still there. A refresh that REPLACED the list with
+    # only the authored source would satisfy the line above and silently remove
+    # every skill the container ships.
+    assert {"ach", "research"} <= names, names
+    # And the tool's own message survives, or the model never sees the write
+    # succeed.
+    assert [str(m.content) for m in update["messages"]] == ["ok"]
+
+    # What the model is actually handed. `skills_metadata` reaching state is
+    # only useful because `SkillsMiddleware.modify_request` renders it into the
+    # system prompt; asserting the dict key alone would pass for a payload the
+    # prompt builder cannot read.
+    rendered = skills_mw._format_skills_list(update["skills_metadata"])
+    assert "probe-skill" in rendered, rendered
+
+
+async def test_the_async_path_is_used_so_nothing_blocks_the_event_loop(store: Any) -> None:
+    """WS-H1 criterion 5, measured rather than named.
+
+    The criterion asserts `abefore_agent` is the exercised hook. There is no
+    `abefore_agent` in `authored_skills.py` and there is not meant to be — the
+    refresh happens at tool-call time, which is the only moment the authoring
+    turn can still use what it just wrote. So what is left to check is the
+    property behind it: a rescan runs a real directory listing and a real file
+    read, and neither may happen on the event loop thread.
+
+    Checked by recording `threading.get_ident()` inside the SYNC methods of the
+    production composite's own routed backends, and asserting none of them ran
+    on the loop's thread. `FilesystemBackend` and `StoreBackend` define no
+    `als`/`adownload_files` of their own, so they inherit the protocol defaults,
+    which are `asyncio.to_thread` wrappers — this asserts that resolution
+    rather than reading it, so a future backend that implements `als` by calling
+    `self.ls` inline goes red here.
+    """
+    import asyncio
+    import threading
+
+    backend = _composite(store, ("project-a", "skills"))
+    await _write_skill(backend, "probe-skill")
+
+    loop_thread = threading.get_ident()
+    seen: dict[str, list[int]] = {}
+
+    def record(target: Any, name: str) -> None:
+        original = getattr(target, name)
+
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            seen.setdefault(name, []).append(threading.get_ident())
+            return original(*args, **kwargs)
+
+        # Bound on the INSTANCE, so the protocol's async default still resolves
+        # `self.ls` through this wrapper.
+        target.__dict__[name] = wrapper
+
+    for routed in backend.routes.values():
+        record(routed, "ls")
+        record(routed, "download_files")
+
+    merged = await refresh_skill_metadata(backend, SKILL_SOURCES)
+    assert "probe-skill" in {s["name"] for s in merged}
+
+    assert seen.get("ls"), "no directory listing happened; the assertion below is vacuous"
+    assert seen.get("download_files"), "no file was read; the assertion below is vacuous"
+    offending = {name: ids for name, ids in seen.items() if loop_thread in ids}
+    assert not offending, (
+        f"{sorted(offending)} ran on the event loop thread — a blocking "
+        f"filesystem or store call inside a FastAPI request"
+    )
+
+    # And the loop really was running, so "not the loop thread" means something.
+    assert threading.get_ident() == loop_thread
+    assert asyncio.get_running_loop() is not None

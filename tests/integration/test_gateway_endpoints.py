@@ -6,9 +6,13 @@ by hand and then asserts on it, because the write path is where the interesting
 mistakes live (a `key_version` that does not move with the blob, a ledger
 payload carrying the secret).
 
-What is NOT here, and must not be inferred: there is no HTTP route and no
-production caller. The API and the workers still read `LITELLM_BASE_URL` from
-Settings. This is the table, the resolver and the probe.
+This file is the SERVICE. The routes that call it, and the two-endpoint
+isolation the whole feature exists for, are
+`tests/integration/test_gateway_endpoint_routes.py`.
+
+What is still NOT here, and must not be inferred: the agent path
+(`copilot_agent`), `app.state.litellm` and the workers' `ctx["litellm_client"]`
+all still read `LITELLM_BASE_URL` from Settings. That is MEP-6.
 """
 
 from __future__ import annotations
@@ -375,3 +379,187 @@ async def test_probing_an_endpoint_in_another_project_is_a_miss(
     )
     with pytest.raises(NotFound):
         await _service(session).probe(project_id=mine, endpoint_id=endpoint_id)
+
+
+async def test_a_probe_reports_whether_the_admin_route_was_allowed(
+    session: AsyncSession,
+) -> None:
+    """ "Restricted key" and "gateway told us nothing" look identical without this.
+
+    A LiteLLM virtual key is restricted to `llm_api_routes`, so `/model/info`
+    403s and discovery falls back to `/v1/models` — ids and nothing else. That
+    is the NORMAL case and it is not a failure, but it decides whether
+    autoconfigure binds on gateway metadata or on an operator's hints file, and
+    an operator staring at a model list with no modes and no prices has no way
+    to tell which happened.
+
+    Not derivable from the models themselves: `aleph_models.hints` sets
+    `metadata_available=True` on a model it fills in, so a hinted id from
+    `/v1/models` is indistinguishable from a described one.
+    """
+    project_id = uuid.uuid4()
+
+    restricted = FakeGateway(GatewayConfig())  # the hostile default: /model/info 403s
+    restricted_id = await _upsert(
+        session,
+        project_id=project_id,
+        name="restricted",
+        base_url=restricted.base_url,
+        api_key=restricted.api_key,
+    )
+    async with restricted.client() as http:
+        got = await _service(session).probe(
+            project_id=project_id, endpoint_id=restricted_id, client=http
+        )
+    assert got.ok, got.error
+    assert got.model_info_allowed is False
+    assert got.models, "a 403 on the admin route must still yield the ids /v1/models serves"
+    assert restricted.count("/v1/models") >= 1, "it did not fall back"
+
+    admin = FakeGateway(GatewayConfig.well_behaved())
+    admin_id = await _upsert(
+        session,
+        project_id=project_id,
+        name="admin",
+        base_url=admin.base_url,
+        api_key=admin.api_key,
+    )
+    async with admin.client() as http:
+        rich = await _service(session).probe(
+            project_id=project_id, endpoint_id=admin_id, client=http
+        )
+    assert rich.model_info_allowed is True
+    assert set(rich.models) == {m.id for m in GatewayConfig.well_behaved().models}
+
+
+async def test_an_unreachable_endpoint_gives_no_verdict_on_the_admin_route(
+    session: AsyncSession,
+) -> None:
+    """`False` here would tell an operator their key is restricted.
+
+    It is not. Their URL is wrong, and the two remedies are nothing like each
+    other. `None` is the only honest answer to a question the endpoint never
+    got the chance to answer.
+    """
+    project_id = uuid.uuid4()
+    endpoint_id = await _upsert(
+        session,
+        project_id=project_id,
+        name="typo",
+        base_url="http://gatewya.invalid",
+        api_key="sk-whatever-1234567890",
+    )
+
+    def _refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("[Errno 8] nodename nor servname provided", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_refuse)) as http:
+        got = await _service(session).probe(
+            project_id=project_id, endpoint_id=endpoint_id, client=http
+        )
+    assert not got.ok
+    assert got.model_info_allowed is None
+    assert got.error is not None
+    assert "ConnectError" in got.error, (
+        "the exception TYPE is most of the diagnosis for a transport failure"
+    )
+    assert "nodename nor servname" in got.error
+
+
+async def test_a_gateway_that_echoes_the_key_does_not_get_it_relayed(
+    session: AsyncSession,
+) -> None:
+    """The one place returning the endpoint's words verbatim can leak the key.
+
+    Some gateways put the offending bearer token in their 401 body. Relaying
+    that verbatim puts the key in an HTTP response, in `last_probe_error`, and
+    in every log line that quotes it — which is the settings-card defect again,
+    arriving through the door built to be honest.
+    """
+    project_id = uuid.uuid4()
+    plaintext = "sk-echoed-back-by-the-gateway-0123456789"
+    endpoint_id = await _upsert(
+        session,
+        project_id=project_id,
+        name="chatty",
+        base_url="http://chatty.invalid",
+        api_key=plaintext,
+    )
+
+    def _echo(request: httpx.Request) -> httpx.Response:
+        sent = request.headers.get("authorization", "")
+        return httpx.Response(401, json={"error": {"message": f"invalid api key: {sent}"}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_echo)) as http:
+        got = await _service(session).probe(
+            project_id=project_id, endpoint_id=endpoint_id, client=http
+        )
+    assert not got.ok
+    assert got.error is not None
+    assert plaintext not in got.error, "the endpoint's own key was relayed back to the caller"
+    assert "[redacted]" in got.error
+    assert "invalid api key" in got.error, "redaction must not eat the diagnosis"
+
+    stored = (
+        await session.execute(
+            text("SELECT last_probe_error FROM gateway_endpoints WHERE id = :id"),
+            {"id": endpoint_id},
+        )
+    ).scalar_one()
+    assert plaintext not in stored
+
+
+async def test_delete_removes_the_row_and_records_who_and_what(
+    session: AsyncSession,
+) -> None:
+    """`delete` had no caller and no test; it now has both."""
+    project_id = uuid.uuid4()
+    endpoint_id = await _upsert(
+        session,
+        project_id=project_id,
+        name="retired",
+        base_url="https://retired.invalid",
+        api_key="sk-retired-key-0123456789",
+    )
+    removed = await _service(session).delete(
+        ledger=LedgerWriter(session),
+        actor_id=ACTOR,
+        actor_kind="user",
+        project_id=project_id,
+        endpoint_id=endpoint_id,
+    )
+    assert removed == "retired"
+    assert await _service(session).list_for_project(project_id) == []
+
+    kinds = (
+        (
+            await session.execute(
+                text("SELECT action_kind FROM action_ledger_events WHERE target_id = :id"),
+                {"id": endpoint_id},
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert "gateway_endpoint.delete" in kinds
+
+
+async def test_deleting_another_projects_endpoint_is_a_miss(session: AsyncSession) -> None:
+    """A `False` nobody checks is how a cross-tenant delete reports success."""
+    mine, theirs = uuid.uuid4(), uuid.uuid4()
+    endpoint_id = await _upsert(
+        session,
+        project_id=theirs,
+        name="theirs",
+        base_url="https://theirs.invalid",
+        api_key="sk-theirs-0123456789",
+    )
+    with pytest.raises(NotFound):
+        await _service(session).delete(
+            ledger=LedgerWriter(session),
+            actor_id=ACTOR,
+            actor_kind="user",
+            project_id=mine,
+            endpoint_id=endpoint_id,
+        )
+    assert len(await _service(session).list_for_project(theirs)) == 1

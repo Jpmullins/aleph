@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One prop contract, three copies, four ways for them to disagree in silence.
+# One prop contract, three copies, five ways for them to disagree in silence.
 #
 # The copies are the Python PRODUCER that sends the prop, `catalog.json` (which
 # the server validates against, and which tells the agent what it may set), and
@@ -24,6 +24,19 @@
 #     that the catalog did not mention, and `WikiSurface.view_mode` REQUIRED and
 #     never sent by anybody.
 #
+#   * a prop all three copies agree on that the VIEW never reads — the last
+#     step, and the only one that happens after the binder has done its job
+#     correctly. `FindingCard.evidence_refs` was read out of
+#     `ReviewFinding.evidence_refs_jsonb`, sent, declared, resolved, handed to
+#     `FindingCard.tsx` — and not destructured, so a reviewer saw every finding
+#     with no evidence under it. Three more cards REQUIRED an
+#     `open_action: "open"` whose button does not exist.
+#
+# An `*_action` prop is the one legitimate way to declare a prop and not read
+# it: `catalog.json` pins it to a `const`, so the value carries no information
+# and the view may hardcode the verb. Those are not skipped — they are
+# re-pointed, and the sweep asserts the view dispatches the exact constant.
+#
 # And one direction over the other half of the same contract, the ACTIONS: three
 # of twenty-one verbs the ActionRouter would dispatch had no emitter anywhere in
 # the product. `clarify` was an echo that wrote nothing; `mark_handedit` and
@@ -42,7 +55,9 @@
 #
 # CI-wired. Fails on: a prop no client schema declares, a bound prop declared
 # unresolvably, catalog/renderer drift, an agent-offered prop that reaches no
-# view, a registered action nothing can send, or a subject file that has moved.
+# view, a declared prop the view never reads, a card that advertises a verb it
+# does not fire, a catalog component no producer emits and nobody has explained,
+# a registered action nothing can send, or a subject file that has moved.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 python3 - <<'PY'
@@ -92,19 +107,18 @@ if report.mismatches:
 
 print(
     f"✓ surface bindings: {len(report.compared)} of {report.catalog_total} catalog "
-    f"components compared, {report.bound_props} props, all declared client-side, "
-    "resolvable by the binder, and matching catalog.json in both directions; "
+    f"components compared, {report.props_inspected} distinct props inspected "
+    f"({report.bound_props} of them sent by a producer), all declared "
+    "client-side, resolvable by the binder, matching catalog.json in both "
+    "directions, and READ by the view that owns them; "
     f"{report.actions_total} action kinds, every one with an emitter"
 )
-if report.uncompared:
+for name, why in report.no_producer.items():
     # Stated every run, on purpose — the difference between a coverage gap
-    # somebody can act on and a completeness claim nobody questions. What is
-    # left are the components no Python producer emits: they are built in the
-    # browser, or by a worker, or only ever by the agent.
-    print(
-        f"  {report.uncompared} catalog component(s) are emitted by no Python producer "
-        "in the subject list and are NOT compared"
-    )
+    # somebody can act on and a completeness claim nobody questions. A gap that
+    # is not named here is a MISMATCH, not a footnote, so this list cannot
+    # quietly grow.
+    print(f"  {name} is emitted by no producer and is NOT compared: {why}")
 if report.unknown_to_client:
     # The basic-catalog primitives (`Text`, `Button`, `TextField`, …) come from
     # @a2ui/react's own catalog, not from Aleph's zod file, so their props

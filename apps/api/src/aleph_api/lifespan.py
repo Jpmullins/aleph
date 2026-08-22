@@ -14,6 +14,10 @@ Two things still live here rather than in a capability, because each one binds a
 building the agent's durable checkpointer, and mounting the AG-UI route. Both sit
 inside the `try`, so a failure in either still unwinds the kernel completely.
 
+Mounting the route no longer compiles the assistant. It installs a resolver that
+compiles one per (endpoint, bindings) on first use — so what a project binds in
+Settings reaches the assistant on its next turn instead of its next deploy.
+
 Gateway model discovery is deliberately NOT one of them. The pricing table it
 fills belongs to the `models` capability and is read by that capability's own
 probe, so discovery has to happen inside it — nothing out here can run early
@@ -104,9 +108,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             _log.exception("api.boot.reap_failed")
 
-        # Rule 7: resolve the agent's model from the default named ModelProfile
-        # rather than a hardcoded id, so the conversational surface uses the
-        # configured tier.
+        # The DEFAULT bindings — the fallback for a turn that names no project,
+        # or a project with no profile row of its own. Not the agent's model any
+        # more: WS-MEP-6 resolves the profile per request from the project, so
+        # this read no longer freezes the assistant for the life of the process.
+        # It stays because "no project scope on this run" still has to resolve to
+        # something, and an unbound capability is an error (`NoModelBound`)
+        # rather than a guessed model id.
         agent_bindings: dict[str, Any] | None = None
         try:
             from aleph_db.repos.model_profile import get_template

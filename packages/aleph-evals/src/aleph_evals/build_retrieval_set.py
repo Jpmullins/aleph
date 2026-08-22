@@ -86,7 +86,7 @@ Return JSON: {{"questions": ["...", "..."]}}\
 """
 
 
-def _documents(rows: list[tuple[str, str, int, str]]) -> list[dict[str, Any]]:
+def _documents(rows: list[tuple[str, str, int, str, str]]) -> list[dict[str, Any]]:
     """Group consecutive chunks of one source into documents of realistic length.
 
     The chunks in the database are ~1,900 characters — a passage, not a
@@ -94,15 +94,25 @@ def _documents(rows: list[tuple[str, str, int, str]]) -> list[dict[str, Any]]:
     something document-shaped, which the eval then puts through
     `chunk_markdown` itself. That ordering matters: the eval has to do the
     chunking, or chunking is outside the measurement again.
+
+    **`provenance.chunk_ids` is what makes the claim surface scoreable.** A
+    claim's evidence is anchored to CHUNKS (`Citation.chunk_id` /
+    `Citation.chunk_ids`), and a source becomes several documents here, so
+    without recording which chunks went into which part there is no way to say
+    which document a claim belongs to. The alternative — crediting a claim for
+    every part of its source — inflates the claims arm against the chunks arm,
+    and inflating the new thing is the one direction of bias a comparison must
+    not have.
     """
     docs: list[dict[str, Any]] = []
     current: list[str] = []
+    current_chunks: list[str] = []
     current_source: str | None = None
     current_title = ""
     part = 0
 
     def flush() -> None:
-        nonlocal current, part
+        nonlocal current, current_chunks, part
         if not current:
             return
         text = "\n\n".join(current)
@@ -112,21 +122,149 @@ def _documents(rows: list[tuple[str, str, int, str]]) -> list[dict[str, Any]]:
                     "doc_id": f"{current_source}#{part}",
                     "title": current_title,
                     "text": text[:MAX_CHARS],
-                    "provenance": {"source_id": current_source, "part": part},
+                    "provenance": {
+                        "source_id": current_source,
+                        "part": part,
+                        "chunk_ids": list(current_chunks),
+                    },
                 }
             )
             part += 1
         current = []
+        current_chunks = []
 
-    for source_id, title, _ordinal, text in rows:
+    for source_id, title, _ordinal, text, chunk_id in rows:
         if source_id != current_source:
             flush()
             current_source, current_title, part = source_id, title, 0
         current.append(text)
+        current_chunks.append(chunk_id)
         if sum(len(t) for t in current) >= TARGET_CHARS:
             flush()
     flush()
     return docs
+
+
+#: Edge kinds the claim surface actually walks. Mirrors
+#: `aleph_wiki.claim_search.TRAVERSABLE_EDGES` in MEANING but is written out
+#: here on purpose: this module builds a portable data file, and a dataset that
+#: silently changed shape because a constant moved in another package would be
+#: impossible to compare against an older run. The eval asserts the two agree.
+TRAVERSABLE_EDGE_KINDS = ("supports", "contradicts", "refines", "relates_to")
+
+
+async def _claim_rows(conn: Any, sql_text: Any) -> list[tuple[str, str, list[str]]]:
+    """Live claims and the chunk ids their evidence is anchored to.
+
+    Both anchors are read. `Citation.chunk_id` is the single-chunk anchor the
+    Claim Spine writes; `Citation.chunk_ids` is the JSONB array
+    `aleph_rks.claim_grounding` fills on the legacy wiki path. Reading only one
+    of them would silently halve the claim layer on whichever path happens to
+    dominate a given instance.
+
+    Superseded claims are excluded, matching `search_claims`: a withdrawn
+    belief is not an answer, so putting it in the eval set would score the
+    system for retrieving something it is right to hide.
+    """
+    return [
+        (str(r.claim_id), str(r.text), [str(c) for c in (r.chunks or [])])
+        for r in (
+            await conn.execute(
+                sql_text(
+                    "select wc.id as claim_id, wc.text as text,"
+                    "       array_agg(distinct anchor) filter (where anchor is not null)"
+                    "         as chunks"
+                    "  from wiki_claims wc"
+                    "  join citations c on c.claim_id = wc.id"
+                    "  left join lateral ("
+                    "        select c.chunk_id::text as anchor"
+                    "        union all"
+                    "        select jsonb_array_elements_text(c.chunk_ids)"
+                    "  ) a on true"
+                    " where wc.superseded_by is null"
+                    " group by wc.id, wc.text"
+                )
+            )
+        ).all()
+    ]
+
+
+async def _edge_rows(conn: Any, sql_text: Any) -> list[tuple[str, str, str]]:
+    """Traversable `claim_edges`, as `(src, dst, kind)`.
+
+    Read separately from the claims so an empty result is legible: two rows in
+    `claim_edges`, both `supersedes`, is the state this instance is in, and the
+    eval reporting "0 edges" is the honest way for WS-RS9 c4's missing producer
+    to show up in a retrieval number instead of only in a database query.
+    """
+    return [
+        (str(r.src_claim_id), str(r.dst_claim_id), str(r.kind))
+        for r in (
+            await conn.execute(
+                sql_text(
+                    "select src_claim_id, dst_claim_id, kind from claim_edges"
+                    " where kind = any(:kinds)"
+                ),
+                {"kinds": list(TRAVERSABLE_EDGE_KINDS)},
+            )
+        ).all()
+    ]
+
+
+def _claim_layer(
+    docs: list[dict[str, Any]],
+    claim_rows: list[tuple[str, str, list[str]]],
+    edge_rows: list[tuple[str, str, str]] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
+    """Assign each claim to exactly ONE document, and keep the edges between them.
+
+    Returns `(claims, edges, dropped)`.
+
+    *One document per claim, not one per anchored chunk.* The eval scores a hit
+    by the document a result belongs to, so a claim credited to three documents
+    would count as correct for three different questions off one retrieval. The
+    document with the most anchored chunks wins; ties go to the lowest part, so
+    the assignment is deterministic and re-running the builder over an
+    unchanged database produces an identical file.
+
+    *A claim with no chunk anchor is DROPPED, not guessed.* Falling back to
+    `Citation.source_id` and crediting every part of that source is the obvious
+    shortcut and it is the wrong one — it would let the claims arm score a hit
+    for retrieving a claim about a different part of the paper. The count comes
+    back so the caller can say how much of the claim layer that cost; on an
+    instance where most citations are the pre-RS8 thin kind, it is most of it,
+    and that is a fact about the data worth printing.
+    """
+    chunk_to_doc: dict[str, str] = {}
+    doc_order = {doc["doc_id"]: n for n, doc in enumerate(docs)}
+    for doc in docs:
+        for chunk_id in doc.get("provenance", {}).get("chunk_ids") or []:
+            chunk_to_doc[str(chunk_id)] = str(doc["doc_id"])
+
+    claims: list[dict[str, Any]] = []
+    kept: set[str] = set()
+    dropped = 0
+    for claim_id, text, anchors in claim_rows:
+        tally: dict[str, int] = {}
+        for anchor in anchors:
+            doc_id = chunk_to_doc.get(anchor)
+            if doc_id is not None:
+                tally[doc_id] = tally.get(doc_id, 0) + 1
+        if not tally:
+            dropped += 1
+            continue
+        best = min(tally.items(), key=lambda kv: (-kv[1], doc_order.get(kv[0], 0)))[0]
+        claims.append({"claim_id": claim_id, "text": text, "doc_id": best})
+        kept.add(claim_id)
+
+    edges = [
+        {"src": src, "dst": dst, "kind": kind}
+        for src, dst, kind in (edge_rows or [])
+        # Both ends, because a dangling edge cannot be seeded: `claim_edges`
+        # has a foreign key to `wiki_claims` on each side.
+        if src in kept and dst in kept
+    ]
+    return claims, edges, dropped
 
 
 def _chat_json(model: str, system: str, user: str) -> dict[str, Any]:
@@ -194,17 +332,19 @@ async def build(out_dir: Path, *, questions_per_doc: int, sample: int, model: st
     engine = create_async_engine(url)
     async with engine.connect() as conn:
         rows = [
-            (str(r.source_id), str(r.title), int(r.ordinal), str(r.text))
+            (str(r.source_id), str(r.title), int(r.ordinal), str(r.text), str(r.id))
             for r in (
                 await conn.execute(
                     sql_text(
-                        "select c.source_id, s.title, c.ordinal, c.text"
+                        "select c.id, c.source_id, s.title, c.ordinal, c.text"
                         " from document_chunks c join sources s on s.id = c.source_id"
                         " order by c.source_id, c.ordinal"
                     )
                 )
             ).all()
         ]
+        claim_rows = await _claim_rows(conn, sql_text)
+        edge_rows = await _edge_rows(conn, sql_text)
     await engine.dispose()
 
     if not rows:
@@ -220,6 +360,18 @@ async def build(out_dir: Path, *, questions_per_doc: int, sample: int, model: st
     with (out_dir / "corpus.jsonl").open("w") as fh:
         for doc in docs:
             fh.write(json.dumps(doc) + "\n")
+
+    claims, edges, dropped = _claim_layer(docs, claim_rows, edge_rows)
+    with (out_dir / "claims.jsonl").open("w") as fh:
+        for claim in claims:
+            fh.write(json.dumps(claim) + "\n")
+    with (out_dir / "claim_edges.jsonl").open("w") as fh:
+        for edge in edges:
+            fh.write(json.dumps(edge) + "\n")
+    print(
+        f"claim layer: {len(claims)} claims, {len(edges)} traversable edges"
+        f" ({dropped} claim(s) dropped — no citation anchored to a chunk in this corpus)"
+    )
 
     rng = random.Random(20260822)
     chosen = rng.sample(docs, min(sample, len(docs)))
@@ -283,7 +435,12 @@ async def build(out_dir: Path, *, questions_per_doc: int, sample: int, model: st
             "labelled against. That makes them real questions with known answers, and\n"
             "it also makes them share vocabulary with their passage, which flatters a\n"
             "lexical retriever. They are tagged `phrasing: generated` so a later\n"
-            "hand-written set can be compared against them rather than merged in.\n"
+            "hand-written set can be compared against them rather than merged in.\n\n"
+            f"Claims: {len(claims)} live claims with at least one citation anchored to a\n"
+            f"chunk in this corpus, and {len(edges)} traversable `claim_edges` between\n"
+            f"them. {dropped} claim(s) were dropped for having no chunk anchor. These are\n"
+            "the project's OWN conclusions, restated from the same third-party sources,\n"
+            "and carry the same redistribution caveat as the documents.\n"
         )
     print(
         f"wrote {len(docs)} documents and {len(questions)} questions to {out_dir}"

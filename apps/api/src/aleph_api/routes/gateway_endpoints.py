@@ -382,13 +382,26 @@ async def list_project_gateway_models(
     list — the single most user-visible way per-project endpoints fail. This
     resolves the project's row first and caches per endpoint, so two projects
     sharing a gateway still share one cache and one TTL.
+
+    **200 even when the gateway did not answer, unlike its un-scoped sibling.**
+    `ErrorMiddleware` maps an escaping transport failure to a 502 naming the
+    upstream, which is right for a route whose whole payload is the upstream's
+    answer. It is wrong here: the payload is *the state of this project's
+    gateway*, and `endpoint` — which row was resolved, or that none was — is
+    the half an operator needs most when the list is empty. A 502 throws that
+    away and leaves a picker that cannot say whose gateway failed.
     """
     require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
     resolved = await resolve_for_project(request, session, project_id)
     catalog = gateway_catalogs(request).for_endpoint(resolved)
     try:
         models = await catalog.models(force=refresh)
-    except (httpx.HTTPError, ValueError) as exc:
+    # `InvalidURL` and `UnsupportedProtocol` are in scope deliberately: the
+    # base URL here is operator-supplied, so a scheme httpx cannot speak is
+    # their typo and not an Aleph bug. `ValueError` covers a gateway answering
+    # HTML where JSON was promised, which is what a login page in front of one
+    # looks like.
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
         return ProjectGatewayModelsOut(
             endpoint=_resolved_out(resolved),
             models=[],

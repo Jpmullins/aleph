@@ -23,6 +23,17 @@ _DEFAULTS = {
     "LANGFUSE_SECRET_KEY": "sk-acceptance",
     "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:1",
     "ALEPH_AGENT_TOKEN_SECRET": "acceptance-secret-acceptance-secret",
+    # Added 2026-08-22. `aleph_credential_master_key` became a required field
+    # on BOTH settings models after this list was written, and nothing noticed:
+    # the `acceptance` CI job does not set it either, so `kernel_boot.py` and
+    # `worker_boot.py` raised `ValidationError` there — A2 and A3 red on a
+    # missing env var, under `--strict`, before a single capability mounted.
+    # Reproduced by running this file under that job's exact `env:` block.
+    #
+    # A probe-only value, `setdefault` like every entry here, so a real
+    # deployment's key always wins. It decrypts nothing: the same is already
+    # true of the signing secret one line above.
+    "ALEPH_CREDENTIAL_MASTER_KEY": "acceptance-master-key-acceptance-master-key",
     # Workers re-enter the API over HTTP for every mutation, so this is
     # required config rather than a default.
     "ALEPH_API_INTERNAL_URL": "http://localhost:8000",

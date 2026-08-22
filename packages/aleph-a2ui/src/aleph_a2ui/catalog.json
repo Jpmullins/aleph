@@ -290,9 +290,6 @@
           "props": {
             "type": "object",
             "properties": {
-              "filters": {
-                "type": "object"
-              },
               "badge_count": {
                 "type": "integer",
                 "minimum": 0
@@ -335,18 +332,6 @@
               "vega_lite_spec": {
                 "type": "object"
               },
-              "chart_url": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "artifact_version_id": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
               "title": {
                 "type": "string"
               },
@@ -355,9 +340,6 @@
                   "string",
                   "null"
                 ]
-              },
-              "open_action": {
-                "const": "open"
               }
             },
             "required": [],
@@ -560,9 +542,6 @@
                   "string",
                   "null"
                 ]
-              },
-              "open_action": {
-                "const": "open"
               }
             },
             "required": [
@@ -937,12 +916,6 @@
               },
               "title": {
                 "type": "string"
-              },
-              "artifact_version_id": {
-                "type": [
-                  "string",
-                  "null"
-                ]
               }
             },
             "required": [
@@ -1118,12 +1091,6 @@
               },
               "alt": {
                 "type": "string"
-              },
-              "artifact_version_id": {
-                "type": [
-                  "string",
-                  "null"
-                ]
               }
             },
             "required": [
@@ -1385,9 +1352,6 @@
               },
               "title": {
                 "type": "string"
-              },
-              "open_action": {
-                "const": "open"
               },
               "_placeholder": {
                 "type": "boolean"

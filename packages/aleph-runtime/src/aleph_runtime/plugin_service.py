@@ -37,6 +37,7 @@ from aleph_kernel.skills import (
     skill_capability,
     skill_capability_name,
     skill_from_source,
+    skill_name_from_capability,
 )
 
 if TYPE_CHECKING:
@@ -270,6 +271,36 @@ class PluginService:
             mounted.append(row.name)
         return mounted, failed
 
+    async def _row_for(self, project_id: UUID, name: str) -> Plugin | None:
+        """The live row for a plugin, addressed by row name or capability name.
+
+        Exact match first. `skill_name_from_capability` is consulted only when
+        that finds nothing, so the fallback can never take precedence over a
+        real row of the same spelling.
+        """
+
+        async def _select(candidate: str) -> Plugin | None:
+            return (
+                await self._session.execute(
+                    select(Plugin).where(
+                        Plugin.project_id == project_id,
+                        Plugin.name == candidate,
+                        Plugin.state != "disabled",
+                    )
+                )
+            ).scalar_one_or_none()
+
+        row = await _select(name)
+        if row is not None:
+            return row
+        from_capability = skill_name_from_capability(name)
+        if from_capability is None:
+            return None
+        row = await _select(from_capability)
+        if row is not None:
+            _log.info("plugin.disable.resolved_capability_name", given=name, row=from_capability)
+        return row
+
     async def disable(
         self,
         *,
@@ -303,16 +334,18 @@ class PluginService:
         when the collateral includes a protected capability — an operator may
         accept breaking their own plugins; nobody may take down the kernel's
         own footing.
+
+        `name` is the ROW name, and a CAPABILITY name is accepted as a fallback.
+        Both callers that reach here in production read the name out of
+        `AgentPluginAPI.inspect()`, which reports `skill.<row name>` — so both
+        were selecting on a string no row holds, both silently matched nothing,
+        and both returned success having written no row and no ledger event
+        while the kernel really had retired the capability. The exact-name
+        lookup runs FIRST and the prefix is stripped only when it finds nothing,
+        because a plugin whose front matter genuinely names it `skill.x` must
+        not be resolved to a different row called `x`.
         """
-        row = (
-            await self._session.execute(
-                select(Plugin).where(
-                    Plugin.project_id == project_id,
-                    Plugin.name == name,
-                    Plugin.state != "disabled",
-                )
-            )
-        ).scalar_one_or_none()
+        row = await self._row_for(project_id, name)
         if row is None:
             return None
 
@@ -321,7 +354,12 @@ class PluginService:
             # `base-notes` is mounted as `skill.base-notes`, and looking it up
             # by the row name returns None — which reads as "core, nothing to
             # retire" and skips the guardrail entirely.
-            key = skill_capability_name(name)
+            #
+            # Derived from `row.name`, never from the `name` argument: a caller
+            # that already handed in a capability name would otherwise produce
+            # `skill.skill.base-notes`, which resolves to nothing and skips the
+            # guardrail in exactly the way this comment exists to warn about.
+            key = skill_capability_name(row.name)
             plugin_id = kernel.plugin_id_for(key)
             # `is_provided` is ACTIVE, not merely registered. Skipping an
             # already-torn-down capability makes this idempotent, which is what
@@ -341,7 +379,10 @@ class PluginService:
         # capability nobody will read.
         from aleph_runtime.ui_contributions import UI_CONTRIBUTIONS
 
-        UI_CONTRIBUTIONS.remove(name)
+        # `row.name`, for the same reason as `key` above: `_contribute_ui`
+        # registers under the row name, so withdrawing under whatever the
+        # caller happened to pass would leave the screen behind.
+        UI_CONTRIBUTIONS.remove(row.name)
         await ledger.append(
             project_id=project_id,
             actor_id=actor_id,
@@ -349,7 +390,7 @@ class PluginService:
             action_kind=PLUGIN_DISABLED,
             target_id=row.id,
             target_kind="plugin",
-            payload={"name": name},
+            payload={"name": row.name},
             trace_id=None,
         )
         return row

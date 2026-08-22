@@ -9,18 +9,31 @@ Per CLAUDE.md rule #2 (relaxed Wave 2): `ChatOpenAI` is permitted ONLY
 pointed at the Insights LiteLLM gateway. `CopilotKitMiddleware` enables
 frontend tools (`useFrontendTool`) + context (`useAgentContext`).
 
-The graph is built once at startup. Per-request scope (which project's
-wiki to search) arrives via the LangGraph `RunnableConfig` the runtime
-forwards — read in the `search_wiki` tool. `session_maker` is supplied
-by lifespan through `bind_runtime()`.
+The graph is built PER RESOLUTION, not once at startup — see
+`assistant_agent_resolver` at the bottom of this module. Which models a graph
+carries depends on the project's `ModelProfile`, and that changes while the
+process is up; one graph compiled at boot made the Settings control inert while
+`set_model_profile` reported that it had worked. Identical resolutions share one
+compiled graph through a bounded LRU, so the common case is still a dict lookup.
+
+Per-request scope (which project's wiki to search) arrives via the LangGraph
+`RunnableConfig` the runtime forwards — read in the `search_wiki` tool.
+`session_maker` is supplied by lifespan through `bind_runtime()`.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import pathlib
 import uuid
-from typing import TYPE_CHECKING, Any
+from collections import OrderedDict
+from collections.abc import Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 from langchain_core.runnables import RunnableConfig
@@ -36,6 +49,8 @@ from aleph_wiki.lint import lint_wiki
 from aleph_wiki.schema_service import SchemaService
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable, Iterator
+
     from langgraph.store.postgres import AsyncPostgresStore
     from psycopg import AsyncConnection
     from psycopg.rows import DictRow
@@ -1342,15 +1357,50 @@ async def set_connector_enabled(connector_id: str, enabled: bool, config: Runnab
     )
 
 
+#: Capability whose model IS the assistant's own — the one a user means by
+#: "which model are you". Named once so the tool's report and the resolver
+#: cannot drift onto different capabilities.
+_ASSISTANT_CAPABILITY = "synthesis"
+
+
+def switched_profile_message(profile_name: str, bindings: Mapping[str, Any] | None) -> str:
+    """What `set_model_profile` says after a switch — and it has to be true.
+
+    The old sentence was "New LLM/agent calls use that profile's models", which
+    the agent path could not make true: one graph was compiled at boot and never
+    rebuilt. WS-MEP-6 made it true, and this function is why it stays true — it
+    names the model by asking the SAME resolver that builds the next turn's
+    graph (`AgentResolution.model_for`), rather than restating the claim in
+    prose that nothing checks. If the resolver stops agreeing with the sentence,
+    `test_agent_profile_switch.py` goes red.
+    """
+    resolved = AgentResolution(project_id=None, endpoint="", bindings=bindings or {}, signature="")
+    try:
+        model = resolved.model_for(_ASSISTANT_CAPABILITY)
+    except NoModelBound:
+        return (
+            f"Switched the project's model profile to {profile_name!r}, but that "
+            f"profile binds no {_ASSISTANT_CAPABILITY} model, so the next turn "
+            "will fail until one is bound. Nothing was guessed."
+        )
+    return (
+        f"Switched the project's model profile to {profile_name!r}. The next turn "
+        f"is built from it — my own model is now {model!r} — and if the embedding "
+        "model changed, the project's sources are re-embedding in the background."
+    )
+
+
 @tool
 async def set_model_profile(profile_name: str, config: RunnableConfig) -> str:
     """Switch the project's model profile to a named template, or report it.
 
-    `profile_name` is one of "aleph-dev" (Sonnet/Haiku) or "aleph-production"
-    (Opus/Sonnet). Pass a name to switch; the project's per-capability bindings
-    are replaced with that template's. If the embedding model changes, the
-    project's chunks are re-embedded in the background. Pass an empty string to
-    just report the current + available profiles.
+    `profile_name` is one of the template names this tool reports when called
+    with an empty string. Aleph ships no model list, so there is no fixed set to
+    name here — the templates are rows in this deployment's database and the
+    models in them are whatever its gateway serves. Passing a name replaces the
+    project's per-capability bindings with that template's, and the assistant's
+    NEXT turn is built from them. If the embedding model changes, the project's
+    chunks are re-embedded in the background.
     """
     import httpx
 
@@ -1372,10 +1422,16 @@ async def set_model_profile(profile_name: str, config: RunnableConfig) -> str:
                 return f"Could not switch the model profile: {exc}"
             if resp.status_code >= 400:
                 return f"Could not switch to '{name}' ({resp.status_code}): {resp.text[:200]}"
-            return (
-                f"Switched the project's model profile to '{name}'. New LLM/agent "
-                "calls use that profile's models; if the embedding model changed, "
-                "the project's sources are re-embedding in the background."
+            # The switch route answers with the profile it just wrote, so the
+            # bindings the next turn will resolve are already in hand. Reading
+            # them is what lets the sentence name a model instead of asserting
+            # an effect.
+            try:
+                switched_bindings = resp.json().get("bindings")
+            except ValueError:
+                switched_bindings = None
+            return switched_profile_message(
+                name, switched_bindings if isinstance(switched_bindings, dict) else None
             )
         try:
             current_resp = await client.get(
@@ -1391,14 +1447,24 @@ async def set_model_profile(profile_name: str, config: RunnableConfig) -> str:
     current_name = "unknown"
     if current_resp.status_code < 400:
         current_name = current_resp.json().get("name", "unknown")
-    available = ["aleph-dev", "aleph-production"]
-    if templates_resp.status_code < 400:
-        names = [t.get("name") for t in templates_resp.json() if t.get("name")]
-        if names:
-            available = names
+    # No hardcoded template list. Aleph ships no model list and no profile list;
+    # the templates are rows, and naming a guess here would be a claim about
+    # models on somebody else's gateway.
+    if templates_resp.status_code >= 400:
+        return (
+            f"The project's current model profile is '{current_name}'. Could not "
+            f"list the available templates ({templates_resp.status_code}) — Aleph "
+            "ships no built-in profile list, so there is nothing to fall back to."
+        )
+    names = [t.get("name") for t in templates_resp.json() if t.get("name")]
+    if not names:
+        return (
+            f"The project's current model profile is '{current_name}'. This "
+            "deployment has no model-profile templates to switch to."
+        )
     return (
         f"The project's current model profile is '{current_name}'. "
-        f"Available profiles: {', '.join(available)}. Pass a name to switch."
+        f"Available profiles: {', '.join(names)}. Pass a name to switch."
     )
 
 
@@ -1524,39 +1590,104 @@ def build_agent_checkpointer(pool: Any) -> Any:
     return AsyncPostgresSaver(conn=pool)
 
 
-# Fallback agent model id, used only when no ModelProfile bindings are bound to
-# the runtime (e.g. the named template row is missing). Normally the model is
-# resolved per capability from the default profile's bindings (rule #7).
-#
-# Environment-driven because the fallback has to name a model the configured
-# gateway actually serves. A hardcoded default is wrong for any deployment
-# pointed at a gateway that does not carry it, and the failure it produces —
-# a 404 from the fallback path only — is the kind that shows up long after boot.
-_AGENT_MODEL = os.environ.get("ALEPH_FALLBACK_AGENT_MODEL", "claude-sonnet-4-6")
+#: Environment variable naming a model to use when the resolved profile binds
+#: nothing for a capability. It has NO default, deliberately: Aleph ships no
+#: model list, and a hardcoded id was wrong for every deployment pointed at a
+#: gateway that does not carry it. Unset and unbound is an error, not a guess.
+FALLBACK_MODEL_ENV = "ALEPH_FALLBACK_AGENT_MODEL"
+
+
+class NoModelBound(RuntimeError):
+    """No model is bound for a capability the agent path needs.
+
+    Raised instead of substituting a model id nobody chose. A guessed id fails
+    later, from inside the gateway, as a 404 on one capability's traffic only —
+    which is the shape of failure this codebase keeps paying for. This one names
+    the capability and the two ways to bind it, at the moment the graph is
+    built, and the AG-UI route turns it into a RUN_ERROR frame the browser
+    reads (`agui_endpoint._resolution_failure`).
+    """
+
+    def __init__(self, capability: str) -> None:
+        self.capability = capability
+        super().__init__(
+            f"no model is bound for capability {capability!r}. The agent resolves "
+            "models from the project's ModelProfile: bind one in Settings, or run "
+            "POST /v1/projects/{project_id}/model-profile/autoconfigure, or set "
+            f"{FALLBACK_MODEL_ENV} to a model this gateway serves."
+        )
+
+
+#: The bindings the graph *currently being built* resolves against.
+#:
+#: A ContextVar rather than a parameter because the six subagent builders call
+#: `subagent_model(settings, name, ...)` themselves, from their own modules, and
+#: threading a bindings argument through all of them would make every future
+#: subagent a place this can be forgotten. Graph construction is synchronous and
+#: wholly inside `use_agent_bindings`, so the value cannot outlive the build or
+#: leak into a concurrently-building graph.
+_ACTIVE_BINDINGS: ContextVar[Mapping[str, Any] | None] = ContextVar(
+    "aleph_active_agent_bindings", default=None
+)
+
+
+@contextmanager
+def use_agent_bindings(bindings: Mapping[str, Any] | None) -> Iterator[None]:
+    """Resolve models against `bindings` for the duration of the block.
+
+    `None` is a no-op: the runtime-bound boot default stays in force. That is
+    what keeps a direct `build_assistant_deep_agent(...)` call behaving as it
+    always did.
+    """
+    if bindings is None:
+        yield
+        return
+    token = _ACTIVE_BINDINGS.set(bindings)
+    try:
+        yield
+    finally:
+        _ACTIVE_BINDINGS.reset(token)
+
+
+def _active_bindings() -> Mapping[str, Any] | None:
+    """The bindings in force: the graph being built, else the boot default."""
+    scoped = _ACTIVE_BINDINGS.get()
+    if scoped is not None:
+        return scoped
+    bound = _runtime.get("agent_bindings")
+    if isinstance(bound, Mapping):
+        return cast("Mapping[str, Any]", bound)
+    return None
+
+
+def _capability_key(capability: Any) -> str:
+    return capability.value if hasattr(capability, "value") else str(capability)
 
 
 def _resolve_agent_model(capability: Any) -> str:
-    """Resolve capability → model from the runtime-bound default profile bindings.
+    """Resolve capability -> model from the bindings in force (rule #7).
 
-    Honors rule #7: the conversational surface uses the project's selected
-    ``ModelProfile`` (the default named profile, loaded at lifespan) instead of a
-    hardcoded id, so ``aleph-production`` actually applies Opus to the agent.
-    Falls back to ``_AGENT_MODEL`` when no bindings are bound or the capability
-    is unmapped.
+    The conversational surface uses the project's own ``ModelProfile`` — the one
+    `assistant_agent_resolver` read for this turn — instead of a hardcoded id.
+    A capability with no binding and no configured fallback raises
+    :class:`NoModelBound` rather than substituting a model nobody selected.
     """
     from aleph_models.profile import resolve_binding
 
-    bindings = _runtime.get("agent_bindings")
-    if not bindings:
-        return _AGENT_MODEL
-    try:
-        return resolve_binding(bindings, capability).model
-    except Exception:
-        return _AGENT_MODEL
+    bindings = _active_bindings()
+    if bindings:
+        try:
+            return resolve_binding(dict(bindings), capability).model
+        except Exception:  # unmapped capability, or a malformed binding row
+            pass
+    fallback = os.environ.get(FALLBACK_MODEL_ENV, "").strip()
+    if fallback:
+        return fallback
+    raise NoModelBound(_capability_key(capability))
 
 
 def _resolve_agent_context_window(capability: Any) -> int | None:
-    """The bound model's input window, or None when nothing is bound.
+    """The bound model's DECLARED input window, or None when it declares none.
 
     WS-MEP-7 c1. Without it every agent model is built with `profile=None`, and
     `deepagents.compute_summarization_defaults` falls back to a FIXED
@@ -1566,20 +1697,27 @@ def _resolve_agent_context_window(capability: Any) -> int | None:
     defaults become fractional — trigger at 0.85 of the real window, keep 0.10 —
     which is the same policy expressed against the model actually bound.
 
-    Separate from `_resolve_agent_model` rather than folded into it because the
-    two have different fallbacks: an unbound capability still gets a model id,
-    but it must NOT get an invented context window — a guessed 200k is exactly
-    the fixed number this exists to remove.
+    Reads the raw binding rather than `resolve_binding(...).max_input_tokens`,
+    which substitutes 200_000 for an absent key. A model whose gateway reports
+    no window must be left UNSET: a guessed 200k is the fixed number this exists
+    to remove, wearing a profile. Separate from `_resolve_agent_model` because
+    the two have different fallbacks — an unbound capability is an error there,
+    and merely unknown here.
     """
-    from aleph_models.profile import resolve_binding
-
-    bindings = _runtime.get("agent_bindings")
+    bindings = _active_bindings()
     if not bindings:
         return None
-    try:
-        return resolve_binding(bindings, capability).max_input_tokens
-    except Exception:
+    raw = bindings.get(_capability_key(capability))
+    if not isinstance(raw, Mapping):
         return None
+    declared = raw.get("max_input_tokens")
+    if declared is None:
+        return None
+    try:
+        window = int(declared)
+    except (TypeError, ValueError):
+        return None
+    return window if window > 0 else None
 
 
 # SKILL.md skills live in `skills/<name>/SKILL.md` alongside this module. The
@@ -1612,8 +1750,10 @@ def _gateway_chat_model(settings: Settings, *, purpose: str, capability: Any = N
     All agent LLM traffic (orchestrator + every subagent) is constructed here so
     it is configured identically — gateway `base_url`/`api_key`, temperature, and
     `stream_usage=True` — and so each gets its own `AgentCostCallbackHandler`
-    tagged with a `purpose`. The model is resolved from the default profile's
-    bindings for `capability` (rule #7), falling back to `_AGENT_MODEL`. The
+    tagged with a `purpose`. The model is resolved for `capability` from the
+    bindings in force (rule #7) — the project's, for a graph built by
+    `assistant_agent_resolver` — and an unbound capability raises
+    :class:`NoModelBound` rather than substituting an id nobody chose. The
     callback is attached ONLY to the agent model (never to `LiteLLMClient`), so
     the LiteLLMClient retrieval path is not double-counted; it writes a
     `ModelCall` + `CostLedgerEvent` per call (rule #5) and never crashes the turn.
@@ -2043,9 +2183,25 @@ _ORCHESTRATOR_TOOLS: tuple[Any, ...] = (
 
 
 def build_assistant_deep_agent(
-    *, settings: Settings, store: AsyncPostgresStore, checkpointer: Any = None
+    *,
+    settings: Settings,
+    store: AsyncPostgresStore,
+    checkpointer: Any = None,
+    bindings: Mapping[str, Any] | None = None,
 ):
-    """Compile the assistant Deep Agent (built once at app startup).
+    """Compile the assistant Deep Agent against one project's model bindings.
+
+    `bindings` is the resolved `ModelProfile.bindings_jsonb` this graph's seven
+    models (orchestrator + six subagents) are built from. `None` means "use
+    whatever `bind_runtime` bound at boot", which is what a direct caller and
+    the older tests get.
+
+    NOT built once at app startup any more. It was, and that made the profile a
+    project could change in Settings an inert control: one graph was compiled
+    from one globally-named template and reused for every project until the
+    process restarted, while `set_model_profile` told the user their change had
+    taken effect. `assistant_agent_resolver` below calls this per resolution and
+    caches the result under the signature it was built from.
 
     `checkpointer` holds per-thread conversation state. Production passes the
     Postgres-backed `build_agent_checkpointer(...)`; it is optional only so
@@ -2146,98 +2302,332 @@ def build_assistant_deep_agent(
             },
         )
 
-    # The orchestrator's OWN model. Cost is attributed to `assistant.turn` via
-    # the AgentCostCallbackHandler that `_gateway_chat_model` attaches (rule #5).
-    model = _gateway_chat_model(settings, purpose="assistant.turn")
+    # Everything that resolves a model — the orchestrator's own, and the six the
+    # subagent builders construct by calling `subagent_model` from their own
+    # modules — happens inside this block. That is why the bindings travel by
+    # ContextVar: a builder added later inherits the scope instead of needing a
+    # new argument threaded to it, and a graph half-built from two profiles is
+    # not expressible.
+    with use_agent_bindings(bindings):
+        # The orchestrator's OWN model. Cost is attributed to `assistant.turn` via
+        # the AgentCostCallbackHandler that `_gateway_chat_model` attaches (rule #5).
+        model = _gateway_chat_model(settings, purpose="assistant.turn")
 
-    # In-memory checkpointer keeps per-thread conversation state for the AG-UI
-    # runtime. Cross-SESSION durability rides the `store` instead: the
-    # CompositeBackend routes `/memories/` to a StoreBackend over the
-    # Postgres-backed langgraph store, so memory files survive new threads and
-    # process restarts. Everything else stays ephemeral (StateBackend).
-    return create_deep_agent(
-        model=model,
-        tools=list(_ORCHESTRATOR_TOOLS),
-        system_prompt=SYSTEM_PROMPT,
-        subagents=[
-            build_retriever_subagent(settings=settings),
-            build_researcher_subagent(settings=settings),
-            build_wiki_builder_subagent(settings=settings),
-            build_viz_builder_subagent(settings=settings),
-            build_analyst_subagent(settings=settings),
-            build_reviewer_subagent(settings=settings),
-        ],
-        # Bundled SKILL.md skills (progressive disclosure): the orchestrator
-        # sees each skill's name + description at startup and reads the full
-        # procedure on demand. `/skills` is the in-backend source the
-        # CompositeBackend routes to the FilesystemBackend above.
-        # BOTH sources, and this is not a stylistic choice: skills are listed
-        # per source path, so `["/skills"]` returns the four bundled ones and
-        # never the store's, no matter how the route is configured. Measured
-        # through the composite before and after.
-        skills=list(SKILL_SOURCES),
-        # The agent may READ its standing orders and may not rewrite them.
-        #
-        # `FilesystemBackend` implements `write` and `edit`, `create_deep_agent`
-        # was called with no `permissions=`, and deepagents allows any operation
-        # no rule matches (`_check_fs_permission` returns "allow" by default). So
-        # the assistant could silently rewrite the four bundled SKILL.md files on
-        # the live API container, and text in an ingested web page could in
-        # principle instruct it to — an edit that then persists for the life of
-        # the container and affects everyone using it.
-        #
-        # One rule closes it: matching is first-match-wins, and both `write_file`
-        # and `edit_file` map to the single `"write"` operation
-        # (`_DEFAULT_FS_TOOL_OPS`). Subagents inherit the parent's rules unless
-        # their own spec overrides, so this covers all six in one line.
-        #
-        # This is a blanket deny, not the governed path. `WS-H1` opens
-        # `/skills/authored/**` for writing, ledgered — and the ORDER will matter
-        # then, because an allow rule ahead of this deny would reopen everything.
-        # ORDER IS THE WHOLE THING. `_check_fs_permission` is first-match-wins
-        # (middleware/filesystem.py:111-116), so the allow must sit ahead of the
-        # deny. Swapped, the deny matches `/skills/authored/**` too and the
-        # authored route is silently read-only — the feature is off, every write
-        # is refused, and nothing anywhere reports a misconfiguration.
-        # `test_the_bundled_skills_stay_read_only` and
-        # `test_the_authored_route_is_writable` are asserted in the same run
-        # precisely so neither can be satisfied by dropping the other.
-        permissions=_agent_filesystem_permissions(),
-        # AlephAgentMiddleware first: it wraps every tool call so an exception
-        # becomes a ToolMessage the model can read and route around, instead of
-        # killing the conversation. Before it, any one of 27 tools throwing
-        # ended the turn — and every tool resolved its project scope OUTSIDE
-        # its own try block, so even the guarded ones were guarded against the
-        # wrong thing.
-        middleware=[
-            AlephAgentMiddleware(session_maker=_runtime.get("session_maker")),
-            AuthoredSkillsMiddleware(
-                session_maker=_runtime.get("session_maker"),
-                actor_id=SYSTEM_ACTOR,
-                backend_factory=_memory_backend,
-            ),
-            # WS-H3: the agent grades its own answer against the project's
-            # rubric before handing it over. Splatted as one list because the
-            # ORDER matters and getting it wrong does not fail — the source
-            # must run before the grader or the grading loop's budget never
-            # resets. `build_grading_middleware` returns them already ordered
-            # so this call site cannot get it wrong.
+        # In-memory checkpointer keeps per-thread conversation state for the AG-UI
+        # runtime. Cross-SESSION durability rides the `store` instead: the
+        # CompositeBackend routes `/memories/` to a StoreBackend over the
+        # Postgres-backed langgraph store, so memory files survive new threads and
+        # process restarts. Everything else stays ephemeral (StateBackend).
+        return create_deep_agent(
+            model=model,
+            tools=list(_ORCHESTRATOR_TOOLS),
+            system_prompt=SYSTEM_PROMPT,
+            subagents=[
+                build_retriever_subagent(settings=settings),
+                build_researcher_subagent(settings=settings),
+                build_wiki_builder_subagent(settings=settings),
+                build_viz_builder_subagent(settings=settings),
+                build_analyst_subagent(settings=settings),
+                build_reviewer_subagent(settings=settings),
+            ],
+            # Bundled SKILL.md skills (progressive disclosure): the orchestrator
+            # sees each skill's name + description at startup and reads the full
+            # procedure on demand. `/skills` is the in-backend source the
+            # CompositeBackend routes to the FilesystemBackend above.
+            # BOTH sources, and this is not a stylistic choice: skills are listed
+            # per source path, so `["/skills"]` returns the four bundled ones and
+            # never the store's, no matter how the route is configured. Measured
+            # through the composite before and after.
+            skills=list(SKILL_SOURCES),
+            # The agent may READ its standing orders and may not rewrite them.
             #
-            # Inert when the project has no rubric: no rubric file, no grader
-            # call, one model call, byte-identical answer.
-            *build_grading_middleware(settings=settings, backend_factory=_memory_backend),
-            CopilotKitMiddleware(),
-            # WS-H5: the QuickJS scratchpad, and the prompt that tells the model
-            # to cover a list rather than sample it. LAST, and that is load
-            # bearing twice over. Middleware earlier in the list is OUTER, so
-            # only the last entry sees the final `request.tools` — which is what
-            # the interpreter filters `PTC_ALLOWLIST` against, and an unmatched
-            # name exposes nothing rather than erroring. And being inside
-            # `AlephAgentMiddleware` (first, therefore outermost) is what turns a
-            # throwing `eval` into a ToolMessage instead of the end of the turn.
-            *build_interpreter_middleware(tools=list(_ORCHESTRATOR_TOOLS)),
-        ],
-        backend=_memory_backend,
-        store=store,
-        checkpointer=checkpointer if checkpointer is not None else MemorySaver(),
+            # `FilesystemBackend` implements `write` and `edit`, `create_deep_agent`
+            # was called with no `permissions=`, and deepagents allows any operation
+            # no rule matches (`_check_fs_permission` returns "allow" by default). So
+            # the assistant could silently rewrite the four bundled SKILL.md files on
+            # the live API container, and text in an ingested web page could in
+            # principle instruct it to — an edit that then persists for the life of
+            # the container and affects everyone using it.
+            #
+            # One rule closes it: matching is first-match-wins, and both `write_file`
+            # and `edit_file` map to the single `"write"` operation
+            # (`_DEFAULT_FS_TOOL_OPS`). Subagents inherit the parent's rules unless
+            # their own spec overrides, so this covers all six in one line.
+            #
+            # This is a blanket deny, not the governed path. `WS-H1` opens
+            # `/skills/authored/**` for writing, ledgered — and the ORDER will matter
+            # then, because an allow rule ahead of this deny would reopen everything.
+            # ORDER IS THE WHOLE THING. `_check_fs_permission` is first-match-wins
+            # (middleware/filesystem.py:111-116), so the allow must sit ahead of the
+            # deny. Swapped, the deny matches `/skills/authored/**` too and the
+            # authored route is silently read-only — the feature is off, every write
+            # is refused, and nothing anywhere reports a misconfiguration.
+            # `test_the_bundled_skills_stay_read_only` and
+            # `test_the_authored_route_is_writable` are asserted in the same run
+            # precisely so neither can be satisfied by dropping the other.
+            permissions=_agent_filesystem_permissions(),
+            # AlephAgentMiddleware first: it wraps every tool call so an exception
+            # becomes a ToolMessage the model can read and route around, instead of
+            # killing the conversation. Before it, any one of 27 tools throwing
+            # ended the turn — and every tool resolved its project scope OUTSIDE
+            # its own try block, so even the guarded ones were guarded against the
+            # wrong thing.
+            middleware=[
+                AlephAgentMiddleware(session_maker=_runtime.get("session_maker")),
+                AuthoredSkillsMiddleware(
+                    session_maker=_runtime.get("session_maker"),
+                    actor_id=SYSTEM_ACTOR,
+                    backend_factory=_memory_backend,
+                ),
+                # WS-H3: the agent grades its own answer against the project's
+                # rubric before handing it over. Splatted as one list because the
+                # ORDER matters and getting it wrong does not fail — the source
+                # must run before the grader or the grading loop's budget never
+                # resets. `build_grading_middleware` returns them already ordered
+                # so this call site cannot get it wrong.
+                #
+                # Inert when the project has no rubric: no rubric file, no grader
+                # call, one model call, byte-identical answer.
+                *build_grading_middleware(settings=settings, backend_factory=_memory_backend),
+                CopilotKitMiddleware(),
+                # WS-H5: the QuickJS scratchpad, and the prompt that tells the model
+                # to cover a list rather than sample it. LAST, and that is load
+                # bearing twice over. Middleware earlier in the list is OUTER, so
+                # only the last entry sees the final `request.tools` — which is what
+                # the interpreter filters `PTC_ALLOWLIST` against, and an unmatched
+                # name exposes nothing rather than erroring. And being inside
+                # `AlephAgentMiddleware` (first, therefore outermost) is what turns a
+                # throwing `eval` into a ToolMessage instead of the end of the turn.
+                *build_interpreter_middleware(tools=list(_ORCHESTRATOR_TOOLS)),
+            ],
+            backend=_memory_backend,
+            store=store,
+            checkpointer=checkpointer if checkpointer is not None else MemorySaver(),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Per-request graph resolution. WS-MEP-6.
+# ---------------------------------------------------------------------------
+#
+# The assistant used to be one graph, compiled once at boot from one globally
+# named ModelProfile template, reused by every project for the life of the
+# process. Changing a project's models in Settings had no effect on it at all —
+# and `set_model_profile` returned "New LLM/agent calls use that profile's
+# models", which was not true of the system. A control that reports an effect it
+# does not have is worse than no control: it teaches the user to trust a false
+# report.
+#
+# What replaces it: the bindings are read per turn, a resolution signature is
+# computed from them, and the compiled graph for that signature is reused. Two
+# projects on the same endpoint with identical bindings share one graph; a
+# project that rebinds gets a fresh one on its NEXT turn, with no restart.
+
+#: The name and description the browser sees for the assistant.
+ASSISTANT_AGENT_NAME = "assistant"
+ASSISTANT_AGENT_DESCRIPTION = (
+    "Aleph research assistant — answers from the project's compiled wiki, "
+    "cites pages, and renders interactive A2UI cards."
+)
+
+#: How many compiled graphs may be held at once.
+#:
+#: Bounded because the cache key is derived from user-controlled state: a
+#: project's bindings can be rebound as often as somebody clicks Save, and an
+#: unbounded map keyed on that is a memory leak with a UI attached. Each entry
+#: is a compiled deep agent carrying middleware and six subagents, so the number
+#: is small on purpose.
+AGENT_GRAPH_CACHE_MAX = 8
+
+
+class BoundedGraphCache:
+    """A least-recently-used map with a hard entry ceiling.
+
+    `OrderedDict` rather than `functools.lru_cache` because the eviction has to
+    be observable: the test that matters asserts the evicted graphs are actually
+    unreferenced, and a decorator's internals are not reachable to assert on.
+    """
+
+    def __init__(self, max_entries: int) -> None:
+        if max_entries < 1:
+            msg = f"a graph cache holding {max_entries} entries would rebuild every turn"
+            raise ValueError(msg)
+        self._max = max_entries
+        self._entries: OrderedDict[str, Any] = OrderedDict()
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    @property
+    def max_entries(self) -> int:
+        return self._max
+
+    def keys(self) -> list[str]:
+        return list(self._entries)
+
+    def clear(self) -> None:
+        self._entries.clear()
+
+    def get_or_build(self, key: str, build: Callable[[], Any]) -> Any:
+        """Return the entry for `key`, building it once if it is not held.
+
+        The build happens BEFORE the insert, so a builder that raises leaves no
+        half-built entry behind for the next turn to find — the failure mode
+        `Kernel.unregister` exists for, in miniature.
+
+        No lock, and that is a property rather than an omission: this method and
+        the builder it calls are entirely synchronous, so on one event loop two
+        concurrent turns cannot interleave inside it. Keep it that way — an
+        `await` anywhere in here would let two requests compile the same
+        signature and would need a real lock.
+        """
+        held = self._entries.get(key)
+        if held is not None:
+            self._entries.move_to_end(key)
+            return held
+        built = build()
+        self._entries[key] = built
+        self._entries.move_to_end(key)
+        while len(self._entries) > self._max:
+            self._entries.popitem(last=False)
+        return built
+
+
+#: The process-wide cache. One per process, so two mounts of the endpoint would
+#: share it; the signature includes the endpoint, so that is correct rather than
+#: merely tolerable.
+_GRAPH_CACHE = BoundedGraphCache(AGENT_GRAPH_CACHE_MAX)
+
+
+def agent_graph_cache() -> BoundedGraphCache:
+    """The process-wide compiled-graph cache (read by tests and diagnostics)."""
+    return _GRAPH_CACHE
+
+
+def agent_resolution_signature(*, endpoint: str, bindings: Mapping[str, Any] | None) -> str:
+    """A stable key for "which graph is this".
+
+    BOTH halves are load bearing. Drop the endpoint and two projects pointed at
+    different gateways share one graph — which is the whole of WS-MEP-4 made
+    inert. Drop the bindings and a project that rebinds keeps the graph it had —
+    which is the whole of this workstream made inert. Neither omission fails
+    loudly; both produce an assistant quietly using the wrong model.
+    """
+    payload = json.dumps(
+        {"endpoint": endpoint, "bindings": bindings or {}},
+        sort_keys=True,
+        default=str,
     )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class AgentResolution:
+    """What the next turn for a project will be built from.
+
+    Exists as a value rather than a closure because "the assistant is using the
+    wrong model" was previously undiagnosable without reading container logs:
+    the resolution lived only inside a function created at boot.
+    """
+
+    project_id: UUID | None
+    endpoint: str
+    bindings: Mapping[str, Any]
+    signature: str
+
+    def model_for(self, capability: Any) -> str:
+        """The model this resolution binds for `capability`.
+
+        Resolves through exactly the path the graph's models are built by, so
+        this cannot report one model while the graph uses another.
+        """
+        with use_agent_bindings(self.bindings):
+            return _resolve_agent_model(capability)
+
+
+async def bindings_for_project(project_id: UUID | None) -> Mapping[str, Any] | None:
+    """The project's own ModelProfile bindings, else the boot default.
+
+    Read per turn, on purpose: this is the only reason a profile switch takes
+    effect without a restart. It is one indexed SELECT against a row the switch
+    route has already written.
+
+    A database failure is NOT swallowed. Falling back to the boot bindings on an
+    error would put the assistant on the wrong model and say nothing, which is
+    the exact defect this workstream removes; the AG-UI route turns the raise
+    into a RUN_ERROR frame carrying a searchable id instead.
+    """
+    boot = _runtime.get("agent_bindings")
+    boot_bindings: Mapping[str, Any] | None = boot if isinstance(boot, Mapping) else None
+    session_maker = _runtime.get("session_maker")
+    if project_id is None or session_maker is None:
+        return boot_bindings
+
+    from aleph_db.repos.model_profile import get_project_profile
+
+    async with session_maker() as session:
+        profile = await get_project_profile(session, project_id)
+    if profile is None:
+        return boot_bindings
+    return dict(profile.bindings_jsonb)
+
+
+async def resolve_agent(
+    project_id: UUID | None,
+    *,
+    settings: Settings,
+    load_bindings: Callable[[UUID | None], Awaitable[Mapping[str, Any] | None]] | None = None,
+) -> AgentResolution:
+    """What the next turn for `project_id` resolves to, without building it."""
+    loader = load_bindings or bindings_for_project
+    bindings = await loader(project_id)
+    endpoint = _openai_base_url(settings.litellm_base_url)
+    return AgentResolution(
+        project_id=project_id,
+        endpoint=endpoint,
+        bindings=bindings or {},
+        signature=agent_resolution_signature(endpoint=endpoint, bindings=bindings),
+    )
+
+
+def assistant_agent_resolver(
+    *,
+    settings: Settings,
+    store: AsyncPostgresStore,
+    checkpointer: Any = None,
+    load_bindings: Callable[[UUID | None], Awaitable[Mapping[str, Any] | None]] | None = None,
+    cache: BoundedGraphCache | None = None,
+) -> Callable[[UUID | None], Awaitable[Any]]:
+    """Build the per-request agent resolver the AG-UI route mounts.
+
+    Returns `(project_id) -> LangGraphAGUIAgent`. The route calls it once per
+    turn; identical resolutions hit the cache, so the common case is a dict
+    lookup and no compilation.
+
+    `load_bindings` and `cache` are injectable so a test can drive the real
+    resolution path — signature, cache, `use_agent_bindings`, all seven model
+    constructions — without a database and without sharing process state
+    between tests. Production passes neither.
+    """
+    from copilotkit import LangGraphAGUIAgent
+
+    graphs = cache if cache is not None else _GRAPH_CACHE
+
+    async def resolve(project_id: UUID | None) -> Any:
+        resolution = await resolve_agent(project_id, settings=settings, load_bindings=load_bindings)
+
+        def _build() -> Any:
+            return LangGraphAGUIAgent(
+                name=ASSISTANT_AGENT_NAME,
+                description=ASSISTANT_AGENT_DESCRIPTION,
+                graph=build_assistant_deep_agent(
+                    settings=settings,
+                    store=store,
+                    checkpointer=checkpointer,
+                    bindings=resolution.bindings,
+                ),
+            )
+
+        return graphs.get_or_build(resolution.signature, _build)
+
+    return resolve

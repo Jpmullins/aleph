@@ -22,6 +22,7 @@ import pathlib
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 LIFESPAN = REPO_ROOT / "apps" / "api" / "src" / "aleph_api" / "lifespan.py"
 ENDPOINT = REPO_ROOT / "apps" / "api" / "src" / "aleph_api" / "copilotkit_endpoint.py"
+AGENT = REPO_ROOT / "apps" / "api" / "src" / "aleph_api" / "copilot_agent.py"
 
 
 def _calls_named(tree: ast.Module, name: str) -> list[ast.Call]:
@@ -43,6 +44,7 @@ def test_paths_exist() -> None:
     """Guard the guard — a moved file would make every assertion vacuous."""
     assert LIFESPAN.is_file(), LIFESPAN
     assert ENDPOINT.is_file(), ENDPOINT
+    assert AGENT.is_file(), AGENT
 
 
 def test_lifespan_builds_a_durable_checkpointer() -> None:
@@ -73,14 +75,43 @@ def test_lifespan_passes_the_checkpointer_to_the_endpoint() -> None:
         )
 
 
-def test_endpoint_forwards_the_checkpointer_to_the_graph() -> None:
+def test_endpoint_forwards_the_checkpointer_to_the_resolver() -> None:
+    """The endpoint no longer builds a graph; it installs the resolver that does.
+
+    WS-MEP-6 moved compilation behind `assistant_agent_resolver`, so the hop the
+    checkpointer can be dropped on moved with it. Both hops are checked, here
+    and in the test below — checking only this one would let the resolver take
+    the argument and quietly not pass it on.
+    """
     tree = ast.parse(ENDPOINT.read_text(encoding="utf-8"))
-    calls = _calls_named(tree, "build_assistant_deep_agent")
-    assert calls, "the endpoint does not build the agent graph"
+    calls = _calls_named(tree, "assistant_agent_resolver")
+    assert calls, "the endpoint does not install the per-project agent resolver"
     for call in calls:
         assert "checkpointer" in _kwarg_names(call), (
-            "build_assistant_deep_agent is called without `checkpointer=` — the "
+            "assistant_agent_resolver is called without `checkpointer=` — the "
             "durable saver stops at the endpoint and never reaches the graph."
+        )
+
+
+def test_the_resolver_forwards_the_checkpointer_to_the_graph() -> None:
+    tree = ast.parse(AGENT.read_text(encoding="utf-8"))
+    resolver = next(
+        (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "assistant_agent_resolver"
+        ),
+        None,
+    )
+    assert resolver is not None, "copilot_agent has no assistant_agent_resolver"
+    calls = _calls_named(
+        ast.Module(body=resolver.body, type_ignores=[]), "build_assistant_deep_agent"
+    )
+    assert calls, "the resolver does not build the agent graph"
+    for call in calls:
+        assert "checkpointer" in _kwarg_names(call), (
+            "the resolver builds the graph without `checkpointer=` — every "
+            "conversation is dropped on restart and nothing reports it."
         )
 
 

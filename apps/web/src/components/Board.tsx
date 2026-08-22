@@ -25,7 +25,12 @@ import { A2uiSurface } from "@a2ui/react/v0_9";
 import { isPluginCatalog } from "@/a2ui/aleph-catalog-v09";
 import { SurfaceStreamProvider, useSurfaceStream } from "@/a2ui/SurfaceStreamProvider";
 import { SurfaceProvider } from "@/a2ui/surface-context";
-import { Block, type BlockLifecycle } from "@/components/Block";
+import {
+  Block,
+  type BlockBand,
+  type BlockLifecycle,
+  type BlockTrust,
+} from "@/components/Block";
 import { type Pane, useWorkspaceUI } from "@/lib/workspace-ui";
 
 interface Rect {
@@ -38,6 +43,35 @@ interface Rect {
 const DEFAULT_W = 430;
 const DEFAULT_H = 360;
 const GAP = 26;
+
+/**
+ * Who drew this block, from the catalog its surface was created under.
+ *
+ * `band="declarative" trust="signed"` was hardcoded on every block, so the two
+ * things the frame ALWAYS shows said exactly the same thing about a core
+ * surface and about a surface a plugin drew. A plugin's catalog id is
+ * `aleph://plugin/<name>@<major>`; core's is not.
+ *
+ * Exported so the derivation can be driven directly. It reached the screen
+ * through `BoardCanvas`, which needs a live SSE stream and the whole card
+ * catalog to render, and the consequence was that the one thing on the frame
+ * that says "a third party wrote this" had no test at all.
+ *
+ * Before the first frame there is nothing to go on, and `unverified` is the
+ * honest reading of "nobody has told us yet" — the block shows `building` at
+ * the same moment. Note it is NOT `signed`: a block that has not identified
+ * itself must not be shown at full trust for the seconds before it does.
+ */
+export function blockProvenance(
+  catalogId: string | undefined,
+  hasSurface: boolean,
+): { band: BlockBand; trust: BlockTrust } {
+  if (!hasSurface) return { band: "declarative", trust: "unverified" };
+  return isPluginCatalog(catalogId)
+    ? { band: "third-party", trust: "asserted" }
+    : { band: "declarative", trust: "signed" };
+}
+
 
 /** Lay a newly-opened block down where it does not cover the others. */
 function autoPlace(index: number): Rect {
@@ -243,18 +277,7 @@ function BoardCanvas({ projectId }: { projectId: string }) {
             : connected
               ? "building"
               : "stale";
-        // Who drew this, from the catalog the surface was created under —
-        // `band="declarative" trust="signed"` was hardcoded on every block, so
-        // the two things the frame always shows said the same thing about a
-        // core surface and a plugin's. A plugin's catalog id is
-        // `aleph://plugin/<name>@<major>`; core's is not.
-        //
-        // Before the first frame there is nothing to go on, and `unverified`
-        // is the honest reading of "nobody has told us yet" — the block is
-        // showing `building` at the same moment.
-        const fromPlugin = isPluginCatalog(surface?.catalog?.id);
-        const band = surface ? (fromPlugin ? "third-party" : "declarative") : "declarative";
-        const trust = surface ? (fromPlugin ? "asserted" : "signed") : "unverified";
+        const { band, trust } = blockProvenance(surface?.catalog?.id, surface !== undefined);
         return (
           <div
             key={pane.id}

@@ -38,11 +38,15 @@ __all__ = [
     "compare_agent_props",
     "compare_catalog_and_client",
     "compare_emitted",
+    "compare_view_reads",
     "emitted_actions",
     "emitted_props",
     "producer_props",
     "registered_actions",
     "run",
+    "strip_ts_comments",
+    "tsx_emitted_props",
+    "view_modules",
 ]
 
 #: Keys that describe the component itself rather than one of its props.
@@ -415,6 +419,242 @@ def compare_agent_props(agent: dict[str, set[str]], clients: dict[str, set[str]]
     return out
 
 
+# ---------------------------------------------------------------------------
+# Producers that are not Python, and the last direction of the contract
+# ---------------------------------------------------------------------------
+
+#: `type: "HtmlDocCard"` inside a TSX object literal.
+_TSX_TYPE = re.compile(r'\btype:\s*"([A-Z][A-Za-z0-9]*)"')
+#: The `props: {` that must follow it for the literal to be a component payload.
+_TSX_PROPS = re.compile(r"\bprops:\s*\{")
+#: `import { HtmlDocCard as HtmlDocCardView } from "./components/HtmlDocCard";`
+_TSX_IMPORT = re.compile(
+    r'import\s*\{\s*(?P<orig>\w+)(?:\s+as\s+(?P<alias>\w+))?\s*\}\s*from\s*"(?P<mod>[^"]+)"'
+)
+#: `adapt("HtmlDocCard", HtmlDocCardView, "html-doc")` — the authoritative
+#: component → view binding, read rather than assumed from the file name.
+_ADAPT = re.compile(r'adapt\(\s*"(?P<name>\w+)"\s*,\s*(?P<view>\w+)\s*,')
+
+
+def _balanced(text: str, start: int) -> str:
+    """The body of a `{`-opened block whose opening brace is at `start - 1`."""
+    depth, i = 1, start
+    while i < len(text) and depth:
+        char = text[i]
+        if char in "{[(":
+            depth += 1
+        elif char in "}])":
+            depth -= 1
+        i += 1
+    return text[start : i - 1]
+
+
+def _object_keys(body: str) -> set[str]:
+    """Top-level `key:` names in a JS object literal body."""
+    keys: set[str] = set()
+    depth, buffer = 0, ""
+    for char in body:
+        if char in "{[(":
+            depth += 1
+        elif char in "}])":
+            depth -= 1
+        if depth == 0 and char == ":":
+            match = re.search(r"([A-Za-z_$][\w$]*)\s*$", buffer)
+            if match:
+                keys.add(match.group(1))
+            buffer = ""
+        elif depth == 0 and char == ",":
+            buffer = ""
+        else:
+            buffer += char
+    return keys
+
+
+def tsx_emitted_props(source: str) -> dict[str, set[str]]:
+    """Component name → the props a BROWSER producer sends it.
+
+    Not every producer is Python. `NotesSurface.tsx` builds a `NoteEditorCard`
+    payload and `WikiPageCard.tsx` builds an `HtmlDocCard` one, and those two
+    are the only producers those components have anywhere — so a sweep that read
+    Python alone reported them "emitted by no producer" and compared nothing
+    about them, forever. Both are registered in `catalog.json` with an `adapt()`
+    impl, which means the AGENT can emit them through the binder too: if the
+    browser producer sends a prop the zod schema does not declare, the two paths
+    render differently and only the agent's is silently wrong.
+
+    Deliberately narrow. A `type:` key only counts as a component payload when a
+    `props: {` follows within the same literal, for the same reason the Python
+    reader requires it — a Vega-Lite encoding is `{field: "x", type: "nominal"}`
+    and a sweep that invents a component called `nominal` gets switched off.
+    """
+    found: dict[str, set[str]] = {}
+    for match in _TSX_TYPE.finditer(source):
+        rest = source[match.end() :]
+        props = _TSX_PROPS.search(rest)
+        if props is None or props.start() > 200:
+            continue
+        keys = _object_keys(_balanced(rest, props.end()))
+        if keys:
+            found.setdefault(match.group(1), set()).update(keys)
+    return found
+
+
+def view_modules(client_source: str) -> dict[str, str]:
+    """Component name → the module path of the view `adapt()` wraps it with.
+
+    Read from the two statements that actually bind them — the import alias and
+    the `adapt("Name", NameView, …)` call — rather than assumed from the file
+    name. `components/<Name>.tsx` is the convention today and a rename would
+    make a convention-based lookup silently compare a prop against the wrong
+    file, or against no file at all.
+    """
+    aliases = {
+        (match.group("alias") or match.group("orig")): match.group("mod")
+        for match in _TSX_IMPORT.finditer(client_source)
+    }
+    return {
+        match.group("name"): aliases[match.group("view")]
+        for match in _ADAPT.finditer(client_source)
+        if match.group("view") in aliases
+    }
+
+
+def strip_ts_comments(source: str) -> str:
+    """The view's CODE, with `//` and `/* */` removed.
+
+    A prop name in prose is not a read, and this is not hypothetical: the very
+    comment written to explain why `FindingCard` now renders `evidence_refs`
+    names the prop, so deleting the destructure left the sweep green. Every
+    "does the view read it" check has this hole, and a sweep that a comment can
+    satisfy is a sweep that certifies the defect it exists to find.
+
+    `'`/`"` strings are skipped so a `//` inside one does not eat the rest of
+    the line. Template literals are deliberately NOT skipped: their `${…}`
+    interpolations are code, and `{`${p.title}`}` is a real read.
+    """
+    out: list[str] = []
+    i, n = 0, len(source)
+    while i < n:
+        char = source[i]
+        if char in "'\"":
+            quote, j = char, i + 1
+            while j < n and source[j] != quote:
+                j += 2 if source[j] == "\\" else 1
+            out.append(source[i : j + 1])
+            i = j + 1
+        elif source.startswith("//", i):
+            end = source.find("\n", i)
+            i = n if end == -1 else end
+        elif source.startswith("/*", i):
+            end = source.find("*/", i + 2)
+            i = n if end == -1 else end + 2
+        else:
+            out.append(char)
+            i += 1
+    return "".join(out)
+
+
+#: Props exempt from the zod → view direction, with the reason each is exempt.
+#: `children` is structural: it is declared one level up in the catalog's
+#: component schema and forwarded by the renderer, never destructured by the
+#: surface view. Same exemption, same reason, as `compare_catalog_and_client`.
+_VIEW_EXEMPT = frozenset({"children"})
+
+
+def compare_view_reads(
+    clients: dict[str, set[str]],
+    catalog_consts: dict[str, dict[str, str]],
+    views: dict[str, tuple[str, str]],
+) -> list[Mismatch]:
+    """The fifth direction: a prop the binder resolves that the view never reads.
+
+    The other four directions all end at the browser's front door. This one
+    walks the last step. The binder resolves a declared prop, hands it to the
+    view, and the view can still ignore it — which is the same defect with the
+    same silence: `FindingCard.evidence_refs` was computed from
+    `ReviewFinding.evidence_refs_jsonb`, serialised, streamed, resolved, and
+    then not destructured by `FindingCard.tsx`.
+
+    Two things are NOT that defect, and conflating them is what kept this
+    direction out of the sweep:
+
+    * `children`, which is structural (see `_VIEW_EXEMPT`);
+    * an `*_action` prop whose `catalog.json` declaration is a `const`. Twenty
+      one props are declared `{"const": "approve"}` and friends: the value is
+      fixed by the contract, so the prop carries no information and the view
+      hardcoding `onAction("approve", …)` is EQUIVALENT to reading it. That is a
+      legitimate pattern, not a gap — but only while the verb the view fires is
+      the verb the catalog fixes, and nothing checked that. So these are not
+      skipped, they are RE-POINTED: the sweep asserts the view dispatches the
+      exact constant. Three cards failed that on the first run — `ChartCard`,
+      `DiffCard` and `TableCard` each required an `open_action: "open"` their
+      views never fired and the router has no branch to route.
+    """
+    out: list[Mismatch] = []
+    for component in sorted(clients):
+        found = views.get(component)
+        if found is None:
+            continue  # nothing `adapt()`s it to a view; there is no reader to check
+        module, raw = found
+        # Comments stripped: the comment explaining why a prop is read names
+        # the prop, so prose alone would satisfy this check. See
+        # `strip_ts_comments`.
+        source = strip_ts_comments(raw)
+        consts = catalog_consts.get(component, {})
+        for prop in sorted(clients[component] - _VIEW_EXEMPT):
+            if re.search(rf"\b{re.escape(prop)}\b", source):
+                continue
+            verb = consts.get(prop)
+            if verb is None:
+                out.append(
+                    Mismatch(
+                        component,
+                        prop,
+                        f"declared in the client zod schema and never read by "
+                        f"{module} — the binder resolves it, hands it to the "
+                        f"view, and the view never looks",
+                    )
+                )
+            elif not re.search(rf'onAction\(\s*"{re.escape(verb)}"', source):
+                out.append(
+                    Mismatch(
+                        component,
+                        prop,
+                        f'declared as the constant verb "{verb}", which lets a '
+                        f"view hardcode it instead of reading the prop — but "
+                        f"{module} dispatches no such action. The card "
+                        f"advertises a verb no control fires",
+                    )
+                )
+    return out
+
+
+def catalog_const_props(catalog_json: str) -> dict[str, dict[str, str]]:
+    """Component name → {prop: the constant `catalog.json` fixes it to}.
+
+    Only `{"const": "<string>"}` counts. A prop pinned to one value is a
+    declaration OF that value, which is the whole basis of the action-prop
+    exemption in `compare_view_reads`.
+    """
+    parsed = json.loads(catalog_json)
+    components = parsed.get("components", {}) if isinstance(parsed, dict) else {}
+    out: dict[str, dict[str, str]] = {}
+    for name, spec in components.items():
+        node: object = spec
+        for step in ("schema", "properties", "props", "properties"):
+            node = node.get(step, {}) if isinstance(node, dict) else {}
+        if not isinstance(node, dict):
+            continue
+        fixed = {
+            str(prop): str(decl["const"])
+            for prop, decl in node.items()
+            if isinstance(decl, dict) and isinstance(decl.get("const"), str)
+        }
+        if fixed:
+            out[str(name)] = fixed
+    return out
+
+
 #: `r.register("<kind>", handler)` in `build_action_router()`.
 _REGISTER = re.compile(r'\br\.register\(\s*"([^"]+)"')
 
@@ -492,6 +732,17 @@ class Report:
     #: from `@a2ui/react`'s own catalog, not from Aleph's zod file, so they are
     #: legitimately outside this comparison — and counted rather than hidden.
     unknown_to_client: list[str] = field(default_factory=list)
+    #: Every DISTINCT prop name this sweep examined, across all five
+    #: directions and every compared component — the union, per component, of
+    #: what a producer sends, what `catalog.json` declares, what the zod schema
+    #: declares, and what the agent block offers. `bound_props` counts only the
+    #: first of those four, which is why it reads far lower than the size of
+    #: the contract: the contract is 114 props and one of its copies is 77.
+    props_inspected: int = 0
+    #: Catalog components with no producer at all, and why each has none. A
+    #: bare "5 not compared" reads as work; a named list with a reason is
+    #: either a gap somebody can close or a fact.
+    no_producer: dict[str, str] = field(default_factory=dict)
 
     @property
     def uncompared(self) -> int:
@@ -558,6 +809,12 @@ _PRODUCERS: tuple[tuple[str, str], ...] = (
         "it pins agent-authored charts to Briefs by writing the prop dict by "
         "hand, which is where two undeclared props lived",
     ),
+    (
+        "apps/workers/src/aleph_workers/jobs/render_code.py",
+        "it is the ONLY producer of `ImageCard` and `HtmlFrameCard` in Aleph, "
+        "and it pins them into Briefs from a worker — so neither card was "
+        "compared against the zod schema that has to declare its props",
+    ),
 )
 
 _SUBJECTS: tuple[tuple[str, str], ...] = (
@@ -573,6 +830,35 @@ _SUBJECTS: tuple[tuple[str, str], ...] = (
         "the denominator of this sweep's coverage number",
     ),
 )
+
+
+#: A catalog component that no producer emits, and why. The sweep's coverage
+#: number used to end at "5 catalog component(s) are emitted by no Python
+#: producer", which is a footnote nobody acts on. Every gap now has to be
+#: either closed or NAMED here with a reason, and an unnamed one is a
+#: mismatch — so the coverage claim enforces itself instead of living in a doc.
+_NO_PRODUCER_REASON: dict[str, str] = {
+    "ArtifactCard": (
+        "agent-only. Nothing in Python and nothing in the browser builds an "
+        "ArtifactCard payload; the catalog's `agent` block is its entire "
+        "producer, so `compare_agent_props` is the direction that covers it"
+    ),
+}
+
+
+def _unexplained_gaps(catalog: set[str], emitted: set[str]) -> list[Mismatch]:
+    """A catalog component nothing emits and nobody has explained."""
+    return [
+        Mismatch(
+            name,
+            "(component)",
+            "declared in catalog.json, emitted by no producer in this sweep's "
+            "subject list, and not named in `_NO_PRODUCER_REASON` with a "
+            "reason — either it has a producer the sweep is not reading, or it "
+            "is a contract with no caller",
+        )
+        for name in sorted(catalog - emitted - set(_NO_PRODUCER_REASON))
+    ]
 
 
 def run(repo_root: pathlib.Path) -> Report:
@@ -604,11 +890,17 @@ def run(repo_root: pathlib.Path) -> Report:
     # Every card view, plus the chat surface's frontend tools. A card that sends
     # an action lives under `a2ui/components`, and the sweep must read all of
     # them or a still-emitted action looks abandoned.
-    view_sources = {
+    tsx_sources = {
         str(path.relative_to(repo_root)): path.read_text()
         for path in sorted((repo_root / "apps/web/src").rglob("*.tsx"))
         if not path.name.endswith(".test.tsx")
     }
+    # Not every producer is Python. `NotesSurface.tsx` and `WikiPageCard.tsx`
+    # build the only `NoteEditorCard` and `HtmlDocCard` payloads that exist.
+    for text in tsx_sources.values():
+        for name, props in tsx_emitted_props(text).items():
+            emitted.setdefault(name, set()).update(props)
+    view_sources = dict(tsx_sources)
     # The agent's composition verbs are dispatched from Python, not from a card.
     for path in sorted((repo_root / "apps/api/src/aleph_api").rglob("*.py")):
         view_sources[str(path.relative_to(repo_root))] = path.read_text()
@@ -619,23 +911,57 @@ def run(repo_root: pathlib.Path) -> Report:
     clients = client_props(client_source)
     bindable = client_bindable_props(client_source)
     catalog = catalog_components(catalog_source)
+    declared = catalog_props(catalog_source)
+    agent = catalog_agent_props(catalog_source)
+
+    # component -> (the path a reader should open, its text). Resolved through
+    # `adapt()`'s own import rather than the `components/<Name>.tsx` naming
+    # convention, so a renamed view is a loud miss rather than a quiet skip.
+    client_dir = client_file.parent
+    views: dict[str, tuple[str, str]] = {}
+    for component, module in view_modules(client_source).items():
+        path = (client_dir / f"{module}.tsx").resolve()
+        try:
+            key = str(path.relative_to(repo_root))
+        except ValueError:  # pragma: no cover - a view outside the repo
+            continue
+        if key in tsx_sources:
+            views[component] = (key, tsx_sources[key])
 
     compared = sorted(set(emitted) & set(clients))
     sent = sum(len(emitted[name]) for name in compared)
+    inspected = sum(
+        len(
+            emitted.get(name, set())
+            | declared.get(name, set())
+            | clients.get(name, set())
+            | agent.get(name, set())
+        )
+        for name in compared
+    )
     return Report(
-        # FOUR directions over one contract, because the contract has three
-        # copies (producer, catalog.json, renderer zod) and each pair can drift
-        # in a way that renders as an empty component and raises nothing.
+        # FIVE directions over one contract. The contract has three copies
+        # (producer, catalog.json, renderer zod), each pair can drift in a way
+        # that renders as an empty component and raises nothing — and the last
+        # step, zod → view, is where a resolved prop can still be ignored.
         mismatches=(
             compare_emitted(emitted, clients)
             + compare_bindability(producers, bindable)
-            + compare_catalog_and_client(catalog_props(catalog_source), clients)
-            + compare_agent_props(catalog_agent_props(catalog_source), clients)
+            + compare_catalog_and_client(declared, clients)
+            + compare_agent_props(agent, clients)
+            + compare_view_reads(clients, catalog_const_props(catalog_source), views)
             + compare_actions(registered_actions(router_source), emitted_actions(view_sources))
+            + _unexplained_gaps(catalog, set(emitted))
         ),
         compared=compared,
         catalog_total=len(catalog),
         bound_props=sent,
         actions_total=len(registered_actions(router_source)),
         unknown_to_client=sorted(set(emitted) - set(clients)),
+        props_inspected=inspected,
+        no_producer={
+            name: _NO_PRODUCER_REASON[name]
+            for name in sorted(catalog - set(emitted))
+            if name in _NO_PRODUCER_REASON
+        },
     )

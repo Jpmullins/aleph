@@ -34,10 +34,16 @@ def write_summary(report: RunReport, path: str | None = None) -> int:
         sys.stdout.write(json.dumps(serialized, indent=2) + "\n")
     code = report.exit_code()
     if code != 0:
-        sys.stderr.write(
-            f"GATE FAIL: {sum(r.cases_failed + r.cases_errored for r in report.results)} "
-            f"failures across {len(report.results)} datasets\n"
-        )
+        # Two different failures, two different sentences. "0 failures across 0
+        # datasets" was what this printed for an empty selection, which reads
+        # as a pass in a CI log and is the opposite of what happened.
+        if report.evaluated_nothing:
+            sys.stderr.write("GATE FAIL: no datasets were selected, so nothing was evaluated\n")
+        else:
+            sys.stderr.write(
+                f"GATE FAIL: {sum(r.cases_failed + r.cases_errored for r in report.results)} "
+                f"failures across {len(report.results)} datasets\n"
+            )
     return code
 
 

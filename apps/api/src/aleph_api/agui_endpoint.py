@@ -30,6 +30,22 @@ a maintenance liability.
 3. **A run id shared by the frame, the log line and the response header.** A
    user reporting "it broke at 14:22" hands over an id that appears verbatim in
    the container log, instead of a timestamp and a guess.
+
+And, since WS-MEP-6, one more thing this route owns: **which agent answers.**
+
+The endpoint used to be handed one compiled graph, built at boot from one
+globally named model profile, and every project got it until the process
+restarted. So a project could change its models in Settings, the assistant would
+report the change, and nothing about the assistant changed. The route now
+resolves the agent per request — from the project named by the thread id, using
+the same extractor `middleware/agent_scope.py` validated membership against a
+moment earlier — and a resolution that FAILS is reported as a RUN_ERROR frame
+like any other failure, rather than as a 500 with an empty stream.
+
+The authorization defences are untouched and must stay that way. Membership is
+decided at the HTTP boundary by `middleware/agent_scope.py` before this handler
+runs; parsing the thread id here selects a profile to build with, it does not
+grant anything. Both parsers are the same function on purpose.
 """
 
 from __future__ import annotations
@@ -44,10 +60,18 @@ from ag_ui.encoder import EventEncoder
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 
+from aleph_api.middleware.agent_scope import thread_project_id
+
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Awaitable, Callable
+    from uuid import UUID
 
     from fastapi import FastAPI
+
+    #: `(project_id) -> an AG-UI agent`. The project may be None: a direct
+    #: caller with no project-prefixed thread id still gets an assistant, built
+    #: from whatever the boot default binds.
+    AgentForProject = Callable[[UUID | None], Awaitable[Any]]
 
 _log = structlog.get_logger(__name__)
 
@@ -123,12 +147,19 @@ async def _guarded_events(
 
 def add_aleph_agui_endpoint(
     app: FastAPI,
-    agent: Any,
+    agent_for_project: AgentForProject,
     *,
     path: str,
     recorder: Any = None,
+    agent_name: str = "assistant",
 ) -> None:
-    """Mount `agent` at `path` as an AG-UI SSE endpoint that reports failure.
+    """Mount an AG-UI SSE endpoint at `path` that reports failure.
+
+    ``agent_for_project`` is awaited once per request with the project the
+    request names, and returns the agent to run. It is a callable rather than a
+    prebuilt agent because the agent depends on the project's model bindings,
+    which change while the process is up; see
+    `copilot_agent.assistant_agent_resolver`.
 
     ``recorder`` is a :class:`aleph_api.chat_runs.ChatRunRecorder` when one is
     available. It is optional so this route stays testable with no database —
@@ -140,37 +171,79 @@ def add_aleph_agui_endpoint(
     @app.post(path)
     async def aleph_agui_endpoint(input_data: RunAgentInput, request: Request) -> StreamingResponse:
         encoder = EventEncoder(accept=request.headers.get("accept"))
-        # Clone per request: `LangGraphAgent` keeps per-request state on
-        # `self.active_run`, and sharing one instance across concurrent requests
-        # corrupts it. Preserved from upstream deliberately.
-        request_agent = agent.clone()
         run_id = uuid.uuid4().hex
+
+        # Which project's models answer this turn. `thread_project_id` is the
+        # extractor `middleware/agent_scope.py` already used to decide whether
+        # this caller may touch this project, and that decision has been made
+        # before this handler runs — `test_thread_parsers_agree` pins the two
+        # together. Selecting a profile, not granting access.
+        project_id = thread_project_id(getattr(input_data, "thread_id", None))
 
         chat_run = None
         if recorder is not None:
             chat_run = await recorder.begin(getattr(input_data, "thread_id", None))
-            if chat_run is not None:
-                # `LangGraphAgent.config` is a documented constructor field that
-                # `clone()` copies and that the agent merges into the graph's
-                # `configurable`. Setting it on the CLONE is what makes the run id
-                # per-request; setting it on the shared agent would leak one
-                # turn's id into every concurrent turn.
-                #
-                # `configurable`, not `metadata` — that distinction is why
-                # `model_calls.agent_run_id` was NULL for the whole life of that
-                # column, and it is what deepagents forwards to subagents.
-                from aleph_api.chat_runs import RUN_ID_KEY
 
-                existing = dict(getattr(request_agent, "config", None) or {})
-                configurable = dict(existing.get("configurable") or {})
-                configurable[RUN_ID_KEY] = str(chat_run.run_id)
-                existing["configurable"] = configurable
-                request_agent.config = existing
+        # Resolving can fail — an unreachable database, or a profile that binds
+        # no model for a capability (`copilot_agent.NoModelBound`). Before this,
+        # a build failure was an unhandled 500 with an empty stream: the exact
+        # "the run just stopped" shape this module exists to remove, one layer
+        # further out. It is reported in the channel the browser is reading.
+        request_agent: Any = None
+        resolution_error: str | None = None
+        try:
+            resolved = await agent_for_project(project_id)
+            # Clone per request: `LangGraphAgent` keeps per-request state on
+            # `self.active_run`, and sharing one instance across concurrent
+            # requests corrupts it. The resolver's cache hands the SAME agent to
+            # every turn with the same bindings, so this clone is now load
+            # bearing for correctness, not just inherited from upstream.
+            request_agent = resolved.clone()
+        except Exception as exc:
+            _log.exception(
+                "agui.resolution_failed",
+                aleph_run_id=run_id,
+                project_id=str(project_id),
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            resolution_error = f"{type(exc).__name__}: {exc}"
+
+        if request_agent is not None and chat_run is not None:
+            # `LangGraphAgent.config` is a documented constructor field that
+            # `clone()` copies and that the agent merges into the graph's
+            # `configurable`. Setting it on the CLONE is what makes the run id
+            # per-request; setting it on the shared agent would leak one
+            # turn's id into every concurrent turn.
+            #
+            # `configurable`, not `metadata` — that distinction is why
+            # `model_calls.agent_run_id` was NULL for the whole life of that
+            # column, and it is what deepagents forwards to subagents.
+            from aleph_api.chat_runs import RUN_ID_KEY
+
+            existing = dict(getattr(request_agent, "config", None) or {})
+            configurable = dict(existing.get("configurable") or {})
+            configurable[RUN_ID_KEY] = str(chat_run.run_id)
+            existing["configurable"] = configurable
+            request_agent.config = existing
 
         async def stream() -> AsyncIterator[str]:
             status = "completed"
             error: str | None = None
             try:
+                if request_agent is None:
+                    status = "failed"
+                    error = resolution_error
+                    yield encoder.encode(
+                        RunErrorEvent(
+                            type=EventType.RUN_ERROR,
+                            message=(
+                                "The assistant could not be built for this turn: "
+                                f"{resolution_error}. Run id {run_id} — the full "
+                                "traceback is in the API log under that id."
+                            ),
+                        )
+                    )
+                    return
                 async for frame in _guarded_events(request_agent, input_data, encoder, run_id):
                     if RUN_ERROR_MARKER in frame:
                         status = "failed"
@@ -193,4 +266,7 @@ def add_aleph_agui_endpoint(
 
     @app.get(f"{path}/health")
     def health() -> dict[str, Any]:
-        return {"status": "ok", "agent": {"name": getattr(agent, "name", "assistant")}}
+        # The name is a constant now rather than read off an agent instance:
+        # there is no single agent to read it from, and inventing a resolution
+        # to answer a health check would make the probe build a graph.
+        return {"status": "ok", "agent": {"name": agent_name}}

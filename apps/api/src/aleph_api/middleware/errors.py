@@ -37,6 +37,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any, cast
 
+import httpx
 import structlog
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -65,6 +66,15 @@ class ErrorMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         except AlephError as exc:
             return _problem(exc, request)
+        # The two upstream branches are deliberately NOT `httpx.TransportError`,
+        # which also covers `LocalProtocolError` and `UnsupportedProtocol` — a
+        # malformed request or a nonsense scheme is Aleph's own bug and has to
+        # stay a 500, or the one class of defect this branch could hide is
+        # exactly the class it would hide silently.
+        except httpx.TimeoutException as exc:
+            return _upstream(exc, request, 504, "Upstream timed out")
+        except (httpx.NetworkError, httpx.RemoteProtocolError, httpx.ProxyError) as exc:
+            return _upstream(exc, request, 502, "Upstream unavailable")
         except Exception:
             fields = correlation_fields(request)
             # Passed as event kwargs, not bound to contextvars: see the module
@@ -117,6 +127,60 @@ def _respond(body: dict[str, Any], status: int, request_id: str | None) -> Respo
     if request_id:
         resp.headers["x-request-id"] = request_id
     return resp
+
+
+def _upstream_host(exc: httpx.RequestError) -> str | None:
+    """The host Aleph could not reach, or None if httpx did not record one.
+
+    `RequestError.request` RAISES when the exception was constructed without a
+    request, which is exactly the situation this runs in — handling somebody
+    else's failure — so it is read defensively like everything else on this path.
+    """
+    try:
+        url = exc.request.url
+    except RuntimeError:
+        return None
+    port = f":{url.port}" if url.port is not None else ""
+    return f"{url.scheme}://{url.host}{port}"
+
+
+def _upstream(exc: httpx.RequestError, request: Request, status: int, title: str) -> Response:
+    """A dependency Aleph calls over HTTP did not answer. That is not a 500.
+
+    `GET /v1/gateway/models` returned a generic `internal_error` whenever the
+    LiteLLM gateway was down — indistinguishable, to the browser and to CI, from
+    the API having a bug. It is the single route that makes the
+    `python-integration` job red on a runner with no gateway, and the honest
+    answer is 502: the request was fine, the thing behind it was not.
+
+    The upstream is NAMED in the body, because "unavailable" without a host is
+    not actionable — an operator has to know whether it was the gateway,
+    Crossref or the object store before they can do anything about it.
+    """
+    fields = correlation_fields(request)
+    host = _upstream_host(exc)
+    _log.warning(
+        "upstream unavailable",
+        upstream=host,
+        error=str(exc),
+        error_type=type(exc).__name__,
+        status=status,
+        **fields,
+    )
+    body: dict[str, Any] = {
+        "type": "about:blank#upstream_unavailable",
+        "title": title,
+        "status": status,
+        "detail": (
+            f"Aleph could not reach {host}."
+            if host
+            else "Aleph could not reach an upstream service."
+        ),
+        "instance": str(request.url.path),
+    }
+    if host:
+        body["details"] = {"upstream": host}
+    return _respond(body, status, fields["request_id"])
 
 
 def _problem(exc: AlephError, request: Request) -> Response:

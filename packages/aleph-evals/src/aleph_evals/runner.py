@@ -44,7 +44,27 @@ class RunReport:
     def any_failures(self) -> bool:
         return any(r.cases_failed > 0 or r.cases_errored > 0 for r in self.results)
 
+    @property
+    def evaluated_nothing(self) -> bool:
+        """No dataset was selected, so no case ran against any code."""
+        return not self.selected_datasets
+
     def exit_code(self) -> int:
+        # Evaluating NOTHING is not a pass, and the rule belongs HERE.
+        #
+        # It used to live only in `cli.main`, so `run(...).exit_code()` — what
+        # `write_summary`, `gate_main` and every test call — answered 0 for a
+        # run that discovered no datasets, executed no case and touched no
+        # production code. A report object that reports success at having
+        # looked at nothing is the same defect the acceptance gate was
+        # rewritten to remove, one layer down.
+        #
+        # Deliberately not gated on STRICT. A `warning`-tier dataset failing is
+        # a quality signal the SOFT gate is entitled to wave through; a runner
+        # that found no datasets at all is a broken harness, and no gate
+        # setting makes that a pass.
+        if self.evaluated_nothing:
+            return 1
         if self.gate == Gate.STRICT and self.any_failures:
             return 1
         return 0

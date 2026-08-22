@@ -39,6 +39,44 @@ export default mergeConfig(
       restoreMocks: true,
       unstubEnvs: true,
       unstubGlobals: true,
+      /**
+       * The floor, recorded rather than asserted.
+       *
+       * WS-UI-2 c6. `--coverage` reported `MISSING DEPENDENCY` — there was no
+       * provider and no number, so "the web app has tests now" was a count of
+       * tests and said nothing about how much of the app any of them touch.
+       *
+       * Measured 2026-08-22 over 216 tests in 23 files, with exactly the
+       * include/exclude below:
+       *   statements 38.14% (605/1586) · branches 24.51% (344/1403)
+       *   functions  30.87% (159/515)  · lines    39.27% (562/1431)
+       *
+       * The thresholds sit ~1.5 points under each of those. Low enough that
+       * deleting one small test does not fail the build, high enough that
+       * deleting a suite does — a ratchet, not an aspiration. Raise them with
+       * the coverage, never to match a number somebody wants to see.
+       *
+       * `enabled` is deliberately absent: coverage runs on `--coverage`, so
+       * `pnpm test` stays fast and this block costs nothing until asked for.
+       * Requires `@vitest/coverage-v8` — an OPTIONAL peer of vitest, so a tree
+       * without it fails loudly at `--coverage` rather than silently reporting
+       * nothing.
+       */
+      coverage: {
+        provider: "v8",
+        reporter: ["text-summary", "json-summary"],
+        reportsDirectory: "./coverage",
+        // The app, not the tests, and not the generated catalog — a generated
+        // file's coverage measures the generator's test suite, not this one.
+        include: ["src/**/*.{ts,tsx}"],
+        exclude: ["src/**/*.test.{ts,tsx}", "src/a2ui/catalog.ts", "src/vite-env.d.ts"],
+        thresholds: {
+          statements: 36,
+          branches: 23,
+          functions: 29,
+          lines: 37,
+        },
+      },
     },
   }),
 );

@@ -287,6 +287,19 @@ class Judgement:
     scores: list[tuple[int, float]]
     #: `None` when the reply was intelligible. A sentence otherwise.
     malformed: str | None = None
+    #: The model judged real candidates and scored EVERY one of them below the
+    #: relevance floor. A third state, added 2026-08-22, and it is the one that
+    #: was making abstention impossible in practice.
+    #:
+    #: `{"relevant": []}` is the abstention the prompt asks for. What the bound
+    #: model actually does is answer `{"relevant": [{"id": 3, "score": 0}]}` —
+    #: it names a real passage, it understood the scale, and it says the
+    #: passage is unrelated. That is a judgement, and it was landing in
+    #: `malformed` beside genuine notation failures and being discarded.
+    #: Measured on 8 off-corpus questions with `gemma-4-e2b`: 6 of them were
+    #: declined by the model and thrown away, which is why the abstain rate was
+    #: 2/8 rather than 8/8 with the reranker doing exactly what it should.
+    declined: bool = False
 
 
 def _passage_id(value: object) -> int | None:
@@ -322,6 +335,38 @@ def _passage_id(value: object) -> int | None:
     return None
 
 
+def _relevance_score(row: dict[str, Any]) -> float | None:
+    """The score the model gave a listed passage, or None when unreadable.
+
+    **A missing `score` key is not unreadable.** The prompt asks the model to
+    "list EVERY passage you scored 1 or above", so appearing in `relevant` is
+    itself the judgement — the number only refines the ORDER within a set the
+    model has already decided is relevant. Measured on this deployment with
+    `gemma-4-e2b`: of 6 replies discarded as unusable in one 48-question run,
+    4 were `{"relevant": [{"id": 1}, {"id": 2}]}` — two real passage ids, no
+    scores, thrown away whole. That is the same class as the `{"id": [4]}`
+    notation echo `_passage_id` already handles: the model answered, in a
+    shape the parser did not accept.
+
+    Defaulting to the floor rather than to the top of the scale is the
+    conservative reading: it asserts "relevant", which the list membership
+    already says, and nothing more. Ties then fall to `apply_ranking`'s
+    secondary key, the fused candidate index — so a reply with no scores at all
+    is read as a SET of relevant passages in fusion order, which is exactly
+    what the model gave us.
+
+    A score that is PRESENT and unreadable — `"score": "high"`, `"score": true`
+    — is still dropped. There the model tried to say something and we cannot
+    tell what, and inventing a value would be a guess wearing its authority.
+    """
+    if "score" not in row:
+        return MIN_RELEVANT_SCORE
+    score = row["score"]
+    if isinstance(score, bool) or not isinstance(score, int | float):
+        return None
+    return float(score)
+
+
 def parse_judgement(reply: dict[str, Any], candidate_count: int) -> Judgement:
     """`(index, score)` pairs the model actually returned, cleaned — and why not.
 
@@ -333,8 +378,17 @@ def parse_judgement(reply: dict[str, Any], candidate_count: int) -> Judgement:
     list, which is a notation echo and not a guess; read its docstring for what
     that cost before it was handled.
 
-    Dropping every entry is different from being handed none, so the two leave
-    by different doors.
+    Dropping every entry is different from being handed none, and dropping
+    every entry FOR A REASON THE MODEL CHOSE is different again, so the three
+    leave by different doors.
+
+    The middle door is the one that was missing. The previous version said
+    "distinguishing further would need per-entry reasons"; it needs one
+    counter, and without it the reranker could not abstain on the deployment
+    it runs on. `MIN_RELEVANT_SCORE` filtering is not a parse failure — a model
+    that writes `{"id": 3, "score": 0}` has read the passage, understood the
+    scale, and said no. Lumping that in with `{"id": [4]}` threw away the only
+    abstention signal Aleph has (`docs/decisions.md` D10) 6 times out of 8.
     """
     raw = reply.get("relevant")
     if not isinstance(raw, list):
@@ -345,33 +399,55 @@ def parse_judgement(reply: dict[str, Any], candidate_count: int) -> Judgement:
         )
     seen: set[int] = set()
     out: list[tuple[int, float]] = []
+    #: Entries the model wrote that we could not READ. Any of these means the
+    #: reply is not trustworthy as a judgement.
+    unreadable = 0
+    #: Entries we read perfectly well and that say "not relevant".
+    below_floor = 0
     for item in cast("list[object]", raw):
         if not isinstance(item, dict):
+            unreadable += 1
             continue
         row = cast_dict(cast("dict[Any, Any]", item))
         index = _passage_id(row.get("id"))
-        score = row.get("score")
+        score = _relevance_score(row)
         if index is None:
+            unreadable += 1
             continue
-        if isinstance(score, bool) or not isinstance(score, int | float):
+        if score is None:
+            unreadable += 1
             continue
         if not 0 <= index < candidate_count or index in seen:
+            unreadable += 1
             continue
         if float(score) < MIN_RELEVANT_SCORE:
+            below_floor += 1
             continue
         seen.add(index)
         out.append((index, float(score)))
 
     if not out and raw:
-        # A non-empty list from which nothing survived. Every entry was
-        # malformed, out of range, a duplicate, or below the relevance floor —
-        # and only the last of those is a judgement. Distinguishing further
-        # would need per-entry reasons; what matters is that the model did NOT
-        # hand back an empty list, so this is not the abstention signal.
+        if unreadable == 0:
+            # Every entry named a real, distinct candidate and scored it below
+            # the floor. The model answered the question it was asked. Its
+            # answer is "none of these", and `apply_ranking` turns an empty
+            # score list into an empty result — the abstention.
+            #
+            # `unreadable == 0`, not "mostly readable". One notation failure in
+            # the list means we do not know what the model meant about that
+            # passage, and a partial abstention is not one: the safe reading of
+            # an unknown is that something in the list might have been
+            # relevant, so fused order stands.
+            return Judgement([], declined=True)
+        # A non-empty list from which nothing survived, and at least one entry
+        # was unreadable. The model may or may not have judged; we cannot tell,
+        # and reading it as "nothing is relevant" is a broken reranker
+        # reporting perfect humility.
         return Judgement(
             [],
-            f"all {len(raw)} entries were unusable (bad id, bad score, "
-            "duplicate, out of range, or below the relevance floor)",
+            f"all {len(raw)} entries were unusable — {unreadable} unreadable "
+            f"(bad id, bad score, duplicate or out of range), {below_floor} "
+            "scored below the relevance floor",
         )
     return Judgement(out)
 
@@ -532,6 +608,15 @@ class ListwiseLlmReranker:
                 "rks.rerank.unparseable",
                 backend=self.name,
                 error=judgement.malformed,
+                candidates=len(hits),
+                # The reply itself, truncated. "The reply was unreadable"
+                # without the reply is a diagnosis nobody can act on: the two
+                # notation failures this parser now handles (`{"id": [4]}` and
+                # a reply wrapped in a fence) were BOTH found by reading raw
+                # replies off a probe script, because this line did not carry
+                # them. It contains passage indices and integer scores, so
+                # there is nothing here to redact.
+                reply=(content or "")[:200],
                 impact="fused order kept; this is NOT read as an abstention",
             )
             # Recorded on the RERANKER, not only in the log, so `search_corpus`
@@ -545,6 +630,19 @@ class ListwiseLlmReranker:
             # replies" on this deployment, so it is the common case.
             self.skipped_reason = f"{self.name} reply unreadable: {judgement.malformed}"
             return list(hits[:top_k])
+        if judgement.declined:
+            # Said out loud, at info rather than warning: this is the feature
+            # working. It shares a shape with the failure above — an empty
+            # result — and the two were indistinguishable on a trace, so the
+            # one that is correct behaviour gets a line of its own rather than
+            # being read later as "retrieval returned nothing again".
+            _log.info(
+                "rks.rerank.declined",
+                backend=self.name,
+                candidates=len(hits),
+                impact="every candidate scored below the relevance floor; "
+                "returning nothing is the answer, not a failure",
+            )
         return apply_ranking(hits, judgement.scores, top_k=top_k, keep_unranked=self.keep_unranked)
 
 

@@ -699,6 +699,19 @@ async def _node_commit_revision(state: WikiIngestState) -> dict:
                     ],
                 )
 
+            # An embedder, even though `_node_source_page_compose` currently
+            # emits `claims=[]`.
+            #
+            # Not defensive padding. `write_claims` returns immediately on an
+            # empty list and `_embed_claim_texts` makes NO gateway call for an
+            # empty batch, so this costs nothing today — and the day the
+            # compose step emits claims again, they arrive with vectors instead
+            # of arriving NULL and needing a backfill nobody runs. The
+            # alternative, `embed=None` plus a comment saying "there are no
+            # claims here", is a comment that stops being true the moment
+            # somebody changes the producer three hundred lines up, and
+            # `test_claim_writers_declare_an_embedder.py` cannot tell the
+            # difference.
             result = await svc.commit_revision(
                 principal=ctx.principal,
                 ledger=ledger,
@@ -713,6 +726,7 @@ async def _node_commit_revision(state: WikiIngestState) -> dict:
                 wikilinks=sd.wikilinks,
                 commit_message=sd.commit_message,
                 respect_hand_edits=True,
+                embed=(await _embed_claim_texts(state, [c.text for c in sd.claims])).get,
             )
             committed.append(result.revision_id)
 
@@ -775,6 +789,9 @@ async def _node_commit_revision(state: WikiIngestState) -> dict:
                     wikilinks=draft.wikilinks,
                     commit_message=draft.commit_message,
                     respect_hand_edits=True,
+                    # Same reasoning as the source page above: free while a
+                    # stub carries no claims, correct if one ever does.
+                    embed=(await _embed_claim_texts(state, [c.text for c in draft.claims])).get,
                 )
                 committed.append(r.revision_id)
 

@@ -290,12 +290,13 @@ export const ChartCardApi = {
   schema: z3.object({
     title: CommonSchemas.DynamicString.optional(),
     chart_id: CommonSchemas.DynamicString.optional(),
-    // Streaming-route URI vega-embed can load (WP-4c) — no self-fetch here.
-    chart_url: CommonSchemas.DynamicString.optional(),
-    artifact_version_id: CommonSchemas.DynamicString.optional(),
     // Vega-Lite spec is a whole-object literal — passthrough.
     vega_lite_spec: z3.any().optional(),
-    open_action: CommonSchemas.Action.optional(),
+    // No `chart_url`, no `artifact_version_id`, no `open_action`. The first two
+    // said the card could reach a URL it is forbidden to fetch (see the loader
+    // in ChartCard.tsx) and nothing ever sent either; `open_action` was
+    // REQUIRED of every producer and the view fires no Open button, because the
+    // ActionRouter's `open` has no branch that could route a chart anywhere.
   }),
 };
 export const ChartCardImpl = createComponentImplementation(
@@ -310,7 +311,6 @@ export const ImageCardApi = {
     src: CommonSchemas.DynamicString,
     title: CommonSchemas.DynamicString.optional(),
     alt: CommonSchemas.DynamicString.optional(),
-    artifact_version_id: CommonSchemas.DynamicString.optional(),
   }),
 };
 export const ImageCardImpl = createComponentImplementation(
@@ -323,7 +323,6 @@ export const HtmlFrameCardApi = {
   schema: z3.object({
     src: CommonSchemas.DynamicString,
     title: CommonSchemas.DynamicString.optional(),
-    artifact_version_id: CommonSchemas.DynamicString.optional(),
   }),
 };
 export const HtmlFrameCardImpl = createComponentImplementation(
@@ -340,7 +339,6 @@ export const TableCardApi = {
     columns: z3.array(z3.any()).optional(),
     rows: z3.array(z3.any()).optional(),
     _placeholder: CommonSchemas.DynamicBoolean.optional(),
-    open_action: CommonSchemas.Action.optional(),
   }),
 };
 export const TableCardImpl = createComponentImplementation(
@@ -408,7 +406,6 @@ export const DiffCardApi = {
     page_id: CommonSchemas.DynamicString,
     from_body_md: CommonSchemas.DynamicString.optional(),
     to_body_md: CommonSchemas.DynamicString.optional(),
-    open_action: CommonSchemas.Action.optional(),
   }),
 };
 export const DiffCardImpl = createComponentImplementation(
@@ -550,7 +547,6 @@ export const BriefsSurfaceApi = {
   name: "BriefsSurface",
   schema: z3.object({
     badge_count: CommonSchemas.DynamicNumber.optional(),
-    filters: z3.any().optional(),
     children: z3.array(z3.any()).optional(),
   }),
 };

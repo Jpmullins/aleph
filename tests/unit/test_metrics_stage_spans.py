@@ -31,18 +31,63 @@ So the spans added were the ones that answer a question the route span cannot,
 rather than however many it takes to reach fifteen. These tests pin the two
 properties that make them worth having: the legs are separately timed, and a
 leg that fails is recorded as a failure rather than as a fast success.
+
+## The second half: inside an ordinary request
+
+`/readyz` was only half the answer. Re-measured 2026-08-22 with an in-memory
+exporter on the booted app, one `GET /v1/projects/{id}/sources` produced **nine
+spans and not one of them Aleph's**: the route span (9.12 ms), three SQLAlchemy
+spans all named `SELECT`, two named `connect`, and three `http send`. Every
+millisecond inside that 9 was unattributable, and — because `start_span` is the
+only thing that records `aleph_stage_duration_seconds` — the busiest code path
+in the process contributed nothing to any histogram.
+
+Four stages now cover it, chosen the same way: `api.authenticate` (a database
+round trip on every request, and a write on first sight), `api.project_scope`
+(111 of the 115 project-scoped routes run it), `api.agent_scope` (reads the
+whole body and queries membership before a chat turn starts) and
+`api.stream_access` (the SSE membership check that once held a pool connection
+for the life of a stream). The same request now reads
+`api.authenticate 2.57 ms + api.project_scope 2.77 ms` inside an 8.22 ms route
+span. `tests/integration/test_route_stage_metrics.py` proves those series reach
+`/metrics` over the wire.
+
+`outcome="error"` on the two scope stages means **the check refused** — a
+mis-scoped credential, a non-member, a write to an archived project — not that
+Aleph malfunctioned. That is deliberate: "how often is someone being told their
+project does not exist" is the number you want when a person reports they
+cannot see their project, and it is invisible in a route-level 404 count that
+cannot say which layer produced it.
 """
 
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 from typing import Any, cast
 
 from fastapi import Request
 
+from aleph_api.middleware.auth import STAGE_AGENT_SCOPE, STAGE_AUTHENTICATE
+from aleph_api.middleware.project_scope import STAGE_PROJECT_SCOPE, STAGE_STREAM_ACCESS
 from aleph_api.routes.health import READYZ_STAGES, readyz
 from aleph_observability.metrics import STAGE_DURATION, init_metrics, sample_value
+
+#: The request-path stages, by the constants the middleware actually passes.
+#: Imported rather than spelled out, so renaming a constant cannot leave this
+#: test asserting a string nothing emits any more.
+REQUEST_STAGES = (
+    STAGE_AUTHENTICATE,
+    STAGE_AGENT_SCOPE,
+    STAGE_PROJECT_SCOPE,
+    STAGE_STREAM_ACCESS,
+)
+
+#: The package whose `start_span` names are swept below.
+_MIDDLEWARE_DIR = (
+    Path(__file__).resolve().parents[2] / "apps" / "api" / "src" / "aleph_api" / "middleware"
+)
 
 # --- stubs ------------------------------------------------------------------
 
@@ -180,3 +225,57 @@ async def test_the_stage_names_are_literals_and_there_are_six(tmp_path: Path) ->
     assert len(set(READYZ_STAGES)) == 6
     assert all(stage.startswith("readyz.") for stage in READYZ_STAGES)
     assert all("{" not in stage and "%" not in stage for stage in READYZ_STAGES)
+
+
+# --- the request path -------------------------------------------------------
+
+
+def _middleware_start_span_names() -> list[tuple[str, str]]:
+    """`(file, first-argument-source)` for every `start_span(` call in the package."""
+    found: list[tuple[str, str]] = []
+    for path in sorted(_MIDDLEWARE_DIR.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+            if name != "start_span" or not node.args:
+                continue
+            found.append((path.name, ast.unparse(node.args[0])))
+    return found
+
+
+def test_every_middleware_span_is_named_by_one_of_the_four_constants() -> None:
+    """The cardinality rule, enforced rather than written down.
+
+    A span name is a metric label. `start_span(f"api.project.{project_id}")`
+    would be accepted by every other test in this repo and would grow the
+    exposition without bound — the failure mode WS-P9's own risk note names.
+    So the sweep requires the argument to be one of four module constants: a
+    literal string is refused too, because a literal is how the fifth stage
+    arrives without anyone deciding it should exist.
+    """
+    allowed = {
+        "STAGE_AUTHENTICATE",
+        "STAGE_AGENT_SCOPE",
+        "STAGE_PROJECT_SCOPE",
+        "STAGE_STREAM_ACCESS",
+    }
+    calls = _middleware_start_span_names()
+    assert calls, "no start_span call found in the middleware package — the sweep is blind"
+    offenders = [(f, arg) for f, arg in calls if arg not in allowed]
+    assert not offenders, (
+        f"start_span called with a name that is not one of {sorted(allowed)}: {offenders}"
+    )
+
+
+def test_the_four_stage_names_are_bounded_literals() -> None:
+    """Four names, all distinct, all `api.`-prefixed, none interpolated."""
+    assert len(REQUEST_STAGES) == 4
+    assert len(set(REQUEST_STAGES)) == 4
+    assert all(stage.startswith("api.") for stage in REQUEST_STAGES)
+    assert all("{" not in stage and "%" not in stage for stage in REQUEST_STAGES)
+    # And they must not collide with the readyz set, or two unrelated code paths
+    # would share one histogram series.
+    assert not set(REQUEST_STAGES) & set(READYZ_STAGES)

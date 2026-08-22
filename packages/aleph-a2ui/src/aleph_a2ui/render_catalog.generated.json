@@ -488,7 +488,6 @@
         "badge_count": {
           "$ref": "#/$defs/DynamicNumber"
         },
-        "filters": {},
         "children": {
           "type": "array"
         }
@@ -575,16 +574,7 @@
         "chart_id": {
           "$ref": "#/$defs/DynamicString"
         },
-        "chart_url": {
-          "$ref": "#/$defs/DynamicString"
-        },
-        "artifact_version_id": {
-          "$ref": "#/$defs/DynamicString"
-        },
-        "vega_lite_spec": {},
-        "open_action": {
-          "$ref": "#/$defs/Action"
-        }
+        "vega_lite_spec": {}
       },
       "required": [
         "id",
@@ -993,9 +983,6 @@
         },
         "to_body_md": {
           "$ref": "#/$defs/DynamicString"
-        },
-        "open_action": {
-          "$ref": "#/$defs/Action"
         }
       },
       "required": [
@@ -1168,9 +1155,6 @@
           "$ref": "#/$defs/DynamicString"
         },
         "title": {
-          "$ref": "#/$defs/DynamicString"
-        },
-        "artifact_version_id": {
           "$ref": "#/$defs/DynamicString"
         }
       },
@@ -1430,9 +1414,6 @@
           "$ref": "#/$defs/DynamicString"
         },
         "alt": {
-          "$ref": "#/$defs/DynamicString"
-        },
-        "artifact_version_id": {
           "$ref": "#/$defs/DynamicString"
         }
       },
@@ -1859,9 +1840,6 @@
         },
         "_placeholder": {
           "$ref": "#/$defs/DynamicBoolean"
-        },
-        "open_action": {
-          "$ref": "#/$defs/Action"
         }
       },
       "required": [

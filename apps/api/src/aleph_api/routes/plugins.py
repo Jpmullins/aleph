@@ -35,6 +35,7 @@ from pydantic import BaseModel
 from aleph_api.deps import PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
 from aleph_core.errors import NotFound
+from aleph_runtime.ui_contributions import TrustTier
 from aleph_security.roles import ProjectRole, require_at_least
 
 router = APIRouter(prefix="/v1/projects", tags=["plugins"])
@@ -52,6 +53,16 @@ class CapabilityOut(BaseModel):
     plugin_id: str | None
     removable: bool
     would_also_stop: list[str]
+    #: Where this capability came from. `core` is anything mounted from the boot
+    #: manifest; `verified` was reviewed by a person; `authored` was written by
+    #: an agent. Derived, never asserted by the plugin: a capability with no
+    #: `plugin_id` is core BECAUSE it has no handle, and everything else falls
+    #: back to `authored` rather than to the safest-looking value.
+    #:
+    #: A DISPLAY attribute, deliberately. Nothing branches on it — see
+    #: `aleph_runtime.ui_contributions` for why the approval gate the plan
+    #: sketched was not built here.
+    trust: TrustTier
 
 
 class AuthorPluginIn(BaseModel):
@@ -74,7 +85,47 @@ def _api(request: Request) -> Any:
     return AgentPluginAPI(kernel)
 
 
-def _view(view: Any) -> CapabilityOut:
+def _declared_trust() -> dict[str, TrustTier]:
+    """Capability name → the trust its UI contribution declared.
+
+    Keyed by CAPABILITY name, not row name. A plugin row called `base-notes` is
+    mounted as `skill.base-notes` while its contribution is registered under
+    `base-notes`, and looking it up by the row name matches nothing — the same
+    mismatch that once made `PluginService.disable` skip the kernel guardrail
+    entirely, which is why `skill_capability_name` exists rather than an
+    f-string at each site.
+    """
+    from aleph_kernel.skills import skill_capability_name
+    from aleph_runtime.ui_contributions import UI_CONTRIBUTIONS
+
+    return {skill_capability_name(c.plugin_id): c.trust for c in UI_CONTRIBUTIONS.all()}
+
+
+def _trust_of(view: Any, declared: dict[str, TrustTier]) -> TrustTier:
+    """`core` is DERIVED from unaddressability, and is not claimable.
+
+    A capability reports `core` exactly when it has no `plugin_id`, and a
+    `plugin_id` is minted only by `register_dynamic`. So the tier rests on the
+    same guardrail as the rest of this surface rather than on a second, weaker
+    one: a contribution that sets `trust="core"` on itself is downgraded here,
+    because an agent-installed plugin describing itself as shipped-with-Aleph is
+    the one direction in which a wrong answer flatters.
+
+    `verified` — reviewed by a person — passes through, and today nothing
+    writes it: `PluginService._contribute_ui` is the only registration site in
+    the tree and it always stamps `authored`. This reads the registry rather
+    than hardcoding that, because the registry is where the answer will come
+    from when a reviewed contribution exists, and a hardcoded `authored` would
+    then be wrong in silence.
+    """
+    if view.plugin_id is None:
+        return "core"
+    claimed = declared.get(view.name)
+    return "authored" if claimed is None or claimed == "core" else claimed
+
+
+def _view(view: Any, declared: dict[str, TrustTier] | None = None) -> CapabilityOut:
+    declared = _declared_trust() if declared is None else declared
     return CapabilityOut(
         name=view.name,
         state=view.state,
@@ -84,6 +135,7 @@ def _view(view: Any) -> CapabilityOut:
         plugin_id=view.plugin_id,
         removable=view.removable,
         would_also_stop=list(getattr(view, "would_also_stop", ()) or ()),
+        trust=_trust_of(view, declared),
     )
 
 
@@ -93,7 +145,8 @@ async def list_capabilities(
 ) -> list[CapabilityOut]:
     """Every capability, with the cost of removing it already computed."""
     require_at_least(principal, project_id, at_least=ProjectRole.VIEWER)
-    return [_view(v) for v in _api(request).inspect()]
+    declared = _declared_trust()
+    return [_view(v, declared) for v in _api(request).inspect()]
 
 
 @router.get("/{project_id}/plugins/{plugin_id}/removal-preview", response_model=CapabilityOut)
@@ -160,8 +213,18 @@ async def author_plugin(
     )
     await session.commit()
 
+    # The kernel mounts a skill as `skill.<row name>`, so comparing `view.name`
+    # to `row.name` never matches. It did exactly that, which meant this route
+    # ALWAYS fell through to the "installed but not mounted" branch below and
+    # always answered `plugin_id: null` — for a plugin that had in fact mounted
+    # successfully. The caller was therefore never given the handle, so the
+    # DELETE route was unreachable from this API's own output, which is why the
+    # second half of this mismatch (`disable_plugin`, below) went unnoticed.
+    from aleph_kernel.skills import skill_capability_name
+
+    capability = skill_capability_name(row.name)
     for view in _api(request).inspect():
-        if view.name == row.name:
+        if view.name == capability:
             return _view(view)
     # Installed durably but not mounted — the honest report, and the state a
     # process without a kernel legitimately reaches.
@@ -174,6 +237,11 @@ async def author_plugin(
         plugin_id=None,
         removable=True,
         would_also_stop=[],
+        # Not `core`. This branch is reached only by `author_plugin`, so the
+        # thing being described was written by an agent — reporting the
+        # trusted tier for a plugin that failed to mount would be the one
+        # place the tier could be wrong in the flattering direction.
+        trust="authored",
     )
 
 
@@ -224,12 +292,20 @@ async def disable_plugin(
         )
 
     from aleph_db.repos.ledger import LedgerWriter
+    from aleph_kernel.skills import skill_name_from_capability
     from aleph_runtime.plugin_service import PluginService
 
-    name = next(
+    # The ROW name, not the capability name. `inspect()` reports
+    # `skill.<name>`; `PluginService.disable` selects on `Plugin.name`, which
+    # holds `<name>`. Passing the capability name matched no row, so the row
+    # stayed `installed` and the `plugin.disable` ledger event was never
+    # written — while this route still returned `{"disabled": true}`, because
+    # the kernel half really had succeeded.
+    capability = next(
         (v.name for v in api.inspect() if v.plugin_id == str(plugin_id)),
         None,
     )
+    name = skill_name_from_capability(capability) if capability else None
     if name:
         await PluginService(session).disable(
             project_id=project_id,

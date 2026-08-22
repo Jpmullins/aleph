@@ -158,6 +158,24 @@ MIN_HANDLERS_REACHED = 58
 #: unmounts half the routers cannot make this suite pass by having less to do.
 MIN_ROUTE_METHODS = 120
 
+#: The one 5xx a route may answer, and the sentence it has to say to earn it.
+#:
+#: `GET /v1/gateway/models` answered a generic 500 whenever the LiteLLM gateway
+#: was unreachable — which is every CI runner, because the `python-integration`
+#: job has no gateway. "The API has a bug" and "the thing behind the API is
+#: down" are different facts and this test exists to catch the first, so
+#: `ErrorMiddleware` now maps an httpx transport failure to 502/504 carrying
+#: this problem `type`, and only that is allowed through.
+#:
+#: This is not a softening. Reaching that branch requires the exception to be
+#: `httpx.NetworkError`, `TimeoutException`, `RemoteProtocolError` or
+#: `ProxyError` — a dependency Aleph *called* not answering. Every bug in
+#: Aleph's own code, and httpx's own `LocalProtocolError` / `UnsupportedProtocol`
+#: (a request Aleph built wrong), still lands in `except Exception`, still
+#: answers `about:blank#internal_error`, and still fails here.
+UPSTREAM_PROBLEM = "about:blank#upstream_unavailable"
+UPSTREAM_STATUSES = frozenset({502, 504})
+
 #: Rows deleted for the throwaway project, in order. `action_ledger_events` and
 #: `ledger_chain_heads` are deliberately absent: the ledger is append-only and
 #: enforced by a database trigger, and a fixture that switches an invariant off
@@ -301,9 +319,42 @@ def test_no_route_answers_500(run: Run) -> None:
     that it names nothing; a test reporting only the path would repeat the
     defect it exists to catch.
     """
-    failures = [o for o in run.outcomes if o.status is not None and o.status >= 500]
+    failures = [
+        o
+        for o in run.outcomes
+        if o.status is not None and o.status >= 500 and not _is_named_upstream_failure(o)
+    ]
     assert not failures, "\n".join(
         f"{o.status} {o.method} {o.path}\n    {o.body}" for o in failures
+    )
+
+
+def _is_named_upstream_failure(outcome: Outcome) -> bool:
+    """A 5xx that says which host did not answer, rather than nothing at all."""
+    return (
+        outcome.status in UPSTREAM_STATUSES
+        and UPSTREAM_PROBLEM in outcome.body
+        and '"upstream"' in outcome.body
+    )
+
+
+def test_the_upstream_exemption_is_never_a_bare_five_hundred(run: Run) -> None:
+    """The escape hatch above cannot be widened by relabelling a 500.
+
+    Two independent ways it could rot, both checked against the run that
+    actually happened: a 502/504 that carries the generic `internal_error` body
+    (something re-mapped the status without going through the transport branch),
+    and a 502/504 that names no host (the branch fired but `details.upstream` is
+    gone, which is the half an operator needs).
+    """
+    suspect = [
+        o
+        for o in run.outcomes
+        if o.status in UPSTREAM_STATUSES and not _is_named_upstream_failure(o)
+    ]
+    assert not suspect, "\n".join(
+        f"{o.status} {o.method} {o.path} — 5xx exempted without naming an upstream\n    {o.body}"
+        for o in suspect
     )
 
 

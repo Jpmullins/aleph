@@ -61,8 +61,39 @@ def test_every_subagent_gets_the_window_too() -> None:
     assert compute_summarization_defaults(model)["trigger"] == ("fraction", 0.85)
 
 
-def test_an_unbound_capability_gets_no_invented_window() -> None:
-    """A guessed 200k is the same defect as a fixed 170k, wearing a profile."""
+def test_a_binding_that_declares_no_window_gets_none_invented() -> None:
+    """A guessed 200k is the same defect as a fixed 170k, wearing a profile.
+
+    This is the case the plan's correction #13 names: a gateway that reports no
+    context window for a model. `ModelBindingIn.max_input_tokens` defaults to
+    200_000 and `resolve_binding` substitutes the same number for an absent key,
+    so reading the window through either would report 200k for a model nobody
+    measured. `_resolve_agent_context_window` reads the RAW binding instead and
+    leaves it unset.
+    """
+    copilot_agent._runtime["agent_bindings"] = {
+        "synthesis": {"model": "a-model-of-unknown-size", "provider": "litellm"}
+    }
     model = copilot_agent._gateway_chat_model(_settings(), purpose="test")
+    assert model.model_name == "a-model-of-unknown-size"
     assert model.profile is None
     assert compute_summarization_defaults(model)["trigger"] == ("tokens", 170_000)
+
+
+def test_a_window_of_zero_is_not_a_window() -> None:
+    """`profile={"max_input_tokens": 0}` would make every trigger 0 tokens."""
+    copilot_agent._runtime["agent_bindings"] = {
+        "synthesis": {"model": "a-model", "max_input_tokens": 0}
+    }
+    assert copilot_agent._gateway_chat_model(_settings(), purpose="test").profile is None
+
+
+def test_nothing_bound_at_all_is_an_error_not_a_window() -> None:
+    """Building against no profile fails; it does not build with no window.
+
+    Pops the directory fixture's bindings deliberately — the unbound case has to
+    stay reachable, or the conftest would be hiding the behaviour it supports.
+    """
+    copilot_agent._runtime.pop("agent_bindings", None)
+    with pytest.raises(copilot_agent.NoModelBound):
+        copilot_agent._gateway_chat_model(_settings(), purpose="test")

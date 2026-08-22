@@ -39,7 +39,7 @@ def setup_copilotkit(
     checkpointer: object = None,
     session_maker: object = None,
 ) -> None:
-    """Build the assistant Deep Agent and mount its AG-UI endpoint.
+    """Mount the assistant's AG-UI endpoint over a per-project agent resolver.
 
     Called from the FastAPI lifespan startup (not app construction): the agent's
     Postgres-backed memory `store` must be created inside the running event loop,
@@ -49,17 +49,22 @@ def setup_copilotkit(
     Postgres saver in production; without it every restart drops the agent's
     history and plan.
     """
-    from copilotkit import LangGraphAGUIAgent
-
     from aleph_api.agui_endpoint import add_aleph_agui_endpoint
     from aleph_api.chat_runs import ChatRunRecorder
     from aleph_api.copilot_agent import (
+        ASSISTANT_AGENT_NAME,
         _dev_actor_id,
         _project_id_from_thread_id,
-        build_assistant_deep_agent,
+        assistant_agent_resolver,
     )
 
-    graph = build_assistant_deep_agent(settings=settings, store=store, checkpointer=checkpointer)
+    # Not one graph. WS-MEP-6: the agent is resolved per request from the
+    # project's own model bindings, so a profile switch takes effect on the next
+    # turn instead of at the next restart. The resolver holds a bounded LRU of
+    # compiled graphs, so identical resolutions still compile once.
+    agent_for_project = assistant_agent_resolver(
+        settings=settings, store=store, checkpointer=checkpointer
+    )
     # Every turn becomes an `agent_runs` row. Nothing about a chat turn was
     # written down before this: no record that it happened, which tools it
     # called, how long they took, which subagent did what, or how it ended —
@@ -76,14 +81,8 @@ def setup_copilotkit(
     )
     add_aleph_agui_endpoint(
         app,
-        LangGraphAGUIAgent(
-            name="assistant",
-            description=(
-                "Aleph research assistant — answers from the project's "
-                "compiled wiki, cites pages, and renders interactive A2UI cards."
-            ),
-            graph=graph,
-        ),
+        agent_for_project,
         path=_AGENT_PATH,
         recorder=recorder,
+        agent_name=ASSISTANT_AGENT_NAME,
     )

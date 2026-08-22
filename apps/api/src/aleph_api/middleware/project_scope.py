@@ -14,10 +14,18 @@ from fastapi import Depends, Path, Request
 from aleph_api.deps import PrincipalDep, SessionDep
 from aleph_core.errors import Conflict, NotFound
 from aleph_db.repos.project import get_member_role_and_status
+from aleph_observability.tracing import start_span
 from aleph_security.principal import Principal
 
 #: HTTP methods that only read. Everything else mutates.
 _READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+#: Stage names for the request-path spans in this module. See
+#: `aleph_api.middleware.auth` for why these are constants and not inline
+#: strings, and `tests/unit/test_metrics_stage_spans.py` for the sweep that
+#: enforces it.
+STAGE_PROJECT_SCOPE = "api.project_scope"
+STAGE_STREAM_ACCESS = "api.stream_access"
 
 #: Statuses that accept writes. `archived` is deliberately read-only — that is
 #: what archiving is for — and `deleted` accepts nothing but its own restore.
@@ -137,16 +145,23 @@ async def project_scope_dep(
     if they are a member but the project is archived or deleted and the request
     would write.
     """
-    _assert_credential_scope(principal, project_id)
-    found = await get_member_role_and_status(
-        session, project_id=project_id, user_id=principal.user_id
-    )
-    if found is None:
-        msg = f"project not found: {project_id}"
-        raise NotFound(msg)
-    role, status = found
-    _assert_project_writable(request, project_id, status)
-    principal.cache_role(project_id, role)
+    # 111 of the 115 project-scoped routes run this, so it is the single
+    # busiest piece of Aleph's own code on the request path — and it was
+    # invisible: the SQLAlchemy instrumentation names its query `SELECT`, same
+    # as the handler's. The span separates "the scope check was slow" from "the
+    # handler was slow", and `aleph_stage_duration_seconds{stage=
+    # "api.project_scope"}` makes the first one alertable.
+    with start_span(STAGE_PROJECT_SCOPE, **{"aleph.write": request.method not in _READ_METHODS}):
+        _assert_credential_scope(principal, project_id)
+        found = await get_member_role_and_status(
+            session, project_id=project_id, user_id=principal.user_id
+        )
+        if found is None:
+            msg = f"project not found: {project_id}"
+            raise NotFound(msg)
+        role, status = found
+        _assert_project_writable(request, project_id, status)
+        principal.cache_role(project_id, role)
     return project_id
 
 
@@ -167,18 +182,24 @@ async def assert_stream_access(request: Request, project_id: UUID, principal: Pr
     Streams bypass `ProjectScopeDep` entirely, so the credential-scope check has
     to be repeated here — otherwise the SSE endpoints become the hole.
     """
-    _assert_credential_scope(principal, project_id)
-    maker = request.app.state.session_maker
-    async with maker() as session:
-        found = await get_member_role_and_status(
-            session, project_id=project_id, user_id=principal.user_id
-        )
-    if found is None:
-        msg = f"project not found: {project_id}"
-        raise NotFound(msg)
-    role, status = found
-    # Streams are reads, so the write rule never fires here in practice — but it
-    # is applied rather than skipped, because "streams bypass ProjectScopeDep
-    # entirely" is exactly how the credential-scope hole got in.
-    _assert_project_writable(request, project_id, status)
-    principal.cache_role(project_id, role)
+    # Its own stage, not `api.project_scope`: this is the path that exhausted
+    # the connection pool by holding a session for the life of an SSE stream,
+    # and a shared label would average that incident away against 111 ordinary
+    # requests.
+    with start_span(STAGE_STREAM_ACCESS):
+        _assert_credential_scope(principal, project_id)
+        maker = request.app.state.session_maker
+        async with maker() as session:
+            found = await get_member_role_and_status(
+                session, project_id=project_id, user_id=principal.user_id
+            )
+        if found is None:
+            msg = f"project not found: {project_id}"
+            raise NotFound(msg)
+        role, status = found
+        # Streams are reads, so the write rule never fires here in practice —
+        # but it is applied rather than skipped, because "streams bypass
+        # ProjectScopeDep entirely" is exactly how the credential-scope hole
+        # got in.
+        _assert_project_writable(request, project_id, status)
+        principal.cache_role(project_id, role)

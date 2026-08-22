@@ -21,7 +21,9 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any
+from uuid import UUID, uuid4
 
 from ag_ui.core.events import EventType, RunErrorEvent, RunFinishedEvent, RunStartedEvent
 from fastapi import FastAPI
@@ -68,8 +70,19 @@ class _StubAgent:
 
 
 def _app(agent: _StubAgent) -> FastAPI:
+    """Mount the route over a resolver that always answers with `agent`.
+
+    The route takes a resolver rather than an agent since WS-MEP-6: which agent
+    answers depends on the project's model bindings, which change while the
+    process is up. These tests are about the envelope, so the resolver is
+    constant — `test_agent_profile_switch.py` is where a varying one is driven.
+    """
     app = FastAPI()
-    add_aleph_agui_endpoint(app, agent, path=PATH)
+
+    async def _resolve(_project_id: UUID | None) -> _StubAgent:
+        return agent
+
+    add_aleph_agui_endpoint(app, _resolve, path=PATH)
     return app
 
 
@@ -186,3 +199,105 @@ async def test_the_health_route_still_answers() -> None:
         response = await client.get(f"{PATH}/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# WS-MEP-6: resolving WHICH agent answers can itself fail.
+# ---------------------------------------------------------------------------
+
+
+def _failing_app(exc: Exception) -> FastAPI:
+    app = FastAPI()
+
+    async def _resolve(_project_id: UUID | None) -> Any:
+        raise exc
+
+    add_aleph_agui_endpoint(app, _resolve, path=PATH)
+    return app
+
+
+async def test_a_resolution_failure_is_reported_as_run_error() -> None:
+    """Building the agent is now part of the turn, so it fails like one.
+
+    Before the resolver, the graph existed before the first request and could
+    not fail during one. Now an unreachable database or a profile binding no
+    model raises inside the handler — and an unhandled raise there is a 500 with
+    an empty body, which is the "the stream just stopped" shape this whole
+    module exists to remove, one layer further out.
+    """
+    frames = _frames((await _post(_failing_app(RuntimeError("no model is bound")))).text)
+    assert frames, "a resolution failure produced no frames at all"
+    assert frames[-1]["type"] == EventType.RUN_ERROR.value
+    assert "no model is bound" in frames[-1]["message"]
+
+
+async def test_a_resolution_failure_carries_the_same_searchable_id() -> None:
+    app = _failing_app(RuntimeError("the profile could not be read"))
+    with capture_logs() as captured:
+        response = await _post(app)
+
+    message = _frames(response.text)[-1]["message"]
+    found = re.search(r"[0-9a-f]{32}", message)
+    assert found, f"the RUN_ERROR message carries no searchable id: {message}"
+    assert response.headers.get(RUN_ID_HEADER) == found.group(0)
+    assert any(entry.get("event") == "agui.resolution_failed" for entry in captured), (
+        f"the resolution failure was not logged under its own event: {captured}"
+    )
+
+
+async def test_a_resolution_failure_still_closes_the_recorded_run() -> None:
+    """Otherwise the row sits in `running` until the reaper, saying nothing."""
+
+    class _Recorder:
+        def __init__(self) -> None:
+            self.finished: list[tuple[str, str | None]] = []
+
+        async def begin(self, _thread_id: object) -> Any:
+            return SimpleNamespace(run_id=uuid4())
+
+        async def finish(self, _run: Any, *, status: str, error_text: str | None) -> None:
+            self.finished.append((status, error_text))
+
+    app = FastAPI()
+    recorder = _Recorder()
+
+    async def _resolve(_project_id: UUID | None) -> Any:
+        msg = "the gateway endpoint row is gone"
+        raise RuntimeError(msg)
+
+    add_aleph_agui_endpoint(app, _resolve, path=PATH, recorder=recorder)
+    await _post(app)
+
+    assert recorder.finished, "the run was begun and never finished"
+    status, error_text = recorder.finished[-1]
+    assert status == "failed"
+    assert error_text is not None and "the gateway endpoint row is gone" in error_text
+
+
+async def test_the_project_named_by_the_thread_id_is_what_gets_resolved() -> None:
+    """The resolver is asked about the project, not about the raw thread id.
+
+    Uses `middleware/agent_scope.thread_project_id` — the extractor the
+    membership check already ran against — so the profile the turn is built from
+    and the project the caller was authorised for cannot be two different
+    things.
+    """
+    project_id = uuid4()
+    seen: list[UUID | None] = []
+    app = FastAPI()
+
+    async def _resolve(pid: UUID | None) -> _StubAgent:
+        seen.append(pid)
+        return _StubAgent(
+            [
+                RunStartedEvent(threadId="t", runId="r"),
+                RunFinishedEvent(threadId="t", runId="r"),
+            ]
+        )
+
+    add_aleph_agui_endpoint(app, _resolve, path=PATH)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://t") as client:
+        await client.post(PATH, json={**RUN_INPUT, "threadId": f"proj:{project_id}:chat-1"})
+
+    assert seen == [project_id]

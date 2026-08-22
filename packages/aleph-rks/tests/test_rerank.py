@@ -883,3 +883,205 @@ def test_the_prompt_tells_the_model_the_id_is_a_bare_integer() -> None:
     assert '"id": [7]' in rendered, "the prompt must show the shape it is rejecting"
     assert "BARE INTEGER" in rendered
     assert "EVERY passage" in rendered
+
+
+# ---------------------------------------------------------------------------
+# Scoring everything zero is an ANSWER, not a parse failure (WS-RS5 c6)
+# ---------------------------------------------------------------------------
+#
+# The prompt asks for `{"relevant": []}` when nothing is relevant. Measured on
+# this deployment with `gemma-4-e2b` bound to `Capability.RERANK`, the model
+# almost never does that: it names a real passage and gives it score 0. Every
+# one of those replies landed in `malformed` beside genuine notation failures
+# and was discarded as unreadable, so the abstain rate on 8 off-corpus
+# questions was 2/8 while the model had actually declined 8 of 8.
+
+
+def test_scoring_every_candidate_below_the_floor_is_an_abstention() -> None:
+    """The model read the passages and said no. That is a judgement.
+
+    `id` names a real candidate, `score` is a number on the stated scale, and
+    the number is 0. Nothing about that reply is unreadable — the only reason
+    no pair survived is the relevance floor, which is a filter this code
+    applies to a judgement the model made.
+    """
+    judgement = parse_judgement({"relevant": [{"id": 0, "score": 0}, {"id": 3, "score": 0}]}, 5)
+
+    assert judgement.scores == []
+    assert judgement.declined is True
+    assert judgement.malformed is None, (
+        "a reply we could read completely is not malformed; calling it that is "
+        "what made abstention impossible on the model this deployment binds"
+    )
+
+
+def test_one_unreadable_entry_cancels_the_abstention() -> None:
+    """A partial abstention is not an abstention.
+
+    If one entry cannot be read, we do not know what the model thought about
+    that passage — and the passage might have been the answer. Emptying the
+    result on that basis would trade a wrong answer for no answer on the
+    strength of a guess.
+    """
+    # `"4"` as a STRING, not `[4]`: a one-element list is a notation echo that
+    # `_passage_id` deliberately repairs, so it would be readable and this test
+    # would be measuring the repair instead of the rule.
+    judgement = parse_judgement(
+        {"relevant": [{"id": 0, "score": 0}, {"id": "4", "score": 2}]},
+        5,
+    )
+
+    assert judgement.declined is False
+    assert judgement.malformed is not None
+    assert "1 unreadable" in judgement.malformed
+    assert "1 scored below" in judgement.malformed, (
+        "the reason has to separate the two counts, or the next person reading "
+        "it re-derives the same conflation from the message"
+    )
+
+
+def test_the_two_empty_shaped_states_are_still_distinguishable() -> None:
+    """Three replies, three verdicts, all with `scores == []`.
+
+    This is the whole point of `Judgement` carrying more than a list. A
+    well-formed empty list, an all-zero judgement and an unreadable list are
+    now three states, and only the first two empty the result.
+    """
+    empty = parse_judgement({"relevant": []}, 5)
+    zeroed = parse_judgement({"relevant": [{"id": 1, "score": 0}]}, 5)
+    garbage = parse_judgement({"relevant": [{"index": 1, "relevance": 0.9}]}, 5)
+
+    assert (empty.scores, empty.declined, empty.malformed) == ([], False, None)
+    assert (zeroed.scores, zeroed.declined, zeroed.malformed) == ([], True, None)
+    assert garbage.scores == [] and garbage.declined is False
+    assert garbage.malformed is not None
+
+
+@pytest.mark.asyncio
+async def test_the_reranker_returns_nothing_when_the_model_declines() -> None:
+    """End to end through `rank`, because the parse alone changes no result.
+
+    `apply_ranking` empties the list for an empty score set, and the `declined`
+    branch has to reach it. Before this the same reply came back as
+    `list(hits[:top_k])` — the full fused window, presented as an answer to a
+    question the model had just said these passages do not answer.
+    """
+    reranker, _ = llm_reranker('{"relevant": [{"id": 0, "score": 0}, {"id": 1, "score": 0}]}')
+
+    out = await reranker.rank(query="the offside rule in football", hits=hits(6), top_k=5)
+
+    assert out == [], (
+        "the model declined every candidate and the search returned the fused "
+        "window anyway — 0 of 8 off-corpus questions declined, measured"
+    )
+    assert reranker.skipped_reason is None, (
+        "an abstention is the reranker WORKING; recording it as a skip would "
+        "put it on the span beside 'the reply was unreadable'"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_reply_still_keeps_the_fused_order() -> None:
+    """The guard this change must not weaken.
+
+    Measured before it existed: treating an unreadable reply as an abstention
+    took the 45-question eval from nDCG@10 0.970 to 0.133 — retrieval was not
+    returning worse answers, it was returning none.
+    """
+    fused = hits(6)
+    reranker, _ = llm_reranker('{"relevant": [{"id": "4", "score": 2}, {"index": 2}]}')
+
+    out = await reranker.rank(query="anything", hits=fused, top_k=5)
+
+    assert [h.text for h in out] == [h.text for h in fused[:5]]
+    assert reranker.skipped_reason is not None
+
+
+# ---------------------------------------------------------------------------
+# A listed passage with no score is a judgement (measured, WS-RS6 c1)
+# ---------------------------------------------------------------------------
+#
+# `rks.rerank.unparseable` said "the reply was unreadable" and never said what
+# the reply WAS, so nobody could see the shape and fix it. With the raw reply
+# logged, one 48-question run over 120 documents showed 6 discarded replies, of
+# which 4 were `{"relevant": [{"id": 1}, {"id": 2}]}`: real passage ids, no
+# score key, thrown away whole.
+
+
+def test_a_listed_passage_with_no_score_is_relevant() -> None:
+    """Being in `relevant` IS the judgement; the number refines the order.
+
+    The prompt says "list EVERY passage you scored 1 or above". A model that
+    lists a passage has therefore already said it scores at least 1, and
+    reading that as an unreadable entry discards an answer we were given.
+    """
+    judgement = parse_judgement({"relevant": [{"id": 1}, {"id": 2}]}, 5)
+
+    assert judgement.malformed is None
+    assert judgement.declined is False
+    assert judgement.scores == [(1, 1.0), (2, 1.0)]
+
+
+def test_an_unscored_set_keeps_fusion_order_between_its_members() -> None:
+    """No score means the model gave a SET, not a ranking.
+
+    `apply_ranking` breaks a score tie on the candidate index, so unscored
+    entries come back in fused order. That is the honest reading — inventing a
+    descending scale from the model's typing order would assert a ranking it
+    did not give.
+    """
+    ranked = apply_ranking(hits(5), [(3, 1.0), (1, 1.0)], top_k=5, keep_unranked=False)
+
+    assert [h.text for h in ranked] == ["passage 1", "passage 3"]
+
+
+def test_a_score_that_is_present_and_unreadable_is_still_dropped() -> None:
+    """The default is for an ABSENT key, not for a value we cannot parse.
+
+    `"score": "high"` is the model trying to say something we cannot read.
+    Substituting a number there would be a guess wearing the model's
+    authority — the distinction `_passage_id` already draws for ids.
+    """
+    judgement = parse_judgement({"relevant": [{"id": 1, "score": "high"}]}, 5)
+
+    assert judgement.scores == []
+    assert judgement.malformed is not None
+    assert "1 unreadable" in judgement.malformed
+
+
+def test_a_zero_score_still_means_not_relevant() -> None:
+    """The default must not swallow an explicit refusal.
+
+    `{"id": 1, "score": 0}` and `{"id": 1}` now take different paths through
+    the same function, and getting them the same way round would turn every
+    abstention into a top-ranked hit.
+    """
+    zeroed = parse_judgement({"relevant": [{"id": 1, "score": 0}]}, 5)
+    unscored = parse_judgement({"relevant": [{"id": 1}]}, 5)
+
+    assert (zeroed.scores, zeroed.declined) == ([], True)
+    assert unscored.scores == [(1, 1.0)]
+
+
+@pytest.mark.asyncio
+async def test_the_unparseable_log_carries_the_reply_that_could_not_be_read(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A diagnosis with no evidence is a diagnosis nobody can act on.
+
+    Both notation failures this parser handles were found by reading raw
+    replies off a throwaway probe script, because this warning named only the
+    category. The reply is passage indices and integers — nothing to redact.
+    """
+    from structlog.testing import capture_logs
+
+    reranker, _ = llm_reranker('{"relevant": [{"id": 5.2}, {"id": 5.1}]}')
+    with capture_logs() as logs:
+        await reranker.rank(query="q", hits=hits(5), top_k=5)
+
+    (entry,) = [e for e in logs if e.get("event") == "rks.rerank.unparseable"]
+    assert entry["reply"] == '{"relevant": [{"id": 5.2}, {"id": 5.1}]}', (
+        "a float id is a genuine ambiguity and stays dropped — but the operator "
+        "has to be able to SEE that is what happened"
+    )
+    assert entry["candidates"] == 5

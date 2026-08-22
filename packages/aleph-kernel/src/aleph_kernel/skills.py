@@ -44,7 +44,15 @@ if TYPE_CHECKING:
 
     from aleph_kernel.context import Context
 
-__all__ = ["Skill", "SkillRejected", "load_skill", "skill_capability", "skill_from_source"]
+__all__ = [
+    "Skill",
+    "SkillRejected",
+    "load_skill",
+    "skill_capability",
+    "skill_capability_name",
+    "skill_from_source",
+    "skill_name_from_capability",
+]
 
 _FRONT_MATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*\n(.*)\Z", re.DOTALL)
 
@@ -159,6 +167,32 @@ def skill_capability_name(skill_name: str) -> str:
     through and marked the row.
     """
     return f"skill.{skill_name}"
+
+
+def skill_name_from_capability(key: str) -> str | None:
+    """`skill.<name>` → `<name>`, or None when this is not a skill capability.
+
+    The inverse of `skill_capability_name`, and it exists for the same reason
+    that one does: the kernel and the `plugins` table name the same thing
+    differently, and the two spellings differ by a prefix that is easy to carry
+    across a boundary without noticing.
+
+    `DELETE /v1/projects/{id}/plugins/{plugin_id}` did exactly that. It read the
+    name out of `AgentPluginAPI.inspect()` — a CAPABILITY name — and handed it to
+    `PluginService.disable`, which selects on `Plugin.name`. Nothing matched, so
+    the row was never marked `disabled`, the `plugin.disable` ledger event was
+    never written, and `PluginService.disable` computed the capability key as
+    `skill.skill.<name>` on the way past. The route returned 200 and the kernel
+    really had retired the capability, so the only visible symptom was a row and
+    a ledger that quietly disagreed with the running process.
+
+    Derives the prefix from `skill_capability_name` rather than repeating the
+    literal, so the two can never drift apart.
+    """
+    prefix = skill_capability_name("")
+    if not key.startswith(prefix) or key == prefix:
+        return None
+    return key[len(prefix) :]
 
 
 def skill_capability(skill: Skill, *, requires: frozenset[str] = frozenset()) -> CapabilitySpec:

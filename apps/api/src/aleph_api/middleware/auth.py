@@ -33,7 +33,7 @@ from aleph_db.models.identity import User
 from aleph_db.repos.ledger import LedgerWriter
 from aleph_db.repos.project import get_member
 from aleph_observability.logging import bind_request_context
-from aleph_observability.tracing import current_trace_id
+from aleph_observability.tracing import current_trace_id, start_span
 from aleph_security.agent_token import verify_agent_token
 from aleph_security.principal import Principal
 from aleph_security.request_context import bind_principal, reset_principal
@@ -97,17 +97,26 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # single-user, and the OIDC path was removed (docs/decisions.md D6)
         # because it was half-built, never deployed, and its two known holes
         # were shaping work that had no user.
+        # Every request pays for this: resolving the principal is a database
+        # round trip, and on first sight it is a write (the JIT `User` row plus
+        # its `user.create` ledger event). Before this span a trace of a normal
+        # request showed the route and three anonymous SQLAlchemy `SELECT`s, so
+        # "where did the 9ms go" had no answer. `start_span` also records
+        # `aleph_stage_duration_seconds{stage="api.authenticate"}`, which is the
+        # half you can alert on — and its `outcome` label turns a burst of
+        # rejected credentials into a number rather than a log-grep.
         try:
-            if auth.lower().startswith("bearer "):
-                token = auth[7:].strip()
-                if _looks_like_agent_token(token):
-                    principal = await _principal_from_agent_token(request, token)
+            with start_span(STAGE_AUTHENTICATE, **{"aleph.credential": _credential_kind(auth)}):
+                if auth.lower().startswith("bearer "):
+                    token = auth[7:].strip()
+                    if _looks_like_agent_token(token):
+                        principal = await _principal_from_agent_token(request, token)
+                    else:
+                        # Ignore the bearer content — it may be the frontend's
+                        # sentinel — and synthesize the dev principal.
+                        principal = await _principal_local_dev(request)
                 else:
-                    # Ignore the bearer content — it may be the frontend's
-                    # sentinel — and synthesize the dev principal.
                     principal = await _principal_local_dev(request)
-            else:
-                principal = await _principal_local_dev(request)
         except PermissionDenied as exc:
             return _problem(401, "auth_failed", exc.message, request)
 
@@ -144,7 +153,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
             # See `middleware/agent_scope.py`.
             if path.startswith(_AGENT_SCOPED_PREFIXES):
                 try:
-                    await _assert_agent_request_scope(request, principal)
+                    # Reads the whole request body and issues one membership
+                    # query per project the body names, before the graph starts.
+                    # It is on the critical path of every chat turn, which is
+                    # the path people report as slow.
+                    with start_span(STAGE_AGENT_SCOPE):
+                        await _assert_agent_request_scope(request, principal)
                 except NotFound as exc:
                     return _problem(404, "not_found", exc.message, request)
                 except PermissionDenied as exc:
@@ -157,6 +171,31 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 #: Paths whose body names the project the agent will act on.
 _AGENT_SCOPED_PREFIXES: tuple[str, ...] = ("/copilotkit",)
+
+#: Stage names for the request-path spans in this module.
+#:
+#: Constants rather than inline strings because a span name becomes a metric
+#: label via `start_span` -> `record_stage`, so the set of values has to be
+#: finite and reviewable. `tests/unit/test_metrics_stage_spans.py` walks the AST
+#: of this package and refuses a `start_span` call whose name is anything but
+#: one of these — an f-string carrying a project id is the documented way to
+#: turn a metrics endpoint into an outage.
+STAGE_AUTHENTICATE = "api.authenticate"
+STAGE_AGENT_SCOPE = "api.agent_scope"
+
+
+def _credential_kind(authorization: str) -> str:
+    """A BOUNDED description of what the caller presented. Never the credential.
+
+    Three values, fixed here. This is a span *attribute*, not a metric label —
+    `record_stage` labels only on the stage name and the outcome — but it is
+    still exported: with the `tracing` profile up it reaches the collector and
+    Langfuse. So it says which KIND of credential arrived and never any part of
+    the token itself.
+    """
+    if not authorization.lower().startswith("bearer "):
+        return "none"
+    return "agent_token" if _looks_like_agent_token(authorization[7:].strip()) else "bearer"
 
 
 async def _assert_agent_request_scope(request: Request, principal: Principal) -> None:

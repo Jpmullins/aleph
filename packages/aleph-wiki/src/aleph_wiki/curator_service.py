@@ -329,6 +329,22 @@ class CuratorService:
                 commit_message=f"Curator: cross-link {len(linked)} sibling page(s)",
                 respect_hand_edits=True,
                 origin="curator",
+                # Stated, not omitted. `curate` is the DETERMINISTIC stage —
+                # `curate_page_job` runs it even when the project binds no
+                # ModelProfile at all ("deterministic knit still ran"), so
+                # there is no gateway client in scope and giving it one would
+                # make the cheap always-runs path depend on a model being
+                # reachable.
+                #
+                # Nothing is lost by it. `_carry_claims` re-asserts claims that
+                # already exist, and `BeliefService.upsert_claim` fills
+                # `embedding` on the update branch only when it is NULL — so a
+                # claim that arrived with a vector keeps it, and one that did
+                # not is a claim that was born without one somewhere else. That
+                # is where it has to be fixed; backfilling it here would hide
+                # the birth defect behind whichever page happened to get
+                # cross-linked.
+                embed=None,
             )
             return len(linked)
 
@@ -731,6 +747,13 @@ class CuratorService:
                     commit_message=f"Merge: redirect [[{source.title}]] -> [[{target.title}]]",
                     respect_hand_edits=True,
                     origin="curator",
+                    # As at the claim-fold twenty lines below, and for the same
+                    # reason: these are the inbound page's OWN claims, carried
+                    # across a body rewrite that only changes a wikilink
+                    # target. `apply_merge` is reached from an approval handler
+                    # with a principal and a ledger and no model client, and a
+                    # link redirect is not the place to acquire one.
+                    embed=None,
                 )
                 bodies_rewritten += 1
 

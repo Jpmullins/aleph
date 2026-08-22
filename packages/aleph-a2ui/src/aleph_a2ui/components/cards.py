@@ -156,13 +156,18 @@ def chart_card(p: ChartCardProps, *, card_id: str | None = None) -> dict[str, An
     # ABSENCE of a spec, and it may not self-fetch a dataset, so a dataset id
     # has nothing to do. `TableCard` has real ones — same two names, a
     # different card, and the reason this looked wired.
+    # No `open_action` either. It was REQUIRED of this card in catalog.json and
+    # `ChartCard.tsx` renders no Open control — the ActionRouter's `open` has no
+    # branch that could route a chart, so a button would have posted an action
+    # whose reply carries no `tab` and navigated nowhere. Same for `TableCard`
+    # and `DiffCard` below. Deleted rather than wired: giving three cards a new
+    # destination is a feature, and this is a sweep fix.
     return _card(
         "ChartCard",
         card_id=card_id,
         props={
             "title": p.title,
             "vega_lite_spec": p.vega_lite_spec,
-            "open_action": "open",
         },
     )
 
@@ -176,7 +181,6 @@ def table_card(p: TableCardProps, *, card_id: str | None = None) -> dict[str, An
             "title": p.title,
             "columns": p.columns,
             "rows": p.rows,
-            "open_action": "open",
         },
     )
 
@@ -252,6 +256,5 @@ def diff_card(p: DiffCardProps, *, card_id: str | None = None) -> dict[str, Any]
             "page_id": str(p.page_id),
             "from_body_md": p.from_body_md,
             "to_body_md": p.to_body_md,
-            "open_action": "open",
         },
     )

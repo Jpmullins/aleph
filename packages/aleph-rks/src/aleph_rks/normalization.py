@@ -22,9 +22,12 @@ import re
 from dataclasses import dataclass, field, replace
 from typing import Protocol
 
+import structlog
 import tiktoken
 
 from aleph_core.grounding import defang
+
+_log = structlog.get_logger(__name__)
 
 #: The quality flag every PDF normalizer here raises for a scan.
 #:
@@ -507,15 +510,35 @@ PDF_PARSERS: tuple[tuple[str, type], ...] = (
 )
 
 
+#: PDF parsers this process has already announced it settled on.
+#:
+#: Once, not once per document. A worker ingesting three hundred PDFs would
+#: otherwise emit three hundred identical warnings, which is how an operator
+#: learns to filter the line out.
+_pdf_parser_announced: set[str] = set()
+
+
 def pdf_normalizer(preferred: str | None = None) -> Normalizer:
     """The best PDF parser this deployment actually has.
 
     Tries in order and takes the first that constructs. `DoclingNormalizer`
     raises `NormalizationFailed` when the extra is not installed, so an
-    installation without it silently keeps the flat parsers — silently in the
-    sense of "no crash", not "no record": the resulting document carries
-    `heading_count: 0` and the chunks carry `section_path = NULL`, which is
-    exactly what that state means.
+    installation without it keeps the flat parsers.
+
+    **The fall-back is announced.** It used to be inferable and nothing else:
+    the previous version of this docstring said the degradation was recorded
+    because "the resulting document carries `heading_count: 0` and the chunks
+    carry `section_path = NULL`". Both are true and neither is a record — a PDF
+    that genuinely has no headings produces exactly the same two values, so the
+    only way to learn that a deployment had no layout parser at all was to
+    notice that EVERY document had them. Measured on this instance: 91.5% of
+    pypdf chunks carry a NULL `section_path` and 896 documents report
+    `heading_count = 0`, and no line anywhere said the extra was missing from
+    the worker image.
+
+    That is the same defect as a dead embedder writing no chunks (WS-RS1) — an
+    absence standing in for a state — and it gets the same treatment: the
+    degradation is said out loud, once per process, with the remedy in it.
     """
     import os
 
@@ -531,11 +554,32 @@ def pdf_normalizer(preferred: str | None = None) -> Normalizer:
         candidates = named
 
     last: Exception | None = None
-    for _name, cls in candidates:
+    skipped: list[str] = []
+    for name, cls in candidates:
         try:
-            return cls()  # ty: ignore[invalid-return-type]
+            normalizer: Normalizer = cls()
         except Exception as exc:
             last = exc
+            skipped.append(f"{name} ({type(exc).__name__}: {exc})")
+            continue
+        # Only when something more structure-aware was passed over. Landing on
+        # the first candidate is the healthy case and must stay silent, or the
+        # line means nothing.
+        if skipped and name not in _pdf_parser_announced:
+            _pdf_parser_announced.add(name)
+            _log.warning(
+                "rks.pdf_parser.degraded",
+                using=name,
+                skipped=skipped,
+                impact=(
+                    f"every PDF this process ingests is parsed by {name!r}, which "
+                    "extracts words and no structure: `section_path` will be NULL on "
+                    "its chunks and `structure_jsonb.heading_count` 0, and neither "
+                    "value distinguishes that from a PDF that has no headings"
+                ),
+                remedy="install the layout extra: uv sync --all-packages --all-extras",
+            )
+        return normalizer
     msg = f"no usable PDF parser: {last}"
     raise NormalizationFailed(msg)
 

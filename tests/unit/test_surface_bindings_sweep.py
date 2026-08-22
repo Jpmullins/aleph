@@ -24,11 +24,15 @@ from surface_bindings import (
     compare_bindability,
     compare_catalog_and_client,
     compare_emitted,
+    compare_view_reads,
     emitted_actions,
     emitted_props,
     producer_props,
     registered_actions,
     run,
+    strip_ts_comments,
+    tsx_emitted_props,
+    view_modules,
 )
 from sweep_subject import MissingSubject
 
@@ -416,10 +420,15 @@ def test_the_sweep_now_covers_the_cards_it_never_looked_at() -> None:
     """
     root = pathlib.Path(__file__).resolve().parents[2]
     report = run(root)
-    assert len(report.compared) >= 16, report.compared
-    assert report.bound_props >= 70, report.bound_props
+    assert len(report.compared) >= 20, report.compared
+    assert report.bound_props >= 80, report.bound_props
+    assert report.props_inspected >= 95, report.props_inspected
     # The card components specifically — the ones the old sweep could not see.
     assert {"ApprovalCard", "ClaimCard", "SourceCard", "TableCard"} <= set(report.compared)
+    # And the three the sweep gained when it stopped assuming a producer is
+    # Python: `ImageCard` and `HtmlFrameCard` are pinned from a worker,
+    # `NoteEditorCard` and `HtmlDocCard` are built in the browser.
+    assert {"ImageCard", "HtmlFrameCard", "NoteEditorCard", "HtmlDocCard"} <= set(report.compared)
 
 
 # ---------------------------------------------------------------------------
@@ -473,3 +482,235 @@ def test_every_registered_action_in_the_real_tree_has_an_emitter() -> None:
     # And the router still HAS actions — a router that registered nothing would
     # satisfy the assertion above trivially.
     assert report.actions_total >= 15, report.actions_total
+
+
+# ---------------------------------------------------------------------------
+# The fifth direction: zod → view
+# ---------------------------------------------------------------------------
+#
+# The other four all end at the browser's front door. This one walks the last
+# step: the binder resolves a declared prop, hands it to the view, and the view
+# can still ignore it. Thirty props were in that state when this was written,
+# including `FindingCard.evidence_refs` — read out of
+# `ReviewFinding.evidence_refs_jsonb`, sent, declared, resolved, and not
+# destructured, so every finding rendered with no evidence under it.
+
+
+_VIEW_CLIENT = """
+export const FindingCardApi = {
+  name: "FindingCard",
+  schema: z3.object({
+    summary: CommonSchemas.DynamicString,
+    evidence_refs: z3.array(z3.any()).optional(),
+    approve_action: CommonSchemas.Action.optional(),
+    children: z3.array(z3.any()).optional(),
+  }),
+};
+"""
+
+_VIEW_READS_EVERYTHING = """
+export function FindingCard({ component, onAction }: RendererProps) {
+  const p = component.props as { summary: string; evidence_refs?: unknown[] };
+  return <button onClick={() => onAction("approve", {})}>{p.summary}</button>;
+}
+"""
+
+
+def _views(source: str) -> dict[str, tuple[str, str]]:
+    return {"FindingCard": ("components/FindingCard.tsx", source)}
+
+
+_CONSTS = {"FindingCard": {"approve_action": "approve"}}
+
+
+def test_a_declared_prop_the_view_never_reads_is_reported() -> None:
+    """The defect, in the shape it shipped.
+
+    Every earlier direction is satisfied: the producer sends it, the catalog
+    declares it, the zod schema declares it, the binder resolves it. The value
+    then arrives in a component that does not mention the word.
+    """
+    blind = _VIEW_READS_EVERYTHING.replace("; evidence_refs?: unknown[]", "")
+    found = compare_view_reads(client_props(_VIEW_CLIENT), _CONSTS, _views(blind))
+    assert [f"{m.component}.{m.prop}" for m in found] == ["FindingCard.evidence_refs"]
+    assert "never looks" in found[0].reason
+
+
+def test_a_view_that_reads_every_declared_prop_is_clean() -> None:
+    assert (
+        compare_view_reads(client_props(_VIEW_CLIENT), _CONSTS, _views(_VIEW_READS_EVERYTHING))
+        == []
+    )
+
+
+def test_a_const_action_prop_the_view_hardcodes_is_not_a_gap() -> None:
+    """Twenty-one props are pinned to a `const` in catalog.json.
+
+    The value is fixed by the contract, so the prop carries no information and
+    `onAction("approve", …)` is EQUIVALENT to reading it. Reporting these would
+    have been twenty-one false positives out of the box, which is the shape of
+    mistake that gets a direction deleted rather than fixed — the view above
+    never mentions `approve_action` and is correct.
+    """
+    assert "approve_action" not in _VIEW_READS_EVERYTHING
+    assert (
+        compare_view_reads(client_props(_VIEW_CLIENT), _CONSTS, _views(_VIEW_READS_EVERYTHING))
+        == []
+    )
+
+
+def test_a_const_action_prop_whose_verb_the_view_never_fires_is_reported() -> None:
+    """The exemption is a RE-POINT, not a skip, and this is why it has to be.
+
+    Hardcoding the verb is only equivalent to reading the prop while the two
+    agree, and nothing checked that they did. Three cards failed it on the first
+    run: `ChartCard`, `DiffCard` and `TableCard` each REQUIRED an
+    `open_action: "open"` no button fires, and the ActionRouter's `open` has no
+    branch that could route any of the three anywhere.
+    """
+    silent = _VIEW_READS_EVERYTHING.replace('onAction("approve", {})', "undefined")
+    found = compare_view_reads(client_props(_VIEW_CLIENT), _CONSTS, _views(silent))
+    assert [f"{m.component}.{m.prop}" for m in found] == ["FindingCard.approve_action"]
+    assert "no control fires" in found[0].reason
+
+
+def test_children_is_exempt_from_the_view_direction_too() -> None:
+    """Structural — declared one level up and forwarded, never destructured.
+
+    Same exemption and same reason as `compare_catalog_and_client`; without it
+    the four surfaces that take inline children are four false positives.
+    """
+    assert "children" in client_props(_VIEW_CLIENT)["FindingCard"]
+    assert "children" not in _VIEW_READS_EVERYTHING
+    assert (
+        compare_view_reads(client_props(_VIEW_CLIENT), _CONSTS, _views(_VIEW_READS_EVERYTHING))
+        == []
+    )
+
+
+def test_a_component_with_no_adapted_view_is_skipped_not_guessed() -> None:
+    """No view means nothing claims to read it; guessing a path would compare
+    the prop against the wrong file and report whatever that file happens to
+    say."""
+    assert compare_view_reads(client_props(_VIEW_CLIENT), _CONSTS, {}) == []
+
+
+def test_a_prop_named_only_in_a_comment_does_not_count_as_read() -> None:
+    """Found by mutating the fix, not by reading the sweep.
+
+    Deleting the `evidence_refs` reader from `FindingCard.tsx` left this
+    direction GREEN, because the comment written to explain the fix names the
+    prop three times. Every "does the view read it" check has that hole, and a
+    sweep a comment can satisfy certifies the defect it exists to find.
+    """
+    prose_only = """
+// evidence_refs is rendered below.
+/* and again: evidence_refs */
+export function FindingCard({ component, onAction }: RendererProps) {
+  const p = component.props as { summary: string };
+  return <button onClick={() => onAction("approve", {})}>{p.summary}</button>;
+}
+"""
+    found = compare_view_reads(client_props(_VIEW_CLIENT), _CONSTS, _views(prose_only))
+    assert [f"{m.component}.{m.prop}" for m in found] == ["FindingCard.evidence_refs"]
+
+
+def test_a_url_in_a_string_does_not_swallow_the_rest_of_the_line() -> None:
+    """The other half of the comment stripper, and the way it could go wrong.
+
+    Treating `//` as a comment start regardless of context would eat everything
+    after a `https://` inside a string — hiding a real read and reporting a
+    prop the view does use, which is a false positive on working code.
+    """
+    line = 'const href = "https://example.test/x"; const s = p.evidence_refs;'
+    assert "evidence_refs" in strip_ts_comments(line)
+    assert "// gone" not in strip_ts_comments("keep // gone")
+
+
+def test_every_view_in_the_real_tree_reads_what_it_declares() -> None:
+    root = pathlib.Path(__file__).resolve().parents[2]
+    report = run(root)
+    unread = [m for m in report.mismatches if "never looks" in m.reason]
+    assert unread == [], unread
+
+
+# ---------------------------------------------------------------------------
+# Producers that are not Python
+# ---------------------------------------------------------------------------
+
+
+def test_a_browser_producer_is_read_like_any_other() -> None:
+    """`NotesSurface.tsx` builds the only `NoteEditorCard` payload that exists.
+
+    A sweep that read Python alone reported `NoteEditorCard` and `HtmlDocCard`
+    as "emitted by no producer" and compared nothing about either — while both
+    are registered with an `adapt()` impl, so the agent can emit them through
+    the binder and hit the zod schema neither was ever checked against.
+    """
+    source = """
+        <NoteEditorCard
+          component={{
+            type: "NoteEditorCard",
+            id: `note-editor-${n.id}`,
+            props: { note_id: n.id, section_id: n.section_id, body_md: n.body_md },
+          }}
+          onAction={onAction}
+        />
+    """
+    assert tsx_emitted_props(source) == {"NoteEditorCard": {"note_id", "section_id", "body_md"}}
+
+
+def test_a_nested_object_prop_does_not_leak_its_inner_keys() -> None:
+    """`props: {meta: {title, slug}}` sends ONE prop, not three.
+
+    Counting `title` and `slug` as props of the component would report two
+    undeclared props on every card that nests anything.
+    """
+    source = 'x = { type: "WikiPageCard", props: { page_meta: { title: t, slug: s } } }'
+    assert tsx_emitted_props(source) == {"WikiPageCard": {"page_meta"}}
+
+
+def test_a_tsx_type_field_with_no_props_is_not_a_component() -> None:
+    """The same guard the Python reader needs, for the same reason.
+
+    A Vega-Lite encoding written in TSX is `{field: "x", type: "nominal"}`, and
+    a sweep that starts reporting a component called `nominal` gets switched
+    off. `type:` only counts with a `props: {` beside it.
+    """
+    assert tsx_emitted_props('const enc = { field: "x", type: "Nominal" };') == {}
+
+
+def test_the_view_module_comes_from_adapt_rather_than_the_file_name() -> None:
+    """`components/<Name>.tsx` is a convention, and a convention is not a link.
+
+    Resolving by name would keep comparing against `components/ClaimCard.tsx`
+    after `adapt()` was pointed somewhere else — silently, and with a green
+    result, because the old file still reads the old props.
+    """
+    source = """
+import { ClaimCard as ClaimCardView } from "./components/renamed/Claim";
+export const ClaimCardImpl = createComponentImplementation(
+  ClaimCardApi,
+  adapt("ClaimCard", ClaimCardView, "claim"),
+);
+"""
+    assert view_modules(source) == {"ClaimCard": "./components/renamed/Claim"}
+
+
+def test_every_catalog_component_has_a_producer_or_a_written_reason() -> None:
+    """A coverage gap that is named is a decision; an unnamed one is a footnote.
+
+    The old success line ended at "5 catalog component(s) are emitted by no
+    Python producer", which is true, unactionable, and was printed on every run
+    for as long as the sweep existed. An unexplained gap is now a mismatch, so
+    adding a component to `catalog.json` that nothing emits fails the build
+    until somebody either writes the producer or writes down why there is none.
+    """
+    root = pathlib.Path(__file__).resolve().parents[2]
+    report = run(root)
+    catalog = catalog_components(
+        (root / "packages/aleph-a2ui/src/aleph_a2ui/catalog.json").read_text()
+    )
+    assert set(report.compared) | set(report.no_producer) == catalog
+    # And the reasons are reasons, not placeholders.
+    assert all(len(why) > 40 for why in report.no_producer.values()), report.no_producer

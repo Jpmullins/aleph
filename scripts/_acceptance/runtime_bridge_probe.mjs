@@ -12,6 +12,12 @@
  *   2. The bridge called the API anonymously, so the API saw the BRIDGE and
  *      never the person.
  *
+ * Forwarding is checked in BOTH directions. A bridge that substitutes a
+ * credential of its own when the caller sent none passes a forwarding check
+ * that only ever sends a credential, and every anonymous request then reaches
+ * the API looking authenticated — attributed, in the action ledger, to whoever
+ * that credential belongs to.
+ *
  * This is a probe rather than a unit test because there is no JS test framework
  * in this repo yet (WS-UI-2), and because a source grep for `cors:` would pass
  * against a config that does not do what it says. Here the server is started
@@ -154,49 +160,76 @@ async function main() {
     // handler is in multi-route mode, and both `/api/copilotkit` and
     // `/api/copilotkit/agent/run` return 404 — which would make this check
     // pass vacuously as "the API was never called".
-    await fetch(`${base}/api/copilotkit/agent/assistant/run`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        Origin: ALLOWED,
-        Authorization: "Bearer probe-token",
-      },
-      // The runtime runs in "single-route" mode: one POST to the base path
-      // carrying a `{method, params}` envelope. Read out of the installed
-      // handler (`resolveSingleRoute`), not guessed — the RunAgentInput shape
-      // the agent itself takes returns 404 here, which would have made this
-      // check pass vacuously as "the API was never called".
-      body: JSON.stringify({
-        threadId: "proj:00000000-0000-0000-0000-000000000000:probe",
-        runId: "probe",
-        messages: [{ id: "m1", role: "user", content: "hi" }],
-        tools: [],
-        context: [],
-        state: {},
-        forwardedProps: {},
-      }),
-    })
-      .then(async (r) => {
-        if (!r.ok) {
-          console.log(`     (runtime returned ${r.status}: ${(await r.text()).slice(0, 200)})`);
-          return;
-        }
-        // The response is an SSE stream and the agent is called as it is
-        // CONSUMED. Leaving it unread makes this check report "the API was
-        // never called" for a bridge that works perfectly.
-        // Drained, not inspected. The agent is called as the SSE stream is
-        // CONSUMED, so leaving it unread reports "the API was never called"
-        // for a bridge that works. What comes back is the fake API's reply
-        // failing AG-UI validation, which is expected and not the subject.
-        await r.text();
+    const drive = async (authorization) => {
+      const before = seen.length;
+      const headers = { "content-type": "application/json", Origin: ALLOWED };
+      if (authorization !== undefined) headers.Authorization = authorization;
+      await fetch(`${base}/api/copilotkit/agent/assistant/run`, {
+        method: "POST",
+        headers,
+        // The runtime runs in "single-route" mode: one POST to the base path
+        // carrying a `{method, params}` envelope. Read out of the installed
+        // handler (`resolveSingleRoute`), not guessed — the RunAgentInput shape
+        // the agent itself takes returns 404 here, which would have made this
+        // check pass vacuously as "the API was never called".
+        body: JSON.stringify({
+          threadId: "proj:00000000-0000-0000-0000-000000000000:probe",
+          runId: "probe",
+          messages: [{ id: "m1", role: "user", content: "hi" }],
+          tools: [],
+          context: [],
+          state: {},
+          forwardedProps: {},
+        }),
       })
-      .catch((e) => console.log(`     (post failed: ${e})`));
+        .then(async (r) => {
+          if (!r.ok) {
+            console.log(`     (runtime returned ${r.status}: ${(await r.text()).slice(0, 200)})`);
+            return;
+          }
+          // The response is an SSE stream and the agent is called as it is
+          // CONSUMED. Leaving it unread makes this check report "the API was
+          // never called" for a bridge that works perfectly.
+          // Drained, not inspected. The agent is called as the SSE stream is
+          // CONSUMED, so leaving it unread reports "the API was never called"
+          // for a bridge that works. What comes back is the fake API's reply
+          // failing AG-UI validation, which is expected and not the subject.
+          await r.text();
+        })
+        .catch((e) => console.log(`     (post failed: ${e})`));
 
-    for (let i = 0; i < 20 && seen.length === 0; i += 1) await wait(250);
+      for (let i = 0; i < 20 && seen.length === before; i += 1) await wait(250);
+      return seen.length > before ? seen[seen.length - 1] : null;
+    };
+
+    const withCredential = await drive("Bearer probe-token");
     check(
       "the caller's Authorization header reaches the API",
-      seen.length > 0 && seen[0].authorization === "Bearer probe-token",
-      seen.length === 0 ? "the API was never called" : `got ${seen[0].authorization}`,
+      withCredential !== null && withCredential.authorization === "Bearer probe-token",
+      withCredential === null ? "the API was never called" : `got ${withCredential.authorization}`,
+    );
+
+    // 4. ...and the OTHER direction, which is the half nothing asserted.
+    //
+    // Forwarding is only half the property. A bridge that falls back to a
+    // credential of its OWN when the caller sent none is worse than one that
+    // forwards nothing: every anonymous request would arrive at the API looking
+    // like an authenticated one, the API would authorise it, and the action
+    // ledger would attribute it to whoever the bridge's credential belongs to.
+    // Check 3 passes either way, because check 3 only ever sends a credential.
+    //
+    // Structurally the bridge cannot do this today — `server.ts` builds
+    // `new HttpAgent({ url: AGENT_URL })` with no headers and no `fetch`
+    // override, and the compose env carries no token for it to reach for. That
+    // is an argument, not a check: any of those three could change in a commit
+    // whose diff looks like a convenience.
+    const anonymous = await drive(undefined);
+    check(
+      "an unauthenticated request is not given a credential of the bridge's own",
+      anonymous !== null && anonymous.authorization === undefined,
+      anonymous === null
+        ? "the API was never called"
+        : `got ${anonymous.authorization ?? "(none)"}`,
     );
     if (failures > 0 && log.trim()) {
       console.log("\n  --- runtime log (tail) ---");

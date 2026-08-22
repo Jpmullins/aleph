@@ -31,6 +31,7 @@ from aleph_api.routes import (
     connectors,
     cost,
     feedback,
+    gateway_endpoints,
     handedits,
     health,
     hypotheses,
@@ -145,6 +146,9 @@ def create_app() -> FastAPI:
     app.include_router(plugins.router)
     app.include_router(ledger.router)
     app.include_router(cost.router)
+    # WS-MEP-4's consumer half. Until this line the gateway_endpoints table,
+    # its cipher, its resolver and its probe had no caller anywhere.
+    app.include_router(gateway_endpoints.router)
     app.include_router(model_profile.router)
     app.include_router(agent_tokens.router)
     app.include_router(smoketest.router)

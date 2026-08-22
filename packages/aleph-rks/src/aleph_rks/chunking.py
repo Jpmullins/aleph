@@ -158,6 +158,90 @@ def _count_tokens(text: str, enc: tiktoken.Encoding) -> int:
     return len(enc.encode(text, disallowed_special=()))
 
 
+#: How far past `target_tokens` a single unsplittable run is allowed to go
+#: before it is cut by character offset.
+#:
+#: Any margin at all is a choice, and this one is 1.0 — no margin. A chunk is a
+#: retrieval unit and a 3,000-token "passage" is a chapter: it dilutes its own
+#: embedding, it fills the reranker's window on its own, and it cannot be shown
+#: to a reader as a quote.
+_HARD_SPLIT_RATIO = 1.0
+
+
+def _split_oversized_span(
+    markdown: str,
+    span: tuple[int, int],
+    *,
+    max_tokens: int,
+    enc: tiktoken.Encoding,
+) -> list[tuple[int, int]]:
+    """Cut one over-long span into contiguous sub-spans under `max_tokens`.
+
+    The chunker had no upper bound. `target_tokens` is enforced by flushing the
+    BUFFER before a sentence is added, so a single sentence bigger than the
+    target lands in an empty buffer and is emitted whole at whatever size it
+    is. Only fenced blocks and table rows were special-cased.
+
+    A document with no sentence terminators — a scanned PDF's text layer, a
+    scraped page that lost its punctuation, a long reference list — is one
+    "sentence", so it becomes one chunk of arbitrary size. Measured on this
+    instance: **19 of 29,206 chunks exceed 8,192 tokens, the largest is 21,543
+    (42x the 512 target), and every one of the 19 has `embedding IS NULL`** —
+    the embedder refuses them (`Too many input tokens. Max input tokens: 8192`)
+    so they are permanently invisible to the dense leg. It also breaks the
+    eval, which embeds its seeded corpus in one pass and dies on the first such
+    chunk with an HTTP 400.
+
+    Contiguous by construction: sub-span *n* ends exactly where *n+1* begins,
+    so `emit`'s `markdown[spans[0][0]:spans[-1][1]]` still slices the document
+    and `test_chunk_offsets.py`'s invariant holds unchanged.
+
+    Cut points prefer a newline, then a space, and fall back to a bare
+    character boundary. The fallback is not optional: a 20,000-character run
+    with no whitespace at all is a real thing (a base64 blob in a scraped
+    page), and refusing to cut it would put the unbounded chunk straight back.
+
+    The guarantee this buys is on the SPAN, not on the finished chunk: the
+    packing loop flushes the buffer *before* adding a piece that would exceed
+    the target, so a chunk can still reach just under `2 * target_tokens`.
+    Measured on 738 real documents, the largest chunk goes from 10,732 tokens
+    to 1,023. Stated as a bound rather than left implied because "under the
+    target" would be the natural reading and it is not true.
+    """
+    start, end = span
+    if start >= end or _count_tokens(markdown[start:end], enc) <= max_tokens:
+        return [span]
+
+    out: list[tuple[int, int]] = []
+    while start < end:
+        remainder = markdown[start:end]
+        if _count_tokens(remainder, enc) <= max_tokens:
+            out.append((start, end))
+            break
+        # Characters per token, measured on THIS text rather than assumed: a
+        # table of numbers and a paragraph of English differ by more than 2x,
+        # and a fixed ratio would either overshoot (and need many shrink
+        # passes) or undershoot (and produce chunks a quarter of the target).
+        ratio = len(remainder) / max(1, _count_tokens(remainder, enc))
+        cut = start + max(1, int(max_tokens * ratio))
+        cut = min(cut, end)
+        # Only look for a boundary in the last fifth of the window, so a cut
+        # never gives up most of a chunk to find a prettier place to break.
+        floor = start + max(1, (cut - start) * 4 // 5)
+        for sep in ("\n", " "):
+            found = markdown.rfind(sep, floor, cut)
+            if found > start:
+                cut = found + len(sep)
+                break
+        # The ratio is an estimate, so verify and shrink. Geometric, so it
+        # terminates; `> start + 1` keeps it from ever producing an empty span.
+        while cut > start + 1 and _count_tokens(markdown[start:cut], enc) > max_tokens:
+            cut = start + max(1, (cut - start) * 3 // 4)
+        out.append((start, cut))
+        start = cut
+    return out
+
+
 def _walk_blocks(markdown: str) -> list[tuple[str | None, str, int, int]]:
     """Return (section_path, block_text, char_start, char_end) tuples.
 
@@ -222,6 +306,7 @@ def chunk_markdown(
     asserts the invariant against real documents.
     """
     enc = tiktoken.get_encoding("cl100k_base")
+    hard_max = max(1, int(target_tokens * _HARD_SPLIT_RATIO))
     out: list[Chunk] = []
     ordinal = 0
 
@@ -266,21 +351,34 @@ def chunk_markdown(
                     line_start += len(line)
                     if not markdown[line_span[0] : line_span[1]].strip():
                         continue
-                    line_tokens = _count_tokens(markdown[line_span[0] : line_span[1]], enc)
-                    if buf_tokens + line_tokens > target_tokens and buf:
-                        emit(buf, section_path, buf_tokens)
-                        buf = _carry_overlap_spans(markdown, buf, overlap_tokens, enc)
-                        buf_tokens = sum(_count_tokens(markdown[a:b], enc) for a, b in buf)
-                    buf.append(line_span)
-                    buf_tokens += line_tokens
+                    # A single LINE can be over the target too — one enormous
+                    # table row, or a fenced block written without newlines.
+                    # Splitting the fence into lines and then emitting a line
+                    # whole reintroduces the unbounded chunk one level down.
+                    for piece in _split_oversized_span(
+                        markdown, line_span, max_tokens=hard_max, enc=enc
+                    ):
+                        piece_tokens = _count_tokens(markdown[piece[0] : piece[1]], enc)
+                        if buf_tokens + piece_tokens > target_tokens and buf:
+                            emit(buf, section_path, buf_tokens)
+                            buf = _carry_overlap_spans(markdown, buf, overlap_tokens, enc)
+                            buf_tokens = sum(_count_tokens(markdown[a:b], enc) for a, b in buf)
+                        buf.append(piece)
+                        buf_tokens += piece_tokens
                 continue
 
-            if buf_tokens + sent_tokens > target_tokens and buf:
-                emit(buf, section_path, buf_tokens)
-                buf = _carry_overlap_spans(markdown, buf, overlap_tokens, enc)
-                buf_tokens = sum(_count_tokens(markdown[a:b], enc) for a, b in buf)
-            buf.append(span)
-            buf_tokens += sent_tokens
+            # One sentence bigger than the target used to be emitted at
+            # whatever size it happened to be, because the size check flushes
+            # the BUFFER and an oversized sentence lands in an empty one. See
+            # `_split_oversized_span` for what that costs on real documents.
+            for piece in _split_oversized_span(markdown, span, max_tokens=hard_max, enc=enc):
+                piece_tokens = _count_tokens(markdown[piece[0] : piece[1]], enc)
+                if buf_tokens + piece_tokens > target_tokens and buf:
+                    emit(buf, section_path, buf_tokens)
+                    buf = _carry_overlap_spans(markdown, buf, overlap_tokens, enc)
+                    buf_tokens = sum(_count_tokens(markdown[a:b], enc) for a, b in buf)
+                buf.append(piece)
+                buf_tokens += piece_tokens
 
         emit(buf, section_path, buf_tokens)
 
