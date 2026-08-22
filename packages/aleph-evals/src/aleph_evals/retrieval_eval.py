@@ -113,12 +113,23 @@ def _gateway_embed(model: str, texts: list[str]) -> list[list[float]]:
     return vectors
 
 
-async def _embedding_model(maker: Any) -> str | None:
-    """The model the system would actually use, read from a ModelProfile.
+async def _embedding_model(maker: Any) -> tuple[str, str] | None:
+    """The embedder the system would actually use, and the profile it came from.
 
     Read rather than configured, so the eval measures the deployed binding. An
     eval that embeds with a model the system does not use would report a number
     nothing else can reproduce.
+
+    A profile that NAMES an embedder wins over one that does not, and only then
+    does a template win over a project profile. That order matters now that
+    Aleph ships no embedder name: the templates deliberately carry no
+    `embedding` binding until autoconfigure fills one in from the gateway, so
+    preferring the template unconditionally made this eval silently report
+    `lexical` on a deployment whose projects were fully embedded — a measured
+    number that describes half the system.
+
+    The profile name is returned so the mode string can say where the binding
+    came from. "hybrid" without "and I used THIS binding" is not reproducible.
     """
     from sqlalchemy import text as sql_text
 
@@ -127,13 +138,18 @@ async def _embedding_model(maker: Any) -> str | None:
         row = (
             await session.execute(
                 sql_text(
-                    "select bindings_jsonb->'embedding'->>'model' from model_profiles "
-                    "where name = :n order by is_template desc limit 1"
+                    "select bindings_jsonb->'embedding'->>'model', name, is_template "
+                    "from model_profiles "
+                    "where bindings_jsonb->'embedding'->>'model' is not null "
+                    "order by (name = :n) desc, is_template desc limit 1"
                 ),
                 {"n": name},
             )
         ).first()
-    return str(row[0]) if row and row[0] else None
+    if not row or not row[0]:
+        return None
+    label = f"{row[1]}{' template' if row[2] else ''}"
+    return str(row[0]), label
 
 
 async def _embedder(maker: Any) -> tuple[Any, str]:
@@ -146,9 +162,14 @@ async def _embedder(maker: Any) -> tuple[Any, str]:
     if not os.environ.get("INSIGHTS_LITELLM_API_KEY") or not os.environ.get("LITELLM_BASE_URL"):
         return (lambda _q: _zero_vector()), "lexical (no gateway configured)"
 
-    model = await _embedding_model(maker)
-    if not model:
-        return (lambda _q: _zero_vector()), "lexical (no embedding binding in any ModelProfile)"
+    bound = await _embedding_model(maker)
+    if bound is None:
+        return (
+            lambda _q: _zero_vector(),
+            "lexical (no ModelProfile binds an embedding model — run "
+            "POST /v1/projects/{id}/model-profile/autoconfigure)",
+        )
+    model, profile_label = bound
 
     try:
         _gateway_embed(model, ["probe"])
@@ -158,7 +179,7 @@ async def _embedder(maker: Any) -> tuple[Any, str]:
     def embed(q: str) -> list[float]:
         return _gateway_embed(model, [q])[0]
 
-    return embed, f"hybrid (dense leg via {model})"
+    return embed, f"hybrid (dense leg via {model}, bound on {profile_label})"
 
 
 async def run(k: int = 8) -> Report:
@@ -200,7 +221,8 @@ async def run(k: int = 8) -> Report:
         bodies = [f"{doc['title']}. {doc['text']}" for doc in corpus]
         doc_vectors: list[list[float]] | None = None
         if mode.startswith("hybrid"):
-            model = await _embedding_model(maker)
+            bound_for_seed = await _embedding_model(maker)
+            model = bound_for_seed[0] if bound_for_seed else None
             doc_vectors = _gateway_embed(str(model), bodies)
 
         async with maker() as session:

@@ -219,9 +219,23 @@ else
   skip A2 "needs postgres+redis"
 fi
 
-if [ $NEEDS_SERVICES -eq 1 ]; then
+# A3 boots the WORKER's manifest, which mounts a second Redis for the sandbox
+# bus. `CODE_RUNNER_REDIS_URL` defaults to a compose hostname (`runner-redis`),
+# so a developer whose environment carries the compose `.env` gets a name that
+# resolves only inside the docker network. That is "cannot run here", not
+# "broken" — and reporting it as FAIL is how a gate teaches people to ignore
+# its colours.
+code_runner_bus_up() {
+  local url="${CODE_RUNNER_REDIS_URL:-redis://localhost:6379/1}" h p
+  read -r h p <<< "$(url_host_port "$url" 6379)"
+  (echo > "/dev/tcp/$h/$p") >/dev/null 2>&1
+}
+
+if [ $NEEDS_SERVICES -eq 1 ] && code_runner_bus_up; then
   run_shell A3 "workers boot on the kernel; no duplicated wiring" \
     "uv run python scripts/_acceptance/worker_boot.py"
+elif [ $NEEDS_SERVICES -eq 1 ]; then
+  skip A3 "the sandbox bus at ${CODE_RUNNER_REDIS_URL:-redis://localhost:6379/1} is not reachable from here"
 else
   skip A3 "needs postgres+redis"
 fi
