@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import time
+from decimal import Decimal
 from typing import TYPE_CHECKING, Annotated, Any
 from uuid import UUID
 
@@ -33,6 +34,7 @@ from aleph_a2ui.components.surfaces import (
     hypotheses_surface_v09,
     inspector_surface_v09,
     notes_surface_v09,
+    settings_surface_v09,
     wiki_surface_v09,
 )
 from aleph_a2ui.messages import full_surface
@@ -150,8 +152,8 @@ class SurfaceMessagesOut(BaseModel):
     messages: list[dict[str, Any]]
 
 
-async def _settings_messages(
-    session: Any, project_id: UUID, plugin_id: str | None, surface_id: str
+async def _plugin_settings_messages(
+    session: Any, project_id: UUID, plugin_id: str, surface_id: str
 ) -> list[dict[str, Any]]:
     """One plugin's settings screen, generated from its declared schema.
 
@@ -170,17 +172,6 @@ async def _settings_messages(
     from aleph_a2ui.settings_card import settings_surface
     from aleph_db.models.plugin_settings import PluginSettings
     from aleph_runtime.ui_contributions import UI_CONTRIBUTIONS
-
-    contributions = UI_CONTRIBUTIONS.all()
-    if plugin_id is None:
-        if not contributions:
-            return _pane_message(
-                surface_id,
-                "No plugin has declared a settings screen. A plugin gets one by "
-                "declaring a config schema — it ships no browser code.",
-            )
-        listing = ", ".join(sorted(c.plugin_id for c in contributions))
-        return _pane_message(surface_id, f"Choose a plugin to configure: {listing}")
 
     contribution = UI_CONTRIBUTIONS.get(plugin_id)
     if contribution is None:
@@ -204,6 +195,585 @@ async def _settings_messages(
         current=(row.values if row else None),
         description=contribution.description or None,
     )
+
+
+# ---------------------------------------------------------------------------
+# WS-B1 — the four panes that used to be a slide-over drawer.
+#
+# The web app's deleted `Drawers.tsx` was 742 lines behind `fixed inset-0`:
+# project info, cost, members, model profile, per-capability bindings,
+# connectors and their credentials, the action ledger, the agent-run digest and
+# the signed-in account. It covered the workspace, obeyed none of the pane
+# model's rules, and — the structural reason WS-B1 exists — meant a plugin's
+# settings had nowhere to land, because every section was a hand-written React
+# function.
+#
+# All of it is now DATA. `settings_surface_v09` emits one component whose only
+# bound props are a title and an ordered list of sections; what a pane contains
+# is decided here, on the server, and the client is a renderer per section KIND
+# rather than per section. A plugin with a declared JSON Schema does not need
+# even that — `_plugin_settings_messages` generates its screen from the
+# declaration, which is the path `settings_card.py` has always provided.
+# ---------------------------------------------------------------------------
+
+#: Capabilities the settings screen offers a per-model binding for, in reading
+#: order.
+#:
+#: **This list used to live in the browser** (`CAPABILITIES` in Drawers.tsx),
+#: which is a client-side copy of something only the server can know: the set is
+#: the `Capability` enum, the filtering is `CAPABILITY_POLICIES`, and both are
+#: Python. `docs/plan.md` WS-B1's third criterion is that no such copy remains.
+#:
+#: It is still an EXPLICIT list rather than `list(CAPABILITY_POLICIES)`, and that
+#: is deliberate: `scripts/_lib/capability_offers.py` exists because an offer
+#: with no policy and a policy with no offer are different defects, and deriving
+#: one from the other would make two of that sweep's three checks vacuous by
+#: construction. `rerank` was offered, had a policy, had help text, and had no
+#: resolver anywhere in Aleph; the sweep is what now catches that.
+CAPABILITIES: tuple[str, ...] = (
+    "synthesis",
+    "judge",
+    "page_selection",
+    "extraction",
+    "classification",
+    "vision",
+    "code",
+    "embedding",
+    "rerank",
+)
+
+#: One plain-language line per offered capability. Every entry in `CAPABILITIES`
+#: must have one and vice versa — `tests/unit/test_capability_offers.py` fails
+#: on either direction, because a capability with no description is a dropdown
+#: nobody can choose for, and a description for a capability nothing offers is
+#: the orphan that survived the original grep.
+CAPABILITY_HELP: dict[str, str] = {
+    "synthesis": "Composes briefs and wiki pages",
+    "judge": "Scores eval outputs",
+    "page_selection": "Picks wiki pages to answer from — needs a large context window",
+    "extraction": "Pulls claims and citations out of sources",
+    "classification": "Cheap routing and labelling",
+    "vision": "Reads figures and scanned pages",
+    "code": "Writes the sandboxed analysis code",
+    "embedding": "Vectorises chunks for intra-source descent",
+    "rerank": "Reorders retrieved passages before they reach the answer",
+}
+
+#: How long a hash-chain verification is reused before it is recomputed.
+#:
+#: `verify_project_chain` loads every ledger row for the project and rehashes
+#: the chain. The surface stream rebuilds each open pane on every project
+#: mutation and at least every `_STREAM_FALLBACK_SEC`, so verifying inline would
+#: make having the Logs pane open a full table scan every ten seconds, forever.
+#: The age of the result is rendered beside it rather than hidden — a
+#: verification presented without its timestamp reads as "true now", which is a
+#: claim this cache cannot make.
+_CHAIN_TTL_SEC = 60.0
+_CHAIN_CACHE: dict[UUID, tuple[float, dict[str, Any]]] = {}
+
+
+def _price_label(m: Any) -> str:
+    """`$5.50 / $27.50 per Mtok`, or a plain marker when the gateway gives none.
+
+    Formatted here rather than in the browser because the browser must not
+    decide what an unpriced model looks like: `is_priced` is the gateway's
+    answer, and rendering `$0.00` for it is the made-up pricing
+    `docs/decisions.md` D-pricing exists to stop.
+    """
+    if not getattr(m, "is_priced", False):
+        return "unpriced"
+
+    def per_m(v: str | None) -> str:
+        return "—" if v is None else f"${Decimal(v) * 1_000_000:.2f}"
+
+    return f"{per_m(m.input_per_token)} / {per_m(m.output_per_token)} per Mtok"
+
+
+async def _gateway_section_data(app_state: Any) -> tuple[dict[str, Any], list[Any]]:
+    """What the gateway serves, and an honest statement when it serves nothing.
+
+    Three outcomes, and they are NOT the same thing: no gateway wired into this
+    call path, a gateway that could not be reached, and a gateway that answered
+    with an empty list. The drawer collapsed the last two into "Could not reach
+    the model gateway"; a gateway that is up and advertises nothing is a
+    configuration problem on the gateway, not a network one, and the operator
+    needs to be told which.
+    """
+    catalog = getattr(app_state, "gateway_catalog", None) if app_state is not None else None
+    if catalog is None:
+        return (
+            {
+                "reachable": False,
+                "model_count": 0,
+                "note": (
+                    "No model gateway is attached to this request path, so no model list "
+                    "could be read. Bindings below show what is stored, not what is available."
+                ),
+            },
+            [],
+        )
+    try:
+        models = list(await catalog.models())
+    except Exception as exc:  # any transport failure is the same answer here
+        _log.warning("surfaces.gateway_unreachable", error=f"{type(exc).__name__}: {exc}")
+        return (
+            {
+                "reachable": False,
+                "model_count": 0,
+                "note": (
+                    f"Could not reach the model gateway ({type(exc).__name__}). Aleph ships "
+                    "no built-in model list, so there is nothing to choose from until it "
+                    "responds."
+                ),
+            },
+            [],
+        )
+    note = ""
+    if not models:
+        note = (
+            "The gateway responded but advertises no models. Check its configuration — "
+            "capability bindings cannot be edited until it serves at least one."
+        )
+    return ({"reachable": True, "model_count": len(models), "note": note}, models)
+
+
+async def _model_profile_section(session: Any, project_id: UUID, app_state: Any) -> dict[str, Any]:
+    """Profile templates, the current binding per capability, and the options.
+
+    Every option carries the gateway's OWN numbers (`max_input_tokens` and both
+    rates) so the browser can PATCH a binding without inventing any of them. The
+    drawer already did this and explained why in a comment; the difference is
+    that the numbers now arrive with the surface instead of being fetched by the
+    view.
+    """
+    from aleph_db.repos import model_profile as profile_repo
+    from aleph_models.discovery import capabilities_for
+
+    current = await profile_repo.get_project_profile(session, project_id)
+    templates = await profile_repo.list_templates(session)
+    gateway, models = await _gateway_section_data(app_state)
+
+    bindings: dict[str, Any] = dict(current.bindings_jsonb) if current is not None else {}
+    capabilities: list[dict[str, Any]] = []
+    for cap in CAPABILITIES:
+        eligible = [m for m in models if cap in capabilities_for(m)]
+        bound = bindings.get(cap)
+        capabilities.append(
+            {
+                "id": cap,
+                "label": cap.replace("_", " "),
+                "help": CAPABILITY_HELP[cap],
+                "bound": bound.get("model") if isinstance(bound, dict) else None,
+                "eligible": [
+                    {
+                        "id": m.id,
+                        "label": f"{m.id} · {_price_label(m)}",
+                        "max_input_tokens": m.max_input_tokens,
+                        # `str`, not the Decimal itself. A surface data model is
+                        # serialised by `json.dumps` on the SSE path — not by
+                        # FastAPI's encoder, which is what makes the snapshot
+                        # route forgiving — and `Decimal` has no JSON
+                        # representation. Sent raw, this ended the multiplexed
+                        # stream mid-frame and every OTHER pane went dark with
+                        # it. `ModelBindingIn` takes the rate as a string
+                        # anyway, so this is also the shape the PATCH wants.
+                        "input_per_token": (
+                            None if m.input_per_token is None else str(m.input_per_token)
+                        ),
+                        "output_per_token": (
+                            None if m.output_per_token is None else str(m.output_per_token)
+                        ),
+                    }
+                    for m in eligible
+                ],
+            }
+        )
+
+    return {
+        "kind": "model_profile",
+        "title": "Model profile",
+        "blurb": (
+            "The template that maps each capability to a model. Switching re-embeds sources "
+            "in the background if the embedding model changes. Options come from the gateway "
+            "itself, filtered to the models that can actually do each job."
+        ),
+        "profiles": [t.name for t in templates],
+        "current": current.name if current is not None else None,
+        "gateway": gateway,
+        "capabilities": capabilities,
+    }
+
+
+async def _connectors_section(
+    session: Any, project_id: UUID, principal: Any, app_state: Any
+) -> dict[str, Any]:
+    """Data sources the researcher can search, and whether each has a key.
+
+    Three things this never does, each for a stated reason:
+
+    * **It does not read a plaintext key.** `key_state` says `set` or `unset`
+      and nothing more. A credential's plaintext belongs in
+      `ConnectorCredential`, which encrypts it; `settings_card` refuses a
+      settings field that declares itself a secret for the same reason.
+    * **It does not show key state to a non-owner.** `GET
+      /v1/projects/{id}/connector-credentials` is OWNER-gated, and the surface
+      stream is open to every member — so porting the drawer's key panel
+      unconditionally would have widened who can see it. A non-owner gets
+      `key_state: "unknown"` and a line saying why, which is more than the
+      drawer managed: it simply took a 403 and rendered nothing.
+    * **It does not match a credential to a connector by KIND.** The unique
+      constraint is `(project_id, connector_id)` and `ConnectorCredential` has
+      no `connector_kind` column at all. An earlier draft of this function
+      keyed on one; it type-checked (the session is `Any`, so the row is `Any`)
+      and it ran green, because the only project it was exercised against had
+      no credentials. The first real key would have turned this pane into an
+      error surface.
+    """
+    from aleph_connectors.credentials import ConnectorCredential
+    from aleph_rks.models import Connector, ConnectorBinding
+    from aleph_security.roles import ProjectRole, rank
+
+    connectors = list(
+        (await session.execute(select(Connector).order_by(Connector.kind))).scalars().all()
+    )
+    binding_rows = list(
+        (
+            await session.execute(
+                select(ConnectorBinding).where(ConnectorBinding.project_id == project_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    by_connector = {b.connector_id: b for b in binding_rows}
+
+    role = principal.role_in(project_id) if principal is not None else None
+    is_owner = role is not None and rank(role) >= rank(ProjectRole.OWNER.value)
+
+    creds: dict[Any, Any] = {}
+    if is_owner:
+        creds = {
+            c.connector_id: c
+            for c in (
+                await session.execute(
+                    select(ConnectorCredential).where(ConnectorCredential.project_id == project_id)
+                )
+            )
+            .scalars()
+            .all()
+        }
+
+    return {
+        "kind": "connectors",
+        "title": "Connectors",
+        "blurb": (
+            "Data sources the researcher can search. Enable a connector and, if it needs a "
+            "key, add one here — keys are encrypted per-project and never leave the server."
+        ),
+        "connectors": [
+            {
+                "id": str(c.id),
+                "kind": c.kind,
+                "name": c.name,
+                "requires_auth": c.requires_auth,
+                "enabled": (
+                    by_connector[c.id].enabled if c.id in by_connector else c.enabled_by_default
+                ),
+                "config": dict(by_connector[c.id].config_jsonb) if c.id in by_connector else {},
+                "key_state": (("set" if c.id in creds else "unset") if is_owner else "unknown"),
+                "status": _credential_status(app_state, creds.get(c.id)) if is_owner else None,
+            }
+            for c in connectors
+        ],
+    }
+
+
+def _credential_status(app_state: Any, row: Any) -> str | None:
+    """The credential blob's own `status`, for the connectors that carry one.
+
+    Consensus writes `reconnect_required` here when its OAuth grant lapses, and
+    that is the only unprompted signal anywhere that a connector has stopped
+    working. `routes/connector_credentials.py` derives it the same way for
+    `GET /connector-credentials`; the difference is that this path is reached
+    only after the owner check above.
+
+    Only the status string ever leaves this function. A failure to decrypt is
+    `None` rather than an exception: a settings pane must not go dark because
+    one credential was written under a key generation this process cannot read.
+    """
+    if row is None or app_state is None:
+        return None
+    from aleph_connectors.credentials import credential_cipher
+
+    settings = getattr(app_state, "settings", None)
+    if settings is None:
+        return None
+    try:
+        cipher = credential_cipher(
+            master_key=settings.aleph_credential_master_key,
+            legacy_key=settings.credential_legacy_key,
+        )
+        plaintext = cipher.decrypt(
+            project_id=row.project_id,
+            cipher_blob=bytes(row.cipher_blob),
+            key_version=row.key_version,
+        )
+        parsed = json.loads(plaintext)
+    except Exception:
+        return None
+    if isinstance(parsed, dict):
+        value = parsed.get("status")
+        return str(value) if value is not None else None
+    return None
+
+
+def _plugins_section() -> dict[str, Any]:
+    """Every plugin that declared a settings schema, as a way in to its screen.
+
+    This is the listing the drawer could not have: opening one adds a
+    `settings:plugin=<id>` pane beside this one, generated from the plugin's own
+    declaration with no browser code involved.
+    """
+    from aleph_runtime.ui_contributions import UI_CONTRIBUTIONS
+
+    contributions = sorted(UI_CONTRIBUTIONS.all(), key=lambda c: c.plugin_id)
+    return {
+        "kind": "plugins",
+        "title": "Plugin settings",
+        "blurb": (
+            "A plugin gets a settings screen by declaring a config schema — it ships no "
+            "browser code. Opening one puts it on the board beside this pane."
+        ),
+        "plugins": [
+            {
+                "id": c.plugin_id,
+                "title": c.title,
+                "description": c.description,
+                "trust": c.trust,
+            }
+            for c in contributions
+        ],
+    }
+
+
+async def _cost_rollup(session: Any, project_id: UUID) -> tuple[str, list[dict[str, Any]]]:
+    from aleph_db.repos import cost as cost_repo
+
+    total = await cost_repo.total_cost(session, project_id)
+    by_phase = [
+        {"key": k, "cost_usd": str(c), "call_count": n}
+        for k, c, n in await cost_repo.cost_by_phase(session, project_id)
+    ]
+    return str(total), by_phase
+
+
+async def _project_settings_messages(
+    session: Any, project_id: UUID, surface_id: str, principal: Any, app_state: Any
+) -> list[dict[str, Any]]:
+    """The Settings pane: project, cost, members, models, connectors, plugins."""
+    from aleph_db.models.identity import ProjectMember
+    from aleph_db.repos import project as project_repo
+
+    project = await project_repo.get_project(session, project_id)
+    if project is None:
+        return _pane_message(surface_id, f"No project {project_id}.")
+
+    total_usd, _by_phase = await _cost_rollup(session, project_id)
+    members = list(
+        (
+            await session.execute(
+                select(ProjectMember)
+                .where(ProjectMember.project_id == project_id)
+                .order_by(ProjectMember.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    sections: list[dict[str, Any]] = [
+        {
+            "kind": "fields",
+            "title": "Project",
+            "rows": [
+                {"label": "Title", "value": project.title},
+                {"label": "Description", "value": project.description or "—", "multiline": True},
+                {"label": "Status", "value": project.status},
+                {"label": "Created", "value": project.created_at.isoformat()},
+            ],
+        },
+        {
+            "kind": "fields",
+            "title": "Cost",
+            "rows": [{"label": "Spent (USD)", "value": f"${Decimal(total_usd):.4f}"}],
+        },
+        {
+            "kind": "members",
+            "title": "Members",
+            "members": [
+                {"id": str(m.id), "user_id": str(m.user_id), "role": m.role} for m in members
+            ],
+        },
+        await _model_profile_section(session, project_id, app_state),
+        await _connectors_section(session, project_id, principal, app_state),
+        _plugins_section(),
+    ]
+    return settings_surface_v09(title="Settings", sections=sections, surface_id=surface_id)
+
+
+async def _logs_messages(session: Any, project_id: UUID, surface_id: str) -> list[dict[str, Any]]:
+    """The action ledger, and whether its hash chain still verifies.
+
+    `GET /v1/projects/{id}/ledger/verify` existed with **no caller anywhere** —
+    the append-only hash chain CLAUDE.md lists as a core invariant had no
+    interface at all, so the only way to learn it had diverged was to call the
+    route by hand. It is the first thing this pane says.
+    """
+    from aleph_db.models.ledger import ActionLedgerEvent
+    from aleph_db.repos.ledger import verify_project_chain
+
+    cached = _CHAIN_CACHE.get(project_id)
+    now = time.monotonic()
+    if cached is not None and now - cached[0] < _CHAIN_TTL_SEC:
+        checked_at, chain = cached[0], dict(cached[1])
+    else:
+        result = await verify_project_chain(session, project_id)
+        chain = {
+            "ok": result.ok,
+            "count": result.count,
+            "first_divergence_event_id": (
+                str(result.first_divergence.event_id) if result.first_divergence else None
+            ),
+        }
+        _CHAIN_CACHE[project_id] = (now, dict(chain))
+        checked_at = now
+    chain["age_seconds"] = int(now - checked_at)
+
+    rows = list(
+        (
+            await session.execute(
+                select(ActionLedgerEvent)
+                .where(ActionLedgerEvent.project_id == project_id)
+                .order_by(ActionLedgerEvent.timestamp.desc())
+                .limit(LEDGER_EVENT_LIMIT)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    sections: list[dict[str, Any]] = [
+        {
+            "kind": "ledger",
+            "title": "Action ledger",
+            "blurb": (
+                "Every state change, hash-chained and append-only. The chain is re-verified "
+                f"at most once every {int(_CHAIN_TTL_SEC)}s — walking it rehashes every row."
+            ),
+            "chain": chain,
+            "limit": LEDGER_EVENT_LIMIT,
+            "events": [
+                {
+                    "id": str(e.id),
+                    "actor_kind": e.actor_kind,
+                    "action_kind": e.action_kind,
+                    "target_kind": e.target_kind,
+                    "target_id": str(e.target_id) if e.target_id else None,
+                    "trace_id": e.trace_id,
+                    "timestamp": e.timestamp.isoformat(),
+                }
+                for e in rows
+            ],
+        }
+    ]
+    return settings_surface_v09(title="Logs", sections=sections, surface_id=surface_id)
+
+
+async def _notifications_messages(
+    session: Any, project_id: UUID, surface_id: str
+) -> list[dict[str, Any]]:
+    """Agent runs, failures first.
+
+    Deliberately NOT folded into the Inspector, which is the richer pane and the
+    obvious candidate. The Inspector answers "what did THIS run do"; it lists
+    runs so you can pick one. This answers "is anything broken right now", which
+    is a different question with a different shape — the failures are grouped
+    and lead with their error text rather than being one row among fifty. WS-B1
+    permits deleting a drawer section that holds nothing; this one holds the
+    only unprompted statement in the app that a background job died.
+    """
+    from aleph_db.models.agent import AgentRun
+
+    rows = list(
+        (
+            await session.execute(
+                select(AgentRun)
+                .where(AgentRun.project_id == project_id)
+                .order_by(AgentRun.created_at.desc())
+                .limit(NOTIFICATION_RUN_LIMIT)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    sections: list[dict[str, Any]] = [
+        {
+            "kind": "runs",
+            "title": "Agent runs",
+            "limit": NOTIFICATION_RUN_LIMIT,
+            "runs": [
+                {
+                    "id": str(r.id),
+                    "agent_kind": r.agent_kind,
+                    "status": r.status,
+                    "error_text": r.error_text,
+                    "created_at": r.created_at.isoformat(),
+                    "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+                }
+                for r in rows
+            ],
+        }
+    ]
+    return settings_surface_v09(title="Notifications", sections=sections, surface_id=surface_id)
+
+
+async def _profile_messages(
+    session: Any, project_id: UUID, surface_id: str, principal: Any
+) -> list[dict[str, Any]]:
+    """Who is signed in, and what this project has spent on their behalf."""
+    if principal is None:
+        account_rows = [
+            {
+                "label": "Account",
+                "value": (
+                    "No principal reached this call path, so the signed-in identity could "
+                    "not be resolved."
+                ),
+                "multiline": True,
+            }
+        ]
+    else:
+        account_rows = [
+            {"label": "Email", "value": principal.email or "—"},
+            {"label": "Subject", "value": principal.subject, "mono": True},
+            {"label": "Actor kind", "value": principal.actor_kind},
+            {"label": "User ID", "value": str(principal.user_id), "mono": True},
+        ]
+
+    total_usd, by_phase = await _cost_rollup(session, project_id)
+    usage_rows = [{"label": "Spent to date", "value": f"${Decimal(total_usd):.4f}"}]
+    usage_rows += [
+        {
+            "label": b["key"],
+            "value": f"${Decimal(b['cost_usd']):.4f} · {b['call_count']} calls",
+        }
+        for b in by_phase
+    ]
+
+    sections: list[dict[str, Any]] = [
+        {"kind": "fields", "title": "Signed in as", "rows": account_rows},
+        {"kind": "fields", "title": "Usage", "rows": usage_rows},
+    ]
+    return settings_surface_v09(title="Profile", sections=sections, surface_id=surface_id)
 
 
 def _pane_message(surface_id: str, message: str) -> list[dict[str, Any]]:
@@ -254,6 +824,9 @@ async def _build_tab_messages(
     tab_lc: str,
     params: dict[str, str] | None = None,
     surface_id: str | None = None,
+    *,
+    principal: Any = None,
+    app_state: Any = None,
 ) -> list[dict[str, Any]]:
     """Build the v0.9 message list for `tab_lc`. Shared by the snapshot route
     and the delta stream so both compute identical surfaces. `surface_id`
@@ -263,6 +836,16 @@ async def _build_tab_messages(
     `params` carries whatever the pane DECLARED, keyed by its own name — so the
     grounding pane gets `claim_id` and the Inspector gets `run_id`, rather than
     both reaching in for a positional called `page_id`.
+
+    `principal` and `app_state` are KEYWORD-ONLY and default to `None` because
+    most panes are a pure function of (session, project, params) and every
+    existing caller passes only those. The two that are not: `profile` renders
+    the signed-in identity, which is not project data and lives on the
+    principal; and `settings` offers the models the gateway serves, which is
+    `app.state.gateway_catalog` (TTL-cached, so a rebuild is a cache hit).
+    Absent either, the affected SECTION says so in words — it does not render
+    empty, because an empty account panel and an unauthenticated one look
+    identical.
     """
     sid = surface_id or tab_lc
     args = params or {}
@@ -300,7 +883,16 @@ async def _build_tab_messages(
     if tab_lc == "inspector":
         return await _inspector_messages(session, project_id, args.get("run_id"), sid)
     if tab_lc == "settings":
-        return await _settings_messages(session, project_id, args.get("plugin"), sid)
+        plugin = args.get("plugin")
+        if plugin:
+            return await _plugin_settings_messages(session, project_id, plugin, sid)
+        return await _project_settings_messages(session, project_id, sid, principal, app_state)
+    if tab_lc == "logs":
+        return await _logs_messages(session, project_id, sid)
+    if tab_lc == "notifications":
+        return await _notifications_messages(session, project_id, sid)
+    if tab_lc == "profile":
+        return await _profile_messages(session, project_id, sid, principal)
     msg = f"unknown tab: {tab_lc}"
     raise NotFound(msg)
 
@@ -327,6 +919,13 @@ _INSPECTOR_RUN_KINDS = ("assistant", *BACKGROUND_TASK_KINDS)
 
 INSPECTOR_RUN_LIMIT = 50
 INSPECTOR_EVENT_LIMIT = 500
+
+#: Ledger rows the Logs pane carries, and agent runs the Notifications pane
+#: carries. Both are STATED in the surface next to the list, for the reason
+#: `_INSPECTOR_RUN_KINDS` gives above: a pane quietly showing the most recent N
+#: looks identical to one showing all of them.
+LEDGER_EVENT_LIMIT = 50
+NOTIFICATION_RUN_LIMIT = 25
 
 
 def _pane_kinds() -> dict[str, Any]:
@@ -429,8 +1028,32 @@ async def stream_surfaces_multiplexed(
                 for surface_id, tab, pane_params in specs:
                     try:
                         msgs = await _build_tab_messages(
-                            session, project_id, tab, pane_params, surface_id
+                            session,
+                            project_id,
+                            tab,
+                            pane_params,
+                            surface_id,
+                            principal=principal,
+                            app_state=request.app.state,
                         )
+                        # Serialise here, inside the per-pane guard, and throw
+                        # the bytes away.
+                        #
+                        # `_sse` calls `json.dumps` far below this loop, in the
+                        # generator that feeds the socket — so a value with no
+                        # JSON form does not fail the pane that produced it, it
+                        # ends the WHOLE multiplexed stream and blanks every
+                        # open pane. That is exactly the outcome the except
+                        # branch below exists to prevent, arriving through a
+                        # door the guard did not cover. It happened: a
+                        # `Decimal` gateway rate in the settings model killed
+                        # the connection after two frames, with the traceback
+                        # only in the API's stderr and the browser showing
+                        # panes stuck on "waiting for the first frame".
+                        #
+                        # The cost is one extra serialisation per pane per
+                        # rebuild, which is the same work `_sse` is about to do.
+                        json.dumps(msgs)
                     except Exception as exc:
                         # One pane's failure must not take the workspace down.
                         #
@@ -541,10 +1164,16 @@ async def get_surface(
     tab: str,
     session: SessionDep,
     request: Request,
+    principal: PrincipalDep,
 ) -> SurfaceMessagesOut:
     tab_lc = tab.lower()
     messages = await _build_tab_messages(
-        session, project_id, tab_lc, _params_from_query(tab_lc, request.query_params)
+        session,
+        project_id,
+        tab_lc,
+        _params_from_query(tab_lc, request.query_params),
+        principal=principal,
+        app_state=request.app.state,
     )
     return SurfaceMessagesOut(tab=tab_lc, messages=messages)
 
@@ -598,7 +1227,15 @@ async def stream_surface(
         buf = _STREAM_BUFFERS.get(cid) if cid else None
 
         async with maker() as session:
-            fresh = await _build_tab_messages(session, project_id, tab_lc, pane_params, surface_id)
+            fresh = await _build_tab_messages(
+                session,
+                project_id,
+                tab_lc,
+                pane_params,
+                surface_id,
+                principal=principal,
+                app_state=request.app.state,
+            )
         structural, model = split_surface_messages(fresh)
 
         if buf is not None and last_event_id is not None and buf.can_replay(last_event_id):
@@ -642,7 +1279,13 @@ async def stream_surface(
 
                 async with maker() as session:
                     fresh = await _build_tab_messages(
-                        session, project_id, tab_lc, pane_params, surface_id
+                        session,
+                        project_id,
+                        tab_lc,
+                        pane_params,
+                        surface_id,
+                        principal=principal,
+                        app_state=request.app.state,
                     )
                 structural, model = split_surface_messages(fresh)
 

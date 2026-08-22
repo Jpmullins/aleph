@@ -1112,8 +1112,12 @@
         "component": {
           "const": "GroundingSurface"
         },
-        "claim": {},
-        "groundings": {},
+        "claim": {
+          "$ref": "#/$defs/DynamicValue"
+        },
+        "groundings": {
+          "$ref": "#/$defs/DynamicValue"
+        },
         "children": {
           "type": "array"
         }
@@ -1447,9 +1451,15 @@
         "component": {
           "const": "InspectorSurface"
         },
-        "runs": {},
-        "selected": {},
-        "events": {},
+        "runs": {
+          "$ref": "#/$defs/DynamicValue"
+        },
+        "selected": {
+          "$ref": "#/$defs/DynamicValue"
+        },
+        "events": {
+          "$ref": "#/$defs/DynamicValue"
+        },
         "children": {
           "type": "array"
         }
@@ -1686,6 +1696,30 @@
         "id",
         "component",
         "children"
+      ]
+    },
+    "SettingsSurface": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ComponentId"
+        },
+        "component": {
+          "const": "SettingsSurface"
+        },
+        "title": {
+          "$ref": "#/$defs/DynamicValue"
+        },
+        "sections": {
+          "$ref": "#/$defs/DynamicValue"
+        },
+        "children": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "component"
       ]
     },
     "Slider": {

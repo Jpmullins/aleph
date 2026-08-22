@@ -85,6 +85,21 @@ _CORE: tuple[PaneKind, ...] = (
         launchable=True,
         params=("run_id",),
     ),
+    # WS-B1. These three were `Drawer` kinds in the web app — a slide-over that
+    # covered the workspace, sat outside the pane model everything else obeys,
+    # and could not be put beside the thing it was describing. They are panes
+    # now, so the ledger can be read next to the wiki page whose edit produced
+    # the row.
+    #
+    # `title` must lower-case to `id`: the rail opens a pane by TITLE
+    # (`openPane(kind.title)`) and `paneKey` lower-cases it into the wire
+    # `surfaceId`, which the server then resolves as a tab name. "Action ledger"
+    # would mint the pane id `action ledger` and stream nothing, silently. Every
+    # core pane already obeys this; it is written down here because the drawer
+    # titles did not.
+    PaneKind(id="logs", title="Logs", icon="ledger"),
+    PaneKind(id="notifications", title="Notifications", icon="bell"),
+    PaneKind(id="profile", title="Profile", icon="profile"),
 )
 
 

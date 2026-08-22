@@ -34,6 +34,7 @@ from aleph_core.schemas.model_profile import Capability
 from aleph_models.discovery import (
     CAPABILITY_POLICIES,
     DiscoveredModel,
+    binding_for,
     candidates_for,
     discover_models,
     parse_model_info,
@@ -495,3 +496,69 @@ class TestRateProvenance:
         assert after.input_per_token == Decimal("1.23E-9")
         assert after.max_input_tokens == 999
         assert after.rates_source == "gateway"
+
+
+def test_every_autoconfigured_binding_reads_back() -> None:
+    """What autoconfigure WRITES, the read schema must be able to parse.
+
+    `ModelBindingIn` and `ModelBindingOut` are asymmetric on purpose — the
+    first defaults what a caller may omit, the second requires what a stored
+    row must contain. `binding_for` is stored, so it has to satisfy the
+    stricter one, and it did not: `cache_discount_pct` was missing from every
+    binding it produced, including the nested fallback.
+
+    The consequence was live and total. Every capability autoconfigure bound
+    was unreadable, so `GET /v1/model-profile-templates` and every profile read
+    on an autoconfigured project answered **500** —
+    `ValidationError: fallback.cache_discount_pct Field required`. Nothing
+    failed at write time, because the write went through the permissive schema;
+    the failure surfaced on a different route, on a different day, as a picker
+    that silently read "No templates — server default".
+
+    Asserted over EVERY capability rather than one, and the fallback is checked
+    explicitly: the missing key was on the nested binding too, and a test that
+    validated only the top level would have passed while the route still 500'd.
+    """
+    from aleph_core.schemas.model_profile import ModelBindingOut
+
+    bindings = select_default_bindings(_models(), unreachable=UNREACHABLE)
+    assert bindings, "no bindings to check — this test would pass vacuously"
+
+    unreadable: list[str] = []
+    for capability, binding in sorted(bindings.items()):
+        try:
+            parsed = ModelBindingOut.model_validate(binding)
+        except Exception as exc:
+            unreadable.append(f"{capability}: {exc}")
+            continue
+        if binding.get("fallback") is not None:
+            assert parsed.fallback is not None, (
+                f"{capability} declares a fallback that did not survive the read"
+            )
+    assert not unreadable, (
+        "autoconfigure produced bindings the read schema cannot parse, so the "
+        "profile route 500s after an autoconfigure:\n  " + "\n  ".join(unreadable)
+    )
+
+
+def test_a_binding_carries_every_field_the_read_schema_requires() -> None:
+    """The general rule, stated against the schema rather than against a list.
+
+    Without this, adding a required field to `ModelBindingOut` tomorrow
+    reintroduces exactly this defect and only the test above would catch it —
+    and only if somebody re-ran it against a gateway.
+    """
+    from aleph_core.schemas.model_profile import ModelBindingOut
+
+    required = {name for name, field in ModelBindingOut.model_fields.items() if field.is_required()}
+    assert required, "ModelBindingOut requires nothing — this test is vacuous"
+
+    binding = binding_for(_models()[0], _models()[1])
+    missing = sorted(required - set(binding))
+    assert not missing, (
+        f"binding_for omits {missing}, which ModelBindingOut requires. A row "
+        "written without them cannot be read back."
+    )
+    assert isinstance(binding.get("fallback"), dict)
+    nested_missing = sorted(required - set(binding["fallback"]))
+    assert not nested_missing, f"the nested fallback omits {nested_missing}"

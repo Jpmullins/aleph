@@ -285,3 +285,65 @@ def inspector_surface_v09(
         components=[component],
         data_model={"runs": runs, "selected": selected, "events": events},
     )
+
+
+def settings_surface_v09(
+    *,
+    title: str,
+    sections: list[dict[str, Any]],
+    surface_id: str = "settings",
+    catalog_id: str = ALEPH_V09_CATALOG_ID,
+) -> list[dict[str, Any]]:
+    """Configuration and instrumentation, as a pane rather than a slide-over.
+
+    Data model: ``{title, sections}`` where each section is
+    ``{kind, title, ...payload}`` and `kind` selects the renderer.
+
+    **Why one component and a list of sections rather than four surfaces.**
+    WS-B1 deletes `Drawers.tsx`, 742 lines carrying seven hand-written sections
+    behind a `fixed inset-0` overlay. The plan's stated reason is not cosmetic:
+    a drawer with a React function per section means a new plugin needs a new
+    React function, so settings is the one part of the workbench a plugin cannot
+    extend. Sending the SECTION LIST as data moves that decision to the server —
+    what a settings pane contains, and in what order, is now a value, and the
+    four panes that used to be drawers (`settings`, `logs`, `notifications`,
+    `profile`) are four different values of it rather than four components.
+
+    A plugin whose configuration is expressible as JSON Schema does not come
+    through here at all: `settings_card.settings_surface` generates its screen
+    from the declaration, which is the cheaper path and the one that needs no
+    entry in any of these lists.
+
+    Section kinds, and what each carries:
+
+    * ``fields``     — ``rows: [{label, value, mono?, multiline?}]``
+    * ``members``    — ``members: [{id, user_id, role}]``
+    * ``model_profile`` — ``profiles: [str]``, ``current: str|null``,
+      ``capabilities: [{id, label, help, bound, eligible: [{id, label}]}]``,
+      ``gateway: {reachable, model_count, note}``
+    * ``connectors`` — ``connectors: [{id, kind, name, requires_auth, enabled,
+      has_key, status}]``
+    * ``plugins``    — ``plugins: [{id, title, description, trust}]``
+    * ``ledger``     — ``chain: {ok, count, first_divergence_event_id}``,
+      ``events: [{id, actor_kind, action_kind, target_kind, trace_id, timestamp}]``
+    * ``runs``       — ``runs: [{id, agent_kind, status, error_text, created_at,
+      completed_at}]``
+    * ``note``       — ``text``: a stated reason a section could not be built.
+
+    A section kind the client does not know is rendered as a named placeholder,
+    not skipped. Skipping is how a settings screen loses a section and still
+    looks complete — the exact regression `docs/plan.md` WS-B1 calls the risk of
+    this workstream.
+    """
+    component = {
+        "id": "root",
+        "component": "SettingsSurface",
+        "title": {"path": "/title"},
+        "sections": {"path": "/sections"},
+    }
+    return full_surface(
+        surface_id=surface_id,
+        catalog_id=catalog_id,
+        components=[component],
+        data_model={"title": title, "sections": sections},
+    )

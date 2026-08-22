@@ -1179,8 +1179,12 @@ export const ALEPH_A2UI_CATALOG = {
         "component": {
           "const": "GroundingSurface"
         },
-        "claim": {},
-        "groundings": {},
+        "claim": {
+          "$ref": "#/$defs/DynamicValue"
+        },
+        "groundings": {
+          "$ref": "#/$defs/DynamicValue"
+        },
         "children": {
           "type": "array"
         }
@@ -1530,9 +1534,15 @@ export const ALEPH_A2UI_CATALOG = {
         "component": {
           "const": "InspectorSurface"
         },
-        "runs": {},
-        "selected": {},
-        "events": {},
+        "runs": {
+          "$ref": "#/$defs/DynamicValue"
+        },
+        "selected": {
+          "$ref": "#/$defs/DynamicValue"
+        },
+        "events": {
+          "$ref": "#/$defs/DynamicValue"
+        },
         "children": {
           "type": "array"
         }
@@ -1774,6 +1784,31 @@ export const ALEPH_A2UI_CATALOG = {
         "id",
         "component",
         "children"
+      ]
+    },
+    "SettingsSurface": {
+      "description": "Server-built. Aleph's own code composes this from live project state; do not emit one yourself. Listed here so you can read and reason about a surface you were given.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ComponentId"
+        },
+        "component": {
+          "const": "SettingsSurface"
+        },
+        "title": {
+          "$ref": "#/$defs/DynamicValue"
+        },
+        "sections": {
+          "$ref": "#/$defs/DynamicValue"
+        },
+        "children": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "component"
       ]
     },
     "Slider": {

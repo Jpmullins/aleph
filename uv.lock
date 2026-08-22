@@ -665,6 +665,7 @@ name = "aleph-runtime"
 version = "0.1.0"
 source = { editable = "packages/aleph-runtime" }
 dependencies = [
+    { name = "aleph-a2ui" },
     { name = "aleph-core" },
     { name = "aleph-db" },
     { name = "aleph-kernel" },
@@ -680,6 +681,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aleph-a2ui", editable = "packages/aleph-a2ui" },
     { name = "aleph-core", editable = "packages/aleph-core" },
     { name = "aleph-db", editable = "packages/aleph-db" },
     { name = "aleph-kernel", editable = "packages/aleph-kernel" },

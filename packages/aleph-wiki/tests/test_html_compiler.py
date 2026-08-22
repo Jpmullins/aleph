@@ -199,9 +199,8 @@ def test_the_document_carries_no_radius() -> None:
                 continue
             if not _ZERO.match(length):
                 offenders.append(f"{value!r} (component {length!r})")
-    assert not offenders, (
-        "the compiled document declares a non-zero corner radius: "
-        + "; ".join(offenders)
+    assert not offenders, "the compiled document declares a non-zero corner radius: " + "; ".join(
+        offenders
     )
 
 
@@ -229,8 +228,13 @@ def test_the_radius_check_can_see_every_shape_a_radius_takes() -> None:
     assert offenders("a{BORDER-RADIUS:9PX}") == ["9PX"], "css is case-insensitive"
     # And the forms that are genuinely zero must not be reported, or the check
     # is unsatisfiable and somebody will delete it.
-    for clean in ("a{border-radius:0}", "a{border-radius: 0px}", "a{border-radius:none}",
-                  "a{border-radius:0 0 0 0}", "a{border-radius:0%}"):
+    for clean in (
+        "a{border-radius:0}",
+        "a{border-radius: 0px}",
+        "a{border-radius:none}",
+        "a{border-radius:0 0 0 0}",
+        "a{border-radius:0%}",
+    ):
         assert offenders(clean) == [], clean
 
 

@@ -496,13 +496,39 @@ def candidates_for(
 
 
 def binding_for(model: DiscoveredModel, fallback: DiscoveredModel | None = None) -> dict[str, Any]:
-    """A `ModelBindingIn`-shaped dict carrying the gateway's own numbers."""
+    """A binding dict carrying the gateway's own numbers.
+
+    Every field `ModelBindingOut` requires is written, not only the ones
+    `ModelBindingIn` needs. The two schemas are asymmetric on purpose —
+    `ModelBindingIn` defaults what a caller may omit, `ModelBindingOut` requires
+    what a stored row must contain — and this dict is stored, so it has to
+    satisfy the stricter one.
+
+    It did not. `cache_discount_pct` was absent from every binding this
+    produced, so **every capability autoconfigure bound was unreadable**:
+    `GET /v1/model-profile-templates` and every profile read on an
+    autoconfigured project answered 500 with
+    `ValidationError: fallback.cache_discount_pct Field required`. Writing
+    through a permissive schema and reading through a strict one hides that
+    completely at write time — nothing fails until somebody reads it back, and
+    the reader is a different route on a different day.
+
+    `test_every_autoconfigured_binding_reads_back` is the round trip that would
+    have caught it, and the general rule it stands for: a producer of stored
+    state must satisfy the schema its consumer uses, not the one it is written
+    against.
+    """
     out: dict[str, Any] = {
         "model": model.id,
         "provider": "litellm",
         "max_input_tokens": model.max_input_tokens or 200_000,
         "cost_per_input_token_usd": model.input_per_token or Decimal("0"),
         "cost_per_output_token_usd": model.output_per_token or Decimal("0"),
+        # Not discoverable: no gateway reports a cache discount, and inventing
+        # one would be a price claim Aleph made up. Zero is the honest default
+        # and it is what `ModelBindingIn` would have defaulted to anyway — the
+        # difference is that it is now PRESENT, so the row can be read.
+        "cache_discount_pct": Decimal("0"),
     }
     if fallback is not None:
         out["fallback"] = binding_for(fallback)

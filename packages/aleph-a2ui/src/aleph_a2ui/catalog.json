@@ -1658,6 +1658,47 @@
         ],
         "additionalProperties": false
       }
+    },
+    "SettingsSurface": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "sections": {
+                "type": "array"
+              }
+            },
+            "required": [],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "primitives": {

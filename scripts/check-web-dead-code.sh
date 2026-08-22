@@ -27,6 +27,17 @@
 #     `Icons[kind.icon]` — a runtime string lookup the walk cannot see. Icon
 #     KEYS are checked separately in both directions below.
 #
+# WS-B1 removed one of this sweep's subjects. `Rail.tsx` used to end with a
+# four-tuple of `[kind, icon, label]` for the settings / logs / notifications /
+# profile DRAWERS, and it was the one place an icon was resolved with no
+# fallback, so it was checked separately and its absence was fatal. Those four
+# are ordinary pane kinds now: their icons come out of `pane_registry.py` like
+# every other pane's and go through `Icons[kind.icon] ?? Icons.notes`. The
+# server-icon direction below already covers them, so the tuple check is gone
+# rather than pointed somewhere else — a check kept alive against a construct
+# that no longer exists is the "gate that passes forever" this file warns about
+# two paragraphs up.
+#
 # Exemptions live in `apps/web/.deadcode-allow` and each one must carry a
 # backlog id and an ISO date, so keeping a dead file is a dated decision rather
 # than silence. A stale exemption — one naming a file that is gone, or one that
@@ -49,7 +60,6 @@ WEB = pathlib.Path("apps/web")
 SRC = WEB / "src"
 ALLOW_FILE = WEB / ".deadcode-allow"
 VITE_CONFIG = WEB / "vite.config.ts"
-RAIL = SRC / "components/Rail.tsx"
 ICONS = SRC / "components/Icons.tsx"
 REGISTRY = pathlib.Path("packages/aleph-a2ui/src/aleph_a2ui/pane_registry.py")
 
@@ -271,11 +281,11 @@ for path, tag in allowed.items():
 # ---------------------------------------------------------------------------
 # Icon keys, both directions.
 #
-# `Rail.tsx:56` does `Icons[kind.icon] ?? Icons.notes`, so an icon the SERVER
-# names and the client does not ship renders as a note and reports nothing —
-# every pane in the rail silently wearing the same wrong glyph is the shape this
-# catches. The drawer tuple in the same file has no fallback at all: an unknown
-# key there is `undefined` used as a component, which throws at render.
+# `Rail.tsx` does `Icons[kind.icon] ?? Icons.notes`, so an icon the SERVER names
+# and the client does not ship renders as a note and reports nothing — every
+# pane in the rail silently wearing the same wrong glyph is the shape this
+# catches. Since WS-B1 that fallback is the only path: the drawer tuple, which
+# resolved four icons with no fallback at all, is gone with the drawers.
 #
 # The reverse direction is ordinary dead code: an icon nothing names is 6 lines
 # of SVG that ships in every bundle and renders nowhere.
@@ -294,14 +304,6 @@ server_icons = set(re.findall(r'icon="([^"]+)"', REGISTRY.read_text()))
 if not server_icons:
     die(f"parsed zero `icon=` values out of {REGISTRY}")
 
-rail_body = strip_comments(RAIL.read_text())
-drawer_block = re.search(r"\[\s*(\[\s*\"settings\".*?)\]\s*as const", rail_body, re.S)
-if not drawer_block:
-    die(
-        f"could not find the drawer tuple in {RAIL}. It is the one place icons are "
-        "resolved WITHOUT a fallback, so an unchecked rename there throws at render."
-    )
-drawer_icons = {m[1] for m in re.findall(r'\[\s*"([^"]+)"\s*,\s*"([^"]+)"', drawer_block.group(1))}
 
 # Anything written as a literal `Icons.foo` anywhere in the app.
 static_icons: set[str] = set()
@@ -310,9 +312,9 @@ for path in modules:
         continue  # a dead file's references do not keep an icon alive
     static_icons |= set(re.findall(r"\bIcons\.([A-Za-z_][A-Za-z0-9_]*)\b", strip_comments(path.read_text())))
 
-named = server_icons | drawer_icons | static_icons
-for missing in sorted((server_icons | drawer_icons) - icon_keys):
-    where = "the pane registry" if missing in server_icons else f"{RAIL}'s drawer tuple"
+named = server_icons | static_icons
+for missing in sorted(server_icons - icon_keys):
+    where = "the pane registry"
     problems.append(
         f"{ICONS}: {where} names icon {missing!r}, which Icons does not ship — "
         "the rail falls back to `notes` and nothing reports it"
@@ -320,7 +322,7 @@ for missing in sorted((server_icons | drawer_icons) - icon_keys):
 for orphan in sorted(icon_keys - named):
     problems.append(
         f"{ICONS}: icon {orphan!r} is named by nothing — not the pane registry, "
-        f"not {RAIL}'s drawer tuple, not any `Icons.{orphan}` in live code"
+        f"not any `Icons.{orphan}` in live code"
     )
 
 if problems:

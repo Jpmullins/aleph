@@ -2,7 +2,8 @@
 
 A `Capability` is only real if three separate things say so:
 
-1. the Settings picker offers it (`CAPABILITIES` in `apps/web/src/components/Drawers.tsx`),
+1. the Settings picker offers it (`CAPABILITIES` in
+   `apps/api/src/aleph_api/routes/surfaces.py`),
 2. `CAPABILITY_POLICIES` in `packages/aleph-models/src/aleph_models/discovery.py`
    says what a model must be able to do to serve it, so autoconfigure can bind
    one and the picker can filter the list, and
@@ -20,11 +21,25 @@ picker, it had a help string — and Aleph contains no reranker at all, so every
 to ignore the unbound list.
 
 The obvious check — `grep -rn '"rerank"' | wc -l` — is the reason this file
-exists instead. `CAPABILITY_HELP` in Drawers.tsx spells the key **unquoted**
-(`rerank: "Reorders retrieved chunks",`), so the grep never matched it: deleting
-the policy and the array entry drove the count to its target while the orphan
-help text carried on shipping. A count of matching text is not a statement about
-what the system does.
+exists instead. When the picker lived in the web app's settings drawer,
+`CAPABILITY_HELP` spelled the key **unquoted** (`rerank: "Reorders retrieved
+chunks",`) and the grep never matched it: deleting the policy and the array
+entry drove the count to its target while the orphan help text carried on
+shipping. A count of matching text is not a statement about what the system does.
+
+**WS-B1 moved list (1) from the browser to the server, and the parsers moved
+with it.** The drawer became a pane, and a pane renders what the server sends —
+so a capability list compiled into the client was exactly the copy of a
+server-owned list that workstream removes. Both lists are now module constants
+in the surface producer and are read with the AST rather than with a regex,
+which retires the unquoted-key trap by construction: a Python dict key is a
+string literal or it is a syntax error.
+
+What did NOT change, and is why this file was not simply deleted: the two lists
+are still spelled out by hand rather than derived from `CAPABILITY_POLICIES`.
+Deriving them would make "offered but unbindable" and "bindable but not offered"
+inexpressible, and therefore uncheckable — which sounds like a win until the
+call-site check is the only one left standing.
 
 Used by `tests/unit/test_capability_offers.py`. Runnable directly for a report:
 ``python3 scripts/_lib/capability_offers.py``.
@@ -64,12 +79,17 @@ __all__ = [
 #:
 #: To close it: give `vision` a resolving call site, or remove it from
 #: `CAPABILITY_POLICIES` and from `CAPABILITIES` / `CAPABILITY_HELP` in
-#: Drawers.tsx — then delete this entry, which
+#: `routes/surfaces.py` — then delete this entry, which
 #: `tests/unit/test_capability_offers.py` will demand.
 KNOWN_UNRESOLVED = frozenset({"vision"})
 
 #: Where each of the three lists lives.
-DRAWERS = "apps/web/src/components/Drawers.tsx"
+#:
+#: This was `apps/web/src/components/Drawers.tsx` until WS-B1 deleted that file.
+#: The constant was renamed with it on purpose: a sweep whose variable still says
+#: `DRAWERS` after the drawer is gone is how the next reader concludes it is
+#: still there.
+OFFERS = "apps/api/src/aleph_api/routes/surfaces.py"
 DISCOVERY = "packages/aleph-models/src/aleph_models/discovery.py"
 ENUM = "packages/aleph-core/src/aleph_core/schemas/model_profile.py"
 
@@ -85,14 +105,6 @@ _NOT_CALL_SITES = (ENUM, DISCOVERY)
 _SOURCE_GLOBS = ("apps/*/src/**/*.py", "packages/*/src/**/*.py")
 
 _CAPABILITY_REF = re.compile(r"\bCapability\.([A-Z][A-Z0-9_]*)\b")
-_ARRAY = re.compile(r"const\s+CAPABILITIES\s*=\s*\[(?P<body>.*?)\]\s*as\s+const;", re.DOTALL)
-_HELP = re.compile(
-    r"const\s+CAPABILITY_HELP\s*:\s*Record<[^>]*>\s*=\s*\{(?P<body>.*?)\n\};", re.DOTALL
-)
-_QUOTED = re.compile(r"""["']([a-z][a-z0-9_]*)["']""")
-#: Object keys, BOTH spellings. `rerank:` and `"rerank":` are the same key to
-#: TypeScript and different strings to grep, which is how the orphan survived.
-_OBJECT_KEY = re.compile(r"""^\s*(?:["']([a-z][a-z0-9_]*)["']|([a-z][a-z0-9_]*))\s*:""", re.M)
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,20 +164,44 @@ def policy_capabilities(source: str, members: dict[str, str]) -> set[str]:
     return set()
 
 
+def _module_assignment(source: str, name: str) -> ast.expr | None:
+    """The value assigned to a module-level `name`, annotated or not.
+
+    AST, not regex, and for a sharper reason than tidiness: `CAPABILITIES` and
+    `CAPABILITY_HELP` also appear in that module's own prose — the comment
+    explaining why the two lists are written out rather than derived from each
+    other names both. A text search matches the explanation as well as the code.
+    """
+    tree = ast.parse(source)
+    for node in tree.body:
+        target: str | None = None
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            target = node.target.id
+        elif (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            target = node.targets[0].id
+        if target == name:
+            return node.value
+    return None
+
+
 def offered_capabilities(source: str) -> list[str]:
-    """The picker's `CAPABILITIES` array, in order."""
-    match = _ARRAY.search(source)
-    if match is None:
+    """The picker's `CAPABILITIES` tuple, in order."""
+    value = _module_assignment(source, "CAPABILITIES")
+    if not isinstance(value, (ast.Tuple, ast.List)):
         return []
-    return _QUOTED.findall(match.group("body"))
+    return [e.value for e in value.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]
 
 
 def help_capabilities(source: str) -> list[str]:
-    """The keys of `CAPABILITY_HELP`, quoted or not."""
-    match = _HELP.search(source)
-    if match is None:
+    """The keys of `CAPABILITY_HELP`, in order."""
+    value = _module_assignment(source, "CAPABILITY_HELP")
+    if not isinstance(value, ast.Dict):
         return []
-    return [quoted or bare for quoted, bare in _OBJECT_KEY.findall(match.group("body"))]
+    return [k.value for k in value.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)]
 
 
 def call_site_capabilities(root: pathlib.Path, members: dict[str, str]) -> dict[str, set[str]]:
@@ -202,9 +238,9 @@ def run(root: pathlib.Path, *, exempt: frozenset[str] = frozenset()) -> list[Pro
     """
     members = declared_capabilities((root / ENUM).read_text(encoding="utf-8"))
     policies = policy_capabilities((root / DISCOVERY).read_text(encoding="utf-8"), members)
-    drawers = (root / DRAWERS).read_text(encoding="utf-8")
-    offered = offered_capabilities(drawers)
-    helped = help_capabilities(drawers)
+    offers = (root / OFFERS).read_text(encoding="utf-8")
+    offered = offered_capabilities(offers)
+    helped = help_capabilities(offers)
     call_sites = call_site_capabilities(root, members)
     values = set(members.values())
 
@@ -215,7 +251,7 @@ def run(root: pathlib.Path, *, exempt: frozenset[str] = frozenset()) -> list[Pro
                 Problem(
                     value,
                     "not-a-capability",
-                    f"{DRAWERS} offers it; there is no such Capability member",
+                    f"{OFFERS} offers it; there is no such Capability member",
                 )
             )
         elif value not in policies:
@@ -223,7 +259,7 @@ def run(root: pathlib.Path, *, exempt: frozenset[str] = frozenset()) -> list[Pro
                 Problem(
                     value,
                     "no-policy",
-                    f"offered by {DRAWERS} but absent from CAPABILITY_POLICIES — the picker "
+                    f"offered by {OFFERS} but absent from CAPABILITY_POLICIES — the picker "
                     f"lists no models for it and autoconfigure can never bind it",
                 )
             )
@@ -232,16 +268,16 @@ def run(root: pathlib.Path, *, exempt: frozenset[str] = frozenset()) -> list[Pro
             Problem(
                 value,
                 "not-offered",
-                f"has a policy but {DRAWERS} does not offer it; nobody can bind it by hand",
+                f"has a policy but {OFFERS} does not offer it; nobody can bind it by hand",
             )
         )
     for value in sorted(set(helped) - set(offered)):
         problems.append(
-            Problem(value, "orphan-help", f"help text in {DRAWERS} for a capability nothing offers")
+            Problem(value, "orphan-help", f"help text in {OFFERS} for a capability nothing offers")
         )
     for value in sorted(set(offered) - set(helped)):
         problems.append(
-            Problem(value, "no-help", f"offered by {DRAWERS} with no entry in CAPABILITY_HELP")
+            Problem(value, "no-help", f"offered by {OFFERS} with no entry in CAPABILITY_HELP")
         )
     for value in sorted(policies):
         if value in exempt:
