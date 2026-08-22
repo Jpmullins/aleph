@@ -1,0 +1,133 @@
+# Dependabot — the half of supply-chain hygiene that PROPOSES fixes.
+#
+# `.github/workflows/security.yml` is the half that REFUSES to ship without
+# them. Neither is much use alone: a gate with no upgrade path is a permanently
+# red build, and upgrade PRs with no gate are a notification nobody opens.
+#
+# Before this file existed, nothing in the repository ever looked at a dependency
+# for a published advisory. `grep -c 'audit\|codeql\|trivy\|snyk\|bandit' ci.yml`
+# returned 0, and the four `overrides:` in pnpm-workspace.yaml — each a hand-typed
+# response to an advisory somebody happened to read — were the only evidence that
+# this work was being done at all. It was, by hand, sporadically. Three of those
+# four overrides had already rotted by the time this file was written.
+#
+# Grouping: VERSION updates are grouped into one weekly PR per ecosystem, because
+# twenty separate patch bumps is noise and noise is how a real one gets closed
+# unread. SECURITY updates are deliberately NOT grouped — Dependabot raises those
+# on their own schedule and each lands as its own PR, which is what you want when
+# the question is "can I merge just this one, today".
+
+version: 2
+
+updates:
+  # ── Python: the uv workspace ─────────────────────────────────────────────────
+  # One entry, not 23. `uv.lock` at the root resolves every workspace member, so
+  # a member's own pyproject is never the thing that pins a transitive version —
+  # the root lockfile is. That is also what `security.yml` audits, so Dependabot
+  # and the gate are reading the same file.
+  #
+  # NOT covered here, and no config can cover it: apps/code-runner/Dockerfile
+  # installs its audited stack with a literal `pip install "matplotlib==3.11.0"
+  # ...` rather than from the lockfile. Dependabot cannot see versions embedded in
+  # a RUN line. `security.yml`'s drift check is what catches those going stale.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      python:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  # ── JavaScript: the pnpm workspace (apps/web) ───────────────────────────────
+  # Rooted at "/", not at "/apps/web". The lockfile that decides what the web app
+  # installs is the root `pnpm-lock.yaml`, and the root `pnpm-workspace.yaml`
+  # carries the `overrides:` that force patched transitive versions. Pointed at
+  # the member directory, Dependabot would edit a package.json whose resolutions
+  # live one level up and could not touch the overrides at all.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      web:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  # ── JavaScript: the copilot-runtime bridge ──────────────────────────────────
+  # A separate npm project with its own package-lock.json, deliberately outside
+  # the pnpm workspace (its Dockerfile explains why: pnpm 10's build-script
+  # gating vs the esbuild postinstall tsx needs). Separate lockfile, separate
+  # entry — a single npm entry at "/" would never look at it.
+  - package-ecosystem: "npm"
+    directory: "/apps/copilot-runtime"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      copilot-runtime:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  # ── Container base images ───────────────────────────────────────────────────
+  # This entry is the reason the five Dockerfiles are pinned by digest at all. A
+  # floating `FROM python:3.13-slim` gives Dependabot nothing to open a PR about:
+  # the tag is already "current" by definition, so drift happens with no diff and
+  # no review. With a digest pinned, a rebuilt base becomes a reviewable change.
+  #
+  # `Dockerfile.dev` is matched: Dependabot's docker file-finder matches any
+  # filename containing "dockerfile", case-insensitively.
+  - package-ecosystem: "docker"
+    directories:
+      - "/apps/api"
+      - "/apps/workers"
+      - "/apps/code-runner"
+      - "/apps/copilot-runtime"
+      - "/apps/web"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      base-images:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  # ── The compose stack's own images ──────────────────────────────────────────
+  # deploy/compose/docker-compose.yml runs seven images this repository does not
+  # build — postgres/pgvector, redis, clickhouse, langfuse, the OTEL collector,
+  # minio — every one of them on a floating or long-stale tag
+  # (`minio:RELEASE.2024-10-13T13-34-11Z` has not moved in nearly two years).
+  # Those are as much a part of what gets deployed as the app images, and the
+  # `docker` ecosystem above does not read compose files.
+  - package-ecosystem: "docker-compose"
+    directory: "/deploy/compose"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      stack-images:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  # ── The workflows themselves ────────────────────────────────────────────────
+  # A pinned action is code running with a token in the repository's own context.
+  # This is also what keeps `security.yml`'s scanners current: trivy-action and
+  # codeql-action are referenced by tag there precisely so this entry can move
+  # them, since Dependabot cannot see a version embedded in a `docker run` line.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        applies-to: version-updates
+        patterns: ["*"]

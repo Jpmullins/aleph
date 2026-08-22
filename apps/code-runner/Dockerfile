@@ -4,7 +4,17 @@
 # aleph packages, no database drivers, no S3 client, no secrets. The image is
 # built from a standalone pinned pip install (NOT `uv sync --all-packages`), so
 # nothing from the workspace but this app's own source lands in the image.
-FROM python:3.13-slim
+# Pinned by digest, not by tag. `python:3.13-slim` is a moving pointer: two
+# builds a fortnight apart shipped different interpreters, different OpenSSL and
+# different Debian packages with nothing in the diff to say so, and a CVE scan of
+# "the image we build" named an image nobody could reproduce. The tag is kept in
+# the line so a human can still read which base this is; the digest is what
+# docker resolves. `.github/dependabot.yml`'s docker ecosystem is what moves it
+# forward, and `.github/workflows/security.yml` scans exactly this digest.
+# Resolved 2026-08-21 with `docker buildx imagetools inspect python:3.13-slim`
+# — the multi-arch INDEX digest, so it resolves on linux/amd64 and linux/arm64
+# alike; a per-platform manifest digest would break every non-amd64 build.
+FROM python:3.13-slim@sha256:ffb752e139c0a19692a43af8d8523b274222dd68eebad5d583b45c2201c6e30a
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

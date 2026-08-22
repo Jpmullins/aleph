@@ -1,4 +1,14 @@
-FROM node:22-alpine
+# Pinned by digest, not by tag. `node:22-alpine` is a moving pointer: two
+# builds a fortnight apart shipped different Node runtimes, different bundled npm
+# and different Alpine packages with nothing in the diff to say so, and a CVE scan of
+# "the image we build" named an image nobody could reproduce. The tag is kept in
+# the line so a human can still read which base this is; the digest is what
+# docker resolves. `.github/dependabot.yml`'s docker ecosystem is what moves it
+# forward, and `.github/workflows/security.yml` scans exactly this digest.
+# Resolved 2026-08-21 with `docker buildx imagetools inspect node:22-alpine`
+# — the multi-arch INDEX digest, so it resolves on linux/amd64 and linux/arm64
+# alike; a per-platform manifest digest would break every non-amd64 build.
+FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
 
 WORKDIR /app
 

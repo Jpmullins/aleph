@@ -12,19 +12,28 @@ defect: chunks are written before embedding now, so a mismatch costs the dense
 leg and nothing else. A fake session cannot express that, because the property
 is about transaction boundaries.
 
-The `LiteLLMClient` — the only site that writes a `ModelCall` /
-`CostLedgerEvent` — is a spy; the guarantee asserted is that it is *never
-invoked* on a mismatch, i.e. zero model spend.
+"Zero model spend" is asserted against a **real** `LiteLLMClient` pointed at
+`aleph_models.testing.FakeGateway`, not against a stub with an `.embed()`
+method. That swap matters: a stub can only report that a method was not called,
+which is a claim about this test's own object graph. The fake reports that no
+HTTP request reached a gateway and no `ModelCall` was constructed — a claim
+about billing. And the fake *serves* `wrong-dim-model` at its declared 256-wide
+output, so a green test means the guard refused a model that would otherwise
+have answered, rather than a call that was going to fail anyway.
 """
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
 
+from aleph_models.client import LiteLLMClient
+from aleph_models.pricing import PricingTable
+from aleph_models.testing import FakeGateway, FakeModel, GatewayConfig, RecordingSessions
 from aleph_rks.embedding import KNOWN_EMBEDDING_DIMS, embedding_dim_mismatch
 from aleph_rks.models import EMBEDDING_DIM
 
@@ -104,15 +113,33 @@ class _Session:
         return _Result(self._queue.pop(0))
 
 
-class _EmbedSpy:
-    """Stands in for LiteLLMClient — records if `embed` is ever awaited."""
+#: An embedder this gateway really serves, at a width `document_chunks.embedding`
+#: cannot store. 256 != EMBEDDING_DIM is the whole defect: the vector is
+#: unwritable, so producing it is pure spend.
+NARROW_EMBEDDER = FakeModel(id="wrong-dim-model", mode="embedding", embedding_dim=256)
 
-    def __init__(self) -> None:
-        self.calls = 0
 
-    async def embed(self, **_kw: Any) -> Any:  # pragma: no cover - must not run
-        self.calls += 1
-        raise AssertionError("embed must not be called on a dimension mismatch")
+@pytest.fixture
+async def gateway() -> AsyncIterator[tuple[FakeGateway, LiteLLMClient, RecordingSessions]]:
+    """A live gateway, the real client that bills through it, and the cost rows.
+
+    Hostile default config, deliberately: nothing in the guard's behaviour may
+    depend on a gateway that reports its own rates, and production's does not.
+    """
+    fake = FakeGateway(GatewayConfig(models=(NARROW_EMBEDDER,)))
+    sessions = RecordingSessions()
+    async with fake.client() as http:
+        yield (
+            fake,
+            LiteLLMClient(
+                base_url=fake.base_url,
+                api_key=fake.api_key,
+                http_client=http,
+                pricing=PricingTable(),
+                session_maker=cast("Any", sessions),
+            ),
+            sessions,
+        )
 
 
 # ---- re-embed --------------------------------------------------------------
@@ -120,10 +147,12 @@ class _EmbedSpy:
 
 async def test_reembed_dim_mismatch_marked_and_skipped_no_cost(
     monkeypatch: pytest.MonkeyPatch,
+    gateway: tuple[FakeGateway, LiteLLMClient, RecordingSessions],
 ) -> None:
     from aleph_rks.retrieval import reembed_for_project
 
-    monkeypatch.setitem(KNOWN_EMBEDDING_DIMS, "wrong-dim-model", 256)
+    fake, client, sessions = gateway
+    monkeypatch.setitem(KNOWN_EMBEDDING_DIMS, NARROW_EMBEDDER.id, NARROW_EMBEDDER.embedding_dim)
 
     project_id = uuid4()
     rec = SimpleNamespace(source_id=uuid4(), embedder_model="old-embed-model")
@@ -137,19 +166,46 @@ async def test_reembed_dim_mismatch_marked_and_skipped_no_cost(
     queue: list[Any] = [[rec], [chunk]]
     counts = {"add": 0, "commit": 0, "flush": 0, "execute": 0}
     session = _Session(queue, counts)
-    spy = _EmbedSpy()
 
     sources_done, chunks_done = await reembed_for_project(
         session,  # type: ignore[arg-type]
         project_id=project_id,
-        client=spy,
+        client=client,
         principal=SimpleNamespace(user_id=uuid4(), actor_kind="aleph_agent"),
-        profile_bindings={"embedding": {"model": "wrong-dim-model", "provider": "litellm"}},
+        profile_bindings={"embedding": {"model": NARROW_EMBEDDER.id, "provider": "litellm"}},
         purpose="rks.reembed",
     )
 
     assert (sources_done, chunks_done) == (0, 0)  # skipped, nothing written
-    assert spy.calls == 0  # zero embed calls → zero ModelCall / CostLedgerEvent
+    # Both halves of "cost nothing": nothing was asked of the gateway, and no
+    # ModelCall / CostLedgerEvent was built. Either alone would leave the other
+    # free to regress.
+    assert fake.request_count == 0
+    assert sessions.model_calls() == []
     assert counts["flush"] == 0  # never reached the write/flush
     # The stale record was left untouched (still old model) — marked, not re-billed.
     assert rec.embedder_model == "old-embed-model"
+
+
+async def test_the_gateway_would_have_answered_that_model(
+    gateway: tuple[FakeGateway, LiteLLMClient, RecordingSessions],
+) -> None:
+    """Without this, "zero requests" is ambiguous.
+
+    A guard that fires and a model that does not exist produce the same
+    `request_count == 0`. This pins that `wrong-dim-model` is a model this
+    gateway genuinely serves, so the test above is measuring refusal rather
+    than absence — and pins the 256-wide answer that makes it a mismatch.
+    """
+    fake, client, _sessions = gateway
+    resp = await client.embed(
+        principal=SimpleNamespace(user_id=uuid4(), actor_kind="aleph_agent"),  # type: ignore[arg-type]
+        project_id=uuid4(),
+        agent_run_id=None,
+        profile_bindings={"embedding": {"model": NARROW_EMBEDDER.id, "provider": "litellm"}},
+        input=["a chunk of text"],
+        purpose="test.dim_guard_control",
+    )
+    assert fake.request_count == 1
+    assert len(resp.embeddings[0]) == NARROW_EMBEDDER.embedding_dim
+    assert NARROW_EMBEDDER.embedding_dim != EMBEDDING_DIM

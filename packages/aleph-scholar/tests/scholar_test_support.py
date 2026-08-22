@@ -42,3 +42,30 @@ class FakeRedis:
             if self.store.pop(name, None) is not None:
                 removed += 1
         return removed
+
+
+class FakeClock:
+    """A monotonic clock that only advances when the fake sleep is awaited.
+
+    `ScholarHttp`'s retry budget is arithmetic on wall-clock time. Testing it
+    against the real clock leaves two bad options — a suite that sleeps for
+    real seconds, or one that asserts on timing and goes flaky on a loaded CI
+    box. Driving the clock from the sleep makes "the budget ran out" an exact,
+    instant assertion, and it is what stops a zero-backoff test configuration
+    from spinning for the whole deadline.
+    """
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = start
+        self.sleeps: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+    @property
+    def elapsed(self) -> float:
+        return self.now - 1000.0

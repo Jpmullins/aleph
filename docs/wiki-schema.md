@@ -13,9 +13,17 @@ operation reports success.
 
 The hermes skill answers this with a `SCHEMA.md` the agent must read before it
 writes. Aleph stores the same thing **as data**, because an agent can ignore a
-document: `WikiSchema.validate_page` runs on the write path, so a page carrying
-an undeclared tag is rejected at commit time rather than discovered in a lint six
-weeks later.
+document: `WikiSchema.validate_page` returns every violation a page has as a
+value a caller can act on mechanically.
+
+**It does not run on the write path.** This document claimed it did, and it did
+not: `validate_page`'s only non-test caller is `aleph_wiki.lint`, which reports
+and never repairs. So an undeclared tag is committed and then discovered in a
+lint six weeks later — precisely the gap the sentence above used to claim was
+closed. Closing it for real means calling `validate_page` from
+`WikiService.commit_revision` and deciding what a violation does there: reject
+the commit, or accept it and flag the page. That decision has not been made, and
+until it is, the schema is a governance *report*, not a gate.
 
 The vocabulary mirrors the hermes frontmatter field-for-field (`type`,
 `category`, `tags`, `related`, `sources`, `confidence`, `contested`,
@@ -30,8 +38,8 @@ files, 0 round-trip failures.
 | Schema | `wiki_schemas` table, one row per project | domain, categories, tag taxonomy, thresholds |
 | Page fields | `wiki_pages` columns | `category`, `page_type`, `tags`, `related`, `confidence`, `contested`, `contradictions` |
 | Frontmatter | `aleph_wiki.frontmatter` | the only code that moves between YAML and columns |
-| Validation | `aleph_wiki.schema` | runs on write; returns every violation, not the first |
-| Health | `aleph_wiki.lint` | 13 read-only checks, severity-ordered |
+| Validation | `aleph_wiki.schema` | returns every violation, not the first — called by the lint, not by the write path |
+| Health | `aleph_wiki.lint` | 16 read-only checks, severity-ordered |
 | Navigation | `aleph_wiki.navigation` | hubs and index, derived rather than hand-maintained |
 
 The fields are columns rather than markdown because each is something the system

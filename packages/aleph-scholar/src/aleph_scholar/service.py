@@ -78,11 +78,15 @@ class ScholarService:
 
     # -- discovery ------------------------------------------------------------
 
-    async def crossref_lookup(self, query: str, *, rows: int = 10) -> list[WorkRef]:
-        return await self.crossref.search_bibliographic(query, rows=rows)
+    async def crossref_lookup(
+        self, query: str, *, rows: int = 10, deadline_s: float | None = None
+    ) -> list[WorkRef]:
+        return await self.crossref.search_bibliographic(query, rows=rows, deadline_s=deadline_s)
 
-    async def search_openalex(self, query: str, *, per_page: int = 10) -> list[WorkRef]:
-        return await self.openalex.search(query, per_page=per_page)
+    async def search_openalex(
+        self, query: str, *, per_page: int = 10, deadline_s: float | None = None
+    ) -> list[WorkRef]:
+        return await self.openalex.search(query, per_page=per_page, deadline_s=deadline_s)
 
     async def expand_citations(
         self, ref: str, *, direction: ExpandDirection = "both", limit: int = 25

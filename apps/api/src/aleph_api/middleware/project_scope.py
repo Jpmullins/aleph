@@ -56,6 +56,23 @@ def _is_project_status_change(request: Request) -> bool:
     return request.method == "PATCH" and getattr(route, "path", None) == _RESTORE_ROUTE
 
 
+#: Routes that are POSTs and are not writes.
+#:
+#: Exporting a vault produces a zip, which is why it cannot be a GET — but it
+#: reads the wiki and changes nothing. Blocking it on an archived project locks
+#: a person out of the one thing an exit hatch exists for: taking their
+#: knowledge with them from a project they have already archived. Reads stay
+#: open on an archived project for exactly this reason; this route was on the
+#: wrong side of the method check, not the wrong side of the rule.
+#:
+#: Kept as an explicit list, not a naming convention: "any route with 'export'
+#: in it is safe" is the kind of rule that admits the first route somebody names
+#: `export_and_purge`.
+_NON_MUTATING_POSTS: frozenset[str] = frozenset(
+    {"/v1/projects/{project_id}/export/vault"}
+)
+
+
 def _assert_project_writable(request: Request, project_id: UUID, status: str) -> None:
     """Refuse writes to a project that is archived or deleted.
 
@@ -77,6 +94,9 @@ def _assert_project_writable(request: Request, project_id: UUID, status: str) ->
     they need to find.
     """
     if request.method in _READ_METHODS:
+        return
+    route_path = getattr(request.scope.get("route"), "path", None)
+    if route_path in _NON_MUTATING_POSTS:
         return
     if status in _WRITABLE_STATUSES:
         return

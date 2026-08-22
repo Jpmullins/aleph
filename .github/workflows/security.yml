@@ -1,0 +1,737 @@
+name: security
+
+# Nothing in this repository had ever looked at a dependency for a published
+# advisory, at a container image for a known CVE, or at the source for a common
+# security defect. `grep -c 'audit\|codeql\|trivy\|snyk\|bandit\|semgrep'` over
+# ci.yml returned 0. The four `overrides:` in pnpm-workspace.yaml were the whole
+# programme: a human reading an advisory feed and typing a version floor by hand.
+#
+# Same rule as ci.yml — every job here must genuinely be able to fail, and every
+# gate below has been observed failing on a real input rather than a contrived
+# one. Where a check CANNOT honestly act as a gate it says so out loud and
+# reports instead of pretending (see `base-image-cves`). A green light that means
+# nothing is worse than no light.
+#
+# ── THE THRESHOLD, AND WHY IT IS WHERE IT IS ────────────────────────────────
+# The advisory gates fire at HIGH and above. That was decided against measured
+# output on 2026-08-21, not by feel:
+#
+#   Python closure (uv)     35 raw / 27 distinct  →  0 critical, 19 high, 8 moderate
+#   pnpm workspace          20 findings           →  0 critical, 12 high, 6 moderate, 2 low
+#   copilot-runtime (npm)    9 findings           →  0 critical,  1 high, 3 moderate, 5 low
+#
+# Gate on ANYTHING and the job is red on every commit forever, mostly over
+# quadratic-complexity denial-of-service in a build-time transitive dependency.
+# Within a month nobody reads it and it protects nothing. That is the documented
+# failure mode this threshold exists to avoid.
+#
+# HIGH-and-above is NOT "the level where the job happens to be green". It is not
+# green today, and that is deliberate: every one of the 19 Python highs has a
+# published fix and is one `uv lock --upgrade-package` away, and the job's first
+# act is to print that command. The gate is red because the tree is behind.
+# Raising the threshold to make it green would be the mistake; bumping the
+# lockfiles is the work. Findings BELOW the gate are printed in full on every
+# run, never hidden, so a moderate backlog accumulates visibly.
+#
+# Revisit the threshold when the backlog is clear — tightening a gate you are
+# already failing teaches you nothing.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, and this is the leg that matters most. An advisory published
+    # against an unchanged lockfile appears in no diff and triggers no PR build:
+    # with no clock, the day the tree becomes vulnerable is a day nothing runs.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  UV_VERSION: "0.9.7"
+
+  # The gates, in one place, so each is a reviewable line rather than a flag
+  # buried in a command. Read the threshold note above before changing either.
+  ALEPH_PYTHON_AUDIT_GATE: "HIGH"
+  ALEPH_WEB_AUDIT_GATE: "high"
+
+  # Advisories accepted for now: comma-separated GHSA/PYSEC ids. EMPTY, and it
+  # should take an argument in a diff to make it otherwise. An entry that no
+  # longer matches any finding FAILS the gate rather than being ignored: a
+  # suppression nobody re-checks quietly covers the next advisory in the same
+  # package. That is not hypothetical — it is exactly what the `prismjs` override
+  # in pnpm-workspace.yaml was doing for a package that had left the graph.
+  ALEPH_AUDIT_ALLOW: ""
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # Every image reference in every Dockerfile is pinned by digest.
+  #
+  # The cheap gate that makes the expensive ones mean something: a scan of "the
+  # base image we use" is a statement about nothing unless the base image we use
+  # is a fixed thing. Observed failing on an unpinned `FROM`, on an unpinned
+  # `COPY --from=ghcr.io/astral-sh/uv:...`, and on a `--from=` naming a build
+  # stage that does not exist.
+  # ───────────────────────────────────────────────────────────────────────────
+  image-pins:
+    name: base images pinned by digest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: every FROM and COPY --from carries a digest
+        run: |
+          python3 - <<'PYEOF'
+          """Every image reference in every Dockerfile is pinned by digest.
+
+          A tag is a mutable pointer. `FROM python:3.13-slim` means "whatever that
+          tag pointed at when this build ran", so two builds of the same commit can
+          ship different interpreters, different OpenSSL and different OS packages,
+          and a CVE report about "our image" names an image nobody can rebuild. The
+          pin is also what makes Dependabot's docker ecosystem useful at all: with a
+          floating tag there is nothing for it to open a pull request about.
+
+          `COPY --from=` is checked too, and that is not pedantry — apps/api and
+          apps/workers pull the `uv` binary that resolves EVERY Python dependency in
+          the image from `ghcr.io/astral-sh/uv`. An unpinned tag there is a pinned
+          base with a floating supply chain one line below it.
+
+          Build-stage references (`COPY --from=builder`) are allowed, but only when
+          the file declares that stage: `--from=buidler` is otherwise a silent typo
+          that docker happily resolves as a registry image.
+          """
+
+          import pathlib
+          import re
+          import sys
+
+          DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
+
+
+          def check(path):
+              problems = []
+              stages = set()
+              for lineno, raw in enumerate(path.read_text().splitlines(), start=1):
+                  line = raw.strip()
+                  if line.startswith("#"):
+                      continue
+
+                  m = re.match(r"^FROM\s+(\S+)(?:\s+[Aa][Ss]\s+(\S+))?", line)
+                  if m:
+                      ref, alias = m.group(1), m.group(2)
+                      if ref not in stages and not DIGEST.search(ref):
+                          problems.append(f"{path}:{lineno}: FROM {ref} is not digest-pinned")
+                      if alias:
+                          stages.add(alias)
+                      continue
+
+                  m = re.match(r"^COPY\s+--from=(\S+)", line)
+                  if m:
+                      ref = m.group(1)
+                      if ref in stages:
+                          continue
+                      if "/" not in ref and ":" not in ref:
+                          problems.append(
+                              f"{path}:{lineno}: COPY --from={ref} names no declared build "
+                              "stage and is not a registry reference — likely a typo"
+                          )
+                      elif not DIGEST.search(ref):
+                          problems.append(
+                              f"{path}:{lineno}: COPY --from={ref} is not digest-pinned"
+                          )
+              return problems
+
+
+          files = sorted(p for p in pathlib.Path("apps").glob("*/Dockerfile*") if p.is_file())
+          # A glob that matches nothing passes silently, and a file that stopped
+          # being found is a file that stopped being checked. Five today.
+          if len(files) < 5:
+              print(f"FAIL: expected >= 5 Dockerfiles under apps/, found {len(files)}: {files}")
+              sys.exit(1)
+
+          problems = []
+          for path in files:
+              found = check(path)
+              problems += found
+              print(f"{'FAIL' if found else 'OK  '} {path}")
+
+          if problems:
+              print()
+              for p in problems:
+                  print("FAIL: " + p)
+              print()
+              print("Resolve a digest with:  docker buildx imagetools inspect <image>:<tag>")
+              print("Use the multi-arch INDEX digest — a per-platform manifest digest")
+              print("builds on amd64 and breaks every arm64 build.")
+              sys.exit(1)
+
+          print(f"\nPASS: {len(files)} Dockerfiles, every image reference digest-pinned.")
+          PYEOF
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Python advisories over the resolved uv closure, gated at HIGH and above.
+  # ───────────────────────────────────────────────────────────────────────────
+  python-advisories:
+    name: pip-audit · uv closure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      # The dev group is INCLUDED. These are the versions CI itself installs and
+      # runs, and a compromised linter is a supply-chain compromise with commit
+      # access — the fact that it never reaches production is not a defence. It
+      # costs nothing today: every finding in the tree is in the runtime closure,
+      # so `--no-dev` returns the same 27.
+      - name: resolve the closure
+        run: |
+          uv export --format requirements-txt --all-packages \
+            --no-emit-workspace --no-hashes -o /tmp/closure.txt
+          echo "$(grep -c '==' /tmp/closure.txt) pinned distributions in the closure"
+
+      # apps/code-runner does not install from the lockfile, so this is the one
+      # place where "audited" and "shipped" can silently diverge.
+      - name: the sandbox image's inline pins match the lockfile
+        id: sandbox-drift
+        continue-on-error: true
+        run: |
+          python3 - <<'PYEOF'
+          """apps/code-runner/Dockerfile's inline pins match what uv.lock resolves.
+
+          The sandbox image does NOT install from the lockfile. It runs a literal
+          `pip install "arq==0.28.0" "matplotlib==3.11.0" ...` on purpose, so that
+          nothing from the workspace but this app's own source lands in a
+          credential-less, network-partitioned container. The cost is a second,
+          independent set of version numbers that no lockfile governs: `uv export`
+          cannot see them, so the advisory gate below cannot audit them, and
+          Dependabot cannot open a PR for a version embedded in a RUN line.
+
+          Today the two agree, and that agreement is the ONLY reason auditing the
+          lockfile also covers the sandbox. This check is what keeps it true.
+          Without it the sandbox could sit two years behind every other green gate.
+          """
+
+          import pathlib
+          import re
+          import sys
+
+          def normalise(name):
+              return re.sub(r"[-_.]+", "-", name).lower()
+
+          dockerfile = pathlib.Path("apps/code-runner/Dockerfile").read_text()
+          pins = {
+              normalise(n): v
+              for n, v in re.findall(r'"([A-Za-z0-9_.\-]+)==([^"]+)"', dockerfile)
+          }
+          if not pins:
+              print("FAIL: no `name==version` pins in apps/code-runner/Dockerfile.")
+              print("      Either the install strategy changed or this parser did.")
+              print("      Both need a look; passing silently is not an option.")
+              sys.exit(1)
+
+          resolved = {}
+          for line in pathlib.Path("/tmp/closure.txt").read_text().splitlines():
+              m = re.match(r"^([A-Za-z0-9_.\-]+)==([^\s;]+)", line.strip())
+              if m:
+                  resolved[normalise(m.group(1))] = m.group(2)
+
+          problems = []
+          for name, pinned in sorted(pins.items()):
+              lock = resolved.get(name)
+              if lock is None:
+                  problems.append(
+                      f"{name}=={pinned} ships in the sandbox image but is not in the "
+                      "resolved workspace closure — nothing audits it"
+                  )
+              elif lock != pinned:
+                  problems.append(
+                      f"{name}: Dockerfile installs {pinned}, uv.lock resolves {lock} — "
+                      "the audited version and the shipped version are different"
+                  )
+              else:
+                  print(f"OK   {name}=={pinned} matches uv.lock")
+
+          if problems:
+              print()
+              for p in problems:
+                  print("FAIL: " + p)
+              sys.exit(1)
+          print(f"\nPASS: all {len(pins)} sandbox pins match the resolved closure.")
+          PYEOF
+
+      # pip-audit itself is deliberately UNPINNED while everything it scans is
+      # pinned. It is the one place a float is the safer choice: a scanner held at
+      # an old release keeps reporting an old advisory database, and a stale
+      # scanner reporting nothing looks exactly like a clean tree.
+      #
+      # `|| true` because pip-audit exits 1 on any finding at any severity. The
+      # severity decision belongs to the gate below, not to pip-audit's exit code.
+      - name: pip-audit
+        run: |
+          uvx pip-audit --format json --progress-spinner=off \
+            -r /tmp/closure.txt > /tmp/pip-audit.json || true
+          test -s /tmp/pip-audit.json  # an empty report is a failed run, not a clean tree
+
+      - name: gate at ${{ env.ALEPH_PYTHON_AUDIT_GATE }} and above
+        id: python-gate
+        continue-on-error: true
+        run: |
+          python3 - /tmp/pip-audit.json <<'PYEOF'
+          """Turn pip-audit's finding list into a pass/fail at a stated severity.
+
+          pip-audit reports WHAT is vulnerable and nothing about HOW BAD: its JSON
+          carries id, aliases and fix_versions, and no severity of any kind. On its
+          own it can therefore only be run as "fail on anything", which against this
+          tree is 27 findings on day one — and a job red on every run is a job that
+          gets ignored, the exact risk docs/plan.md WS-P12 names.
+
+          Severity comes from the GitHub Advisory Database via OSV, deliberately: it
+          is the SAME scale `pnpm audit --audit-level high` uses, so the Python gate
+          and the JavaScript gate mean the same thing by "high" instead of two
+          thresholds that merely share a word. Measured on this tree, all 27
+          findings resolve to a GHSA label, so this is not a best-effort lookup.
+
+          Fails CLOSED. A vulnerability whose severity cannot be resolved counts as
+          blocking, because "we could not find out how bad it is" must never read as
+          "it is fine" — that is how a scanner outage becomes a green light.
+          """
+
+          import json
+          import os
+          import sys
+          import time
+          import urllib.error
+          import urllib.request
+
+          RANK = {"LOW": 0, "MODERATE": 1, "HIGH": 2, "CRITICAL": 3}
+          GATE = os.environ.get("ALEPH_PYTHON_AUDIT_GATE", "HIGH").upper()
+          ALLOW = {
+              x.strip() for x in os.environ.get("ALEPH_AUDIT_ALLOW", "").split(",") if x.strip()
+          }
+
+          _cache = {}
+
+
+          def osv(vuln_id):
+              if vuln_id in _cache:
+                  return _cache[vuln_id]
+              last = ""
+              for attempt in range(3):
+                  try:
+                      url = f"https://api.osv.dev/v1/vulns/{vuln_id}"
+                      with urllib.request.urlopen(url, timeout=30) as resp:
+                          _cache[vuln_id] = json.load(resp)
+                          return _cache[vuln_id]
+                  except urllib.error.HTTPError as exc:
+                      if exc.code == 404:  # a 404 is an answer, not an outage
+                          _cache[vuln_id] = {}
+                          return {}
+                      last = f"HTTP {exc.code}"
+                  except Exception as exc:  # noqa: BLE001 — any transport failure retries
+                      last = repr(exc)
+                  time.sleep(2 * (attempt + 1))
+              _cache[vuln_id] = {"_error": last}
+              return _cache[vuln_id]
+
+
+          def severity_of(vuln_id, aliases):
+              """(severity, source id). GitHub's own label, via the GHSA alias."""
+              for candidate in [vuln_id, *aliases]:
+                  if not candidate.startswith("GHSA-"):
+                      continue
+                  label = (osv(candidate).get("database_specific") or {}).get("severity")
+                  if isinstance(label, str) and label.upper() in RANK:
+                      return label.upper(), candidate
+              return "UNRESOLVED", vuln_id
+
+
+          report = json.load(open(sys.argv[1]))
+
+          findings = []
+          seen = set()
+          for dep in report.get("dependencies", []):
+              for vuln in dep.get("vulns", []):
+                  key = (dep["name"], vuln["id"])
+                  if key in seen:  # pip-audit repeats a package per marker branch
+                      continue
+                  seen.add(key)
+                  sev, src = severity_of(vuln["id"], vuln.get("aliases") or [])
+                  fix = ", ".join(vuln.get("fix_versions") or []) or "none published"
+                  findings.append((sev, dep["name"], dep["version"], vuln["id"], src, fix))
+
+          findings.sort(key=lambda f: (-RANK.get(f[0], 99), f[1]))
+          gate_rank = RANK[GATE]
+
+          blocking = []
+          allowed_hits = set()
+          print(f"{'SEVERITY':10} {'PACKAGE':30} {'INSTALLED':12} {'ADVISORY':20} FIX")
+          print("-" * 104)
+          for sev, name, version, vid, src, fix in findings:
+              ids = {vid, src}
+              suppressed = bool(ids & ALLOW)
+              allowed_hits |= ids & ALLOW
+              # UNRESOLVED is failed separately below rather than folded in here:
+              # reporting a lookup failure as a severity finding sends the reader
+              # after the wrong fix.
+              blocks = sev in RANK and RANK[sev] >= gate_rank and not suppressed
+              mark = "BLOCK" if blocks else ("allow" if suppressed else "")
+              print(f"{sev:10} {name:30} {version:12} {vid:20} {fix}  {mark}")
+              if blocks:
+                  blocking.append((sev, name, version, vid, src, fix))
+
+          unresolved = [f for f in findings if f[0] == "UNRESOLVED"]
+          stale = ALLOW - allowed_hits
+
+          print()
+          print(f"{len(findings)} advisories, gate = {GATE} and above")
+
+          if stale:
+              print(f"FAIL: allowlist entries matching no finding any more: {sorted(stale)}")
+              print("      Remove them. A suppression nobody re-checks hides the next")
+              print("      advisory in the same package.")
+          if unresolved:
+              print(f"FAIL: {len(unresolved)} advisories have no resolvable GitHub severity.")
+              print("      Blocking on purpose: an unanswered lookup is not an all-clear.")
+          if blocking:
+              print(f"FAIL: {len(blocking)} advisories at {GATE} or above.")
+              print("      Every one of these is a lockfile bump. Fix with:")
+              pkgs = sorted({f[1] for f in blocking})
+              print("        uv lock " + " ".join(f"--upgrade-package {p}" for p in pkgs))
+              print("        uv sync --all-packages --all-extras")
+
+          if blocking or unresolved or stale:
+              sys.exit(1)
+          print("PASS: nothing at or above the gate.")
+          PYEOF
+
+      # Both checks above run on every build and neither hides the other. A gate
+      # whose first failing step short-circuits the rest reports one problem at a
+      # time, which turns a five-minute fix into five round trips.
+      - name: verdict
+        run: |
+          drift='${{ steps.sandbox-drift.outcome }}'
+          gate='${{ steps.python-gate.outcome }}'
+          echo "sandbox pin drift: $drift"
+          echo "advisory gate:     $gate"
+          test "$drift" = success && test "$gate" = success
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # JavaScript advisories: the pnpm workspace, the copilot-runtime bridge, and
+  # whether the hand-written overrides still do anything.
+  #
+  # No install step. Both `pnpm audit` and `npm audit` read the lockfile and
+  # query the advisory API — verified against a directory containing nothing but
+  # the manifests — so this job needs no node_modules and takes seconds.
+  # ───────────────────────────────────────────────────────────────────────────
+  web-advisories:
+    name: pnpm audit · npm audit · overrides
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: pnpm audit (workspace) at ${{ env.ALEPH_WEB_AUDIT_GATE }} and above
+        id: pnpm-audit
+        continue-on-error: true
+        run: pnpm audit --audit-level ${{ env.ALEPH_WEB_AUDIT_GATE }}
+
+      - name: npm audit (copilot-runtime) at ${{ env.ALEPH_WEB_AUDIT_GATE }} and above
+        id: npm-audit
+        continue-on-error: true
+        working-directory: apps/copilot-runtime
+        run: npm audit --audit-level=${{ env.ALEPH_WEB_AUDIT_GATE }}
+
+      - name: the overrides in pnpm-workspace.yaml still do something
+        id: overrides
+        continue-on-error: true
+        run: |
+          pnpm audit --json > /tmp/pnpm-audit.json || true
+          test -s /tmp/pnpm-audit.json
+          python3 - pnpm-workspace.yaml pnpm-lock.yaml /tmp/pnpm-audit.json <<'PYEOF'
+          """Assert every `overrides:` entry in pnpm-workspace.yaml still does something.
+
+          An override is a manual patch of somebody else's dependency graph: it
+          exists because an advisory landed before the parent package moved. Two
+          things then rot silently, and neither shows up in any diff:
+
+            STALE        the package left the graph entirely (upstream dropped it),
+                         so the override constrains nothing and reads as protection
+                         that is not there.
+            INSUFFICIENT a NEWER advisory covers the version the override pins to,
+                         so the floor is itself vulnerable. The line still looks
+                         like it is handling the package, which is worse than no
+                         line at all — it is where a reviewer stops looking.
+
+          Both are failures. Measured against this tree on 2026-08-21:
+          `prismjs: >=1.30.0` is STALE (prismjs is not resolved anywhere in
+          pnpm-lock.yaml any more), and `postcss: >=8.5.10` and
+          `js-yaml: >=4.2.0 <5` are both INSUFFICIENT at high severity.
+          """
+
+          import json
+          import os
+          import re
+          import sys
+
+          RANK = {"info": -1, "low": 0, "moderate": 1, "high": 2, "critical": 3}
+          GATE = RANK[os.environ.get("ALEPH_WEB_AUDIT_GATE", "high")]
+
+
+          def parse_overrides(text):
+              """Read the `overrides:` block.
+
+              Deliberately not a YAML parse: this runs on a bare runner, the block is
+              a flat `name: 'spec'` map, and a dependency on PyYAML being present
+              buys nothing here.
+              """
+              out = {}
+              inside = False
+              for line in text.splitlines():
+                  if re.match(r"^overrides:\s*$", line):
+                      inside = True
+                      continue
+                  if inside:
+                      if line and not line.startswith((" ", "\t", "#")):
+                          break
+                      m = re.match(r"^\s+([@\w][^:]*?):\s*(.+?)\s*(?:#.*)?$", line)
+                      if m:
+                          out[m.group(1).strip("\"'")] = m.group(2).strip("\"'")
+              return out
+
+
+          def resolved_in_lockfile(lock_text, package):
+              """Versions of `package` the lockfile actually resolves.
+
+              The `@` in this pattern is load-bearing. pnpm ECHOES the overrides map
+              back into pnpm-lock.yaml verbatim (`  prismjs: '>=1.30.0'` near the
+              top), so a bare name search finds the override's own reflection and
+              reports every stale override as present — the check would then pass by
+              reading its own input. Resolved entries are always `name@version:`.
+              """
+              pat = re.compile(r"^\s+" + re.escape(package) + r"@([^:(\s]+)", re.MULTILINE)
+              return sorted(set(pat.findall(lock_text)))
+
+
+          workspace = open(sys.argv[1]).read()
+          lockfile = open(sys.argv[2]).read()
+          audit = json.load(open(sys.argv[3]))
+
+          flagged = {}
+          for adv in (audit.get("advisories") or {}).values():
+              if RANK.get(adv["severity"], -1) < GATE:
+                  continue
+              flagged.setdefault(adv["module_name"], []).append(
+                  (
+                      adv["severity"],
+                      adv.get("github_advisory_id") or "?",
+                      adv["vulnerable_versions"],
+                  )
+              )
+
+          overrides = parse_overrides(workspace)
+          if not overrides:
+              print("FAIL: no `overrides:` block found — the parser or the file moved.")
+              sys.exit(1)
+
+          failures = []
+          for name, spec in overrides.items():
+              versions = resolved_in_lockfile(lockfile, name)
+              if not versions:
+                  failures.append(
+                      f"STALE        {name} ({spec}) is not resolved anywhere in "
+                      "pnpm-lock.yaml. The graph moved past it; delete the override."
+                  )
+                  continue
+              hits = flagged.get(name, [])
+              if hits:
+                  detail = "; ".join(f"{s} {g} affects {v}" for s, g, v in hits)
+                  failures.append(
+                      f"INSUFFICIENT {name} ({spec}) resolves {', '.join(versions)} and is "
+                      f"still flagged: {detail}. Raise the floor."
+                  )
+                  continue
+              print(
+                  f"OK           {name} ({spec}) resolves {', '.join(versions)}, "
+                  "no advisory at gate"
+              )
+
+          if failures:
+              print()
+              for line in failures:
+                  print("FAIL: " + line)
+              sys.exit(1)
+          print(f"\nPASS: all {len(overrides)} overrides still answer a live advisory.")
+          PYEOF
+
+      - name: verdict
+        run: |
+          echo "pnpm audit (workspace):     ${{ steps.pnpm-audit.outcome }}"
+          echo "npm audit (copilot-runtime): ${{ steps.npm-audit.outcome }}"
+          echo "overrides still needed:      ${{ steps.overrides.outcome }}"
+          test '${{ steps.pnpm-audit.outcome }}' = success \
+            && test '${{ steps.npm-audit.outcome }}' = success \
+            && test '${{ steps.overrides.outcome }}' = success
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # The image references to scan, read out of the Dockerfiles rather than typed
+  # here. A hardcoded list is a list that drifts from what actually gets built,
+  # and then the scan reports on an image nobody ships.
+  # ───────────────────────────────────────────────────────────────────────────
+  base-image-refs:
+    name: collect pinned base images
+    runs-on: ubuntu-latest
+    outputs:
+      refs: ${{ steps.collect.outputs.refs }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: collect
+        run: |
+          python3 - <<'PYEOF' >> "$GITHUB_OUTPUT"
+          import json
+          import pathlib
+          import re
+
+          refs = set()
+          for path in sorted(pathlib.Path("apps").glob("*/Dockerfile*")):
+              for line in path.read_text().splitlines():
+                  line = line.strip()
+                  if line.startswith("#"):
+                      continue
+                  m = re.match(r"^FROM\s+(\S+@sha256:[0-9a-f]{64})", line)
+                  if m:
+                      refs.add(m.group(1))
+                  m = re.match(r"^COPY\s+--from=(\S+@sha256:[0-9a-f]{64})", line)
+                  if m:
+                      refs.add(m.group(1))
+
+          print("refs=" + json.dumps(sorted(refs)))
+          PYEOF
+          cat "$GITHUB_OUTPUT"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Container CVEs — REPORTING, NOT A GATE, and the reason is written down.
+  #
+  # Measured on 2026-08-21 against the exact digests pinned in this tree:
+  #
+  #   python:3.13-slim @ffb752e   38 HIGH, 19 MEDIUM, 9 LOW  (all fix-available)
+  #   node:22-alpine   @c610fcd    1 CRITICAL, 7 HIGH        (all in npm's own
+  #                                                           bundled tree: tar,
+  #                                                           brace-expansion,
+  #                                                           sigstore, picomatch)
+  #   ghcr.io/astral-sh/uv:0.5.21  none
+  #
+  # Every one of those is in a package this repository does not choose the version
+  # of. The only lever available is moving the digest pin to a rebuilt upstream
+  # image — which is Dependabot's job, weekly — so a gate here would be red on
+  # every run until Docker Hub happens to rebuild, on somebody else's cadence.
+  # That is the "always red, therefore ignored" outcome, and buying it would cost
+  # the credibility of the gates above that CAN be acted on. So: findings are
+  # published to the Security tab and printed, and they do not block.
+  #
+  # The job can still FAIL, and on the failure that matters: `exit-code: 0`
+  # governs only "vulnerabilities were found". A digest that does not exist, a
+  # registry that refuses, or trivy erroring all still fail the step — which is
+  # the check that a bad pin cannot land quietly.
+  # ───────────────────────────────────────────────────────────────────────────
+  base-image-cves:
+    name: trivy · ${{ matrix.ref }}
+    needs: base-image-refs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: ${{ fromJSON(needs.base-image-refs.outputs.refs) }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: trivy (table, for the log)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ matrix.ref }}
+          scanners: vuln
+          # --ignore-unfixed: an advisory with no available patch is not an
+          # action, and burying the actionable ones under it is how the list stops
+          # being read.
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          format: table
+          exit-code: "0"
+
+      - name: trivy (sarif, for the Security tab)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ matrix.ref }}
+          scanners: vuln
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          format: sarif
+          output: trivy.sarif
+          exit-code: "0"
+
+      # Code scanning refuses uploads from a fork's pull request (the token is
+      # read-only there), and that refusal would read as a security failure.
+      - name: upload to code scanning
+        if: >-
+          github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy.sarif
+          category: base-image-${{ strategy.job-index }}
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # CodeQL — the only check here that reads Aleph's OWN source rather than
+  # somebody else's version numbers. Both languages, because the two halves fail
+  # differently: the Python side is where SQL construction, path handling and
+  # deserialisation live; the TypeScript side is where an unauthenticated proxy
+  # and unsafe HTML rendering live.
+  #
+  # On PRs and on a weekly clock, for the same reason as the advisory jobs: a
+  # query-pack update can find something in code that has not changed.
+  # ───────────────────────────────────────────────────────────────────────────
+  codeql:
+    name: codeql · ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          # security-and-quality over the default pack: the default set is tuned
+          # to be quiet, and this is the first time anything has ever read this
+          # source. Narrow it later against real output, not in advance.
+          queries: security-and-quality
+
+      # No build step. Both languages are interpreted, so CodeQL's own extractors
+      # index the tree directly; `autobuild` here would only run a build CodeQL
+      # does not need and add a way for this job to fail for unrelated reasons.
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}

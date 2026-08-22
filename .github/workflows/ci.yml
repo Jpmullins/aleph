@@ -124,6 +124,12 @@ jobs:
       - name: No unlocked wiki page read in the create-or-lock path
         run: ./scripts/check-page-lock.sh
 
+      # The wiki schema doc claimed 13 lint checks against 16 in the code, so a
+      # reader counting on the doc was told the wiki was less governed than it
+      # is. A number in prose beside a number in code is a number that drifts.
+      - name: The documented lint count matches the code
+        run: ./scripts/check-lint-count.sh
+
   python-unit:
     name: unit tests
     runs-on: ubuntu-latest

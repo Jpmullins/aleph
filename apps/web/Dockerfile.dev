@@ -1,16 +1,53 @@
-FROM node:22-alpine
+# Pinned by digest, not by tag. `node:22-alpine` is a moving pointer: two builds
+# a fortnight apart shipped different Node runtimes, different bundled npm and
+# different Alpine packages with nothing in the diff to say so, and a CVE scan of
+# "the image we build" named an image nobody could reproduce. The tag is kept in
+# the line so a human can still read which base this is; the digest is what
+# docker resolves. `.github/dependabot.yml`'s docker ecosystem is what moves it
+# forward, and `.github/workflows/security.yml` scans exactly this digest.
+# Resolved 2026-08-21 with `docker buildx imagetools inspect node:22-alpine`
+# — the multi-arch INDEX digest, so it resolves on linux/amd64 and linux/arm64
+# alike; a per-platform manifest digest would break every non-amd64 build.
+FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+
+WORKDIR /app
+
+# pnpm at a pinned version, installed with npm's own lockfile-free path because
+# it is the bootstrap and has no lockfile of its own. Keep the version in step
+# with `pnpm/action-setup`'s in .github/workflows/ci.yml: the image and CI must
+# resolve the same lockfile with the same resolver, or "CI is green" stops being
+# a statement about the container that ships.
+RUN npm install --global pnpm@11.17.0
+
+# The workspace root files come first, and they come together.
+#
+# `pnpm-workspace.yaml` is not optional context here — it is what makes
+# `apps/web` a workspace member. Without it pnpm sees a lockfile describing an
+# importer it cannot find and `--frozen-lockfile` fails. It also carries the
+# `overrides:` that force patched transitive versions (prismjs, postcss,
+# dompurify, js-yaml) and the `allowBuilds` entry that keeps @scarf/scarf's
+# telemetry postinstall blocked — the build-script gating the previous bare
+# `npm install` was routing around rather than configuring.
+COPY pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY apps/web/package.json ./apps/web/package.json
+
+# `--frozen-lockfile`, and this is the whole point of the change. This image
+# used to COPY apps/web/package.json alone and run a bare `npm install`, so the
+# container that actually gets deployed re-resolved every caret range at build
+# time and installed whatever had been published since — versions no lockfile
+# described, that `pnpm -C apps/web lint`/`build` had never typechecked, and
+# that differed between two builds of the same commit. `--frozen-lockfile` fails
+# the build on lockfile drift instead of quietly updating it, so the container
+# installs exactly what CI verified.
+RUN pnpm --dir /app/apps/web install --frozen-lockfile
+
+# Source last so a source edit does not invalidate the install layer. COPY
+# merges into the existing tree, so the node_modules symlink farm pnpm just
+# built under /app/apps/web survives this.
+COPY apps/web ./apps/web
 
 WORKDIR /app/apps/web
 
-COPY apps/web/package.json ./package.json
-
-# Standalone npm install: avoids pnpm 10's build-script gating (CopilotKit
-# pulls @scarf/scarf whose postinstall pnpm refuses to run), and keeps the
-# web app out of the root pnpm workspace. Vite lands in ./node_modules.
-RUN npm install
-
-COPY apps/web ./
-
 EXPOSE 5173
 
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+CMD ["pnpm", "run", "dev", "--", "--host", "0.0.0.0"]

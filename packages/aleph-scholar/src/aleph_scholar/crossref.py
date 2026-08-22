@@ -93,11 +93,18 @@ class CrossrefClient:
         body: dict[str, Any] = response.json()
         return parse_work(as_dict(body.get("message")))
 
-    async def search_bibliographic(self, query: str, *, rows: int = 10) -> list[WorkRef]:
-        """Bibliographic search (`query.bibliographic=`)."""
+    async def search_bibliographic(
+        self, query: str, *, rows: int = 10, deadline_s: float | None = None
+    ) -> list[WorkRef]:
+        """Bibliographic search (`query.bibliographic=`).
+
+        `deadline_s` is the caller's wall-clock budget for the whole attempt
+        sequence — see `ScholarHttp.get`.
+        """
         response = await self._http.get(
             f"{_API}/works",
             params={"query.bibliographic": query, "rows": str(rows)},
+            deadline_s=deadline_s,
         )
         ensure_ok(response)
         body: dict[str, Any] = response.json()

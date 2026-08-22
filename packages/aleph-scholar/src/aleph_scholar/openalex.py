@@ -88,17 +88,28 @@ class OpenAlexClient:
     def __init__(self, http: ScholarHttp) -> None:
         self._http = http
 
-    async def _list_works(self, params: dict[str, str]) -> list[OpenAlexWork]:
+    async def _list_works(
+        self, params: dict[str, str], *, deadline_s: float | None = None
+    ) -> list[OpenAlexWork]:
         params = {**params, "mailto": self._http.mailto}
-        response = await self._http.get(f"{_API}/works", params=params)
+        response = await self._http.get(f"{_API}/works", params=params, deadline_s=deadline_s)
         ensure_ok(response)
         body: dict[str, Any] = response.json()
         return [parse_work(as_dict(raw)) for raw in as_list(body.get("results"))]
 
-    async def search(self, query: str, *, per_page: int = 10) -> list[WorkRef]:
-        """Full-text relevance search over works."""
+    async def search(
+        self, query: str, *, per_page: int = 10, deadline_s: float | None = None
+    ) -> list[WorkRef]:
+        """Full-text relevance search over works.
+
+        `deadline_s` is the caller's wall-clock budget for the whole attempt
+        sequence — see `ScholarHttp.get`. Discovery search is the one call site
+        where a caller genuinely knows how long an answer is still worth
+        waiting for, so it is plumbed through rather than fixed here.
+        """
         works = await self._list_works(
-            {"search": query, "per-page": str(min(per_page, _MAX_PER_PAGE))}
+            {"search": query, "per-page": str(min(per_page, _MAX_PER_PAGE))},
+            deadline_s=deadline_s,
         )
         return [work.ref for work in works]
 
