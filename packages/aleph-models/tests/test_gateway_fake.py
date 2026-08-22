@@ -34,6 +34,7 @@ from aleph_models.testing import (
     GatewayConfig,
     RecordingSessions,
     rate_limited,
+    server_error,
 )
 from aleph_security.principal import Principal
 
@@ -570,3 +571,122 @@ class TestTheCostPathRunsForReal:
                     purpose="test.unbound",
                 )
         assert fake.request_count == 0
+
+
+class TestTheDoubleIsItselfPinned:
+    """An exported helper nothing exercises is a contract with no caller.
+
+    An adversarial review changed `server_error()`'s default from 503 to 200 AND
+    deleted the `require_auth=False` early return, in one run, and the whole
+    suite stayed green. Roughly a third of this module's `__all__` was in that
+    state: `server_error`, `invoke_status`, `require_auth`, the rollback path
+    and the commit counters. This is the repo's own dominant defect class — a
+    thing written correctly and read by nothing — one level up, in the double
+    that other workstreams are about to be measured against.
+    """
+
+    async def test_server_error_is_a_5xx_with_no_retry_after(self) -> None:
+        """The other retryable class, and the one with no header to read.
+        MEP-2's backoff has to handle it, so it has to be reachable here."""
+        fake = FakeGateway(GatewayConfig(invoke_script=(server_error(),)))
+        async with fake.client() as http:
+            resp = await http.post(
+                CHAT,
+                headers={"Authorization": f"Bearer {fake.api_key}"},
+                json={"model": "claude-haiku-4-5", "messages": []},
+            )
+        assert resp.status_code == 503
+        assert "retry-after" not in resp.headers
+
+    async def test_server_error_takes_the_status_it_is_given(self) -> None:
+        fake = FakeGateway(GatewayConfig(invoke_script=(server_error(status=502),)))
+        async with fake.client() as http:
+            resp = await http.post(
+                CHAT,
+                headers={"Authorization": f"Bearer {fake.api_key}"},
+                json={"model": "claude-haiku-4-5", "messages": []},
+            )
+        assert resp.status_code == 502
+
+    async def test_require_auth_false_really_stops_requiring_auth(self) -> None:
+        """The escape hatch for a gateway that takes no key. If it silently kept
+        requiring one, a test written for that deployment shape would fail for a
+        reason that has nothing to do with what it is testing."""
+        fake = FakeGateway(GatewayConfig(require_auth=False))
+        async with fake.client() as http:
+            resp = await http.post(CHAT, json={"model": "claude-haiku-4-5", "messages": []})
+        assert resp.status_code == 200
+
+    async def test_require_auth_true_is_the_default_and_refuses(self) -> None:
+        """Both directions, or the flag is indistinguishable from a constant."""
+        fake = FakeGateway(GatewayConfig())
+        async with fake.client() as http:
+            resp = await http.post(CHAT, json={"model": "claude-haiku-4-5", "messages": []})
+        assert resp.status_code in {401, 403}
+
+    async def test_a_model_that_lists_and_fails_on_invocation_uses_its_own_status(self) -> None:
+        """The Bedrock inference-profile case: advertised, and fails when called.
+
+        `invoke_status` only takes effect alongside `invoke_error` — a status
+        with no error is inert, which is worth pinning because the two fields
+        read like independent knobs and are not.
+        """
+        fake = FakeGateway(
+            GatewayConfig(
+                models=(
+                    FakeModel(
+                        id="advertised-only",
+                        invoke_error="inference profile not available in this region",
+                        invoke_status=422,
+                    ),
+                ),
+            )
+        )
+        async with fake.client() as http:
+            resp = await http.post(
+                CHAT,
+                headers={"Authorization": f"Bearer {fake.api_key}"},
+                json={"model": "advertised-only", "messages": []},
+            )
+        assert resp.status_code == 422
+
+
+class TestTheRecordingSessionsModelACommit:
+    """A row added and never committed does not exist.
+
+    `RecordingSessions` appended straight to a shared list, so deleting the
+    `await session.commit()` that persists every `ModelCall` left the entire
+    suite green — including the test whose docstring claimed it proved the fake
+    was rich enough to drive the real cost path.
+    """
+
+    async def test_an_uncommitted_row_is_not_reported(self) -> None:
+        from aleph_models.testing import RecordingSessions
+
+        sessions = RecordingSessions()
+        async with sessions() as session:
+            session.add(object())
+        assert sessions.added == [], "an uncommitted row was reported as written"
+        assert len(sessions.attempted) == 1, "the attempt itself is still observable"
+
+    async def test_a_committed_row_is_reported(self) -> None:
+        from aleph_models.testing import RecordingSessions
+
+        sessions = RecordingSessions()
+        marker = object()
+        async with sessions() as session:
+            session.add(marker)
+            await session.commit()
+        assert sessions.added == [marker]
+        assert sessions.commits == 1
+
+    async def test_a_rolled_back_row_is_not_reported(self) -> None:
+        from aleph_models.testing import RecordingSessions
+
+        sessions = RecordingSessions()
+        async with sessions() as session:
+            session.add(object())
+            await session.rollback()
+            await session.commit()
+        assert sessions.added == []
+        assert sessions.rollbacks == 1
