@@ -42,6 +42,19 @@ class PaneKind:
     #: Which suite contributed it. Shown nowhere yet; the moment a second suite
     #: exists, "where did this surface come from" becomes a real question.
     source: str = "research"
+    #: How this pane's content is built: `(session, project_id, params, surface_id)`
+    #: returning a v0.9 message list.
+    #:
+    #: The registry described `extend()` as "the seam a plugin uses" while the
+    #: thing that BUILT a pane was a hardcoded if/elif chain in a 1,028-line
+    #: route file that raised `NotFound` on an unknown name. So a plugin could
+    #: register a pane and the app would break on it — the door was half built,
+    #: and the missing half was the half that does anything.
+    #:
+    #: `None` for the core panes, which the route still resolves by name. A
+    #: plugin supplies one, and that is the whole difference between extending
+    #: the registry and editing the router.
+    builder: object | None = None
 
 
 _CORE: tuple[PaneKind, ...] = (

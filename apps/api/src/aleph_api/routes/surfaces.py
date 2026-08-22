@@ -12,6 +12,7 @@ import time
 from typing import TYPE_CHECKING, Annotated, Any
 from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, Path, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -25,6 +26,7 @@ from aleph_a2ui.components.cards import (
     finding_card,
 )
 from aleph_a2ui.components.surfaces import (
+    ALEPH_V09_CATALOG_ID,
     artifacts_surface_v09,
     briefs_surface_v09,
     grounding_surface_v09,
@@ -33,6 +35,7 @@ from aleph_a2ui.components.surfaces import (
     notes_surface_v09,
     wiki_surface_v09,
 )
+from aleph_a2ui.messages import full_surface
 from aleph_a2ui.pane_registry import PANE_REGISTRY
 from aleph_a2ui.surface_streamer import (
     SurfaceStreamBuffer,
@@ -47,6 +50,8 @@ from aleph_wiki.models import Citation, PageMergeProposal, SourcePage, WikiPage
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+_log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/v1/projects", tags=["surfaces"])
 
@@ -144,6 +149,33 @@ class SurfaceMessagesOut(BaseModel):
     messages: list[dict[str, Any]]
 
 
+def _pane_error_surface(surface_id: str, tab: str, exc: BaseException) -> list[dict[str, Any]]:
+    """One pane that says it broke, so the other panes can carry on.
+
+    Names the pane and the exception CLASS, not the message: an exception string
+    can carry anything the failing code put in it, and a surface is rendered in
+    a browser. The full traceback is in the API log under the same pane id.
+    """
+    return full_surface(
+        surface_id=surface_id,
+        catalog_id=ALEPH_V09_CATALOG_ID,
+        components=[
+            {
+                "id": "root",
+                "component": "Text",
+                "text": {"path": "/message"},
+            }
+        ],
+        data_model={
+            "message": (
+                f"The {tab!r} pane failed to load ({type(exc).__name__}). "
+                "The rest of the workspace is unaffected; the details are in the "
+                "API log under this pane's id."
+            )
+        },
+    )
+
+
 async def _build_tab_messages(
     session: Any,
     project_id: UUID,
@@ -163,6 +195,21 @@ async def _build_tab_messages(
     sid = surface_id or tab_lc
     args = params or {}
     page_id = args.get("page_id")
+
+    # A registered builder wins. This is the seam `PANE_REGISTRY.extend()` has
+    # always advertised and never had: the thing that BUILT a pane was the
+    # if/elif chain below, which raised `NotFound` on any name it did not know,
+    # so a plugin could register a pane and the app would break on it.
+    #
+    # The core panes keep resolving by name below rather than being converted
+    # wholesale — that is a mechanical change to seven builders with no test
+    # behind the move, and the point of this workstream is that a PLUGIN can add
+    # one, not that the existing ones are rewritten today.
+    kind = _pane_kinds().get(tab_lc)
+    builder = getattr(kind, "builder", None) if kind is not None else None
+    if builder is not None:
+        return await builder(session, project_id, args, sid)
+
     if tab_lc == "wiki":
         return await _wiki_messages(session, project_id, page_id, sid)
     # "library" is the renamed Artifacts tab (ingested Sources + built
@@ -298,9 +345,26 @@ async def stream_surfaces_multiplexed(
             out: dict[str, tuple[list[dict[str, Any]], Any]] = {}
             async with maker() as session:
                 for surface_id, tab, pane_params in specs:
-                    msgs = await _build_tab_messages(
-                        session, project_id, tab, pane_params, surface_id
-                    )
+                    try:
+                        msgs = await _build_tab_messages(
+                            session, project_id, tab, pane_params, surface_id
+                        )
+                    except Exception as exc:
+                        # One pane's failure must not take the workspace down.
+                        #
+                        # This loop feeds the SINGLE multiplexed connection that
+                        # every open pane reads from, and an exception escaping
+                        # here ended the generator — so one broken pane blanked
+                        # all of them, with the reason only in the API's stderr.
+                        # That is the specific thing that makes "a plugin can add
+                        # a pane" unsafe: a plugin's bug becomes an outage.
+                        _log.exception(
+                            "surfaces.pane_build_failed",
+                            pane=tab,
+                            surface_id=surface_id,
+                            error=f"{type(exc).__name__}: {exc}",
+                        )
+                        msgs = _pane_error_surface(surface_id, tab, exc)
                     out[surface_id] = split_surface_messages(msgs)
             return out
 

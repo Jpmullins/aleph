@@ -259,6 +259,12 @@ fi
 # the product had no HTTP route, no agent tool and no graph node.
 run_shell A8 "the kernel is reachable, and a refusal matches its own preview" \
   "uv run pytest -m integration tests/integration/test_plugin_routes.py -q -p no:randomly 2>&1 | tail -1"
+if [ $NEEDS_SERVICES -eq 1 ]; then
+  run_shell A9 "a plugin can add a pane, and a broken one cannot blank the workspace" \
+    "uv run pytest -m integration tests/integration/test_plugin_panes.py -q -p no:randomly 2>&1 | tail -1"
+else
+  skip A9 "needs postgres"
+fi
 
 # ---------------------------------------------------------------------------
 # B — Retrieval
