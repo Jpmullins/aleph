@@ -267,3 +267,103 @@ def test_merge_is_in_place_so_every_holder_sees_the_refresh() -> None:
         ).source
         == "gateway"
     )
+
+
+def test_a_client_built_with_an_empty_pricing_table_says_so(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An empty table is legal and silent, and its consequence is not.
+
+    Every `ModelCall` such a client writes lands `pricing_source="unknown"`,
+    `cost_usd=0` — "this call was free" — in an append-only ledger, and those
+    rows are what `status_numbers.py` counts as uncosted. The retrieval eval
+    passed `PricingTable()` and wrote 90 of them before anything noticed, and
+    what noticed was a health number two days later.
+
+    Not raised, because `copilot_cost_callback` legitimately falls back to an
+    empty table before the kernel binds one. Warned, so a caller who MEANT to
+    pass rates finds out at construction.
+    """
+    import logging
+    from typing import Any, cast
+
+    import httpx
+    import structlog
+
+    from aleph_models.client import LiteLLMClient
+
+    structlog.configure(
+        processors=[structlog.stdlib.render_to_log_kwargs],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        cache_logger_on_first_use=False,
+    )
+    try:
+        with caplog.at_level(logging.WARNING):
+            LiteLLMClient(
+                base_url="http://gateway.invalid",
+                api_key="k",
+                http_client=httpx.AsyncClient(),
+                pricing=PricingTable(),
+                session_maker=cast("Any", object()),
+            )
+        assert "litellm.pricing_table_empty" in caplog.text, (
+            f"no warning for an empty pricing table; logged: {caplog.text!r}"
+        )
+    finally:
+        structlog.reset_defaults()
+
+
+def test_a_client_built_with_real_rates_is_quiet(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Otherwise the warning fires on every well-configured client and is noise.
+
+    Without this, hardcoding the warning unconditionally would pass the test
+    above.
+    """
+    import logging
+    from typing import Any, cast
+
+    import httpx
+    import structlog
+
+    from aleph_models.client import LiteLLMClient
+    from aleph_models.discovery import DiscoveredModel
+
+    priced = PricingTable.from_discovery(
+        [
+            DiscoveredModel(
+                id="a-model",
+                mode="chat",
+                max_input_tokens=128_000,
+                max_output_tokens=8_192,
+                input_per_token=Decimal("0.000001"),
+                output_per_token=Decimal("0.000002"),
+                cache_read_per_token=None,
+                cache_write_per_token=None,
+                supports_vision=False,
+                supports_function_calling=True,
+                supports_reasoning=False,
+                supports_prompt_caching=False,
+            )
+        ]
+    )
+    assert priced.models(), "the fixture itself has no rates, so this proves nothing"
+
+    structlog.configure(
+        processors=[structlog.stdlib.render_to_log_kwargs],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        cache_logger_on_first_use=False,
+    )
+    try:
+        with caplog.at_level(logging.WARNING):
+            LiteLLMClient(
+                base_url="http://gateway.invalid",
+                api_key="k",
+                http_client=httpx.AsyncClient(),
+                pricing=priced,
+                session_maker=cast("Any", object()),
+            )
+        assert "litellm.pricing_table_empty" not in caplog.text
+    finally:
+        structlog.reset_defaults()

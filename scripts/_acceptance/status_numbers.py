@@ -36,10 +36,37 @@ QUERIES: list[tuple[str, str, str, str]] = [
     ),
     (
         "unindexed_documents",
-        "select count(*) from normalized_documents nd where not exists "
-        "(select 1 from document_chunks c where c.normalized_document_id = nd.id)",
+        # Scoped to REAL projects, like `ungrounded_citations` below and for the
+        # same reason. Every one of the 49 this counted on 2026-08-22 was in an
+        # `[e2e]` project created and soft-deleted by the browser suite: the
+        # number was reporting on test litter and moved whenever the suite ran.
+        # A health number a test run can turn red is a number people learn to
+        # ignore.
+        #
+        # The excluded count is printed beside it as `unindexed_documents_
+        # fixtures`, so narrowing the scope cannot hide anything behind it.
+        "select count(*) from normalized_documents nd"
+        " where not exists ("
+        "   select 1 from document_chunks c where c.normalized_document_id = nd.id)"
+        "   and exists ("
+        "     select 1 from projects p where p.id = nd.project_id"
+        "       and p.title not ilike '[e2e]%' and p.title not ilike 'smoke test%'"
+        "   )",
         "== 0",
-        "ingested documents with no chunks at all",
+        "ingested documents with no chunks at all, in real projects",
+    ),
+    (
+        "unindexed_documents_fixtures",
+        "select count(*) from normalized_documents nd"
+        " where not exists ("
+        "   select 1 from document_chunks c where c.normalized_document_id = nd.id)"
+        "   and not exists ("
+        "     select 1 from projects p where p.id = nd.project_id"
+        "       and p.title not ilike '[e2e]%' and p.title not ilike 'smoke test%'"
+        "   )",
+        ">= 0",
+        "the same count in test-fixture and orphaned projects — excluded above, "
+        "printed here so the scope cannot hide anything",
     ),
     (
         "ungrounded_citations",
@@ -56,18 +83,44 @@ QUERIES: list[tuple[str, str, str, str]] = [
         # — append-only by database trigger. So test-created beliefs outlive
         # their project permanently, exactly as test-created pages do.
         #
+        # `ilike`, not `like`. The exclusion was case-sensitive and the
+        # instance's own smoke corpus is titled "Smoke test" — lowercase t —
+        # while the pattern read 'Smoke Test%'. So "Smoke Test 2" and "Smoke
+        # Test 3" were excluded as fixtures and "Smoke test" was counted as a
+        # real project, on nothing but the case of one letter. It carried 220
+        # of the 226 this number reported.
+        #
         # Matched on the title convention the fixtures actually use, and
         # `ungrounded_citations_fixtures` prints what was excluded, so this can
         # narrow the number and cannot hide anything behind it.
         "select count(*) from citations c"
         " where (c.quote is null or c.char_start is null)"
+        "   and c.source_id is not null"
         "   and exists ("
         "     select 1 from projects p where p.id = c.project_id"
-        "       and p.title not like '[e2e]%' and p.title not like 'Smoke Test%'"
+        "       and p.title not ilike '[e2e]%' and p.title not ilike 'smoke test%'"
         "   )",
         "== 0",
-        "citations with no quote or span, in real projects — RE-DERIVABLE, so this "
-        "stays red until BeliefService.rebuild runs (decisions.md D9)",
+        "citations with a source but no quote or span, in real projects — "
+        "RE-DERIVABLE by re-reading the source (decisions.md D9)",
+    ),
+    (
+        "sourceless_citations",
+        # Counted APART, and still graded. A citation with `source_id IS NULL`
+        # is not an unevidenced belief — it is a broken row, and the two need
+        # opposite fixes: an unquoted citation is re-derivable by re-reading its
+        # source, and one with no source has nothing to re-read. Folding them
+        # together made "run BeliefService.rebuild" the stated remedy for six
+        # rows it cannot touch.
+        "select count(*) from citations c"
+        " where c.source_id is null"
+        "   and exists ("
+        "     select 1 from projects p where p.id = c.project_id"
+        "       and p.title not ilike '[e2e]%' and p.title not ilike 'smoke test%'"
+        "   )",
+        "== 0",
+        "citations naming no source at all, in real projects — NOT re-derivable; "
+        "the write path that produced them is the defect",
     ),
     (
         "ungrounded_citations_fixtures",
@@ -75,7 +128,7 @@ QUERIES: list[tuple[str, str, str, str]] = [
         " where (c.quote is null or c.char_start is null)"
         "   and not exists ("
         "     select 1 from projects p where p.id = c.project_id"
-        "       and p.title not like '[e2e]%' and p.title not like 'Smoke Test%'"
+        "       and p.title not ilike '[e2e]%' and p.title not ilike 'smoke test%'"
         "   )",
         ">= 0",
         "the same count in test-fixture and orphaned projects — excluded above, "
@@ -128,9 +181,29 @@ QUERIES: list[tuple[str, str, str, str]] = [
     ),
     (
         "degraded_indexes",
-        "select count(*) from retrieval_index_records where state <> 'embedded'",
+        # Scoped to REAL projects, like the two numbers above. All five this
+        # counted on 2026-08-22 were in one `[e2e] chat project` — a browser-suite
+        # fixture, soft-deleted, whose sources were never going to be embedded.
+        "select count(*) from retrieval_index_records r"
+        " where r.state <> 'embedded'"
+        "   and exists ("
+        "     select 1 from projects p where p.id = r.project_id"
+        "       and p.title not ilike '[e2e]%' and p.title not ilike 'smoke test%'"
+        "   )",
         "== 0",
-        "sources searchable by keyword only",
+        "sources searchable by keyword only, in real projects",
+    ),
+    (
+        "degraded_indexes_fixtures",
+        "select count(*) from retrieval_index_records r"
+        " where r.state <> 'embedded'"
+        "   and not exists ("
+        "     select 1 from projects p where p.id = r.project_id"
+        "       and p.title not ilike '[e2e]%' and p.title not ilike 'smoke test%'"
+        "   )",
+        ">= 0",
+        "the same count in test-fixture and orphaned projects — excluded above, "
+        "printed here so the scope cannot hide anything",
     ),
 ]
 

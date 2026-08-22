@@ -1,4 +1,4 @@
-2026-08-22T01:30:00Z
+2026-08-22T14:00:00Z
 
 # The moment the deployed stack started recording model calls with BOTH a price
 # and a run to attribute them to.
@@ -28,6 +28,22 @@
 # Three deploys to attribute one turn, each fixing a real and different gap,
 # and the cutoff is the last of them because that is when the claim "every
 # model call a turn makes belongs to that turn" first became true.
+#
+# A FOURTH (14:00), and this one was not on the agent path at all.
+# `aleph_evals.retrieval_eval` built its own `LiteLLMClient` with a bare
+# `PricingTable()` to drive the reranker. An empty table knows no rates, so all
+# 90 `rks.rerank.llm` rows from two measurement runs landed
+# `pricing_source="unknown"`, `cost_usd=0` — a measurement harness reporting its
+# own spend as free, into the same ledger the number counts. The eval now builds
+# its table with `PricingTable.from_discovery(...)`; the 45 rows since are
+# `gateway`-priced.
+#
+# The general fix matters more than the specific one: `LiteLLMClient` now warns
+# at CONSTRUCTION when its pricing table is empty, naming the consequence. It is
+# a warning and not an error because `copilot_cost_callback` legitimately falls
+# back to an empty table before the kernel binds one — but a caller who meant to
+# pass rates and passed `PricingTable()` used to learn about it from a health
+# number two days later.
 #
 # `docs/plan.md` number 5 is measured FORWARD from here. `docs/decisions.md` D9
 # says why: the 159 rows before it are true records of calls that really were

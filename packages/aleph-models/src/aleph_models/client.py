@@ -325,6 +325,28 @@ class LiteLLMClient:
         self._api_key = api_key
         self._http = http_client
         self._pricing = pricing
+        if not pricing.models():
+            # Said out loud at CONSTRUCTION, because the consequence is silent
+            # and lands in an append-only ledger. Every `ModelCall` this client
+            # writes will carry `pricing_source="unknown"` and `cost_usd=0` —
+            # "this call was free" — and those rows are what
+            # `status_numbers.py` counts as uncosted.
+            #
+            # Not an error: `copilot_cost_callback` deliberately falls back to
+            # an empty table when the kernel has not bound one yet, and a fresh
+            # process before discovery genuinely knows no rates. But a caller
+            # that MEANT to pass rates and passed `PricingTable()` gets nothing
+            # back today except a health number moving next week. The retrieval
+            # eval did exactly that and wrote 90 unpriced rows.
+            _log.warning(
+                "litellm.pricing_table_empty",
+                base_url=self._base_url,
+                impact=(
+                    "every ModelCall this client writes will be pricing_source="
+                    "'unknown' with cost_usd=0. Build it with "
+                    "PricingTable.from_discovery(...)"
+                ),
+            )
         self._session_maker = session_maker
         self._idem = _IdemCache(redis=redis_client)
         self._idem_ttl = idempotency_ttl_seconds

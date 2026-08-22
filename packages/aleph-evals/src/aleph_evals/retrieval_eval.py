@@ -340,6 +340,7 @@ async def _rerank_model(maker: Any) -> tuple[Any, Any, UUID, dict[str, Any], str
 
     from aleph_core.ids import uuid7
     from aleph_models.client import LiteLLMClient
+    from aleph_models.discovery import discover_models
     from aleph_models.pricing import PricingTable
     from aleph_security.principal import Principal
 
@@ -366,11 +367,28 @@ async def _rerank_model(maker: Any) -> tuple[Any, Any, UUID, dict[str, Any], str
     # holds it for the whole run. A `with` block here would close the transport
     # before the first rerank call, which fails as "client has been closed" —
     # an error that reads like a gateway problem.
+    # Priced from the gateway, not left empty. `PricingTable()` knows no rates,
+    # so every `ModelCall` this writes lands with `pricing_source="unknown"` and
+    # `cost_usd=0` — and these rows go into the SAME production ledger the
+    # `uncosted_model_calls` number counts. A measurement run that reports its
+    # own spend as free moves a health number in the wrong direction and is
+    # exactly the "silent $0" the pricing module exists to prevent. Measured: 90
+    # unpriced `rks.rerank.llm` rows from two eval runs.
+    transport = httpx.AsyncClient(timeout=120.0)
+    discovered = await discover_models(
+        base_url=os.environ["LITELLM_BASE_URL"],
+        api_key=os.environ["INSIGHTS_LITELLM_API_KEY"],
+        client=transport,
+    )
     client = LiteLLMClient(
         base_url=os.environ["LITELLM_BASE_URL"],
         api_key=os.environ["INSIGHTS_LITELLM_API_KEY"],
-        http_client=httpx.AsyncClient(timeout=120.0),
-        pricing=PricingTable(),
+        # Held for the whole run on purpose: the reranker keeps this client, so
+        # a `with` block here would close the transport before the first rerank
+        # call and fail as "client has been closed" — an error that reads like a
+        # gateway problem.
+        http_client=transport,
+        pricing=PricingTable.from_discovery(discovered),
         session_maker=maker,
     )
     principal = Principal(
