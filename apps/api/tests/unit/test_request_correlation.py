@@ -262,3 +262,156 @@ def test_middleware_order_is_pinned() -> None:
         "ErrorMiddleware",
         "AuthMiddleware",
     ), f"middleware stack is {order} — outermost first"
+
+
+# ---------------------------------------------------------------------------
+# The id has to reach the CLIENT, not just the wire
+#
+# Found by an adversarial review that drove a real cross-origin 500 instead of
+# inspecting the response object server-side. `allow_headers` governs what a
+# browser may SEND; `expose_headers` governs what its JavaScript may READ, and
+# the default readable set is a fixed handful that does not include ours. The
+# web app is on :5173 and the API on :8000, so every request is cross-origin
+# and `fetch(...).headers.get("x-request-id")` returned null.
+#
+# The whole stated purpose of this workstream is that a user reporting "I got a
+# 500 at 14:22" hands over an id instead. An id the page cannot see does not do
+# that.
+# ---------------------------------------------------------------------------
+
+
+def test_the_correlation_id_is_readable_by_a_cross_origin_page() -> None:
+    from aleph_api.main import create_app
+
+    app = create_app()
+    cors = next(m for m in app.user_middleware if "CORS" in m.cls.__name__)
+    exposed = {h.lower() for h in (cors.kwargs.get("expose_headers") or [])}
+    assert "x-request-id" in exposed, (
+        "the correlation id reaches the wire and not the browser: without "
+        "expose_headers, fetch(...).headers.get('x-request-id') is null "
+        "cross-origin, and the web app is on a different port than the API"
+    )
+
+
+def test_the_agent_run_headers_are_readable_too() -> None:
+    """The AG-UI route stamps the failed run's id and the recorded run's id.
+    Same reasoning: a header the page cannot read is a header the page does not
+    have."""
+    from aleph_api.main import create_app
+
+    app = create_app()
+    cors = next(m for m in app.user_middleware if "CORS" in m.cls.__name__)
+    exposed = {h.lower() for h in (cors.kwargs.get("expose_headers") or [])}
+    assert "x-aleph-run-id" in exposed
+    assert "x-aleph-agent-run-id" in exposed
+
+
+async def test_a_real_cross_origin_500_carries_a_readable_id() -> None:
+    """End to end through the assembled app, not over the middleware list.
+
+    A test that only reads `app.user_middleware` proves the argument was
+    passed. This proves the response a browser receives actually carries both
+    the id and the permission to read it.
+    """
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from aleph_api.main import create_app
+
+    app: FastAPI = create_app()
+
+    @app.get("/_boom_readable")
+    async def boom() -> None:
+        msg = "deliberate"
+        raise RuntimeError(msg)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://api.test") as client:
+        response = await client.get(
+            "/_boom_readable",
+            headers={"origin": "http://localhost:5173", "x-request-id": "RID-CROSSORIGIN"},
+        )
+
+    assert response.status_code == 500
+    assert response.headers.get("x-request-id") == "RID-CROSSORIGIN"
+    exposed = {
+        h.strip().lower()
+        for h in (response.headers.get("access-control-expose-headers") or "").split(",")
+        if h.strip()
+    }
+    assert "x-request-id" in exposed, (
+        "the 500 came back with no Access-Control-Expose-Headers, so a browser "
+        f"cannot read the id it carries: {dict(response.headers)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Each layer, pinned on its own
+#
+# There are TWO stamps of `x-request-id`: `RequestIDMiddleware` on the way out,
+# and `ErrorMiddleware._respond` on the response it builds. That is defence in
+# depth only if each one is tested; otherwise it is one mechanism plus dead
+# code, and nothing can tell which. An adversarial review proved the point by
+# deleting `_respond`'s stamp and watching every test stay green — RequestID,
+# being outside Error, covered for it.
+# ---------------------------------------------------------------------------
+
+
+async def test_error_middleware_stamps_the_id_on_its_own() -> None:
+    """`ErrorMiddleware` alone, with no `RequestIDMiddleware` outside it.
+
+    It has to be correct in isolation: it is the component that builds the
+    error response, and a caller that mounts it without the request-id
+    middleware — which the tests above and any future embedding of this
+    middleware do — must still get a correlated response.
+    """
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from aleph_api.middleware.errors import ErrorMiddleware
+
+    app = FastAPI()
+    app.add_middleware(ErrorMiddleware)
+
+    @app.get("/_boom_alone")
+    async def boom(request: Request) -> None:
+        request.state.request_id = "RID-ALONE"
+        msg = "deliberate"
+        raise RuntimeError(msg)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://api.test") as client:
+        response = await client.get("/_boom_alone")
+
+    assert response.status_code == 500
+    assert response.headers.get("x-request-id") == "RID-ALONE", (
+        "ErrorMiddleware did not stamp the id, and nothing outside it did either"
+    )
+    assert response.json().get("request_id") == "RID-ALONE"
+
+
+async def test_request_id_middleware_stamps_the_id_on_an_error_response() -> None:
+    """The outer layer, pinned separately.
+
+    `RequestIDMiddleware` is outside `ErrorMiddleware`, so it sees the error
+    response too. Asserted against an app where `ErrorMiddleware` is deliberately
+    absent, so this cannot pass on the inner stamp's behalf.
+    """
+    from fastapi import FastAPI
+    from fastapi.responses import JSONResponse
+    from httpx import ASGITransport, AsyncClient
+
+    from aleph_api.middleware.request_id import RequestIDMiddleware
+
+    app = FastAPI()
+    app.add_middleware(RequestIDMiddleware)
+
+    @app.get("/_five_hundred")
+    async def five_hundred() -> JSONResponse:
+        return JSONResponse({"detail": "no"}, status_code=500)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://api.test") as client:
+        response = await client.get("/_five_hundred", headers={"x-request-id": "RID-OUTER"})
+
+    assert response.headers.get("x-request-id") == "RID-OUTER"

@@ -110,6 +110,18 @@ def create_app() -> FastAPI:
         allow_origins=origins,
         allow_methods=["*"],
         allow_headers=["*"],
+        # Without this the correlation id reaches the wire and NOT the client.
+        # `allow_headers` governs what a browser may SEND; `expose_headers`
+        # governs what its JavaScript may READ, and the default readable set is
+        # a fixed handful that does not include ours. The web app is on :5173
+        # and the API on :8000, so every request is cross-origin and
+        # `fetch(...).headers.get("x-request-id")` returned null.
+        #
+        # That is the whole point of P2: a user reporting "I got a 500 at 14:22"
+        # should be handing over an id, and the id has to be one the page could
+        # actually see. Found by an adversarial review that drove a real
+        # cross-origin 500 rather than reading the response object server-side.
+        expose_headers=["x-request-id", "X-Aleph-Run-Id", "X-Aleph-Agent-Run-Id"],
         allow_credentials=True,
     )
 
