@@ -43,8 +43,15 @@ function renderKinds(kinds: readonly string[]) {
       <WorkspaceUIProvider>
         <SurfaceProvider projectId="p1" surface="settings">
         <SettingsSurface
+          // Never called: every section here renders read-only, and a section
+          // that DID dispatch through the renderer would be the F7/F8 defect —
+          // a settings value in `card_actions` and the ledger.
+          onAction={() => {
+            throw new Error("no section may dispatch a card action from the renderer");
+          }}
           component={{
-            componentType: "SettingsSurface",
+            type: "SettingsSurface",
+            id: "settings-surface",
             props: {
               title: "Settings",
               sections: kinds.map((kind) => ({ kind, title: kind })),
