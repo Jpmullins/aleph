@@ -113,7 +113,11 @@ class Settings(BaseSettings):
     # Scholar (WP-2). `mailto` is the polite-pool contact sent to Crossref /
     # OpenAlex on every request; the cap meters Consensus searches per project
     # per month (Redis counter — the Pro plan meters 250/month upstream).
-    aleph_scholar_mailto: str = "dev@aleph.local"
+    # Empty by default, deliberately. A filled-in placeholder reads as configured
+    # and buys nothing: the polite pool keys on an address a human answers, and
+    # `is_contactable("dev@aleph.local")` is already False, so the only thing the
+    # placeholder ever did was make an unset value look set.
+    aleph_scholar_mailto: str = ""
     aleph_consensus_monthly_search_cap: int = 200
 
     # The agent's own Postgres pool and its gateway budget.

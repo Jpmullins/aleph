@@ -75,7 +75,11 @@ class WorkerSettings(BaseSettings):
     # Scholar (WP-2, mirrors aleph_api.settings.Settings). The reviewer's
     # doi_verification pass (WP-3) runs in workers and needs the same polite
     # mailto + Consensus quota cap the API uses.
-    aleph_scholar_mailto: str = "dev@aleph.local"
+    # Empty by default, deliberately. A filled-in placeholder reads as configured
+    # and buys nothing: the polite pool keys on an address a human answers, and
+    # `is_contactable("dev@aleph.local")` is already False, so the only thing the
+    # placeholder ever did was make an unset value look set.
+    aleph_scholar_mailto: str = ""
     aleph_consensus_monthly_search_cap: int = 200
 
     # Native research loop bounds (WP-3). The plateau cutoff (an iteration
