@@ -43,10 +43,43 @@ QUERIES: list[tuple[str, str, str, str]] = [
     ),
     (
         "ungrounded_citations",
-        "select count(*) from citations where quote is null or char_start is null",
+        # Scoped to REAL projects, and the exclusion is reported beside it.
+        #
+        # This number asks how much of what Aleph believes is unevidenced. A
+        # test fixture's beliefs are not part of that, and the e2e suites write
+        # through the legacy path into projects they create — which is how this
+        # went from 796 to 3,997 in one afternoon of running tests, none of it
+        # about the corpus.
+        #
+        # The rows cannot simply be cleaned up: citations hang off claims, which
+        # hang off pages, which are held by a foreign key from `wiki_revisions`
+        # — append-only by database trigger. So test-created beliefs outlive
+        # their project permanently, exactly as test-created pages do.
+        #
+        # Matched on the title convention the fixtures actually use, and
+        # `ungrounded_citations_fixtures` prints what was excluded, so this can
+        # narrow the number and cannot hide anything behind it.
+        "select count(*) from citations c"
+        " where (c.quote is null or c.char_start is null)"
+        "   and exists ("
+        "     select 1 from projects p where p.id = c.project_id"
+        "       and p.title not like '[e2e]%' and p.title not like 'Smoke Test%'"
+        "   )",
         "== 0",
-        "citations with no quote or span — RE-DERIVABLE, so this stays red until "
-        "WS-RS8 runs the extractor (decisions.md D9)",
+        "citations with no quote or span, in real projects — RE-DERIVABLE, so this "
+        "stays red until BeliefService.rebuild runs (decisions.md D9)",
+    ),
+    (
+        "ungrounded_citations_fixtures",
+        "select count(*) from citations c"
+        " where (c.quote is null or c.char_start is null)"
+        "   and not exists ("
+        "     select 1 from projects p where p.id = c.project_id"
+        "       and p.title not like '[e2e]%' and p.title not like 'Smoke Test%'"
+        "   )",
+        ">= 0",
+        "the same count in test-fixture and orphaned projects — excluded above, "
+        "printed here so the scope cannot hide anything",
     ),
     (
         "uncosted_model_calls",

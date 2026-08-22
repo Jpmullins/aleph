@@ -62,12 +62,15 @@ interface ClaimInfo {
  * union now, so a new state without a class is a compile error.
  */
 const CONFIDENCE_STYLES: Record<Confidence, string> = {
-  well_supported: "bg-emerald-100 text-emerald-900",
-  weakly_supported: "bg-sky-100 text-sky-900",
+  // Semantic badge tokens, not palette scales. `tokens.css` already defines a
+  // light and a dark value for each of these; a raw `emerald-100` has no theme
+  // behind it and reads as a bright chip on a dark background.
+  well_supported: "bg-[var(--badge-completed-bg)] text-[var(--badge-completed-fg)]",
+  weakly_supported: "bg-[var(--badge-running-bg)] text-[var(--badge-running-fg)]",
   under_investigation: "bg-sunken text-ink-soft",
-  contested: "bg-amber-100 text-amber-900",
-  refuted: "bg-rose-100 text-rose-900",
-  abandoned: "bg-rose-200 text-rose-950 line-through",
+  contested: "bg-[var(--badge-warning-bg)] text-[var(--badge-warning-fg)]",
+  refuted: "bg-[var(--badge-failed-bg)] text-[var(--badge-failed-fg)]",
+  abandoned: "bg-[var(--badge-failed-bg)] text-[var(--badge-failed-fg)] line-through",
 };
 
 /** Why this citation reached no readable text — stated, never elided. */
@@ -110,7 +113,9 @@ export function GroundingSurface({ component }: RendererProps) {
           data-testid="grounding-status"
           className={
             "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold " +
-            (grounded ? "bg-emerald-100 text-emerald-900" : "bg-amber-100 text-amber-900")
+            (grounded
+              ? "bg-[var(--badge-completed-bg)] text-[var(--badge-completed-fg)]"
+              : "bg-[var(--badge-warning-bg)] text-[var(--badge-warning-fg)]")
           }
         >
           {grounded

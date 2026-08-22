@@ -126,6 +126,7 @@ else
 fi
 
 dbline 3 "ungrounded citations" ungrounded_citations
+dbline 3b "  ...in test fixtures" ungrounded_citations_fixtures
 dbline 5 "uncosted model calls" uncosted_model_calls
 dbline 5b "  ...all time (D9)" uncosted_model_calls_legacy
 dbline 6 "stuck agent runs" stuck_agent_runs

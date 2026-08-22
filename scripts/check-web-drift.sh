@@ -59,7 +59,11 @@ PIN = {
     "rounded-{sm..full}": 53,
     "rounded (bare)": 48,
     "shadow-{sm..2xl}": 9,
-    "palette-scale colour": 108,
+    # 108 -> 96: GroundingSurface's confidence badges moved from emerald/amber/
+    # rose scales onto the semantic --badge-* tokens tokens.css already defines
+    # for light and dark. A raw `emerald-100` has no theme behind it and reads
+    # as a bright chip on a dark background.
+    "palette-scale colour": 96,
     "var(--token, LITERAL)": 25,
     "raw hex / rgba()": 27,
 }

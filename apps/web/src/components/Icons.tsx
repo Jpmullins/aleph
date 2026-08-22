@@ -89,6 +89,19 @@ export const Icons = {
       <path d="M12 15v4M5 19h14" />
     </Svg>
   ),
+  // The Inspector: a timeline with a magnifier over it. WS-C3b.
+  //
+  // Registering a pane whose icon does not exist makes the rail fall back to
+  // `notes` — silently, so the Inspector would have shipped wearing the Notes
+  // icon and nothing would have said so. `check-web-dead-code.sh` caught it,
+  // which is what that sweep is for.
+  inspector: (p: IconProps = {}) => (
+    <Svg {...p}>
+      <path d="M4 6h9M4 10h6M4 14h5M4 18h8" />
+      <circle cx="16.5" cy="14.5" r="3.5" />
+      <path d="M19 17l2.5 2.5" />
+    </Svg>
+  ),
   settings: (p: IconProps = {}) => (
     <Svg {...p}>
       <circle cx="12" cy="12" r="3" />
