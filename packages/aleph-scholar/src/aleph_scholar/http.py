@@ -178,14 +178,37 @@ class _TokenBucket:
         self._updated = clock()
         self._lock = asyncio.Lock()
 
-    async def acquire(self, *, max_wait: float) -> bool:
+    async def acquire(self, *, deadline: float) -> bool:
+        """Take a token, or return False rather than wait past ``deadline``.
+
+        ``deadline`` is an ABSOLUTE clock value, not a relative budget, and that
+        is the whole fix.
+
+        A relative ``max_wait`` was re-based every time it was read, so the Nth
+        concurrent caller queued behind N-1 sleeps its own budget never saw.
+        Measured with the real class: eight concurrent callers at rate 1/s,
+        burst 1, each with a 2.0s deadline, all returned True after 7.0s — every
+        one of them three and a half times past the budget it had declared,
+        inside the component whose stated job is to refuse rather than queue
+        past it.
+
+        An absolute deadline cannot be re-based. The caller fixes it once from
+        its own remaining budget, and it is re-checked after the lock is
+        acquired, so a caller that spent its budget waiting for the lock is
+        refused there rather than going on to sleep for a token as well.
+        """
         async with self._lock:
+            # Re-check AFTER queueing. The wait that mattered may already have
+            # happened, in a queue this caller could not see.
+            remaining = deadline - self._clock()
+            if remaining < 0:
+                return False
             now = self._clock()
             self._tokens = min(self._burst, self._tokens + (now - self._updated) * self._rate)
             self._updated = now
             if self._tokens < 1.0:
                 wait = (1.0 - self._tokens) / self._rate
-                if wait > max_wait:
+                if wait > remaining:
                     return False
                 await self._sleep(wait)
                 self._updated = self._clock()
@@ -291,18 +314,26 @@ class ScholarHttp:
         when the rate limiter cannot admit the request inside that budget.
 
         **Single flight.** Concurrent GETs with the same URL and query share
-        one upstream request and one response object. The research loop fans
-        the same query out across sub-questions, so N identical searches used
-        to cost N upstream requests *and* N token-bucket slots — the queue was
-        mostly made of duplicates. Followers inherit the leader's deadline;
-        their own is not applied, because the alternative is issuing the
-        second request the de-duplication exists to avoid.
+        one upstream request and one response object, so N identical searches
+        cost one upstream request and one token-bucket slot rather than N of
+        each. Followers inherit the leader's deadline; their own is not applied,
+        because the alternative is issuing the second request the
+        de-duplication exists to avoid.
+
+        The consumer is concurrent HTTP traffic: `POST /v1/scholar/search`
+        fanned out by a UI or by several analysts converging on the same
+        question. It is deliberately NOT justified by the research loop —
+        `research_workflow._node_search` is a sequential double `for` loop with
+        no `gather` or `TaskGroup`, so it issues no concurrent duplicates at
+        all, and an earlier version of this docstring claimed otherwise.
+        De-duplication is per-in-flight and not a cache, so sequential repeats
+        still go upstream, by design.
         """
         key = _flight_key(url, params)
         inflight = self._inflight.get(key)
         if inflight is not None:
-            # shield: a follower giving up (its caller cancelled) must not
-            # cancel the request every other follower is waiting on.
+            # shield: a waiter giving up (its caller cancelled) must not cancel
+            # the request every other waiter is on.
             return await asyncio.shield(inflight)
 
         budget = self.deadline_s if deadline_s is None else deadline_s
@@ -310,11 +341,26 @@ class ScholarHttp:
             self._fetch(url, params, budget)
         )
         self._inflight[key] = task
-        try:
-            return await task
-        finally:
-            if self._inflight.get(key) is task:
-                del self._inflight[key]
+        # The LEADER shields too, and this is not symmetry for its own sake.
+        # `await task` propagates the awaiter's cancellation INTO the task, so a
+        # leader whose caller disconnected — which is exactly what FastAPI does
+        # to a request task when the client goes away — killed the flight and
+        # every follower waiting on it. Measured: three identical concurrent
+        # GETs, cancel the leader, all three raise CancelledError. That is a
+        # failure mode the pre-de-duplication code could not have had, so the
+        # optimisation would have made one disconnecting client break other
+        # people's searches.
+        #
+        # The key is cleared on the TASK's completion rather than in a `finally`
+        # here, because a cancelled leader's `finally` runs while the flight is
+        # still in progress — clearing it there would let the next caller start
+        # the second request de-duplication exists to avoid.
+        task.add_done_callback(lambda done: self._forget(key, done))
+        return await asyncio.shield(task)
+
+    def _forget(self, key: str, task: asyncio.Future[httpx.Response]) -> None:
+        if self._inflight.get(key) is task:
+            del self._inflight[key]
 
     async def _fetch(
         self, url: str, params: dict[str, str] | None, budget: float
@@ -338,7 +384,9 @@ class ScholarHttp:
             remaining = deadline - self._clock()
             if remaining <= 0:
                 break
-            if not await self._bucket(host).acquire(max_wait=remaining):
+            # The absolute deadline, not `remaining`: re-deriving a relative
+            # budget at each call site is how the limiter came to outlast it.
+            if not await self._bucket(host).acquire(deadline=deadline):
                 last_detail = (
                     f"the {self.rate_per_second:g}/s rate limit could not admit the request "
                     f"within {remaining:.1f}s of remaining budget"

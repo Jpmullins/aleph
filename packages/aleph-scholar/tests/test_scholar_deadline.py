@@ -165,3 +165,64 @@ async def test_the_default_budget_is_conservative_and_env_configurable(
 
     monkeypatch.setenv("ALEPH_SCHOLAR_DEADLINE_S", "nonsense")
     assert _http(handler, clock=clock).deadline_s == DEFAULT_DEADLINE_S
+
+
+# ---------------------------------------------------------------------------
+# The deadline has to cover time spent QUEUEING, not just time spent sleeping
+#
+# `_TokenBucket.acquire` held its lock across the sleep and computed the wait
+# once, before queueing for that lock. So the Nth concurrent caller queued
+# behind N-1 sleeps its own budget never saw. Measured against the real class
+# with the real clock: eight concurrent callers at rate 1/s, burst 1, each with
+# a 2.0s deadline, ALL returned True after 7.0 seconds — every one of them three
+# and a half times past the budget it had declared, inside the component whose
+# stated job is to refuse rather than queue past it.
+# ---------------------------------------------------------------------------
+
+
+async def test_a_caller_is_refused_when_the_queue_ate_its_budget() -> None:
+    from aleph_scholar.http import _TokenBucket
+
+    clock = FakeClock()
+    bucket = _TokenBucket(rate=1.0, burst=1, clock=clock, sleep=clock.sleep)
+
+    # Eight callers that all started at the same instant and are each willing to
+    # wait 2s. ONE shared absolute deadline is what "concurrent" means here — and
+    # it is the thing a relative budget could not express, because each caller
+    # re-based it after the previous one had already slept.
+    deadline = clock() + 2.0
+    results = [await bucket.acquire(deadline=deadline) for _ in range(8)]
+
+    admitted = sum(1 for r in results if r)
+    assert admitted < 8, (
+        "every caller was admitted, so the limiter queued them past the budget each one declared"
+    )
+    # The first has the token; the next two can wait 1s and 2s inside 2s. Beyond
+    # that the queue itself has consumed the budget.
+    assert admitted <= 3, f"{admitted} callers were admitted on a 2s budget at 1/s"
+
+
+async def test_the_refusal_is_not_just_a_low_ceiling() -> None:
+    """The check must be able to say yes. A limiter that refuses everything
+    under contention is a different bug with the same test."""
+    from aleph_scholar.http import _TokenBucket
+
+    clock = FakeClock()
+    bucket = _TokenBucket(rate=1.0, burst=8, clock=clock, sleep=clock.sleep)
+
+    deadline = clock() + 2.0
+    results = [await bucket.acquire(deadline=deadline) for _ in range(8)]
+    assert all(results), "a burst of eight should admit eight without waiting at all"
+    assert clock.elapsed == 0.0
+
+
+async def test_a_single_caller_still_waits_the_time_it_agreed_to() -> None:
+    """Uncontended, the behaviour is unchanged: wait up to the budget, then go."""
+    from aleph_scholar.http import _TokenBucket
+
+    clock = FakeClock()
+    bucket = _TokenBucket(rate=1.0, burst=1, clock=clock, sleep=clock.sleep)
+
+    assert await bucket.acquire(deadline=clock() + 5.0) is True  # takes the only token
+    assert await bucket.acquire(deadline=clock() + 5.0) is True  # waits ~1s for the next
+    assert clock.elapsed == pytest.approx(1.0)

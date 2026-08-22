@@ -16,6 +16,7 @@ answer possible.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 import httpx
 import pytest
@@ -199,3 +200,57 @@ async def test_dedup_does_not_leak_the_flight_registry() -> None:
 
     assert http._inflight == {}
     assert http_failing._inflight == {}
+
+
+async def test_cancelling_the_leader_does_not_kill_the_flight() -> None:
+    """One disconnecting client must not fail everybody else's search.
+
+    The leader used to `await task` unshielded, and awaiting a task propagates
+    the awaiter's cancellation INTO it. FastAPI cancels a request task when the
+    client goes away, so a browser closing a tab killed the flight and every
+    other search that had joined it — a failure mode the pre-de-duplication code
+    could not have had. An optimisation that introduces a new way to break other
+    people's requests is not an optimisation.
+
+    The companion test cancels a FOLLOWER, which the shield on the follower path
+    already covered. This is the half that was missing.
+    """
+    upstream = GatedUpstream(httpx.Response(200, json={"results": []}))
+    http = _http(upstream, burst=1)
+
+    tasks = await _launch([http.get(_URL, params={"search": "same"}) for _ in range(3)])
+    tasks[0].cancel()  # the leader's caller disconnected
+    upstream.release.set()
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    assert isinstance(results[0], asyncio.CancelledError), "the leader should see its own cancel"
+    for index, result in enumerate(results[1:], start=1):
+        assert not isinstance(result, BaseException), (
+            f"follower {index} was killed by the leader disconnecting: {result!r}"
+        )
+        assert result.status_code == 200
+    assert upstream.calls == 1
+
+
+async def test_the_flight_is_forgotten_when_it_finishes_not_when_a_waiter_leaves() -> None:
+    """A cancelled leader's cleanup must not clear the in-flight entry while the
+    request is still running — doing so lets the next caller start the second
+    request de-duplication exists to avoid."""
+    upstream = GatedUpstream(httpx.Response(200, json={"results": []}))
+    http = _http(upstream, burst=1)
+
+    leader = (await _launch([http.get(_URL, params={"search": "same"})]))[0]
+    leader.cancel()
+    await asyncio.sleep(0.05)
+
+    # A newcomer arriving while the abandoned flight is still in progress joins
+    # it rather than starting a second one.
+    late = (await _launch([http.get(_URL, params={"search": "same"})]))[0]
+    upstream.release.set()
+    response = await late
+    with contextlib.suppress(asyncio.CancelledError):
+        await leader
+
+    assert response.status_code == 200
+    assert upstream.calls == 1, f"the abandoned flight was restarted: {upstream.calls} calls"
