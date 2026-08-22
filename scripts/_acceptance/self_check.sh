@@ -250,7 +250,7 @@ probe "check-acceptance-claims notices a bare ::test_id no file defines" \
 # could not see either.
 probe "check-acceptance-rows notices a gate row on no scoreboard" \
   docs/acceptance.md \
-  's/^\| B1e \|/| B1x |/' \
+  's/^\| B1e \|/| B1x |/m' \
   "./scripts/check-acceptance-rows.sh"
 
 probe "check-acceptance-rows notices prose citing a row that does not exist" \

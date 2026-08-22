@@ -208,9 +208,25 @@ async def main() -> int:
         await engine.dispose()
         project_id = str(row.id) if row else None
 
+    # A skip that exits 0 is recorded by `acceptance.sh`'s `run_shell` as PASS —
+    # the row prints "SKIP: …" as its detail and counts toward `pass=`. That is
+    # the shape of check this repository keeps finding: a green that means
+    # nothing was measured. When the operator has explicitly asked for real
+    # turns, being unable to drive one is a failure, not a shrug. Without that
+    # flag the probe is a tool someone ran by hand, and a skip is a skip.
+    required = os.environ.get("ALEPH_ACCEPTANCE_DRIVE_AGENT") == "1"
+    unmeasured = 1 if required else 0
+
+    # The word on the LAST line has to match the exit status. `run_shell`
+    # records the last non-empty line as the row's detail, so returning 1 after
+    # printing "SKIP: …" gives the gate a row reading `FAIL  SKIP: …` — which
+    # is not a false green, but it is the same last-line reasoning applied to
+    # the exit code and not to the sentence.
+    verdict = "FAIL" if required else "SKIP"
+
     if project_id is None:
-        print("SKIP: no project to drive a turn against (set ALEPH_PROBE_PROJECT_ID)")
-        return 0
+        print(f"{verdict}: no project to drive a turn against (set ALEPH_PROBE_PROJECT_ID)")
+        return unmeasured
 
     url = f"{args.api.rstrip('/')}/copilotkit/agent/assistant"
     turns: list[Turn] = []
@@ -218,8 +234,8 @@ async def main() -> int:
         try:
             await client.get(f"{args.api.rstrip('/')}/healthz", timeout=5.0)
         except httpx.HTTPError as exc:
-            print(f"SKIP: the API is not reachable at {args.api} ({type(exc).__name__})")
-            return 0
+            print(f"{verdict}: the API is not reachable at {args.api} ({type(exc).__name__})")
+            return unmeasured
         for _ in range(args.samples):
             turns.append(await _drive(client, url, project_id, args.prompt))
 
@@ -281,10 +297,26 @@ async def main() -> int:
             "(no run id came back, or DATABASE_URL is unset)"
         )
 
-    if failed == len(turns):
-        print("\nFAIL: every turn failed")
-        return 1
-    return 0
+    # One line carrying every number, printed LAST, because `run_shell` in
+    # `scripts/acceptance.sh` records only the last non-empty line of a row's
+    # output. Before this, a run where two of three turns errored ended on the
+    # request-count line and was recorded as `H2 PASS` with the failures
+    # nowhere in the gate's output — visible only to whoever scrolled the raw
+    # log, which is nobody.
+    # `n/a`, never `0.00s` — a zero here would read as an instantaneous first
+    # token, which is the same shape of lie `status.sh` prints `n/a` to avoid.
+    samples = [t.first_token_s for t in good if t.first_token_s is not None]
+    ttft = f"{_percentile(samples, 50):.2f}s" if samples else "n/a"
+    reqs = f"{min(counted)}-{max(counted)}" if counted else "n/a"
+    verdict = "every turn ok" if failed == 0 else f"{failed} of {len(turns)} turns FAILED"
+    print(
+        f"\n{len(turns)} turn(s): {verdict}; first token p50 {ttft}; "
+        f"upstream chat completions per turn {reqs}"
+    )
+    # Any failed turn is a red row. A chat turn that ends in RUN_ERROR is the
+    # defect `WS-E1a` exists for, and this probe is opt-in — nobody runs it by
+    # accident, so "mostly worked" is not the answer it should give.
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
