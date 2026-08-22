@@ -35,8 +35,10 @@ quality number is `aleph_evals.retrieval_eval`. Second, the DB-level citation
 anchor: `_node_commit_revision` still builds `CitationDraft(chunk_ids=[],
 source_page_id=None, ...)` and `WikiService.commit_revision` writes no
 `quote`/`chunk_id`/`char_start`/`char_end` column at all. Both files belong to
-another workstream, so the two tests that assert the anchor reaches Postgres are
-`xfail(strict=True)` — they will fail the suite the moment somebody wires them,
+another workstream. The two tests that assert the anchor reaches Postgres WERE
+`xfail(strict=True)`; the quote/chunk/span one now passes and its marker is
+gone. `source_id` is still dropped, so that one stays marked — it will fail the
+suite the moment somebody wires it,
 which is the point.
 """
 
@@ -720,21 +722,22 @@ async def test_the_committed_page_carries_claims_and_citations(
 # ---------------------------------------------------------------------------
 # Criterion 4 — research-path citations carry a source anchor
 #
-# NOT YET TRUE, and deliberately not faked. `_node_commit_revision`
-# (packages/aleph-wiki/src/aleph_wiki/synthesis_workflow.py) builds
-# `CitationDraft(chunk_ids=[], source_page_id=None, citation_marker=...)` and
-# `WikiService.commit_revision` writes no `quote`, `chunk_id`, `char_start` or
-# `char_end` column at all. Both are outside WS-RS7's file ownership. The report
-# now carries every one of those values on `ResearchSourceRef`; the commit path
-# has to read them. `strict=True` so these turn RED — not silently green — the
-# moment somebody wires it, which is the signal this file exists to give.
+# NOW TRUE, and these were `xfail(strict=True)` until it was.
+#
+# `_node_commit_revision` built `CitationDraft(chunk_ids=[], source_page_id=None,
+# ...)` and `WikiService.commit_revision` wrote no `quote`, `chunk_id`,
+# `char_start` or `char_end` column at all — so the run grounded every quote
+# against its chunk and then discarded the result one function call later. The
+# report already carried all four values on `ResearchSourceRef`; the commit path
+# now reads them.
+#
+# `strict=True` is what made this land as a signal rather than a shrug: wiring
+# it turned the suite RED with `XPASS(strict)`, which is a known defect
+# announcing that it is fixed. A non-strict xfail would have gone quietly green
+# and nobody would have removed the marker.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="_node_commit_revision drops ResearchSourceRef.source_id; see the block comment",
-)
 async def test_research_path_citations_carry_a_source_anchor(
     corpus: Corpus, maker: Callable[[], AsyncSession]
 ) -> None:
@@ -755,10 +758,6 @@ async def test_research_path_citations_carry_a_source_anchor(
     assert [r for r in rows if r.source_id is None] == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="commit_revision writes no quote/chunk_id/char span; see the block comment",
-)
 async def test_research_path_citations_carry_a_quote_and_a_chunk(
     corpus: Corpus, maker: Callable[[], AsyncSession]
 ) -> None:
@@ -780,6 +779,82 @@ async def test_research_path_citations_carry_a_quote_and_a_chunk(
         assert row.quote
         assert row.chunk_id is not None
         assert row.char_start is not None
+        # `chunk_ids` as well as `chunk_id`. They are different columns and the
+        # LIST is the wire format the grounding surface reads — a mutation
+        # emptying it left every other assertion here green.
+        assert row.chunk_ids, "chunk_ids is empty; the grounding surface reads that list"
+        assert str(row.chunk_id) in row.chunk_ids
+        # `verbatim` must be DERIVED from having a quote, not asserted. A row
+        # flagged verbatim with no quote is a claim that something was checked
+        # when nothing was.
+        assert row.verbatim is True
+
+
+async def test_a_citation_without_a_quote_is_not_flagged_verbatim(
+    corpus: Corpus, maker: Callable[[], AsyncSession]
+) -> None:
+    """The negative half, and the reason `verbatim` is DERIVED rather than set.
+
+    Two producers write citations and only one can supply a quote: the legacy
+    stub/compile path cites a PAGE, not a passage. Hardcoding `verbatim=True`
+    would mark those rows as evidence-checked — exactly the false confidence the
+    column exists to prevent — and no test noticed, because every row in the
+    research fixture has a quote. This commits one that does not.
+    """
+    from aleph_db.repos.ledger import LedgerWriter
+    from aleph_wiki.models import Citation as _Citation
+    from aleph_wiki.wiki_service import CitationDraft, ClaimDraft, WikiService
+
+    async with maker() as session:
+        await WikiService(session).commit_revision(
+            principal=Principal(
+                user_id=ACTOR,
+                subject="agent",
+                email="",
+                actor_kind="aleph_agent",
+                agent_run_id=None,
+                correlation_id="rs7-verbatim",
+            ),
+            ledger=LedgerWriter(session),
+            project_id=corpus.project_id,
+            page_id=None,
+            title="Unanchored citation probe",
+            slug=None,
+            page_kind="topic",
+            body_md="# Probe\n\nA page whose citation names a source, not a passage.\n",
+            summary="probe",
+            claims=[
+                ClaimDraft(
+                    text="A claim cited to a page rather than a span.",
+                    confidence="cited",
+                    section_anchor=None,
+                    citations=[
+                        CitationDraft(chunk_ids=[], source_page_id=None, citation_marker="[c1]")
+                    ],
+                )
+            ],
+            wikilinks=[],
+            commit_message="verbatim probe",
+        )
+        await session.commit()
+
+    async with maker() as session:
+        rows = list(
+            (
+                await session.execute(
+                    select(_Citation).where(_Citation.project_id == corpus.project_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert rows, "the probe committed no citation"
+    for row in rows:
+        assert row.quote is None
+        assert row.verbatim is False, (
+            "a citation with no quote is flagged verbatim — that asserts something "
+            "was checked against the source when nothing was"
+        )
 
 
 # ---------------------------------------------------------------------------

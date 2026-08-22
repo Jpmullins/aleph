@@ -212,6 +212,32 @@ async def _node_wikilink_resolve(state: SynthesisState) -> dict:
         return {"resolved_wikilinks": wikilinks}
 
 
+async def _sources_for_chunks(ctx: Any, chunk_ids: set[UUID]) -> dict[UUID, UUID]:
+    """`chunk_id -> source_id`, read from the chunks themselves.
+
+    One query for the whole revision rather than one per citation. A chunk that
+    has since been deleted simply does not appear, and its citation is written
+    with `source_id = None` — the honest answer, and the same one the row had
+    before, rather than a guess that would make a retraction sweep confident and
+    wrong.
+    """
+    if not chunk_ids:
+        return {}
+    from sqlalchemy import select as _select
+
+    from aleph_rks.models import DocumentChunk
+
+    async with ctx.session_maker() as session:
+        rows = (
+            await session.execute(
+                _select(DocumentChunk.id, DocumentChunk.source_id).where(
+                    DocumentChunk.id.in_(chunk_ids)
+                )
+            )
+        ).all()
+    return dict(rows)  # ty: ignore[invalid-return-type]
+
+
 @with_phase("commit_revision", ctx_getter=lambda: _ctx())
 async def _node_commit_revision(state: SynthesisState) -> dict:
     """Commit a single synthesis page as a draft and record the SynthesisProposal."""
@@ -236,6 +262,19 @@ async def _node_commit_revision(state: SynthesisState) -> dict:
         report = state["report"]
         wikilinks = state.get("resolved_wikilinks") or []
 
+        # `Citation.source_id` is the retraction join key — what
+        # `aleph_reviewer.retraction` selects on to find every claim resting on
+        # a source that was withdrawn. Left NULL, a retraction propagates
+        # nowhere and reports success.
+        #
+        # Resolved from the CHUNK rather than from `source_short_id`. The chunk
+        # row already carries `source_id`, so this is a lookup of a fact rather
+        # than a re-derivation from a display string — and a short id can be
+        # missing, ambiguous, or belong to a source the run did not read.
+        source_by_chunk = await _sources_for_chunks(
+            ctx, {ref.chunk_id for ref in report.citations_by_marker.values()}
+        )
+
         claim_drafts: list[ClaimDraft] = []
         for c in report.claims:
             citations = []
@@ -246,7 +285,18 @@ async def _node_commit_revision(state: SynthesisState) -> dict:
                     continue
                 citations.append(
                     CitationDraft(
-                        chunk_ids=[],
+                        # The anchor the run already computed. `ResearchSourceRef`
+                        # carries the chunk, the source's own spelling of the
+                        # quote, and the span in the normalized document — and
+                        # every one of them was thrown away here, so the
+                        # research path wrote 830 citations with no evidence
+                        # while holding the evidence in memory.
+                        chunk_ids=[ref.chunk_id],
+                        chunk_id=ref.chunk_id,
+                        quote=ref.quote,
+                        char_start=ref.char_start,
+                        char_end=ref.char_end,
+                        source_id=source_by_chunk.get(ref.chunk_id),
                         source_page_id=None,  # source page resolved by short_id later
                         citation_marker=marker[:16],
                     )

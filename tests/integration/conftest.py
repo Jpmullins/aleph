@@ -46,6 +46,40 @@ DEFAULT_URL = "postgresql+asyncpg://aleph:aleph@localhost:5432/aleph"
 #: for the first person who points DATABASE_URL at the running compose Postgres,
 #: which is the documented way to run these.
 _TEARDOWN_SQL = (
+    # The wiki tables, in FK order, and they were ALL missing.
+    #
+    # `DELETE FROM projects` ran while every wiki row for that project stayed
+    # behind, orphaned — pointing at a project id that no longer resolves. That
+    # is not merely untidy: `test_stub_pages_are_not_drafts` counts
+    # `is_stub AND status='draft'` across the whole database as a canary for the
+    # deployed instance, and it went red on 20 rows titled "Gamma" left by a
+    # concurrency fixture whose project had been deleted three hours earlier.
+    # The invariant it guards is real and the code upholds it; the rows were
+    # rubbish this teardown should never have left.
+    "DELETE FROM citations WHERE project_id = :pid",
+    "DELETE FROM claim_edges WHERE project_id = :pid",
+    "DELETE FROM wiki_claims WHERE project_id = :pid",
+    "DELETE FROM wiki_sections WHERE project_id = :pid",
+    "DELETE FROM wiki_links WHERE project_id = :pid",
+    "DELETE FROM wiki_index WHERE project_id = :pid",
+    "DELETE FROM synthesis_proposals WHERE project_id = :pid",
+    "DELETE FROM wiki_schemas WHERE project_id = :pid",
+    # `wiki_pages` and `wiki_revisions` are deliberately NOT deleted.
+    #
+    # `wiki_revisions` is append-only, enforced by a database trigger
+    # (`wiki_revisions_immutable`) — the same protection the action ledger has,
+    # and for the same reason. A DELETE raises. `wiki_pages` cannot go either:
+    # revisions carry a FK back to their page, so removing the page would
+    # violate it.
+    #
+    # So a test that commits a revision leaves a permanent page row behind, and
+    # that is a property of the design rather than a leak to plug. A fixture
+    # that switched the trigger off to tidy up would be trading an invariant for
+    # a clean table, which is how the invariant stops being one.
+    #
+    # The consequence lands on any check that counts wiki_pages globally: see
+    # `test_stub_pages_are_not_drafts`, which scopes to LIVE projects for
+    # exactly this reason.
     "DELETE FROM document_chunks WHERE project_id = :pid",
     "DELETE FROM retrieval_index_records WHERE project_id = :pid",
     "DELETE FROM normalized_documents WHERE project_id = :pid",

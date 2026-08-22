@@ -68,6 +68,22 @@ class CitationDraft:
     #: feature. This is the direct link, and the legacy compile path sets it too
     #: so that a claim written by either path is reachable from its source.
     source_id: UUID | None = None
+    #: The evidence, when the producer has it.
+    #:
+    #: Optional because two producers write citations and only one can supply
+    #: this today: the wiki ingest path goes through `BeliefService`, which
+    #: grounds the quote itself, while the research path composes from an
+    #: evidence pack and already holds the span. Defaulting to None keeps the
+    #: legacy stub/compile writers — which cite a page, not a passage —
+    #: constructible without inventing an anchor they do not have.
+    #:
+    #: `char_start`/`char_end` index the NORMALIZED DOCUMENT, not the chunk, so
+    #: `document[char_start:char_end] == quote`. That is the invariant every
+    #: reader assumes and `test_belief_spine` asserts.
+    chunk_id: UUID | None = None
+    quote: str | None = None
+    char_start: int | None = None
+    char_end: int | None = None
 
 
 @dataclass(frozen=True)
@@ -450,6 +466,17 @@ class WikiService:
                                 source_id=cite.source_id,
                                 source_page_id=cite.source_page_id,
                                 citation_marker=cite.citation_marker[:16],
+                                # The anchor, when the producer has one. It was
+                                # dropped here even when the caller held it —
+                                # the research path grounds every quote against
+                                # its chunk and then wrote a row with no quote,
+                                # no chunk and no span, so the work was done and
+                                # discarded one function call later.
+                                chunk_id=cite.chunk_id,
+                                quote=cite.quote,
+                                char_start=cite.char_start,
+                                char_end=cite.char_end,
+                                verbatim=cite.quote is not None,
                             )
                         )
 

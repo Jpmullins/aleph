@@ -21,10 +21,32 @@ pytestmark = pytest.mark.integration
 
 
 async def test_no_stub_sits_in_the_review_queue(session: AsyncSession) -> None:
-    """The queue is `status='draft'`; a stub must never be in it."""
+    """The queue is `status='draft'`; a stub must never be in it.
+
+    Scoped to projects that still EXIST, and the reason is not tidiness.
+
+    `wiki_revisions` is append-only by database trigger and `wiki_pages` is held
+    by a foreign key from it, so the integration teardown deletes a test's
+    project and physically cannot delete the pages it committed. Those pages
+    outlive their project permanently.
+
+    Unscoped, this counted them. It went red on twenty rows titled "Gamma" left
+    by a concurrency fixture whose project had been dropped three hours earlier —
+    a real-looking failure about a real invariant, caused entirely by rubbish.
+    A check that fails for reasons unrelated to the code is a check people learn
+    to re-run rather than read.
+
+    And the scope is not a loophole: the review queue is per project. A page
+    whose project is gone is in nobody's queue, because there is no queue for it
+    to be in.
+    """
     stray = (
         await session.execute(
-            text("SELECT count(*) FROM wiki_pages WHERE is_stub IS TRUE AND status = 'draft'")
+            text(
+                "SELECT count(*) FROM wiki_pages p"
+                " WHERE p.is_stub IS TRUE AND p.status = 'draft'"
+                "   AND EXISTS (SELECT 1 FROM projects pr WHERE pr.id = p.project_id)"
+            )
         )
     ).scalar_one()
     assert stray == 0, (
