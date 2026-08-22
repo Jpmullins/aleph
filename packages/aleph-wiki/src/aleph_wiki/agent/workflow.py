@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 from uuid import UUID
 
+import structlog
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
@@ -47,7 +48,6 @@ from aleph_wiki.alias_service import AliasService
 from aleph_wiki.feedback_service import mark_addressed, pending_for_concept
 from aleph_wiki.models import Citation, RejectionFeedback, SourcePage, WikiClaim
 from aleph_wiki.wiki_service import (
-    CitationDraft,
     ClaimDraft,
     WikiLinkDraft,
     WikiService,
@@ -61,6 +61,9 @@ if TYPE_CHECKING:
 
 
 _PROMPT_DIR = Path(__file__).parent / "prompts"
+
+
+_log = structlog.get_logger(__name__)
 
 
 def _prompt(name: str) -> str:
@@ -120,6 +123,14 @@ class WikiIngestState(TypedDict, total=False):
     source_page_draft: WikiPageDraft
     topic_page_drafts: list[WikiPageDraft]
     committed_revision_ids: list[UUID]
+    #: Written by `claim_extraction`. Declared here because a LangGraph node
+    #: that writes an undeclared key has the write DISCARDED in silence — the
+    #: reader's `state.get(k, [])` comes back empty and the feature is inert
+    #: while every step reports success. `scripts/check-graph-state-keys.sh`
+    #: enforces this; four shipped defects had exactly that shape.
+    source_page_id: UUID | None
+    claims_extracted: int
+    claim_quotes_rejected: int
 
 
 @dataclass
@@ -409,41 +420,23 @@ async def _node_source_page_compose(state: WikiIngestState) -> dict:
             capability=Capability.SYNTHESIS,
             profile_bindings=state["profile_bindings"],
             system_prompt=_prompt("source_page_compose")
-            + '\n\nReturn JSON: {"body_md": "...", "summary": "...", '
-            + '"claims": [{"text": "...", "citation_marker": "[c1]"}]}',
+            # No `claims` field any more. Asking for `{text, citation_marker}`
+            # here is what produced 796 citations with no quote, no chunk and no
+            # span: a marker assigned by position in a list cannot be checked
+            # against anything afterwards. Claims now come from
+            # `_node_claim_extraction`, which reads the CHUNKS and must quote
+            # them verbatim. Leaving the field in the prompt would keep the
+            # model spending tokens on output nobody reads.
+            + '\n\nReturn JSON: {"body_md": "...", "summary": "..."}',
             user_payload=payload,
             purpose="wiki.source_page_compose",
         )
         body_md = ctx_chat.get("body_md") or _fallback_source_page(state)
         summary = ctx_chat.get("summary") or f"Source page for {state['source_title']}."
-        raw_claims = ctx_chat.get("claims") or []
+        # Claims are no longer produced here. An empty list means
+        # `commit_revision` writes none, and every claim on this source goes
+        # through `BeliefService` with a verbatim quote attached.
         claims: list[ClaimDraft] = []
-        for c in raw_claims:
-            text = (c.get("text") or "").strip()
-            marker = (c.get("citation_marker") or "").strip() or "[c?]"
-            if not text:
-                continue
-            claims.append(
-                ClaimDraft(
-                    text=text,
-                    confidence="cited",
-                    section_anchor="key-claims",
-                    citations=[
-                        CitationDraft(
-                            chunk_ids=[],  # Inc 1 binds claims to the source page itself.
-                            # The source this claim was extracted from. It was
-                            # `source_page_id=None` with a comment saying the
-                            # commit step would set it; the commit step never
-                            # did, so every citation this path wrote had no
-                            # source anchor and retraction blast-radius returned
-                            # nothing for the life of the feature.
-                            source_id=state["source_id"],
-                            source_page_id=None,
-                            citation_marker=marker,
-                        )
-                    ],
-                )
-            )
 
         wikilinks = _wikilinks_from_body(body_md)
         draft = WikiPageDraft(
@@ -813,7 +806,139 @@ async def _node_commit_revision(state: WikiIngestState) -> dict:
             page_kind="source",
             page_id=result.page_id,
         )
-        return {"committed_revision_ids": committed}
+        return {
+            "committed_revision_ids": committed,
+            # The page the extracted claims attach to. Returned rather than
+            # re-derived, because re-deriving by title is the unlocked by-title
+            # path `commit_revision` is already known to race on.
+            "source_page_id": result.page_id,
+        }
+
+
+@with_phase("claim_extraction", ctx_getter=lambda: _ctx())
+async def _node_claim_extraction(state: WikiIngestState) -> dict:
+    """Give the belief layer its first caller.
+
+    Everything under `BeliefService` — verbatim grounding, `claim_key` identity,
+    derived confidence — has been written, tested and never executed, because
+    nothing produced evidence for it to check. `grep -rn 'BeliefService'` over
+    the tree returned only self-references. This is the caller.
+
+    It runs AFTER `commit_revision`, not inside it, and that is deliberate:
+    `commit_revision` is the wiki's own transactional write and is already
+    load-bearing. Extraction is an LLM step that can fail, be slow, or return
+    nothing; folding it into that transaction would mean a bad model response
+    could cost a page its revision. Here, a failed extraction costs claims and
+    leaves the page committed.
+
+    The compose step no longer emits claims of its own. It used to ask a model
+    for `{text, citation_marker}` and build a citation with `chunk_ids=[]`, no
+    quote and no span — 796 of those are in the live database, and they are
+    what number 3 counts.
+    """
+    with start_span(
+        "wiki.node.claim_extraction",
+        **{
+            "aleph.node": "claim_extraction",
+            "aleph.agent_kind": "wiki",
+            "aleph.project_id": str(state["project_id"]),
+            "aleph.source_id": str(state["source_id"]),
+        },
+    ):
+        from sqlalchemy import select as _select
+
+        from aleph_rks.models import DocumentChunk
+        from aleph_wiki.belief_service import BeliefService
+        from aleph_wiki.claim_extraction import ChunkRef, extract_claims
+
+        ctx = _ctx()
+        page_id = state.get("source_page_id")
+        if page_id is None:
+            # No page means commit_revision did not run or did not report one.
+            # Extracting claims against nothing would write orphans.
+            return {"claims_extracted": 0, "claim_quotes_rejected": 0}
+
+        async with ctx.session_maker() as session:
+            rows = list(
+                (
+                    await session.execute(
+                        _select(
+                            DocumentChunk.id,
+                            DocumentChunk.text,
+                            DocumentChunk.char_start,
+                        )
+                        .where(DocumentChunk.source_id == state["source_id"])
+                        .order_by(DocumentChunk.ordinal)
+                    )
+                ).all()
+            )
+
+        if not rows:
+            # `chunk_embed_job` is enqueued alongside `wiki_ingest_job` rather
+            # than before it, so the chunks may genuinely not exist yet. Zero is
+            # the honest answer; `BeliefService.rebuild` re-derives later.
+            _log.info(
+                "wiki.claim_extraction.no_chunks",
+                source_id=str(state["source_id"]),
+            )
+            return {"claims_extracted": 0, "claim_quotes_rejected": 0}
+
+        chunks = [
+            ChunkRef(chunk_id=cid, text=text, char_start=start or 0) for cid, text, start in rows
+        ]
+
+        async def _call(*, system_prompt: str, user_payload: str, purpose: str) -> dict[str, Any]:
+            return await _call_llm_json(
+                project_id=state["project_id"],
+                agent_run_id=state["agent_run_id"],
+                capability=Capability.SYNTHESIS,
+                profile_bindings=state["profile_bindings"],
+                system_prompt=system_prompt,
+                user_payload=user_payload,
+                purpose=purpose,
+            )
+
+        revision_ids = state.get("committed_revision_ids") or []
+        drafts = await extract_claims(
+            chunks,
+            source_id=state["source_id"],
+            page_id=page_id,
+            call_json=_call,
+            title=state["source_title"],
+            revision_id=revision_ids[0] if revision_ids else None,
+        )
+
+        written = 0
+        rejected = 0
+        async with ctx.session_maker() as session:
+            svc = BeliefService(session)
+            ledger = LedgerWriter(session)
+            for draft in drafts:
+                result = await svc.upsert_claim(
+                    principal=ctx.principal,
+                    ledger=ledger,
+                    project_id=state["project_id"],
+                    draft=draft,
+                )
+                written += result.citations_written
+                rejected += len(result.citations_rejected)
+            await session.commit()
+
+        if rejected:
+            # A refused quote is the check WORKING — the model paraphrased and
+            # the citation was refused rather than stored unverifiable. Logged
+            # because a rate that climbs is a prompt problem, and nothing else
+            # would ever show it.
+            _log.info(
+                "wiki.claim_extraction.quotes_rejected",
+                source_id=str(state["source_id"]),
+                rejected=rejected,
+                written=written,
+            )
+        return {
+            "claims_extracted": len(drafts),
+            "claim_quotes_rejected": rejected,
+        }
 
 
 @with_phase("wiki_index_update", ctx_getter=lambda: _ctx())
@@ -859,6 +984,7 @@ class WikiIngestWorkflow:
         graph.add_node("wikilink_resolve", _node_wikilink_resolve)
         graph.add_node("wiki_index_update", _node_wiki_index_update)
         graph.add_node("commit_revision", _node_commit_revision)
+        graph.add_node("claim_extraction", _node_claim_extraction)
 
         graph.add_edge(START, "concept_extraction")
         graph.add_edge("concept_extraction", "alias_extraction")
@@ -866,7 +992,8 @@ class WikiIngestWorkflow:
         graph.add_edge("source_page_compose", "topic_page_stubs")
         graph.add_edge("topic_page_stubs", "wikilink_resolve")
         graph.add_edge("wikilink_resolve", "commit_revision")
-        graph.add_edge("commit_revision", "wiki_index_update")
+        graph.add_edge("commit_revision", "claim_extraction")
+        graph.add_edge("claim_extraction", "wiki_index_update")
         graph.add_edge("wiki_index_update", END)
 
         self._compiled = graph.compile()

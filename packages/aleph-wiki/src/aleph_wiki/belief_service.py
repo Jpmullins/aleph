@@ -101,6 +101,21 @@ class EvidenceDraft:
     stance: str = "supports"
     weight: float = 1.0
     citation_marker: str = "[c1]"
+    #: Where ``source_text`` begins inside the whole document.
+    #:
+    #: Grounding has to be scoped to ONE chunk — a quote hunted across a whole
+    #: document anchors to its first occurrence, which for a repeated sentence
+    #: is the wrong place, and a citation pointing at the wrong sentence is
+    #: worse than one pointing nowhere. But the stored span must be
+    #: document-relative, because that is what every reader assumes and what
+    #: `test_belief_spine` asserts (`source[char_start:char_end] == quote`).
+    #:
+    #: So: ground inside the chunk, store `chunk.char_start + span`. The
+    #: arithmetic is exact — `test_chunk_offsets.py` pins
+    #: `markdown[chunk.char_start:chunk.char_end] == chunk.text` over real
+    #: documents, so an offset into the chunk plus its start is an offset into
+    #: the document.
+    char_offset: int = 0
 
 
 @dataclass(frozen=True)
@@ -268,9 +283,9 @@ class BeliefService:
             if span is None:
                 rejected.append(draft.quote[:80])
                 continue
-            locator = locator_hash_for(
-                draft.source_id, draft.chunk_id, span.char_start, span.char_end
-            )
+            start = span.char_start + draft.char_offset
+            end = span.char_end + draft.char_offset
+            locator = locator_hash_for(draft.source_id, draft.chunk_id, start, end)
             stmt = insert(Citation).values(
                 id=uuid7(),
                 project_id=project_id,
@@ -282,8 +297,8 @@ class BeliefService:
                 stance=draft.stance,
                 weight=draft.weight,
                 locator_hash=locator,
-                char_start=span.char_start,
-                char_end=span.char_end,
+                char_start=start,
+                char_end=end,
                 chunk_ids=[str(draft.chunk_id)] if draft.chunk_id else [],
                 source_page_id=None,
                 citation_marker=draft.citation_marker[:16],
