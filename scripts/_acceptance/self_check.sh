@@ -477,6 +477,15 @@ probe "a dialog outside Modal.tsx is noticed" \
   's/<Modal title=/<div className="fixed inset-0" role="dialog" aria-modal="true" title=/' \
   "./scripts/check-modals-are-trapped.sh"
 
+# A bound prop declared as a LITERAL. `GroundingSurface` and `InspectorSurface`
+# both shipped this way — five props each typed `z3.any()`, so the binder passed
+# `{path: "/runs"}` through verbatim and React unmounted the pane on every open,
+# while the sweep printed "all declared client-side".
+probe "a bound prop declared unresolvably is noticed" \
+  apps/web/src/a2ui/aleph-catalog-v09.tsx \
+  's/sections: CommonSchemas\.\w+/sections: z3.any()/' \
+  "./scripts/check-surface-bindings.sh"
+
 probe "the runtime bridge check notices an any-origin proxy" \
   apps/copilot-runtime/src/server.ts \
   's/^  cors: \{$/  cors: true, \/\/ probe\n  _unused: {/m' \

@@ -15,8 +15,10 @@ import pathlib
 import pytest
 from surface_bindings import (
     catalog_components,
+    client_bindable_props,
     client_props,
     compare,
+    compare_bindability,
     producer_props,
     run,
 )
@@ -151,3 +153,82 @@ def test_the_coverage_denominator_is_the_canonical_catalog() -> None:
     # or lost its denominator (bad).
     assert report.uncompared > 0
     assert set(report.compared) <= catalog
+
+
+# ---------------------------------------------------------------------------
+# Declared and BINDABLE are different things
+# ---------------------------------------------------------------------------
+
+
+_CLIENT_WITH_A_LITERAL = """
+export const InspectorSurfaceApi = {
+  name: "InspectorSurface",
+  schema: z3.object({
+    runs: z3.any().optional(),
+    selected: CommonSchemas.DynamicValue.optional(),
+  }),
+};
+"""
+
+_PRODUCER_BINDING_BOTH = """
+def _messages():
+    return [{"component": "InspectorSurface",
+             "runs": {"path": "/runs"},
+             "selected": {"path": "/selected"}}]
+"""
+
+
+def test_a_bound_prop_typed_as_a_literal_is_reported() -> None:
+    """The defect that shipped twice, in the shape it shipped.
+
+    `GroundingSurface` and `InspectorSurface` each declared five bound props as
+    `z3.any()`. The binder classifies those STATIC and passes them through
+    VERBATIM, so the view received `{path: "/runs"}`, `runs.map` threw, and
+    React unmounted the pane on every open — while the sweep printed
+    "all declared client-side", because the prop WAS declared. Declared and
+    resolvable are not the same claim.
+    """
+    producers = producer_props(_PRODUCER_BINDING_BOTH)
+    bindable = client_bindable_props(_CLIENT_WITH_A_LITERAL)
+    problems = compare_bindability(producers, bindable)
+
+    assert [f"{m.component}.{m.prop}" for m in problems] == ["InspectorSurface.runs"], (
+        "the z3.any() prop was not reported, or the CommonSchemas one was"
+    )
+    assert "verbatim" in problems[0].reason.lower()
+
+
+def test_the_old_direction_would_not_have_caught_it() -> None:
+    """States plainly why a second direction was needed rather than a tweak.
+
+    `compare` sees `runs` declared and is satisfied. Both checks now run, and
+    this is the evidence that one of them was not enough.
+    """
+    producers = producer_props(_PRODUCER_BINDING_BOTH)
+    declared = client_props(_CLIENT_WITH_A_LITERAL)
+    assert compare(producers, declared) == [], (
+        "the declaration-only check now reports this too, so this test no "
+        "longer demonstrates anything — delete it or fix the premise"
+    )
+
+
+def test_a_literal_prop_no_producer_binds_is_not_reported() -> None:
+    """`z3.any()` is CORRECT for a Vega-Lite spec, table columns, graph edges.
+
+    Without this the fix would be "ban z3.* everywhere", which would force real
+    literal props to be declared as bindings and break them the other way.
+    """
+    client = """
+export const ChartCardApi = {
+  name: "ChartCard",
+  schema: z3.object({
+    title: CommonSchemas.DynamicString,
+    vega_lite_spec: z3.any().optional(),
+  }),
+};
+"""
+    producer = """
+def _messages():
+    return [{"component": "ChartCard", "title": {"path": "/t"}}]
+"""
+    assert compare_bindability(producer_props(producer), client_bindable_props(client)) == []

@@ -45,19 +45,28 @@ except MissingSubject as exc:
     raise SystemExit(1) from None
 
 if report.mismatches:
-    print("✗ surface bindings: producer props the client never declares", file=sys.stderr)
+    print(
+        "✗ surface bindings: producer props the client does not declare, or "
+        "declares unresolvably",
+        file=sys.stderr,
+    )
     for mismatch in report.mismatches:
         print(f"   {mismatch}", file=sys.stderr)
     print(file=sys.stderr)
     print(
-        "   Add the prop to its `*Api.schema` in apps/web/src/a2ui/aleph-catalog-v09.tsx.",
+        "   Declare the prop in its `*Api.schema` in "
+        "apps/web/src/a2ui/aleph-catalog-v09.tsx, as `CommonSchemas.Dynamic*` "
+        "or `CommonSchemas.Action`. A `z3.*` declaration is a LITERAL the "
+        "binder passes through untouched — correct for a Vega-Lite spec, "
+        "fatal for a prop the producer sends as {path: ...}.",
         file=sys.stderr,
     )
     raise SystemExit(1)
 
 print(
     f"✓ surface bindings: {len(report.compared)} of {report.catalog_total} catalog "
-    f"components compared, {report.bound_props} bound props, all declared client-side"
+    f"components compared, {report.bound_props} bound props, all declared "
+    "client-side AND resolvable by the binder"
 )
 if report.uncompared:
     # Stated every run, on purpose. The uncovered components are the ones bound

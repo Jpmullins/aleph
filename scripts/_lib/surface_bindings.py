@@ -45,6 +45,11 @@ __all__ = [
 #: undeclared when both are declared as `z3.any()`, which is the shape of
 #: false positive that gets a sweep switched off.
 _ZOD_PROP = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?:CommonSchemas\.|z3\.)", re.MULTILINE)
+#: A prop declaration the binder can RESOLVE. `CommonSchemas.Dynamic*` and
+#: `CommonSchemas.Action` are bindable scalars; anything typed `z3.*` is a
+#: literal the binder passes through verbatim, which is correct for a Vega-Lite
+#: spec and catastrophic for a prop the producer sends as `{"path": ...}`.
+_ZOD_BINDABLE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*CommonSchemas\.", re.MULTILINE)
 _API_BLOCK = re.compile(
     r"export const (?P<name>\w+)Api = \{.*?schema: z3\.object\((?P<body>.*?)\),\s*\};",
     re.DOTALL,
@@ -98,6 +103,58 @@ def client_props(source: str) -> dict[str, set[str]]:
         name = match.group("name")
         found[name] = set(_ZOD_PROP.findall(match.group("body")))
     return found
+
+
+def client_bindable_props(source: str) -> dict[str, set[str]]:
+    """Component name → the props whose declaration the binder can RESOLVE.
+
+    Declared and bindable are different things, and the sweep only checked the
+    first. `GroundingSurface` and `InspectorSurface` both shipped with five
+    bound props typed `z3.any()`: the binder classifies those STATIC and passes
+    the value through verbatim, so the view received `{path: "/runs"}`,
+    `runs.map` threw, and React unmounted the pane on every open. The sweep
+    printed "all declared client-side" throughout.
+
+    Reverting one prop to `z3.any()` reproduced it exactly: sweep green,
+    browser red.
+    """
+    found: dict[str, set[str]] = {}
+    for match in _API_BLOCK.finditer(source):
+        found[match.group("name")] = set(_ZOD_BINDABLE.findall(match.group("body")))
+    return found
+
+
+def compare_bindability(
+    producers: dict[str, set[str]], bindable: dict[str, set[str]]
+) -> list[Mismatch]:
+    """Every prop the producer binds by PATH whose declaration cannot resolve one.
+
+    The second direction of the same contract. `compare` asks whether the
+    client declares the prop at all; this asks whether it declared it as
+    something the binder will resolve. Both failures are silent and produce the
+    same symptom — the view reads `undefined`, or worse a raw `{path: ...}`
+    object — so a sweep that checks only the first says "all declared" over a
+    pane that cannot render.
+    """
+    out: list[Mismatch] = []
+    for component, bound in sorted(producers.items()):
+        declared = bindable.get(component)
+        if declared is None:
+            continue  # the component has no client schema; `compare` reports that
+        for prop in sorted(bound - declared):
+            out.append(
+                Mismatch(
+                    component=component,
+                    prop=prop,
+                    reason=(
+                        "bound by the producer as a path, but the client "
+                        "declares it with `z3.*` rather than `CommonSchemas.*`. "
+                        "The binder passes a `z3.*` prop through VERBATIM, so "
+                        "the view receives the {path: ...} object itself"
+                    ),
+                )
+            )
+    return out
 
 
 def compare(producers: dict[str, set[str]], clients: dict[str, set[str]]) -> list[Mismatch]:
@@ -210,8 +267,11 @@ def run(repo_root: pathlib.Path) -> Report:
 
     compared = sorted(set(producers) & set(clients))
     bound = sum(len(producers[name]) for name in compared)
+    bindable = client_bindable_props(client_file.read_text())
     return Report(
-        mismatches=compare(producers, clients),
+        # BOTH directions. "Declared" and "bindable" are different things and
+        # only the first was ever checked — see `compare_bindability`.
+        mismatches=compare(producers, clients) + compare_bindability(producers, bindable),
         compared=compared,
         catalog_total=len(catalog),
         bound_props=bound,
