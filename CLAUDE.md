@@ -79,9 +79,9 @@ which supersedes the old decision that the wiki was being deleted.
   The research path does too — it had been grounding every quote and then discarding all four values
   one function call later. Claims are also embedded at write time now (`WS-RS10`); the HNSW index on
   `wiki_claims.embedding` had never had anything to index. The 796 pre-existing thin citations stay
-  and are re-derivable — `docs/decisions.md` D9 — so number 3 is red until `rebuild` runs over the
-  corpus. It is
-  running. See `WS-RS8`.
+  and are re-derivable — `docs/decisions.md` D9. The rebuild has run: **number 3 is 0** in real
+  projects as of 2026-08-22. `status.sh` prints the fixture-project count (15,558) beside it on its
+  own line, so the scope of the zero cannot hide anything. See `WS-RS8`.
 - **They are different plugins and both are fully accessible.** *"What do we think about X, and on
   what evidence?"* is the wiki. *"What did source 47 actually say?"* is the RAG. Framing them as
   competitors is what produced the removal decision, and it was a false choice.
@@ -598,8 +598,11 @@ Distribution `aleph-xxx` · module `aleph_xxx` · tables plural snake_case · ac
 
 `status.sh` is the honest picture and it prints `n/a` — never zero — for a number it cannot
 compute, because a zero meaning "no defects" and a zero meaning "nothing was measured" look
-identical on a dashboard and this project has already shipped one of those. As of 2026-08-21 four
-of the eight are failing and three are not yet measurable; each says which.
+identical on a dashboard and this project has already shipped one of those. As of 2026-08-22 **one**
+of the eight is failing and two are not yet measurable; each says which. The one is the acceptance
+gate itself, and it is the number to read first — the other seven can all be green while it is red,
+which is exactly the state this project was in when a broken retrieval path survived seven work
+packages.
 
 **Reference:**
 
