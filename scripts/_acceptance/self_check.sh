@@ -266,6 +266,41 @@ probe "check-acceptance-claims notices a stale test count" \
   's/— 165 passed, 1 skipped/— 142 passed, 1 skipped/m' \
   "./scripts/check-acceptance-claims.sh"
 
+# ---------------------------------------------------------------------------
+# The acceptance PROBES, not the sweeps. Every scripts/check-*.sh has a probe
+# above; the ten scripts/_acceptance/ probes had none, which is the same gap
+# one directory over. These three are the ones provable without live services
+# or spend — the rest drive a gateway, a browser or the live database.
+# ---------------------------------------------------------------------------
+
+# WS-P1 c4's real half. Its old wording — "test_capability_probes.py asserts
+# len(ready) == 10" — cannot fail and never could: a failed probe UNWINDS the
+# boot, so if the fixture yields at all then every probe passed. The thing that
+# can fail is a probe body reporting a problem, driven through the real
+# composition root.
+if [ $NEEDS_SERVICES -eq 1 ]; then
+  probe "a capability that reports a problem stops the boot" \
+    packages/aleph-runtime/src/aleph_runtime/capabilities.py \
+    's/        return ok\("connection round-tripped"\)/        return problem("forced")/' \
+    "uv run python scripts/_acceptance/kernel_boot.py"
+fi
+
+# The floor, not the mechanism. E12 runs the coverage command; E12a is the row
+# that notices the four thresholds being lowered, which is the one move that
+# turns a red build green.
+probe "the coverage-floor pin notices a lowered threshold" \
+  apps/web/vitest.config.ts \
+  's/statements: 38,/statements: 0,/' \
+  "uv run python scripts/_acceptance/web_coverage_floor.py"
+
+# D9's subject. A PTC budget below the item count is the shape that makes the
+# fan-out silently partial — the turn still succeeds and still reports a
+# result, it just covers five of twenty.
+probe "the fan-out probe notices a PTC budget below the item count" \
+  apps/api/src/aleph_api/interpreter.py \
+  's/INTERPRETER_MAX_PTC_CALLS: Final = 128/INTERPRETER_MAX_PTC_CALLS: Final = 5/' \
+  "uv run python scripts/_acceptance/interpreter_fanout_probe.py"
+
 # The mutation that matters is not "delete the rule" — it is "widen the allow",
 # which is how this gate silently reopens.
 #
