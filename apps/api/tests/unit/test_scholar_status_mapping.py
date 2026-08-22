@@ -153,6 +153,36 @@ async def test_persistent_429_is_503_with_retry_after(monkeypatch: pytest.Monkey
     assert resp.json()["details"]["upstream_status"] == 429
 
 
+async def test_a_throttled_search_tells_the_operator_why(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The 429 that produced `WS-E2` stops being silent about its cause.
+
+    MEASURED 2026-08-22: eight concurrent searches, 0 of 8 succeeded, every one
+    a real OpenAlex 429 with `Retry-After: 28409` (7.9 hours, on the deployment
+    rather than the request). The same query from the host returned 200. The
+    difference was `ALEPH_SCHOLAR_MAILTO=dev@aleph.local`, an undeliverable
+    address, so the polite pool never applied — and nothing in the log said so.
+
+    Asserted at the ROUTE, not at `ScholarHttp`, because the log record is where
+    the sentence actually reaches a person: `_upstream_response` writes
+    `error=str(exc)[:1000]` and deliberately keeps the deployment's mailto out
+    of the response body, so this is the only channel that carries it.
+    """
+    import structlog
+
+    app = _build_app(monkeypatch, _static(429))
+    with structlog.testing.capture_logs() as logs:
+        resp = await _search(app)
+
+    assert resp.status_code == 503, resp.text
+    unavailable = [e for e in logs if e.get("event") == "scholar upstream unavailable"]
+    assert unavailable, f"no operator-facing record of the failure in {logs}"
+    error = str(unavailable[-1].get("error", ""))
+    assert "ALEPH_SCHOLAR_MAILTO" in error, error
+    assert "unit@aleph.local" in error, error
+
+
 async def test_persistent_5xx_is_503_with_a_default_retry_after(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

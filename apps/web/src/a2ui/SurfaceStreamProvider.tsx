@@ -117,16 +117,63 @@ export function SurfaceStreamProvider({
 
   const paneKey = panes.join(",");
 
+  /**
+   * The processor belongs to the CATALOG SET, not to the pane set.
+   *
+   * It was constructed inside the effect below, whose dependencies include
+   * `paneKey` — so opening one pane threw away the processor and with it
+   * `surfacesMap`, every open pane's component tree and every value bound into
+   * it. The stream then had to re-deliver all of them, and until it did, panes
+   * that were fine a moment ago rendered "waiting for the first frame…". A
+   * fifteen-pane board rebuilt fifteen surfaces to add a sixteenth, and nothing
+   * failed, so nothing reported it.
+   *
+   * Catalogs genuinely do invalidate it: the processor resolves a surface's
+   * `catalogId` at `createSurface` time, so a surface created under the old set
+   * cannot be re-bound. `setPlugins` above compares before replacing for that
+   * reason.
+   */
+  const processor = useMemo(() => new MessageProcessor(catalogs), [catalogs]);
+
+  // Re-publish whenever the processor's own surface set changes. Keyed on the
+  // processor rather than living in the connection effect, so a pane-set change
+  // does not churn the subscriptions either.
   useEffect(() => {
-    const processor = new MessageProcessor(catalogs);
+    const sync = () => setSurfaces(new Map(processor.model.surfacesMap));
+    const created = processor.onSurfaceCreated(sync);
+    const deleted = processor.onSurfaceDeleted(sync);
+    sync();
+    return () => {
+      created.unsubscribe();
+      deleted.unsubscribe();
+    };
+  }, [processor]);
+
+  /**
+   * Drop the surfaces of panes that are no longer open.
+   *
+   * The consequence of keeping the processor: a closed pane's surface would
+   * otherwise sit in `surfacesMap` forever. It renders nowhere — the Board maps
+   * over `panes`, not over surfaces — so the leak is invisible, which is
+   * precisely why it needs to be handled here rather than noticed later.
+   */
+  useEffect(() => {
+    const live = new Set(paneKey.split(",").filter(Boolean));
+    const stale = [...processor.model.surfacesMap.keys()].filter((id) => !live.has(id));
+    if (stale.length === 0) return;
+    processor.processMessages(
+      stale.map((surfaceId) => ({ version: "v0.9", deleteSurface: { surfaceId } })) as never,
+    );
+    setSurfaces(new Map(processor.model.surfacesMap));
+  }, [processor, paneKey]);
+
+  useEffect(() => {
     let live = true;
     let lastSeq = -1;
 
     const sync = () => {
       if (live) setSurfaces(new Map(processor.model.surfacesMap));
     };
-    const created = processor.onSurfaceCreated(sync);
-    const deleted = processor.onSurfaceDeleted(sync);
 
     const base =
       (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8000";
@@ -170,10 +217,8 @@ export function SurfaceStreamProvider({
     return () => {
       live = false;
       es.close();
-      created.unsubscribe();
-      deleted.unsubscribe();
     };
-  }, [catalogs, projectId, paneKey]);
+  }, [processor, projectId, paneKey]);
 
   const value = useMemo<StreamCtx>(
     () => ({ surfaces, connected, error }),

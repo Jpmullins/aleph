@@ -55,6 +55,34 @@ The price is one model call per search: ~1.4s at the measured concurrency, and
 the whole candidate window in the prompt. That is why `search_corpus` takes a
 reranker rather than building one — a caller on the in-process agent path pays
 that latency directly.
+
+**The reranker spent a day judging and being ignored.** Bound to
+`gemma-4-e2b` — the model this deployment actually binds to
+`Capability.RERANK` — the 45-question committed set logged
+`rks.rerank.unparseable` on **40 of 45 queries** and kept fusion order every
+time. The reply was `{"relevant": [{"id": [4], "score": 2}]}`: the model had
+copied the prompt's own `[4]` passage label into the id, so every entry was
+dropped and the list read as "all 1 entries were unusable". Two changes, and
+each fixes a different half:
+
+* the prompt now says the id is a bare integer and asks for EVERY passage
+  scored 1 or above, not just the best one — the same three probe questions
+  went from one entry each to four, two and six against the live gateway;
+* :func:`_passage_id` reads a one-element list as the passage it names, so the
+  next model that echoes the brackets costs nothing.
+
+Measured on the committed set, `--rerank both`, before and after:
+
+|                | nDCG@10 | MRR   | r@1  | unparseable |
+|----------------|---------|-------|------|-------------|
+| fusion only    | 0.970   | 0.960 | 0.93 | —           |
+| rerank, before | 0.978   | 0.971 | 0.96 | 40/45       |
+| rerank, after  | **1.000** | **1.000** | **1.00** | **0/45** |
+
+That set is saturated — 0.970 is a ceiling of 1.000 away, so `WS-RS6`'s
+"+0.05 nDCG@10" cannot be shown here at all and needs the RS5 generated set.
+What it does show is that the judgement now reaches the results: the arm is
+perfect, and it was not.
 """
 
 from __future__ import annotations
@@ -127,7 +155,12 @@ Return JSON and nothing else:
 
 {{"relevant": [{{"id": <passage id>, "score": <1, 2 or 3>}}, ...]}}
 
-Order the list most relevant first. List only passages you scored 1 or above.
+`id` is the BARE INTEGER that labels the passage: for a passage written
+`[7] ...` write `"id": 7` — never `"id": [7]`, never `"id": "7"`.
+
+Order the list most relevant first, and list EVERY passage you scored 1 or
+above, not only the best one.
+
 If NO passage is relevant to the question, return {{"relevant": []}} — an empty
 list is the correct answer for a question this collection does not answer, and
 guessing is worse than saying nothing.\
@@ -256,6 +289,39 @@ class Judgement:
     malformed: str | None = None
 
 
+def _passage_id(value: object) -> int | None:
+    """The passage index a model meant, or None when it is not decidable.
+
+    Only one shape is normalised, and it is a NOTATION echo rather than a
+    guess: a one-element list, ``"id": [7]``, for a passage the prompt labels
+    ``[7]``. The model has copied the label including its brackets, and there
+    is exactly one integer inside it, so which passage it names is not in
+    doubt.
+
+    Measured on this deployment: with `gemma-4-e2b` bound to
+    `Capability.RERANK`, **40 of the 45 eval queries** came back as
+    ``{"relevant": [{"id": [4], "score": 2}]}`` and every one was dropped —
+    `rks.rerank.unparseable`, "all 1 entries were unusable", fused order kept.
+    The reranker was making a judgement on 89% of searches and throwing it
+    away. The prompt now says the id is a bare integer (which fixes the model
+    that was measured), and this fixes the next model that does it anyway.
+
+    Everything else still goes out the door dropped, because everything else
+    IS a guess: ``[4, 7]`` names two passages and repairing it would invent an
+    intent, and ``"4"`` as a string is cheap to accept but is the shape a model
+    also uses for a passage LABEL it invented, so it earns no exception.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, list):
+        inner = cast("list[object]", value)
+        if len(inner) == 1 and isinstance(inner[0], int) and not isinstance(inner[0], bool):
+            return inner[0]
+    return None
+
+
 def parse_judgement(reply: dict[str, Any], candidate_count: int) -> Judgement:
     """`(index, score)` pairs the model actually returned, cleaned — and why not.
 
@@ -263,7 +329,9 @@ def parse_judgement(reply: dict[str, Any], candidate_count: int) -> Judgement:
     same id twice, a score outside the scale, a string where a number belongs.
     Each of those, left alone, silently reorders a passage the model never
     judged. Dropped rather than repaired — a repaired id is a guess wearing the
-    model's authority.
+    model's authority. The single exception is :func:`_passage_id`'s one-element
+    list, which is a notation echo and not a guess; read its docstring for what
+    that cost before it was handled.
 
     Dropping every entry is different from being handed none, so the two leave
     by different doors.
@@ -281,9 +349,9 @@ def parse_judgement(reply: dict[str, Any], candidate_count: int) -> Judgement:
         if not isinstance(item, dict):
             continue
         row = cast_dict(cast("dict[Any, Any]", item))
-        index = row.get("id")
+        index = _passage_id(row.get("id"))
         score = row.get("score")
-        if isinstance(index, bool) or not isinstance(index, int):
+        if index is None:
             continue
         if isinstance(score, bool) or not isinstance(score, int | float):
             continue

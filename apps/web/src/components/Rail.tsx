@@ -10,6 +10,8 @@
  * A rail scales vertically, is always visible regardless of which surface is
  * open, and gives every surface a stable position the eye can learn.
  */
+import { useEffect } from "react";
+
 import { AlephLogo } from "@/components/AlephLogo";
 import { Icons, type IconName } from "@/components/Icons";
 import { usePaneKinds, useWorkspaceUI } from "@/lib/workspace-ui";
@@ -39,6 +41,29 @@ export function Rail({ projectId, onBack }: Props) {
   // difference between tabs and a workspace you can compare things in.
   const { panes, focusedPaneId, openPane, setFocusedPaneId } = useWorkspaceUI();
 
+  /**
+   * Seed the board with the FIRST surface the server offers.
+   *
+   * The workspace state used to boot holding a pane called `Wiki`, which is the
+   * client deciding that a research-suite surface is what a workbench opens
+   * with — the one thing `GET /panes` exists to stop. Here it is whatever the
+   * server put first, by id, and a project whose plugins contribute nothing
+   * launchable simply opens on the Board's empty state.
+   *
+   * Keyed on the length rather than on the array so it does not re-run every
+   * time a pane is added, and it re-seeds after the last pane is closed — the
+   * "never leave an empty stage" guarantee, without a name in the client.
+   */
+  const first = paneKinds.launchable[0];
+  const empty = panes.length === 0;
+  useEffect(() => {
+    if (!empty || !first) return;
+    openPane(first.id, { title: first.title });
+    // `openPane` is re-created every render; depending on it would re-run this
+    // on every keystroke elsewhere in the tree.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [empty, first?.id, first?.title]);
+
   return (
     <nav
       className="flex w-14 shrink-0 flex-col items-center gap-0.5 border-r border-line bg-surface py-2.5"
@@ -59,19 +84,26 @@ export function Rail({ projectId, onBack }: Props) {
       </button>
 
       {paneKinds.launchable.map((kind) => {
-        const tab = kind.title;
+        // The pane's wire ID, never its title. `paneKey` lower-cases what it is
+        // given and uses the result as the `surfaceId` in `?panes=`, so passing
+        // `kind.title` here made "Dispute Queue" into the pane `dispute queue`,
+        // which the server drops as an unknown tab. Every core pane's title
+        // happens to lower-case to its id, so nothing ever caught it.
+        const paneId = kind.id;
         // An icon a plugin names but we do not ship must not throw.
         const Icon = Icons[(kind.icon as IconName)] ?? Icons.notes;
-        const open = panes.find((p) => p.kind === tab);
+        const open = panes.find((p) => p.kind === paneId);
         const active = open?.id === focusedPaneId;
         return (
           <button
-            key={tab}
+            key={paneId}
             type="button"
-            onClick={() => (open ? setFocusedPaneId(open.id) : openPane(tab))}
-            aria-label={tab}
+            onClick={() =>
+              open ? setFocusedPaneId(open.id) : openPane(paneId, { title: kind.title })
+            }
+            aria-label={kind.title}
             aria-current={active ? "page" : undefined}
-            data-testid={`rail-${tab.toLowerCase()}`}
+            data-testid={`rail-${paneId}`}
             data-active={active}
             data-open={!!open}
             className={
@@ -94,7 +126,7 @@ export function Rail({ projectId, onBack }: Props) {
               aria-hidden
               className="pointer-events-none absolute left-12 z-50 whitespace-nowrap border border-line-strong bg-elevated px-2 py-1 text-xs text-ink opacity-0 transition-opacity group-hover:opacity-100"
             >
-              {tab}
+              {kind.title}
             </span>
           </button>
         );

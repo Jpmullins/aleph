@@ -28,7 +28,7 @@ def _http(
     """A ScholarHttp over MockTransport whose clock advances only on sleep."""
     clock = clock or FakeClock()
     return ScholarHttp(
-        mailto="test@aleph.local",
+        mailto="scholar-tests@aleph-fixture.org",
         client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         retry_wait_min=0.0,
         retry_wait_max=0.0,
@@ -48,7 +48,7 @@ async def test_sends_polite_user_agent() -> None:
         return httpx.Response(200, json={})
 
     await _http(handler).get("https://api.crossref.org/works/10.1/x")
-    assert seen == ["aleph-scholar/0.1 (mailto:test@aleph.local)"]
+    assert seen == ["aleph-scholar/0.1 (mailto:scholar-tests@aleph-fixture.org)"]
 
 
 async def test_retries_5xx_then_succeeds() -> None:

@@ -97,7 +97,12 @@ import { WikiSurface as WikiSurfaceView } from "./components/WikiSurface";
 import type { A2UIComponent, ComponentName } from "./catalog";
 
 /**
- * Adapter: the v0_9 binder hands us a RESOLVED plain-value `props` object. Our
+ * Adapter: the v0_9 binder hands us a RESOLVED plain-value `props` object.
+ *
+ * Exported so a test can drive the real dispatch → navigate → pane path with
+ * the same wrapper every card in this file is built from. `props` is the only
+ * thing a test supplies, and it is exactly what the binder produces; the
+ * mutation, the navigate handling and the workspace call are all production. Our
  * existing views take `{ component: { type, id, props }, onAction }`. This
  * helper wraps a view as a v0_9 React impl and routes the view's `onAction`
  * through Aleph's ActionRouter (`POST /v1/projects/{id}/cards/actions`) using
@@ -110,7 +115,7 @@ type ViewProps = {
   onAction: (action: string, params: Record<string, unknown>) => void;
 };
 
-function adapt(
+export function adapt(
   name: ComponentName,
   View: (p: ViewProps) => React.ReactNode,
   idHint: string,
@@ -118,7 +123,7 @@ function adapt(
   return function AlephCardImpl({ props }: { props: Record<string, unknown> }) {
     const { projectId, surface } = useSurface();
     const qc = useQueryClient();
-    const { setActiveSurface, setOpenPageId } = useWorkspaceUI();
+    const { setActiveSurface, setOpenPageId, openPane } = useWorkspaceUI();
 
     const action = useMutation({
       mutationFn: async ({
@@ -129,7 +134,14 @@ function adapt(
         params: Record<string, unknown>;
       }) =>
         api.post<{
-          result?: { navigate?: { tab?: string; page_id?: string } };
+          result?: {
+            navigate?: {
+              tab?: string;
+              page_id?: string;
+              /** The pane's DECLARED params, by name — `{claim_id}` for grounding. */
+              params?: Record<string, string>;
+            };
+          };
         }>(`/v1/projects/${projectId}/cards/actions`, {
           surface_kind: surface,
           action_kind: actionName,
@@ -148,8 +160,23 @@ function adapt(
         // No client-side validation of the name: the server produced this
         // navigate target and the server owns the set of surfaces.
         if (nav?.tab) {
-          if (nav.page_id) setOpenPageId(nav.page_id);
-          setActiveSurface(nav.tab);
+          // `page_id` is the older, single-purpose form of the same thing and
+          // still arrives on its own from `navigate_wiki`. Fold it in.
+          const params: Record<string, string> = { ...(nav.params ?? {}) };
+          if (nav.page_id) {
+            params.page_id = nav.page_id;
+            setOpenPageId(nav.page_id);
+          }
+          if (Object.keys(params).length > 0) {
+            // A parameterised pane must be opened WITH its parameter. The pane
+            // id is the wire `surfaceId` and carries the params, so opening the
+            // bare kind and hoping is how "Open claim" showed an empty
+            // Grounding surface — indistinguishable from a claim with no
+            // evidence, which is the one thing that pane exists to tell apart.
+            openPane(nav.tab, { params });
+          } else {
+            setActiveSurface(nav.tab);
+          }
         }
       },
     });
@@ -167,7 +194,18 @@ function adapt(
           props: rest,
           children: Array.isArray(children) ? children : undefined,
         }}
-        onAction={(actionName, params) => action.mutate({ actionName, params })}
+        onAction={(actionName, params) => {
+          // Resolves TRUE/FALSE rather than rejecting: most cards do not await
+          // this, and a rejecting promise nobody holds is an unhandled
+          // rejection in the console of an app that is working correctly.
+          const settled = new Promise<boolean>((resolve) => {
+            action.mutate(
+              { actionName, params },
+              { onSuccess: () => resolve(true), onError: () => resolve(false) },
+            );
+          });
+          return settled;
+        }}
       />
     );
   };

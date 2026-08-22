@@ -31,7 +31,7 @@ def make_http() -> Callable[[Callable[[httpx.Request], httpx.Response]], Scholar
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         clock = FakeClock()
         return ScholarHttp(
-            mailto="test@aleph.local",
+            mailto="scholar-tests@aleph-fixture.org",
             client=client,
             retry_wait_min=0.0,
             retry_wait_max=0.0,

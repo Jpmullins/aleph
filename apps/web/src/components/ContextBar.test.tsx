@@ -67,17 +67,55 @@ describe("ContextBar", () => {
 
   it("reports the focused pane's kind, following the workspace rather than leading it", async () => {
     const view = await mountBar();
-    act(() => state().openPane("Notes"));
+    act(() => state().openPane("notes"));
     await waitFor(() => expect(view.getByTestId("context-active-tab").textContent).toBe("Notes"));
   });
 
   it("cycles through the surfaces the SERVER returned, not a compiled-in list", async () => {
+    // No `Rail` in this tree, so nothing has seeded the board — the bar says so
+    // rather than naming a surface nobody is looking at.
     const view = await mountBar(["Wiki", "Notes", "Library"]);
+    await waitFor(() =>
+      expect(view.getByTestId("context-active-tab").textContent).toBe("nothing open"),
+    );
+    fireEvent.click(view.getByTestId("context-active-tab"));
     await waitFor(() => expect(view.getByTestId("context-active-tab").textContent).toBe("Wiki"));
     fireEvent.click(view.getByTestId("context-active-tab"));
     await waitFor(() => expect(view.getByTestId("context-active-tab").textContent).toBe("Notes"));
     fireEvent.click(view.getByTestId("context-active-tab"));
     await waitFor(() => expect(view.getByTestId("context-active-tab").textContent).toBe("Library"));
+  });
+
+  /**
+   * The bar reads a pane by its TITLE and cycles by its ID.
+   *
+   * It did both by title, and `activeSurface` is a pane kind — so for any pane
+   * whose title is not its id, `indexOf` returned -1 and the button jumped back
+   * to the first surface instead of advancing to the next one, forever.
+   */
+  it("cycles a pane whose title is not its id", async () => {
+    get.mockResolvedValue({
+      panes: [
+        { id: "dispute-queue", title: "Dispute Queue", icon: "notes", launchable: true, params: [] },
+        { id: "notes", title: "Notes", icon: "notes", launchable: true, params: [] },
+      ],
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(
+      <QueryClientProvider client={client}>
+        <WorkspaceUIProvider>
+          <ContextBar projectId="proj-1" />
+          <Probe />
+        </WorkspaceUIProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(get).toHaveBeenCalled());
+    act(() => state().openPane("dispute-queue", { title: "Dispute Queue" }));
+    await waitFor(() =>
+      expect(view.getByTestId("context-active-tab").textContent).toBe("Dispute Queue"),
+    );
+    fireEvent.click(view.getByTestId("context-active-tab"));
+    await waitFor(() => expect(view.getByTestId("context-active-tab").textContent).toBe("Notes"));
   });
 
   it("does nothing when the project offers no surfaces at all", async () => {

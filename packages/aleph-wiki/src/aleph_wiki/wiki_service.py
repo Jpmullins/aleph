@@ -29,11 +29,16 @@ from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
 from aleph_observability.tracing import current_trace_id, start_span
 from aleph_wiki import schema as schema_mod
+from aleph_wiki.belief_service import (
+    BeliefService,
+    ClaimEmbedder,
+    ClaimUpsert,
+    page_citation_locator,
+)
 from aleph_wiki.handedit_service import list_active_for_page
 from aleph_wiki.index_service import IndexService
 from aleph_wiki.models import (
     Citation,
-    WikiClaim,
     WikiLink,
     WikiPage,
     WikiRevision,
@@ -53,13 +58,16 @@ PageKind = Literal["topic", "source", "synthesis", "stub"]
 @dataclass(frozen=True)
 class ClaimDraft:
     text: str
-    #: One of `aleph_core.confidence.Confidence`. A known legacy spelling
-    #: ("cited", "uncited", the hyphenated pair) is translated on the way into
-    #: the column by `canonical_confidence`; anything else raises. The default
-    #: was "cited", which is not a member of any vocabulary the engine, the
-    #: catalog or the renderer agreed on — it just meant "a citation is
-    #: attached", and a draft that says nothing about its evidence has had none
-    #: assessed.
+    #: VALIDATED, NOT STORED. One of `aleph_core.confidence.Confidence`; a
+    #: known legacy spelling ("cited", "uncited", the hyphenated pair) is
+    #: accepted and anything else raises.
+    #:
+    #: The column itself is derived by `BeliefService.recompute_confidence`
+    #: from the citations actually attached, in the same transaction — a
+    #: producer's opinion of its own evidence is not evidence. The check
+    #: survives because it is what stops a fourth vocabulary reaching a column
+    #: whose readers each recognised a different set of words; 806 rows of
+    #: "cited" is what happened without it.
     confidence: str = Confidence.UNDER_INVESTIGATION.value
     section_anchor: str | None = None
     citations: list[CitationDraft] = field(default_factory=list)
@@ -305,6 +313,7 @@ class WikiService:
         commit_message: str,
         respect_hand_edits: bool = True,
         origin: str = "agent",
+        embed: ClaimEmbedder | None = None,
     ) -> CommitResult:
         with start_span(
             "wiki.commit_revision",
@@ -449,49 +458,17 @@ class WikiService:
                         )
                     )
 
-                # Insert claims + their citations.
-                for c in claims:
-                    claim = WikiClaim(
-                        id=uuid7(),
-                        project_id=project_id,
-                        page_id=page.id,
-                        revision_id=revision_id,
-                        section_anchor=c.section_anchor,
-                        text=c.text[:2048],
-                        # Canonicalised here rather than trusted: this is the
-                        # legacy wiki write path, its callers span three
-                        # packages, and it is what put 806 rows of "cited" in a
-                        # column whose readers each recognised a different set
-                        # of words.
-                        confidence=canonical_confidence(c.confidence).value,
-                        status="active",
-                        created_by=principal.user_id,
-                    )
-                    self._session.add(claim)
-                    await self._session.flush()
-                    for cite in c.citations:
-                        self._session.add(
-                            Citation(
-                                id=uuid7(),
-                                project_id=project_id,
-                                claim_id=claim.id,
-                                chunk_ids=[str(cid) for cid in cite.chunk_ids],
-                                source_id=cite.source_id,
-                                source_page_id=cite.source_page_id,
-                                citation_marker=cite.citation_marker[:16],
-                                # The anchor, when the producer has one. It was
-                                # dropped here even when the caller held it —
-                                # the research path grounds every quote against
-                                # its chunk and then wrote a row with no quote,
-                                # no chunk and no span, so the work was done and
-                                # discarded one function call later.
-                                chunk_id=cite.chunk_id,
-                                quote=cite.quote,
-                                char_start=cite.char_start,
-                                char_end=cite.char_end,
-                                verbatim=cite.quote is not None,
-                            )
-                        )
+                # Claims go through the belief layer. See `write_claims`.
+                await self.write_claims(
+                    principal=principal,
+                    ledger=ledger,
+                    project_id=project_id,
+                    page_id=page.id,
+                    revision_id=revision_id,
+                    claims=claims,
+                    origin=origin,
+                    embed=embed,
+                )
 
                 page.current_revision_id = revision_id
                 page.last_compiled_at = utcnow()
@@ -551,6 +528,139 @@ class WikiService:
         ).scalar_one_or_none()
 
     # ---- internals ---------------------------------------------------------
+
+    async def write_claims(
+        self,
+        *,
+        principal: Principal,
+        ledger: LedgerWriter,
+        project_id: UUID,
+        page_id: UUID,
+        revision_id: UUID,
+        claims: list[ClaimDraft],
+        origin: str,
+        embed: ClaimEmbedder | None,
+    ) -> None:
+        """Write a revision's claims THROUGH the belief layer.
+
+        This used to construct ``WikiClaim`` directly, and that is the single
+        reason 7,195 of the 17,241 claims written on 2026-08-22 carry no
+        ``claim_key``, no ``embedding`` and, for most of them, no quote. Three
+        writers built the row — here, ``curator_service`` and
+        ``BeliefService`` — and only the third one filled the columns the
+        knowledge layer is built on.
+
+        What changes, concretely:
+
+        *A claim keeps its identity.* ``BeliefService.upsert_claim`` keys on
+        ``(project_id, claim_key)``, so recompiling a page finds the claim it
+        already has instead of inserting a duplicate with a fresh id, losing
+        its citations, its edges and any human correction. That is the property
+        ``docs/belief-engine.md`` describes and it has never held on this path.
+
+        *A claim becomes findable by vector.* ``embed`` fills
+        ``wiki_claims.embedding``. It is injected rather than imported for the
+        same reason it is on ``upsert_claim``: this write path must stay
+        runnable with no gateway, and the caller owns capability routing and
+        cost attribution. Passing nothing leaves the column NULL, which is what
+        it was for all 18,038 existing rows — an HNSW index with nothing in it.
+
+        *Confidence is derived, not asserted.* ``ClaimDraft.confidence`` is no
+        longer written to the column; ``recompute_confidence`` derives it from
+        the citations actually attached, in this transaction. A producer that
+        said "cited" while attaching nothing is how a column whose readers each
+        recognised a different vocabulary ended up with 806 rows nobody could
+        render.
+
+        *Re-committing does not inflate the evidence.* Citations are keyed by
+        :func:`~aleph_wiki.belief_service.page_citation_locator` and upserted,
+        so the second compile of a page unions its evidence instead of doubling
+        it. With durable claim identity that is not optional: the rows now land
+        on the SAME claim every time.
+
+        A ``PermissionDenied`` from a user-authored claim is deliberately left
+        to propagate. The commit fails, loudly, rather than an agent silently
+        rewriting a belief a human owns — which is the whole point of having
+        the ``origin`` column.
+        """
+        if not claims:
+            return
+        belief = BeliefService(self._session)
+        for c in claims:
+            # Checked, not written. `ClaimDraft.confidence` no longer reaches
+            # the column — it is derived below — but a draft carrying a word in
+            # none of the vocabularies is a producer bug and must not pass
+            # silently just because the value is now unused.
+            canonical_confidence(c.confidence)
+            result = await belief.upsert_claim(
+                principal=principal,
+                ledger=ledger,
+                project_id=project_id,
+                draft=ClaimUpsert(
+                    text=c.text[:2048],
+                    page_id=page_id,
+                    revision_id=revision_id,
+                    section_anchor=c.section_anchor,
+                    origin=origin[:16],
+                    # No `evidence=`: an `EvidenceDraft` is grounded against
+                    # the source text at write time, and this path's producers
+                    # have already done that (the research composer grounds
+                    # every quote against its chunk) or cannot (a stub cites a
+                    # page, not a passage). Re-grounding here would need the
+                    # normalized document, which `commit_revision` does not
+                    # have and must not fetch inside the page transaction.
+                    evidence=[],
+                ),
+                embed=embed,
+            )
+            for cite in c.citations:
+                stmt = pg_insert(Citation).values(
+                    id=uuid7(),
+                    project_id=project_id,
+                    claim_id=result.claim_id,
+                    chunk_ids=[str(cid) for cid in cite.chunk_ids],
+                    source_id=cite.source_id,
+                    source_page_id=cite.source_page_id,
+                    citation_marker=cite.citation_marker[:16],
+                    # The anchor, when the producer has one. It was
+                    # dropped here even when the caller held it —
+                    # the research path grounds every quote against
+                    # its chunk and then wrote a row with no quote,
+                    # no chunk and no span, so the work was done and
+                    # discarded one function call later.
+                    chunk_id=cite.chunk_id,
+                    quote=cite.quote,
+                    char_start=cite.char_start,
+                    char_end=cite.char_end,
+                    verbatim=cite.quote is not None,
+                    locator_hash=page_citation_locator(
+                        source_id=cite.source_id,
+                        source_page_id=cite.source_page_id,
+                        chunk_id=cite.chunk_id,
+                        char_start=cite.char_start,
+                        char_end=cite.char_end,
+                        citation_marker=cite.citation_marker[:16],
+                    ),
+                )
+                await self._session.execute(
+                    stmt.on_conflict_do_update(
+                        index_elements=["claim_id", "locator_hash"],
+                        index_where=Citation.locator_hash.is_not(None),
+                        set_={
+                            "quote": stmt.excluded.quote,
+                            "verbatim": stmt.excluded.verbatim,
+                            "chunk_ids": stmt.excluded.chunk_ids,
+                            "char_start": stmt.excluded.char_start,
+                            "char_end": stmt.excluded.char_end,
+                        },
+                    )
+                )
+            if c.citations:
+                # Confidence is a function of the evidence attached, and the
+                # evidence lands AFTER the upsert. Without this second pass the
+                # claim would keep the no-evidence state it was created with
+                # and the column would disagree with the rows beneath it.
+                await belief.recompute_confidence(project_id=project_id, claim_id=result.claim_id)
 
     async def _lock_or_create_page(
         self,

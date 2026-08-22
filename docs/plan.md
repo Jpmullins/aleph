@@ -539,7 +539,7 @@ at the right file and the wrong row.
 **Review.** Mutation: remove `type` from one page's frontmatter and confirm the OKF validator exits 1; point a wikilink at a title that does not exist and confirm the exporter reports a dangling link rather than emitting a broken one; add a 17th lint check and confirm the count sweep fails. Restore each. Then the manual step that is the actual claim being made: open the exported vault in Obsidian and follow three links.
 <br>**Iterate.** v2 makes the export continuous — a worker that keeps a git repository of the vault in sync, so 'durable agent context' becomes a directory a human can edit and Aleph re-ingests. That is the OpenWiki shape and it is the version worth having; a one-shot zip is the stepping stone, not the destination.
 <br>**Depends on:** —
-<br>**Risk.** The wiki is under removal per docs/decisions.md D1, so an exporter written against WikiPage and WikiRevision may need rewriting against claims within months. Mitigate by exporting from a small view model rather than the ORM directly, so the source can be swapped without touching the format code. Second risk: OKF v0.1 is a young specification and will change;
+<br>**Risk.** ~~The wiki is under removal per docs/decisions.md D1~~ — **CORRECTED 2026-08-22: D1 says the OPPOSITE.** The wiki and the RAG over the raw collection are two knowledge plugins and both stay; the removal decision was reversed. This paragraph cited the decision that reversed it as the reason to expect a rewrite. The mitigation it proposes is still right for its own reasons — export from a small view model rather than the ORM, so the source can be swapped without touching the format code — but the deadline it invented does not exist. Mitigate by exporting from a small view model rather than the ORM directly, so the source can be swapped without touching the format code. Second risk: OKF v0.1 is a young specification and will change;
 
 
 ---
@@ -1447,7 +1447,7 @@ belongs in `docs/decisions.md` either way.
   <br>`The sweep's zod→view direction exits 0`
 - The sweep fails on a newly introduced mismatch.
   <br>`Add "foo_id" to WikiSurface's props in catalog.json, run `uv run python scripts/gen_catalog.py && ./scripts/check-surface-bindings.sh`, confirm exit 1 naming WikiSurface.foo_id, then revert and re-run gen_catalog`
-- Exactly one @a2ui/web_core version resolves in the lockfile. FAILS TODAY: 2.
+- Exactly one @a2ui/web_core version resolves in the lockfile. **CORRECTED 2026-08-22:** the count of 2 is a `packages:` entry plus a `snapshots:` entry for ONE version, which is how pnpm writes a single resolution — so "returns 1" was never achievable. State it as: exactly one distinct VERSION resolves — `grep -oE "@a2ui/web_core@[0-9]+\.[0-9]+\.[0-9]+" pnpm-lock.yaml | sort -u | wc -l` returns 1. **The criterion itself still FAILS:** two genuinely different versions resolve today, 0.9.0 and 0.10.0, and a component registered against one catalog cannot render under the other. Only the counting method was wrong, not the concern.
   <br>``grep -c "^ '@a2ui/web_core@" pnpm-lock.yaml` returns 1 — or, if two are accepted, a committed note states why and the assertion pins exactly those two`
 - Every prop the agent is told about is bindable. FAILS TODAY: 2 (ChartCard.dataset_version_id, ApprovalCard.diff_card_id).
   <br>`The sweep cross-checks catalog.json's agent.props block against the zod declarations and reports 0 discrepancies`
@@ -1500,7 +1500,7 @@ belongs in `docs/decisions.md` either way.
 **Criteria:**
 
 - Zero strict-rule violations. FAILS TODAY: 187.
-  <br>``grep -rEoh 'rounded-(sm|md|lg|xl|2xl|3xl|full)|shadow-(sm|md|lg|xl|2xl)|(bg|text|border|ring|from|to|via|divide|placeholder|decoration|outline|accent|caret|fill|stroke)-(slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-[0-9]{2,3}' apps/…`
+  <br>``grep -rEoh 'rounded-(sm|md|lg|xl|2xl|3xl|full)|shadow-(sm|md|lg|xl|2xl)|(bg|text|border|ring|from|to|via|divide|placeholder|decoration|outline|accent|caret|fill|stroke)-(slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-[0-9]{2,3}' apps/web/src --include='*.tsx' | wc -l` returns 0. **CORRECTED 2026-08-22:** the command was truncated mid-path in the plan file itself (`apps/…`), so it could not be run at all.
 - Zero hardcoded fallbacks inside var(). FAILS TODAY: 25, disagreeing with each other about the accent.
   <br>``grep -rEoh 'var\(--[a-z-]+, *(#[0-9a-fA-F]{3,8}|rgba?\([^)]*\))\)' apps/web/src --include='*.tsx' | wc -l` returns 0`
 - Zero bare `rounded` and zero raw hex/rgba in .tsx. FAILS TODAY: 50 and 27.

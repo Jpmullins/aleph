@@ -575,6 +575,11 @@ function Plugins({
   plugins: { id: string; title: string; description: string; trust: string }[];
 }) {
   const { openPane } = useWorkspaceUI();
+  // This surface's OWN pane kind, from the pane that is rendering it — not the
+  // literal "Settings" that used to be here. A plugin settings screen is a
+  // second pane of the same kind carrying a `plugin` param, and the client is
+  // not allowed to know that kind's name.
+  const { paneKind } = useSurface();
   if (plugins.length === 0) {
     return (
       <p className="text-xs text-ink-muted">
@@ -599,7 +604,7 @@ function Plugins({
             // Its own pane, beside this one — which is the whole point of the
             // pane model: the plugin's screen and the thing it configures can
             // be on screen at the same time.
-            onClick={() => openPane("Settings", { title: p.title, params: { plugin: p.id } })}
+            onClick={() => openPane(paneKind, { title: p.title, params: { plugin: p.id } })}
             className="shrink-0 border border-line-strong px-2 py-1 text-[11px] font-medium text-ink-soft hover:bg-elevated"
           >
             Open

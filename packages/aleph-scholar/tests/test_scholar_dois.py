@@ -197,7 +197,7 @@ async def test_verify_crossref_404_with_openalex_down_is_unverifiable(
 
 async def test_verify_empty_input() -> None:
     http = ScholarHttp(
-        mailto="test@aleph.local",
+        mailto="scholar-tests@aleph-fixture.org",
         client=httpx.AsyncClient(
             transport=httpx.MockTransport(lambda request: pytest.fail("no request expected"))
         ),

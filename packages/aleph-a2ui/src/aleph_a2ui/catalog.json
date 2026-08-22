@@ -1838,13 +1838,28 @@
             "type": "string",
             "format": "uuid"
           },
+          "note_id": {
+            "type": "string",
+            "format": "uuid"
+          },
           "body_md": {
             "type": "string"
           }
         },
         "required": [
-          "section_id",
           "body_md"
+        ],
+        "anyOf": [
+          {
+            "required": [
+              "section_id"
+            ]
+          },
+          {
+            "required": [
+              "note_id"
+            ]
+          }
         ]
       }
     },

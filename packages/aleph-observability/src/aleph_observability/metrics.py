@@ -8,7 +8,7 @@ directly: "gateway rate limiting, reported as weirdly rate limited, not yet
 characterised" is unanswerable by reading logs and trivial with a per-purpose
 request counter.
 
-Five things are instrumented, and deliberately only five:
+Six things are instrumented, and deliberately only six:
 
   1. HTTP request rate, latency and status **by route template**.
   2. LLM calls by capability, purpose and outcome.
@@ -18,6 +18,9 @@ Five things are instrumented, and deliberately only five:
   5. Stage latency for every `start_span` call site — which is how ingest,
      the wiki curator, the reviewers and the builder get a latency number
      without a second instrumentation pass. See `tracing.start_span`.
+  6. Bytes on the two volumes the dataset lives on. See
+     `aleph_observability.storage` for the label vocabulary and for why
+     "stored" and "used" are different words.
 
 ## Label cardinality is the failure mode
 
@@ -98,6 +101,7 @@ LLM_COST: Final = "aleph_model_call_cost_total"
 QUEUE_DEPTH: Final = "aleph_queue_depth"
 AGENT_RUNS: Final = "aleph_agent_runs"
 STAGE_DURATION: Final = "aleph_stage_duration_seconds"
+STORAGE_BYTES: Final = "aleph_storage_bytes"
 
 #: The label a request gets when no route matched it — a 404, or a probe for
 #: `/wp-login.php`. It exists so there is exactly one series for "everything we
@@ -203,6 +207,7 @@ _purpose_label = _LabelGuard("purpose")
 _snapshot_lock = threading.Lock()
 _queue_depths: dict[str, int] = {}
 _agent_run_counts: dict[tuple[str, str], int] = {}
+_storage_bytes: dict[tuple[str, str], int] = {}
 
 
 def replace_queue_depths(depths: Mapping[str, int]) -> None:
@@ -217,6 +222,28 @@ def replace_agent_run_counts(counts: Mapping[tuple[str, str], int]) -> None:
     with _snapshot_lock:
         _agent_run_counts.clear()
         _agent_run_counts.update(counts)
+
+
+def replace_storage_bytes(values: Mapping[tuple[str, str], int]) -> None:
+    """Publish bytes used, keyed by ``(store, measure)``.
+
+    Replaces the whole family so a store that stops being measurable stops
+    being reported — a byte gauge frozen at its last reading is how "the volume
+    is 40% full" survives the volume filling up. See
+    `aleph_observability.storage` for what the two labels mean.
+    """
+    with _snapshot_lock:
+        _storage_bytes.clear()
+        _storage_bytes.update(values)
+
+
+def _observe_storage_bytes(_options: CallbackOptions) -> Iterable[Observation]:
+    with _snapshot_lock:
+        items = list(_storage_bytes.items())
+    return [
+        Observation(value, {"store": store, "measure": measure})
+        for (store, measure), value in items
+    ]
 
 
 def _observe_queue_depth(_options: CallbackOptions) -> Iterable[Observation]:
@@ -286,6 +313,15 @@ class _Instruments:
             AGENT_RUNS,
             callbacks=[_observe_agent_runs],
             description="Background runs by kind and status, read from Postgres at scrape time.",
+        )
+        meter.create_observable_gauge(
+            STORAGE_BYTES,
+            unit="By",
+            callbacks=[_observe_storage_bytes],
+            description=(
+                "Bytes on the volumes holding the dataset, by store "
+                "(postgres/assets) and measure (stored/used/free/total)."
+            ),
         )
 
 

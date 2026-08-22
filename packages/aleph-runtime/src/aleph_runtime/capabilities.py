@@ -41,6 +41,7 @@ from aleph_models.limiter import (
     reset_limiters,
 )
 from aleph_models.pricing import get_default_pricing
+from aleph_models.repricing import PricingRefresher, refresh_intervals
 from aleph_observability import (
     configure_logging,
     init_langfuse,
@@ -75,6 +76,7 @@ REDIS = "redis"
 LITELLM = "litellm"
 GATEWAY_LIMITER = "gateway.limiter"
 PRICING = "pricing"
+PRICING_REFRESHER = "pricing.refresher"
 GATEWAY_CATALOG = "models.gateway_catalog"
 ASSET_STORE = "asset_store"
 SCHOLAR = "scholar"
@@ -350,6 +352,31 @@ def models() -> CapabilitySpec:
             limiter=limiter,
         )
         await catalog.refresh_pricing(pricing)
+        # Discovery ran once, above, and until now that was the only time it
+        # ever ran. `refresh_pricing` swallows an unreachable gateway so the
+        # process still boots — the cost of which was that a gateway coming up
+        # a second later was never priced at all, for the life of the process,
+        # with no error anywhere and no repair short of a restart. The
+        # refresher re-runs it on an interval into this SAME table, which
+        # `PricingTable.merge` mutates in place, so rates reach the client
+        # built below AND the agent's cost callback without rebuilding either.
+        interval_s, retry_s = refresh_intervals(settings)
+        refresher = PricingRefresher(
+            catalog=catalog,
+            pricing=pricing,
+            interval_s=interval_s,
+            retry_interval_s=retry_s,
+        )
+        refresher.start()
+
+        async def _stop_refresher() -> None:
+            # Bounded: `models` is protected in both manifests, so this runs on
+            # every shutdown, and a stuck discovery request must not become a
+            # process that never exits.
+            await refresher.stop()
+
+        yield _stop_refresher
+
         client = LiteLLMClient(
             base_url=settings.litellm_base_url,
             api_key=settings.insights_litellm_api_key,
@@ -365,8 +392,10 @@ def models() -> CapabilitySpec:
         # (`GET /v1/gateway/models`) — Aleph ships no committed model list, so
         # one cached view of the gateway serves discovery, pricing and the UI.
         ctx.provide(GATEWAY_CATALOG, catalog)
-        if False:  # pragma: no cover - the shared http client owns the socket
-            yield
+        # Provided so the probe below can report whether the table is empty
+        # *and being retried* — the two states differ entirely in what an
+        # operator should do about them.
+        ctx.provide(PRICING_REFRESHER, refresher)
 
     async def probe(ctx: Context) -> ProbeResult:
         # The read path every LLM call starts from: resolve the default profile
@@ -419,9 +448,14 @@ def models() -> CapabilitySpec:
         priced_count = len(pricing.models())
         unpriced = sorted(m for m in bound if not pricing.has(m))
         if unpriced:
+            # An unpriced model that is being retried and one that is not are
+            # the same sentence to an operator unless the difference is said
+            # out loud: the first needs waiting on, the second needs a person.
+            refresher = ctx.get(PRICING_REFRESHER)
             return ok(
                 f"{len(bound)} bound models, {priced_count} priced by the gateway; "
-                f"unpriced (will record pricing_source=unknown): {', '.join(unpriced)}"
+                f"unpriced (will record pricing_source=unknown): {', '.join(unpriced)}; "
+                f"{refresher.describe()}"
             )
         return ok(f"{len(bound)} bound models all priced from {priced_count} gateway rates")
 
@@ -430,7 +464,7 @@ def models() -> CapabilitySpec:
         setup=setup,
         probe=probe,
         requires=frozenset({SETTINGS, HTTP_GATEWAY, DB_SESSIONS, REDIS, GATEWAY_LIMITER}),
-        provides=frozenset({LITELLM, PRICING, GATEWAY_CATALOG}),
+        provides=frozenset({LITELLM, PRICING, PRICING_REFRESHER, GATEWAY_CATALOG}),
     )
 
 
@@ -695,6 +729,7 @@ __all__ = [
     "LITELLM",
     "NOTIFY_LISTENER",
     "PRICING",
+    "PRICING_REFRESHER",
     "REDIS",
     "SCHOLAR",
     "SETTINGS",

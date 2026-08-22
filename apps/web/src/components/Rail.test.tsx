@@ -65,7 +65,48 @@ describe("Rail", () => {
     // The whole point of a server-driven registry: a plugin installed after
     // this bundle was built has to be reachable without a redeploy.
     const view = await mountRail([pane("dispute-queue", "Dispute Queue", "wiki")]);
-    await waitFor(() => expect(view.getByTestId("rail-dispute queue")).toBeTruthy());
+    await waitFor(() => expect(view.getByTestId("rail-dispute-queue")).toBeTruthy());
+  });
+
+  /**
+   * WS-B1a c3, and the reason this rail is not allowed to speak in titles.
+   *
+   * The rail passed `kind.title` into `openPane`, `paneKey` lower-cased it, and
+   * the result became the pane id AND the wire `surfaceId` in `?panes=`. So a
+   * pane registered as `dispute-queue` and titled "Dispute Queue" minted the id
+   * `dispute queue`; `_parse_pane_specs` has no such tab and drops it — which
+   * is the correct behaviour for one bad entry in a URL, so nothing anywhere
+   * reports a problem and the pane simply never fills. Every core pane's title
+   * lower-cases to its id, which is why this survived.
+   */
+  it("opens a plugin pane under its registered id, not its title", async () => {
+    const view = await mountRail([pane("dispute-queue", "Dispute Queue", "wiki")]);
+    await waitFor(() => expect(view.getByTestId("rail-dispute-queue")).toBeTruthy());
+    fireEvent.click(view.getByTestId("rail-dispute-queue"));
+    expect(panes.map((p) => p.id)).toEqual(["dispute-queue"]);
+    expect(panes.map((p) => p.kind)).toEqual(["dispute-queue"]);
+    // The person still reads the title.
+    expect(panes.map((p) => p.title)).toEqual(["Dispute Queue"]);
+  });
+
+  /**
+   * The board is seeded from the SERVER's list, not from a name in the client.
+   *
+   * `WorkspaceUIProvider` used to boot holding a pane called `Wiki`. Here the
+   * first launchable pane the server returned is what opens — whatever it is.
+   */
+  it("seeds the board with the first surface the server offers", async () => {
+    await mountRail([
+      pane("dispute-queue", "Dispute Queue", "wiki"),
+      pane("notes", "Notes", "notes"),
+    ]);
+    await waitFor(() => expect(panes.map((p) => p.id)).toEqual(["dispute-queue"]));
+  });
+
+  it("opens nothing at all when the server offers nothing launchable", async () => {
+    await mountRail([pane("grounding", "Grounding", "grounding", false)]);
+    await waitFor(() => expect(get).toHaveBeenCalled());
+    expect(panes).toHaveLength(0);
   });
 
   it("falls back rather than throwing on an icon it does not ship", async () => {
@@ -79,8 +120,10 @@ describe("Rail", () => {
   it("opens a pane beside what is already there rather than replacing it", async () => {
     const view = await mountRail([pane("wiki", "Wiki", "wiki"), pane("notes", "Notes", "notes")]);
     await waitFor(() => expect(view.getByTestId("rail-notes")).toBeTruthy());
+    // The seed effect has opened the first pane; the click must add beside it.
+    await waitFor(() => expect(panes.map((p) => p.kind)).toEqual(["wiki"]));
     fireEvent.click(view.getByTestId("rail-notes"));
-    expect(panes.map((p) => p.kind)).toEqual(["Wiki", "Notes"]);
+    expect(panes.map((p) => p.kind)).toEqual(["wiki", "notes"]);
   });
 
   it("focuses an already-open pane instead of opening a second one", async () => {
@@ -88,7 +131,7 @@ describe("Rail", () => {
     await waitFor(() => expect(view.getByTestId("rail-notes")).toBeTruthy());
     fireEvent.click(view.getByTestId("rail-notes"));
     fireEvent.click(view.getByTestId("rail-notes"));
-    expect(panes.filter((p) => p.kind === "Notes")).toHaveLength(1);
+    expect(panes.filter((p) => p.kind === "notes")).toHaveLength(1);
   });
 
   it("marks the focused pane as current, so the rail is legible from the periphery", async () => {
@@ -139,6 +182,6 @@ describe("Rail", () => {
     // A pane in the workspace state is a block on the Board. The drawer put
     // nothing here at all — it was React state in ProjectWorkspace holding a
     // `fixed inset-0` overlay above everything.
-    expect(panes.filter((p) => p.kind === "Settings")).toHaveLength(1);
+    expect(panes.filter((p) => p.kind === "settings")).toHaveLength(1);
   });
 });

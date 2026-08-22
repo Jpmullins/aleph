@@ -34,7 +34,7 @@ def _http(
     retry_wait_max: float = 0.0,
 ) -> ScholarHttp:
     return ScholarHttp(
-        mailto="test@aleph.local",
+        mailto="scholar-tests@aleph-fixture.org",
         client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         retry_wait_min=retry_wait_min,
         retry_wait_max=retry_wait_max,

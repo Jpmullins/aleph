@@ -296,7 +296,7 @@ async def test_scholar_service_wires_consensus(fake_redis: FakeRedis) -> None:
     store = CredentialStore(_blob(expires_in_s=3600))
     spy = SearchSpy()
     service = ScholarService(
-        mailto="test@aleph.local",
+        mailto="scholar-tests@aleph-fixture.org",
         redis=fake_redis,
         load_credential=store.load,
         save_credential=store.save,
@@ -309,7 +309,7 @@ async def test_scholar_service_wires_consensus(fake_redis: FakeRedis) -> None:
 
 
 async def test_scholar_service_without_consensus_deps_raises() -> None:
-    service = ScholarService(mailto="test@aleph.local")
+    service = ScholarService(mailto="scholar-tests@aleph-fixture.org")
     with pytest.raises(RuntimeError, match="not configured"):
         await service.search_consensus(PROJECT_ID, "q")
 

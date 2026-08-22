@@ -2,7 +2,8 @@
 
 OpenAlex is the primary upstream for DOI verification (`is_retracted` is
 Retraction-Watch-backed) and the only one used for citation-graph
-expansion. All requests carry `mailto=` for the polite pool. Batch
+expansion. Requests carry `mailto=` for the polite pool when the configured
+address is contactable — see `ScholarHttp.mailto_params`. Batch
 endpoints are preferred: `filter=doi:a|b|c` resolves up to 50 DOIs per
 request, `filter=openalex_id:W1|W2|...` resolves W-ids.
 """
@@ -91,7 +92,7 @@ class OpenAlexClient:
     async def _list_works(
         self, params: dict[str, str], *, deadline_s: float | None = None
     ) -> list[OpenAlexWork]:
-        params = {**params, "mailto": self._http.mailto}
+        params = {**params, **self._http.mailto_params()}
         response = await self._http.get(f"{_API}/works", params=params, deadline_s=deadline_s)
         ensure_ok(response)
         body: dict[str, Any] = response.json()
@@ -193,9 +194,7 @@ class OpenAlexClient:
 
     async def _raw_work(self, ref: str) -> dict[str, Any] | None:
         ident = f"doi:{ref}" if ref.startswith("10.") else (_short_id(ref) or ref)
-        response = await self._http.get(
-            f"{_API}/works/{ident}", params={"mailto": self._http.mailto}
-        )
+        response = await self._http.get(f"{_API}/works/{ident}", params=self._http.mailto_params())
         if response.status_code == 404:
             return None
         ensure_ok(response)

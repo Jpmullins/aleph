@@ -42,6 +42,7 @@ Three defects this module's shape exists to prevent:
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 from collections.abc import Awaitable, Callable
@@ -51,10 +52,41 @@ import httpx
 
 from aleph_scholar.errors import ScholarClientError, ScholarUnavailable
 
+_log = logging.getLogger(__name__)
+
 #: OpenAlex's documented polite-pool ceiling (with `mailto=`). A configured
 #: rate is clamped to this: exceeding it is what gets a deployment's mailto
 #: address blocked, and that failure lands on every project at once.
 POLITE_POOL_CEILING_PER_SECOND = 10.0
+
+#: The ceiling applied when the configured mailto is NOT a contactable address.
+#: A number Aleph chose, not one OpenAlex documents — which is the point: with
+#: no reachable contact there is no polite pool, so clamping to the POLITE
+#: ceiling clamps to a budget this deployment does not have. Measured
+#: 2026-08-22 against the running stack with `ALEPH_SCHOLAR_MAILTO` at its
+#: shipped placeholder: OpenAlex answered 429 to a single request with
+#: `Retry-After: 28409` — 7.9 hours, applied to the whole deployment. One
+#: request per second is the conservative side of a limit nobody has published.
+COMMON_POOL_CEILING_PER_SECOND = 1.0
+
+#: Domains and suffixes that cannot receive mail, so an address on one of them
+#: is a placeholder however well-formed it looks. `.local` is mDNS (RFC 6762);
+#: `.test`, `.example`, `.invalid` and `.localhost` are reserved by RFC 2606 /
+#: RFC 6761; the `example.*` second-level domains are reserved by RFC 2606 §3.
+#: `.internal` is ICANN-reserved for private use.
+_UNDELIVERABLE_SUFFIXES: tuple[str, ...] = (
+    ".local",
+    ".localhost",
+    ".invalid",
+    ".test",
+    ".example",
+    ".internal",
+)
+_UNDELIVERABLE_DOMAINS: frozenset[str] = frozenset(
+    {"example.com", "example.org", "example.net", "localhost"}
+)
+
+_ENV_MAILTO = "ALEPH_SCHOLAR_MAILTO"
 
 #: Default request rate: half the polite pool. Conservative by intent — the
 #: number that unblocks the research loop's fan-out without approaching the
@@ -111,8 +143,30 @@ def _env_float(name: str, default: float) -> float:
     return value if value > 0 else default
 
 
-def _clamped_rate(rate: float) -> float:
-    return min(max(rate, 0.01), POLITE_POOL_CEILING_PER_SECOND)
+def is_contactable(mailto: str) -> bool:
+    """Whether `mailto` is an address a human upstream could actually reach.
+
+    Not validation — a deliverable-looking address can still bounce, and this
+    makes no attempt to find out. It answers the one question the polite pool
+    turns on: is this a *placeholder*. `dev@aleph.local`, which Aleph ships as
+    its default, is well formed and undeliverable, and the polite pool is
+    granted on a contactable address. So the deployment sent `mailto=` on every
+    request, behaved as though it were in the polite pool, and was in the common
+    pool the whole time, with nothing anywhere reporting the gap.
+    """
+    address = mailto.strip().lower()
+    if "@" not in address or address.startswith("@") or address.endswith("@"):
+        return False
+    domain = address.rsplit("@", 1)[1]
+    if not domain or "." not in domain:
+        return False
+    if domain in _UNDELIVERABLE_DOMAINS:
+        return False
+    return not domain.endswith(_UNDELIVERABLE_SUFFIXES)
+
+
+def _clamped_rate(rate: float, ceiling: float) -> float:
+    return min(max(rate, 0.01), ceiling)
 
 
 def _is_retryable_status(status: int) -> bool:
@@ -267,14 +321,49 @@ class ScholarHttp:
         sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
         self.mailto = mailto
-        self.user_agent = f"aleph-scholar/0.1 (mailto:{mailto})"
+        #: Whether this instance is entitled to the polite pool at all. Every
+        #: politeness behaviour below reads it rather than assuming.
+        self.polite = is_contactable(mailto)
+        #: Empty when polite; otherwise one sentence naming the cause and the
+        #: fix. It is appended to the `ScholarUnavailable` message on a
+        #: throttled request, which is how it reaches the operator: the API
+        #: route echoes that message into the 503 body, so a rate-limit failure
+        #: says WHY instead of "the upstream is unavailable".
+        self.degradation = (
+            ""
+            if self.polite
+            else (
+                f"{_ENV_MAILTO} is {mailto!r}, which is not a deliverable address, "
+                "so this deployment is in the common pool rather than the polite "
+                f"pool and is rate-limited to {COMMON_POOL_CEILING_PER_SECOND:g}/s. "
+                f"Set {_ENV_MAILTO} to a real contact address."
+            )
+        )
+        # A placeholder contact is not claimed as a real one. Sending
+        # `(mailto:dev@aleph.local)` asserts a contact that does not exist,
+        # which is what the polite pool is a promise about; the software still
+        # identifies itself.
+        self.user_agent = (
+            f"aleph-scholar/0.1 (mailto:{mailto})" if self.polite else "aleph-scholar/0.1"
+        )
+        if not self.polite:
+            # Once per client, not once per request: the point is that an
+            # operator reading the API log at startup sees the cause of the
+            # 429s, not that every throttled call repeats it.
+            _log.warning("scholar.mailto_not_contactable: %s", self.degradation)
         self._client = client or httpx.AsyncClient(timeout=30.0, follow_redirects=True)
         # The composition root does not pass these yet, so the environment is
         # the only lever an operator has. Constructor argument wins when given.
+        #
+        # The CEILING depends on politeness, and that is the substantive half of
+        # the degradation: without a contactable mailto there is no polite pool,
+        # so clamping a configured 5/s to the polite ceiling clamps it to a
+        # budget this deployment was never granted.
         self.rate_per_second = _clamped_rate(
             rate_per_second
             if rate_per_second is not None
-            else _env_float(_ENV_RATE, DEFAULT_RATE_PER_SECOND)
+            else _env_float(_ENV_RATE, DEFAULT_RATE_PER_SECOND),
+            POLITE_POOL_CEILING_PER_SECOND if self.polite else COMMON_POOL_CEILING_PER_SECOND,
         )
         self.deadline_s = (
             deadline_s if deadline_s is not None else _env_float(_ENV_DEADLINE, DEFAULT_DEADLINE_S)
@@ -286,6 +375,17 @@ class ScholarHttp:
         self._sleep: Callable[[float], Awaitable[None]] = sleep or asyncio.sleep
         self._buckets: dict[str, _TokenBucket] = {}
         self._inflight: dict[str, asyncio.Future[httpx.Response]] = {}
+
+    def mailto_params(self) -> dict[str, str]:
+        """The `mailto=` query parameter, when there is a real address to send.
+
+        OpenAlex reads `mailto=` to decide pool membership. Sending a
+        placeholder does not buy the polite pool and does assert a contact
+        nobody can use, so an uncontactable address is omitted rather than
+        transmitted — the honest request for a deployment that has not been
+        configured.
+        """
+        return {"mailto": self.mailto} if self.polite else {}
 
     def _bucket(self, host: str) -> _TokenBucket:
         bucket = self._buckets.get(host)
@@ -425,6 +525,13 @@ class ScholarHttp:
             f"scholar upstream {host} unavailable after {attempts} attempt(s) "
             f"within a {budget:.1f}s budget: {last_detail}"
         )
+        # A throttled request whose deployment never had the polite pool is not
+        # an outage, and reporting it as one sends an operator to look at the
+        # network. Appended only on 429 — a 500 or a timeout says nothing about
+        # pool membership, and attaching the note there would train people to
+        # ignore it.
+        if last_status == 429 and self.degradation:
+            msg = f"{msg}. {self.degradation}"
         raise ScholarUnavailable(msg, status_code=last_status, retry_after=last_retry_after)
 
     async def aclose(self) -> None:

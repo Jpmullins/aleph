@@ -44,7 +44,7 @@ describe("renderChildCard", () => {
 
 describe("useSurface", () => {
   it("carries the project and surface the tree was mounted for", () => {
-    let seen: { projectId: string; surface: string } | null = null;
+    let seen: { projectId: string; surface: string; paneKind: string } | null = null;
     function Probe() {
       seen = useSurface();
       return null;
@@ -54,7 +54,24 @@ describe("useSurface", () => {
         <Probe />
       </SurfaceProvider>,
     );
-    expect(seen).toEqual({ projectId: "proj-9", surface: "Notes" });
+    expect(seen).toEqual({ projectId: "proj-9", surface: "Notes", paneKind: "" });
+  });
+
+  it("carries the pane kind, so a surface can open another of its own kind", () => {
+    // Without this, `SettingsSurface`'s "Open" button had to name its own pane
+    // — `openPane("Settings")` — which is a client-side surface name, the one
+    // thing `GET /panes` exists to abolish.
+    let seen = "";
+    function Probe() {
+      seen = useSurface().paneKind;
+      return null;
+    }
+    render(
+      <SurfaceProvider projectId="p" surface="disputeQueueSurface" paneKind="dispute-queue">
+        <Probe />
+      </SurfaceProvider>,
+    );
+    expect(seen).toBe("dispute-queue");
   });
 
   it("refuses to be used outside a SurfaceProvider", () => {

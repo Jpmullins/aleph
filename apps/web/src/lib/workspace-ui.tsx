@@ -32,10 +32,11 @@ import { api } from "@/lib/api";
  * `SurfaceTab` is a plain string rather than a union. A static union over a set
  * the server decides is a lie the compiler will happily tell you.
  *
- * `DEFAULT_PANES` is a first-paint fallback only, so the rail is not empty for
- * the one frame before the fetch lands. It is deliberately NOT a second source
- * of truth: nothing validates against it, and a kind the server does not return
- * simply will not appear.
+ * There is no first-paint fallback list. There used to be a one-element one
+ * naming `wiki`, described as "not a second source of truth" — but a fallback
+ * that names a surface IS the client deciding what a workbench opens with, and
+ * `check-pane-registry.sh` could not see it because the sweep tolerated one
+ * registry id per file. Until the server answers, the honest rail is empty.
  */
 export interface PaneKindDef {
   readonly id: string;
@@ -50,9 +51,8 @@ export interface PaneKindDef {
 /** A pane kind's wire id. Not a union — the server owns the set. */
 export type SurfaceTab = string;
 
-const DEFAULT_PANES: PaneKindDef[] = [
-  { id: "wiki", title: "Wiki", icon: "wiki", launchable: true, params: [] },
-];
+/** Stable identity so `usePaneKinds`' memo does not churn before the fetch lands. */
+const NO_PANES: readonly PaneKindDef[] = [];
 
 /**
  * The surfaces this project can open, from the server.
@@ -68,12 +68,13 @@ export function usePaneKinds(projectId: string | null) {
     enabled: Boolean(projectId),
     staleTime: Infinity,
   });
-  const panes = q.data?.panes ?? DEFAULT_PANES;
+  const panes: readonly PaneKindDef[] = q.data?.panes ?? NO_PANES;
   return useMemo(
     () => ({
       all: panes,
       /** What the rail offers. */
       launchable: panes.filter((p) => p.launchable),
+      /** A pane kind by its wire id — the rail's title for `activeSurface`. */
       byId: (id: string) => panes.find((p) => p.id === id),
       /** Narrows an incoming name against what the SERVER said exists. */
       isPaneKind: (value: string) => panes.some((p) => p.id === value),
@@ -170,18 +171,41 @@ export interface Pane {
  */
 export const MAX_PANES = 24;
 
+/**
+ * Normalise an incoming pane name onto the server's pane id.
+ *
+ * Lower-casing is all this does, and all it may do. The server's ids are
+ * lower-case and `_parse_pane_specs` lower-cases the tab it reads, so this
+ * folds the title-cased names the action router still answers with ("Wiki",
+ * "Grounding") onto the id the registry declares.
+ *
+ * What it must never do is DERIVE an id from a title. That was the defect: the
+ * rail passed `kind.title` in here, so a pane registered as `dispute-queue`
+ * titled "Dispute Queue" minted the pane id `dispute queue`, the server dropped
+ * it as an unknown tab, and the pane streamed nothing — with no error anywhere,
+ * because dropping one unknown pane out of a URL is the correct behaviour. Every
+ * core pane happens to be a single lower-case word, so nothing noticed. The rail
+ * passes `kind.id` now.
+ */
+function paneKindId(kind: SurfaceTab): string {
+  return kind.toLowerCase();
+}
+
 function paneKey(kind: SurfaceTab, params?: Record<string, string>): string {
   const p = params ? Object.entries(params).sort().map(([k, v]) => `${k}=${v}`).join("&") : "";
-  return p ? `${kind.toLowerCase()}:${p}` : kind.toLowerCase();
+  const id = paneKindId(kind);
+  return p ? `${id}:${p}` : id;
 }
 
 const WorkspaceUIContext = createContext<WorkspaceUIState | null>(null);
 
 export function WorkspaceUIProvider({ children }: { children: ReactNode }) {
-  const [panes, setPanes] = useState<Pane[]>([
-    { id: "wiki", kind: "Wiki", title: "Wiki" },
-  ]);
-  const [focusedPaneId, setFocusedPaneId] = useState<string>("wiki");
+  // Starts EMPTY, and the Board says so in words. Seeding a pane here means
+  // naming one, and this client is not allowed to know a surface name — `Rail`
+  // opens the first surface the SERVER offers, once it has been told what
+  // exists.
+  const [panes, setPanes] = useState<Pane[]>([]);
+  const [focusedPaneId, setFocusedPaneId] = useState<string>("");
 
   /**
    * Open a pane, or focus it if that exact view is already open.
@@ -191,6 +215,7 @@ export function WorkspaceUIProvider({ children }: { children: ReactNode }) {
    * id per click.
    */
   const openPane = (kind: SurfaceTab, opts: { title?: string; params?: Record<string, string> } = {}) => {
+    const kindId = paneKindId(kind);
     const id = paneKey(kind, opts.params);
     setPanes((prev) => {
       if (prev.some((p) => p.id === id)) return prev;
@@ -199,13 +224,16 @@ export function WorkspaceUIProvider({ children }: { children: ReactNode }) {
       // pane every time a card's `open` action fired, because the action
       // handler re-keys the pane and then asks for the surface by name.
       if (!opts.params) {
-        const existing = prev.find((p) => p.kind === kind);
+        const existing = prev.find((p) => p.kind === kindId);
         if (existing) {
           setFocusedPaneId(existing.id);
           return prev;
         }
       }
-      const next = [...prev, { id, kind, title: opts.title ?? kind, params: opts.params }];
+      // `kind` is stored NORMALISED. Stored raw, `openPane("Wiki")` from the
+      // action router and `openPane("wiki")` from the rail become two panes
+      // claiming one id, and the `p.kind === kindId` match above finds neither.
+      const next = [...prev, { id, kind: kindId, title: opts.title ?? kind, params: opts.params }];
       // Oldest unfocused pane makes way rather than refusing the open — the
       // user asked for this view and should get it.
       return next.length > MAX_PANES ? next.slice(next.length - MAX_PANES) : next;
@@ -216,10 +244,13 @@ export function WorkspaceUIProvider({ children }: { children: ReactNode }) {
   const closePane = (id: string) => {
     setPanes((prev) => {
       const next = prev.filter((p) => p.id !== id);
-      // Never leave an empty stage.
-      return next.length ? next : [{ id: "wiki", kind: "Wiki", title: "Wiki" }];
+      // The "never leave an empty stage" fallback that used to sit here
+      // re-created a pane BY NAME, which is the client deciding what a
+      // workbench opens with. `Rail` re-seeds from the server's own list, and
+      // until it does the Board has an empty state that says what to do.
+      setFocusedPaneId((cur) => (cur === id ? (next.at(-1)?.id ?? "") : cur));
+      return next;
     });
-    setFocusedPaneId((cur) => (cur === id ? "wiki" : cur));
   };
 
   // DERIVED, not stored. Its own docstring calls it "the focused pane's kind",
@@ -228,7 +259,7 @@ export function WorkspaceUIProvider({ children }: { children: ReactNode }) {
   // therefore the `active_tab` the agent is told about — reported a surface the
   // analyst was no longer looking at.
   const activeSurface: SurfaceTab =
-    panes.find((p) => p.id === focusedPaneId)?.kind ?? panes[0]?.kind ?? "Wiki";
+    panes.find((p) => p.id === focusedPaneId)?.kind ?? panes[0]?.kind ?? "";
   const [openPageTitle, setOpenPageTitle] = useState<string | null>(null);
   const [openPageId, setOpenPageIdState] = useState<string | null>(null);
 
@@ -244,21 +275,7 @@ export function WorkspaceUIProvider({ children }: { children: ReactNode }) {
    * comes back, and the state updates. There was simply no path from that state
    * to the request.
    */
-  const setOpenPageId = (id: string | null) => {
-    setOpenPageIdState(id);
-    if (!id) return;
-    // Open the document as its OWN block, beside the index.
-    //
-    // This used to re-key the Wiki pane in place, so reading a page destroyed
-    // the list you found it in: one moment you have an index of 251 pages, the
-    // next you have one document and no way back except the rail. On a canvas
-    // that is simply wrong — the index and the document are two things, and
-    // wanting both on screen is the normal case, not an advanced one.
-    //
-    // As a side effect the Board draws a provenance thread from the index to
-    // the document, because the index is what was focused when it opened.
-    openPane("Wiki", { params: { page_id: id } });
-  };
+  const setOpenPageId = (id: string | null) => setOpenPageIdState(id);
   const [selection, setSelection] = useState<WorkspaceSelection | null>(null);
   const [highlightedClaimId, setHighlightedClaimId] = useState<string | null>(null);
 

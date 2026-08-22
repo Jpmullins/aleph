@@ -60,6 +60,18 @@ than written next to it, so the two cannot drift apart again.
 (or S3) write plus a read. Compose calls this every 15 seconds; on the event
 loop that is four blocking round trips a minute stalling every other request in
 the process, and against S3 it is a blocking socket.
+
+**Why `/readyz` also reports bytes.** WS-P8 c6: the whole dataset lives on two
+docker volumes and nothing measured either one, so "the disk filled up" was
+something Aleph could only learn by dying. The numbers are reported in a
+`storage` section that is deliberately OUTSIDE the verdict — a volume at 91% is
+not a reason to restart a container, and wiring it into `all_ok` would turn a
+capacity warning into an outage. `/metrics` publishes the same measurement as a
+time series (`aleph_storage_bytes`), which is where a trend belongs; this
+section is what an operator sees when they curl the endpoint they already know.
+Both derive from `aleph_observability.storage`, so the two surfaces cannot
+disagree about what a word means. Cost: `pg_database_size` measured at 1.0 ms
+against a 1.3 GB database, and the volume read is one `statvfs`.
 """
 
 from __future__ import annotations
@@ -73,6 +85,14 @@ from anyio import to_thread
 from fastapi import APIRouter, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
+
+from aleph_observability.storage import (
+    ASSET_STORED_BYTES_SQL,
+    DATABASE_STORED_BYTES_SQL,
+    storage_body,
+    storage_series,
+    volume_usage,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -211,6 +231,20 @@ async def _leg(probe: Callable[[], Awaitable[bool]]) -> dict[str, Any]:
         return {"ok": False, "error": _describe(exc)}
 
 
+async def _measurement[T](probe: Callable[[], Awaitable[T]]) -> tuple[T | None, str | None]:
+    """Run one *reported* probe: it answers with a number, or with a reason.
+
+    Deliberately not `_leg`. A leg votes, and a failure to read a byte count
+    must not be able to vote — but it must also not be published as a zero,
+    which is indistinguishable from an empty volume and would make any alert on
+    "free bytes below X" fire permanently the first time the probe errored.
+    """
+    try:
+        return await asyncio.wait_for(probe(), timeout=LEG_TIMEOUT_S), None
+    except Exception as exc:
+        return None, _describe(exc)
+
+
 async def _postgres(request: Request) -> bool:
     maker = request.app.state.session_maker
     async with maker() as session:
@@ -221,6 +255,73 @@ async def _postgres(request: Request) -> bool:
 async def _redis(request: Request) -> bool:
     await request.app.state.redis.ping()
     return True
+
+
+async def _stored_bytes(request: Request) -> tuple[int, int]:
+    """`(database bytes, asset bytes)` — two scalars from one session."""
+    maker = request.app.state.session_maker
+    async with maker() as session:
+        database = int((await session.execute(text(DATABASE_STORED_BYTES_SQL))).scalar_one())
+        assets = int((await session.execute(text(ASSET_STORED_BYTES_SQL))).scalar_one())
+    return database, assets
+
+
+async def _asset_volume(request: Request) -> Any:
+    """`statvfs` on the filesystem holding the asset store, in a thread.
+
+    `None` when the backend is S3: there is no local filesystem to measure, and
+    the honest answer is to publish nothing rather than the API container's own
+    root disk under the asset store's name.
+    """
+    settings: Any = getattr(request.app.state, "settings", None)
+    if settings is None or getattr(settings, "aleph_asset_backend", None) != "fs":
+        return None
+    root = getattr(settings, "aleph_asset_root", None)
+    if not root:
+        return None
+    # Same reasoning as `_asset_store`: a blocking syscall does not belong on
+    # the event loop of a process serving every other request.
+    return await to_thread.run_sync(lambda: volume_usage(str(root)))
+
+
+async def measure_storage(request: Request) -> tuple[dict[tuple[str, str], int], dict[str, str]]:
+    """`((store, measure) -> bytes, name -> reason)`. The one measurement.
+
+    Public because `/metrics` publishes exactly these numbers as
+    `aleph_storage_bytes` and `/readyz` publishes them as JSON. Two copies of
+    "how do I count the bytes" is how the two surfaces end up disagreeing, which
+    is the defect class this repo keeps finding — so there is one copy and both
+    routes call it.
+
+    The two reads are independent because their failures are: a missing asset
+    root must not also cost the operator the database size. Whatever could not
+    be read is absent from the mapping, never zero.
+    """
+    (stored, stored_error), (volume, volume_error) = await asyncio.gather(
+        _measurement(lambda: _stored_bytes(request)),
+        _measurement(lambda: _asset_volume(request)),
+    )
+    database_bytes, asset_bytes = stored if stored is not None else (None, None)
+    series = storage_series(
+        database_stored_bytes=database_bytes,
+        asset_stored_bytes=asset_bytes,
+        asset_volume=volume,
+    )
+    errors = {
+        name: reason
+        for name, reason in (("stored", stored_error), ("asset_volume", volume_error))
+        if reason is not None
+    }
+    return series, errors
+
+
+async def _storage(request: Request) -> dict[str, Any]:
+    """Bytes used, reported and never voting. See the module docstring."""
+    series, errors = await measure_storage(request)
+    body: dict[str, Any] = storage_body(series)
+    if errors:
+        body["errors"] = errors
+    return body
 
 
 async def _asset_store(request: Request) -> bool:
@@ -244,11 +345,12 @@ async def readyz(request: Request, strict: bool = False) -> JSONResponse:
 
     The default answer is the container's gate and covers only what Aleph owns.
     """
-    postgres, redis, asset_store, gateway = await asyncio.gather(
+    postgres, redis, asset_store, gateway, storage = await asyncio.gather(
         _leg(lambda: _postgres(request)),
         _leg(lambda: _redis(request)),
         _leg(lambda: _asset_store(request)),
         _gateway_leg(request).check(lambda: request.app.state.litellm.health()),
+        _storage(request),
     )
     gateway["in_verdict"] = strict
     checks: dict[str, dict[str, Any]] = {
@@ -267,5 +369,9 @@ async def readyz(request: Request, strict: bool = False) -> JSONResponse:
         # see, without reading this source, that the leg was not voting.
         "verdict_over": list(voting),
         "checks": checks,
+        # Reported, never voting: see the module docstring. Named as a sibling
+        # of `checks` so nothing that reads the verdict can pick it up by
+        # iterating.
+        "storage": storage,
     }
     return JSONResponse(body, status_code=code)

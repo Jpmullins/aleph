@@ -162,9 +162,21 @@ project fact), write it to `/memories/<topic>.md` so you remember it in future \
 sessions.
 """
 
-# Stable, deterministic dev user id so ledger rows (ModelCall /
-# CostLedgerEvent) written by retrieval LiteLLM calls reference a single,
-# resolvable principal rather than a fresh random uuid per call.
+# Last-resort dev user id, used ONLY where a real `User` row cannot be looked
+# up (see `_resolve_self_call_user_id`, which prefers the database).
+#
+# It is NOT the local-dev user's id. The auth middleware JIT-provisions that
+# row (`_principal_local_dev` -> `_resolve_or_provision_user`) and keeps
+# whatever id the database assigned, so this constant names a user that does
+# not exist. Measured on this instance before `WS-D2` c5:
+#
+#     select count(*) from action_ledger_events
+#      where actor_id = 'f48cb55b-af47-5e98-9f43-778743c4f744';   -> 32
+#     select count(*) from users
+#      where id       = 'f48cb55b-af47-5e98-9f43-778743c4f744';   ->  0
+#
+# Anything that has an authenticated request in scope must read the real
+# principal instead — that is what `_acting_principal` is for.
 _DEV_USER_UUID = uuid.uuid5(uuid.NAMESPACE_DNS, "dev@aleph.local")
 
 
@@ -180,20 +192,22 @@ def _dev_actor_id() -> uuid.UUID:
     return _DEV_USER_UUID
 
 
-def _dev_principal(settings: Any) -> Principal:
-    """Build the fixed local-dev principal for service calls from agent tools.
+def _acting_principal(project_id: UUID) -> Principal:
+    """The authenticated caller whose authority a tool's service call carries.
 
-    Mirrors `local` auth mode: a single resolvable principal (rather than a
-    fresh random uuid per call) so ledger rows reference a stable actor.
+    `_project_id_from_config` has already run `_authorized` on this id, so the
+    membership role is cached on the principal and this is a dictionary lookup,
+    not a query. It fails closed for the same reason `_authorized` does: an
+    unbound principal raises rather than being substituted for.
+
+    This replaces `_dev_principal`, which fabricated a `Principal` around
+    `_DEV_USER_UUID` at three call sites — the retrieval router (whose
+    `ModelCall`/`CostLedgerEvent` rows are the spend `WS-D2` is about) and both
+    hypothesis writers (whose `ActionLedgerEvent.actor_id` is that user). The
+    fabricated id is not the id the dev user actually has, so those rows named
+    nobody; see the note on `_DEV_USER_UUID`.
     """
-    from aleph_security.principal import Principal
-
-    return Principal(
-        user_id=_DEV_USER_UUID,
-        subject=getattr(settings, "local_dev_subject", "local-dev"),
-        email=getattr(settings, "local_dev_email", "dev@aleph.local"),
-        actor_kind="user",
-    )
+    return require_project_access(project_id)
 
 
 # Runtime dependencies bound by lifespan (the graph is built before the
@@ -693,7 +707,7 @@ async def wiki_lint_report(
 async def _read_wiki_impl(query: str, config: RunnableConfig) -> str:
     """Run the full wiki-first retrieval pipeline and return a cited answer.
 
-    Shared body of the deep wiki read: builds the dev principal, loads the
+    Shared body of the deep wiki read: reads the authenticated caller, loads the
     project's ModelProfile, runs the `WikiFirstRetrievalRouter` (page selection,
     1-hop wikilink expansion, answer composition, intra-source descent) and
     returns a cited markdown answer + a coverage note. Reused by the `retriever`
@@ -710,13 +724,12 @@ async def _read_wiki_impl(query: str, config: RunnableConfig) -> str:
 
     session_maker = _runtime.get("session_maker")
     litellm = _runtime.get("litellm")
-    settings = _runtime.get("settings")
     project_id = await _project_id_from_config(config)
     if session_maker is None or project_id is None:
         return "Deep wiki reading is unavailable (no project scope on this run)."
     if litellm is None:
         return "Deep wiki reading is unavailable (LiteLLM client not bound)."
-    principal = _dev_principal(settings)
+    principal = _acting_principal(project_id)
     async with session_maker() as session:  # type: AsyncSession
         profile = (
             await session.execute(select(ModelProfile).where(ModelProfile.project_id == project_id))
@@ -776,14 +789,13 @@ async def _create_hypothesis_impl(title: str, statement: str, config: RunnableCo
     from aleph_hypotheses.hypothesis_service import create_hypothesis
 
     session_maker = _runtime.get("session_maker")
-    settings = _runtime.get("settings")
     project_id = await _project_id_from_config(config)
     if session_maker is None or project_id is None:
         return "Creating a hypothesis is unavailable (no project scope on this run)."
+    principal = _acting_principal(project_id)
     try:
         async with session_maker() as session:  # type: AsyncSession
             ledger = LedgerWriter(session)
-            principal = _dev_principal(settings)
             h = await create_hypothesis(
                 session,
                 ledger=ledger,
@@ -828,10 +840,10 @@ async def _add_hypothesis_evidence_impl(
     from aleph_hypotheses.models import HypothesisEvidence
 
     session_maker = _runtime.get("session_maker")
-    settings = _runtime.get("settings")
     project_id = await _project_id_from_config(config)
     if session_maker is None or project_id is None:
         return "Adding evidence is unavailable (no project scope on this run)."
+    principal = _acting_principal(project_id)
     try:
         hyp_uuid = UUID(hypothesis_id)
         tgt_uuid = UUID(target_id)
@@ -840,7 +852,6 @@ async def _add_hypothesis_evidence_impl(
     try:
         async with session_maker() as session:  # type: AsyncSession
             ledger = LedgerWriter(session)
-            principal = _dev_principal(settings)
             await add_evidence(
                 session,
                 ledger=ledger,
@@ -2022,6 +2033,7 @@ def build_assistant_deep_agent(
         AuthoredSkillsMiddleware,
         authored_namespace,
     )
+    from aleph_api.interpreter import build_interpreter_middleware
     from aleph_api.rubric import build_grading_middleware
     from aleph_api.subagents.analyst import build_analyst_subagent
     from aleph_api.subagents.researcher import build_researcher_subagent
@@ -2168,6 +2180,15 @@ def build_assistant_deep_agent(
             # call, one model call, byte-identical answer.
             *build_grading_middleware(settings=settings, backend_factory=_memory_backend),
             CopilotKitMiddleware(),
+            # WS-H5: the QuickJS scratchpad, and the prompt that tells the model
+            # to cover a list rather than sample it. LAST, and that is load
+            # bearing twice over. Middleware earlier in the list is OUTER, so
+            # only the last entry sees the final `request.tools` — which is what
+            # the interpreter filters `PTC_ALLOWLIST` against, and an unmatched
+            # name exposes nothing rather than erroring. And being inside
+            # `AlephAgentMiddleware` (first, therefore outermost) is what turns a
+            # throwing `eval` into a ToolMessage instead of the end of the turn.
+            *build_interpreter_middleware(tools=list(_ORCHESTRATOR_TOOLS)),
         ],
         backend=_memory_backend,
         store=store,

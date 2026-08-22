@@ -72,6 +72,7 @@ __all__ = [
     "configure_limits",
     "current_limits",
     "endpoint_key",
+    "env_number",
     "limiter_for",
     "reset_limiters",
     "shared_gateway_client",
@@ -101,8 +102,12 @@ _ENV_RPM = "ALEPH_GATEWAY_RPM"
 _ENV_QUEUE_TIMEOUT = "ALEPH_GATEWAY_QUEUE_TIMEOUT_S"
 
 
-def _env_number(name: str, default: float, *, minimum: float = 0.0) -> float:
+def env_number(name: str, default: float, *, minimum: float = 0.0) -> float:
     """A number from the environment, ignoring junk.
+
+    Public because `aleph_models.repricing` reads its own two intervals the
+    same way, and two copies of "ignore an operator's typo rather than refusing
+    to boot" is two chances for one of them to stop doing it.
 
     A malformed limit is an operator typo and must not take the process down at
     import time — the same reasoning as `aleph_scholar.http._env_float`, and the
@@ -161,13 +166,13 @@ class LimiterConfig:
             max_concurrency=int(
                 max_concurrency
                 if max_concurrency is not None
-                else _env_number(_ENV_MAX_CONCURRENCY, DEFAULT_MAX_CONCURRENCY, minimum=1)
+                else env_number(_ENV_MAX_CONCURRENCY, DEFAULT_MAX_CONCURRENCY, minimum=1)
             ),
-            rpm=float(rpm if rpm is not None else _env_number(_ENV_RPM, DEFAULT_RPM)),
+            rpm=float(rpm if rpm is not None else env_number(_ENV_RPM, DEFAULT_RPM)),
             queue_timeout_s=float(
                 queue_timeout
                 if queue_timeout is not None
-                else _env_number(_ENV_QUEUE_TIMEOUT, DEFAULT_QUEUE_TIMEOUT_S, minimum=0.001)
+                else env_number(_ENV_QUEUE_TIMEOUT, DEFAULT_QUEUE_TIMEOUT_S, minimum=0.001)
             ),
         )
 

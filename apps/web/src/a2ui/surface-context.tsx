@@ -1,6 +1,7 @@
 import {
   createContext,
   useContext,
+  useMemo,
   type ComponentType,
   type ReactNode,
   type JSX,
@@ -38,6 +39,16 @@ import type { A2UIComponent, ComponentName } from "./catalog";
 interface SurfaceCtx {
   projectId: string;
   surface: string;
+  /**
+   * The wire id of the pane this tree is rendering in, or `""` when it is not a
+   * pane at all (the chat dock).
+   *
+   * Here so a surface can open ANOTHER pane of its own kind without naming it.
+   * `SettingsSurface` did that with the literal `openPane("Settings")`, which is
+   * the same client-side surface name `GET /panes` exists to abolish — and it
+   * only worked because "Settings" lower-cases to the registry id `settings`.
+   */
+  paneKind: string;
 }
 
 const SurfaceContext = createContext<SurfaceCtx | null>(null);
@@ -45,15 +56,19 @@ const SurfaceContext = createContext<SurfaceCtx | null>(null);
 export function SurfaceProvider({
   projectId,
   surface,
+  paneKind = "",
   children,
 }: {
   projectId: string;
   surface: string;
+  paneKind?: string;
   children: ReactNode;
 }) {
-  return (
-    <SurfaceContext.Provider value={{ projectId, surface }}>{children}</SurfaceContext.Provider>
+  const value = useMemo(
+    () => ({ projectId, surface, paneKind }),
+    [projectId, surface, paneKind],
   );
+  return <SurfaceContext.Provider value={value}>{children}</SurfaceContext.Provider>;
 }
 
 export function useSurface(): SurfaceCtx {

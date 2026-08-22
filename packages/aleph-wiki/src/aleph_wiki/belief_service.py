@@ -24,7 +24,7 @@ import hashlib
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import structlog
@@ -58,8 +58,10 @@ __all__ = [
     "BeliefService",
     "ClaimUpsert",
     "EvidenceDraft",
+    "claim_embedder_for",
     "claim_key_for",
     "locator_hash_for",
+    "page_citation_locator",
 ]
 
 _WS = re.compile(r"\s+")
@@ -91,6 +93,47 @@ def locator_hash_for(
     start = "" if char_start is None else char_start
     end = "" if char_end is None else char_end
     parts = f"{source_id}|{chunk_id or ''}|{start}|{end}"
+    return hashlib.sha256(parts.encode("utf-8")).hexdigest()
+
+
+def page_citation_locator(
+    *,
+    source_id: UUID | None,
+    source_page_id: UUID | None,
+    chunk_id: UUID | None,
+    char_start: int | None,
+    char_end: int | None,
+    citation_marker: str,
+) -> str:
+    """Identity of a citation written by the PAGE-COMPILE path.
+
+    Separate from :func:`locator_hash_for` for two reasons, and neither is
+    cosmetic.
+
+    *It has to tolerate no anchor at all.* A compile-path citation may carry
+    only a marker and a source page — the stub and cross-link writers cite a
+    page, not a passage — where `locator_hash_for` requires a `source_id`.
+
+    *It has to keep two markers on one claim apart.* Two citations with no span
+    and different markers are two pieces of evidence, and hashing only the
+    (absent) anchor would collapse them into one row and halve the claim's
+    support count.
+
+    A DIFFERENT function rather than more arguments on the existing one,
+    because changing what `locator_hash_for` hashes would change the identity
+    of every span already in the database and turn the next re-derivation into
+    a duplicate of itself.
+    """
+    parts = "|".join(
+        [
+            str(source_id or ""),
+            str(source_page_id or ""),
+            str(chunk_id or ""),
+            "" if char_start is None else str(char_start),
+            "" if char_end is None else str(char_end),
+            citation_marker,
+        ]
+    )
     return hashlib.sha256(parts.encode("utf-8")).hexdigest()
 
 
@@ -183,6 +226,58 @@ _log = structlog.get_logger(__name__)
 #: Turns a claim's proposition into a vector. Injected, never imported — see
 #: `BeliefService.upsert_claim`.
 ClaimEmbedder = Callable[[str], "list[float] | None"]
+
+
+async def claim_embedder_for(
+    *,
+    client: Any,
+    principal: Principal,
+    project_id: UUID,
+    agent_run_id: UUID | None,
+    profile_bindings: dict[str, Any],
+    texts: Sequence[str],
+    purpose: str = "wiki.claim_embed",
+) -> ClaimEmbedder:
+    """One gateway round trip for a batch of claims, as an injectable embedder.
+
+    Returns ``dict.get`` over a `text -> vector` map, so a claim whose text is
+    absent gets ``None`` and is written without a vector — the honest outcome,
+    and the lexical leg still finds it.
+
+    Batched deliberately. Embedding inside ``upsert_claim`` would be one call
+    per claim, and a page compile writes tens; the write path also has to stay
+    runnable with no gateway at all, which is why the embedder is passed IN
+    rather than constructed there.
+
+    A failure costs the vectors and not the claims. Losing a belief because a
+    model was unreachable would be trading the thing for the index of it, and a
+    partial batch is refused outright — zipping a short result would attach
+    vectors to the wrong claims, which is worse than none.
+    """
+    if not texts:
+        return {}.get
+    from aleph_rks.embedding import embed_texts
+
+    wanted = list(dict.fromkeys(texts))
+    try:
+        result = await embed_texts(
+            client=client,
+            principal=principal,
+            project_id=project_id,
+            agent_run_id=agent_run_id,
+            profile_bindings=profile_bindings,
+            texts=wanted,
+            purpose=purpose,
+        )
+    except Exception:
+        _log.warning("belief.claim_embed_batch_failed", claims=len(wanted))
+        return {}.get
+    if len(result.embeddings) != len(wanted):
+        _log.warning(
+            "belief.claim_embed_count_mismatch", asked=len(wanted), got=len(result.embeddings)
+        )
+        return {}.get
+    return dict(zip(wanted, result.embeddings, strict=True)).get
 
 
 def _embed_or_none(embed: ClaimEmbedder | None, text: str) -> list[float] | None:
@@ -285,6 +380,25 @@ class BeliefService:
                 # An update enriches; it never silently downgrades provenance.
                 if rationale and not claim.rationale:
                     claim.rationale = rationale
+                # Re-point the claim at the revision that has just re-asserted
+                # it. NOT bookkeeping: five readers list a page's claims with
+                # `WikiClaim.revision_id == page.current_revision_id`
+                # (`a2ui_handlers`, `routes/surfaces`, `routes/wiki`,
+                # `wiki_refresh`, the mechanical reviewer). Identity is
+                # `claim_key`, so a recompiled page finds its existing claim
+                # instead of inserting a new row — and if that row kept the
+                # revision it was born on, every one of those readers would
+                # show the page as having no claims from the second compile
+                # onwards.
+                #
+                # `revision_id` only when the caller supplies one: a writer
+                # that does not know the revision must not blank the one that
+                # is there.
+                claim.page_id = draft.page_id
+                if draft.revision_id is not None:
+                    claim.revision_id = draft.revision_id
+                if draft.section_anchor is not None:
+                    claim.section_anchor = draft.section_anchor
                 created = False
 
             written, rejected = await self._attach_evidence(

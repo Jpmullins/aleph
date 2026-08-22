@@ -35,9 +35,19 @@ vi.mock("@a2ui/web_core/v0_9", () => {
     constructor(catalogs: { id: string }[] = []) {
       processorCatalogs.push(catalogs);
     }
-    processMessages(messages: { surfaceId?: string; boom?: string }[]) {
+    processMessages(
+      messages: { surfaceId?: string; boom?: string; deleteSurface?: { surfaceId: string } }[],
+    ) {
       for (const msg of messages) {
         if (msg.boom) throw new Error(msg.boom);
+        // The real processor's `deleteSurface`. Modelled here because the
+        // provider is now the thing that sends it — keeping the processor
+        // across a pane-set change means closed panes have to be pruned, and a
+        // fake that ignored the message would report a leak as a pass.
+        if (msg.deleteSurface) {
+          this.model.surfacesMap.delete(msg.deleteSurface.surfaceId);
+          continue;
+        }
         if (msg.surfaceId) this.model.surfacesMap.set(msg.surfaceId, msg);
       }
     }
@@ -204,6 +214,55 @@ describe("SurfaceStreamProvider", () => {
     expect(sources).toHaveLength(2);
     expect(sources[0].closed).toBe(true);
     expect(new URL(sources[1].url).searchParams.get("panes")).toBe("wiki,notes");
+  });
+
+  /**
+   * WS-B1a c5. Opening a pane must not rebuild the panes already open.
+   *
+   * `new MessageProcessor(catalogs)` sat inside the connection effect, and
+   * `paneKey` is one of that effect's dependencies — so opening the sixteenth
+   * pane discarded `surfacesMap` and all fifteen surfaces in it, along with
+   * every component tree and every value bound into them. The stream then had
+   * to re-deliver the lot, and until it did those panes rendered "waiting for
+   * the first frame…". Nothing failed, so nothing said anything.
+   *
+   * Counting constructions is the assertion because that is the mechanism. The
+   * existing "re-subscribes once" test above passes either way: the connection
+   * SHOULD be rebuilt, and it was never the expensive half.
+   */
+  it("does not rebuild the message processor when a pane is opened", () => {
+    const view = mount(["wiki"]);
+    frame(sources[0], { seq: 1, surfaceId: "wiki" });
+    const built = processorCatalogs.length;
+    expect(built).toBeGreaterThan(0);
+
+    view.rerender(
+      <SurfaceStreamProvider projectId="proj-1" panes={["wiki", "notes"]}>
+        <Probe />
+      </SurfaceStreamProvider>,
+    );
+
+    expect(processorCatalogs).toHaveLength(built);
+    // And therefore the surface that was already open is still there, rather
+    // than waiting on the new connection to re-send it.
+    expect(view.getByTestId("ids").textContent).toBe("wiki");
+  });
+
+  it("drops the surface of a pane that was closed, so the map cannot grow forever", () => {
+    // The cost of keeping the processor. A closed pane's surface renders
+    // nowhere — the Board maps over the PANES — so this leak is invisible from
+    // the screen and has to be pinned here or not at all.
+    const view = mount(["wiki", "notes"]);
+    frame(sources[0], { seq: 1, surfaceId: "wiki" });
+    frame(sources[0], { seq: 2, surfaceId: "notes" });
+    expect(view.getByTestId("ids").textContent).toBe("notes|wiki");
+
+    view.rerender(
+      <SurfaceStreamProvider projectId="proj-1" panes={["wiki"]}>
+        <Probe />
+      </SurfaceStreamProvider>,
+    );
+    expect(view.getByTestId("ids").textContent).toBe("wiki");
   });
 
   it("refuses to be read outside its provider instead of reporting an empty workspace", () => {

@@ -57,7 +57,7 @@ class GatedUpstream:
 def _http(handler, *, burst: int = 1, deadline_s: float = 10.0) -> ScholarHttp:
     clock = FakeClock()
     return ScholarHttp(
-        mailto="test@aleph.local",
+        mailto="scholar-tests@aleph-fixture.org",
         client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         retry_wait_min=0.0,
         retry_wait_max=0.0,

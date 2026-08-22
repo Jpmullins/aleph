@@ -36,7 +36,6 @@ from uuid import UUID
 import structlog
 from sqlalchemy import delete, func, select, text, update
 
-from aleph_core.confidence import canonical_confidence
 from aleph_core.ids import uuid7
 from aleph_core.schemas.model_profile import Capability
 from aleph_core.time import utcnow
@@ -47,6 +46,7 @@ from aleph_observability.tracing import current_trace_id, start_span
 from aleph_rks.models import Source, SourceVersion
 from aleph_security.principal import Principal
 from aleph_wiki.alias_service import AliasService
+from aleph_wiki.belief_service import claim_embedder_for
 from aleph_wiki.freshness import ClaimCitation, compute_freshness
 from aleph_wiki.models import (
     Alias,
@@ -490,6 +490,21 @@ class CuratorService:
 
             links = await self._resolve_body_links(project_id=project_id, body_md=updated)
             carried_claims = await self._carry_claims(page=overview)
+            # Every claim this commit re-asserts gets a vector, in one gateway
+            # round trip. `wiki_claims.embedding` was NULL on all 18,038 rows
+            # and the HNSW index on it has never had anything to index —
+            # because the only writer that filled it was the ingest path, and
+            # the two page-compile writers passed nothing. This is the curator
+            # half of closing that; a failure costs the vectors, not the page.
+            embed = await claim_embedder_for(
+                client=litellm,
+                principal=principal,
+                project_id=project_id,
+                agent_run_id=agent_run_id,
+                profile_bindings=profile_bindings,
+                texts=[c.text for c in carried_claims],
+                purpose="wiki.curate.claim_embed",
+            )
 
             result = await WikiService(self._session).commit_revision(
                 principal=principal,
@@ -506,6 +521,7 @@ class CuratorService:
                 commit_message=f"Curator: fold in [[{new_page.title}]]",
                 respect_hand_edits=True,
                 origin="curator",
+                embed=embed,
             )
             return not result.was_noop
 
@@ -748,42 +764,40 @@ class CuratorService:
             # revision (a body-unchanged commit would no-op and never persist
             # them); a later target recommit carries them forward via
             # `_carry_claims`. The `wiki.page.merge` ledger event records the count.
+            #
+            # Through `WikiService.write_claims`, not by constructing
+            # `WikiClaim` here. This was the second of the three writers that
+            # built the row by hand, and like the first it wrote no
+            # `claim_key` and no `embedding` — so a merged claim was born
+            # unidentifiable and invisible to vector search. It also does the
+            # de-duplication the `seen`-by-exact-text check used to do, and
+            # does it better: identity is the normalized `claim_key`, so
+            # "Bees pollinate." and "bees  pollinate." fold into one belief
+            # instead of two.
             source_claims = await self._carry_claims(page=source)
             claims_folded = 0
             if source_claims and target.current_revision_id is not None:
-                seen = {c.text for c in await self._carry_claims(page=target)}
-                for c in source_claims:
-                    if c.text in seen:
-                        continue
-                    claim = WikiClaim(
-                        id=uuid7(),
-                        project_id=proposal.project_id,
-                        page_id=target.id,
-                        revision_id=target.current_revision_id,
-                        section_anchor=c.section_anchor,
-                        text=c.text[:2048],
-                        # Same guard as the commit path: a merge carries a
-                        # claim's confidence across, and a pre-migration row
-                        # carrying "cited" must not re-enter the column under
-                        # the old spelling.
-                        confidence=canonical_confidence(c.confidence).value,
-                        status="active",
-                        created_by=principal.user_id,
-                    )
-                    self._session.add(claim)
-                    await self._session.flush()
-                    for cite in c.citations:
-                        self._session.add(
-                            Citation(
-                                id=uuid7(),
-                                project_id=proposal.project_id,
-                                claim_id=claim.id,
-                                chunk_ids=[str(x) for x in cite.chunk_ids],
-                                source_page_id=cite.source_page_id,
-                                citation_marker=cite.citation_marker[:16],
-                            )
-                        )
-                    claims_folded += 1
+                before = await self._page_claim_count(
+                    project_id=proposal.project_id, page_id=target.id
+                )
+                await WikiService(self._session).write_claims(
+                    principal=principal,
+                    ledger=ledger,
+                    project_id=proposal.project_id,
+                    page_id=target.id,
+                    revision_id=target.current_revision_id,
+                    claims=source_claims,
+                    origin="curator",
+                    embed=None,
+                )
+                after = await self._page_claim_count(
+                    project_id=proposal.project_id, page_id=target.id
+                )
+                # What the ledger records is what the TARGET GAINED. A source
+                # claim the target already asserts folds by collapsing onto the
+                # belief that exists, not by adding one, and counting it would
+                # report work that did not happen.
+                claims_folded = after - before
 
             source.status = "deleted"
             await self._session.execute(delete(WikiIndex).where(WikiIndex.page_id == source.id))
@@ -808,6 +822,30 @@ class CuratorService:
             await self._session.flush()
             return redirected + bodies_rewritten
 
+    async def _page_claim_count(self, *, project_id: UUID, page_id: UUID) -> int:
+        """How many live beliefs sit on one page.
+
+        The merge fold's counter, and it cannot be "one per source claim" any
+        more. Identity is `claim_key`, so folding a proposition the target
+        already asserts re-points the row that exists rather than inserting a
+        second — and counting the source's claims would report work that did
+        not happen. What the ledger should record is what the target GAINED,
+        which is this, measured before and after.
+        """
+        return int(
+            (
+                await self._session.execute(
+                    select(func.count())
+                    .select_from(WikiClaim)
+                    .where(
+                        WikiClaim.project_id == project_id,
+                        WikiClaim.page_id == page_id,
+                        WikiClaim.superseded_by.is_(None),
+                    )
+                )
+            ).scalar_one()
+        )
+
     async def _carry_claims(self, *, page: WikiPage) -> list[ClaimDraft]:
         """Reconstruct the page's current claims + citations as drafts.
 
@@ -819,10 +857,21 @@ class CuratorService:
         """
         if page.current_revision_id is None:
             return []
+        # By PAGE and live, not by `revision_id == current_revision_id`.
+        #
+        # A claim is now durable — `BeliefService` keys it on `claim_key` and
+        # re-points it at whichever revision last asserted it — so a claim can
+        # sit on this page while carrying a revision id from a compile two
+        # revisions ago (any writer that upserts without supplying one). The
+        # revision predicate would drop it, this commit would not carry it, and
+        # the page would silently shed a belief it still holds.
         claims = list(
             (
                 await self._session.execute(
-                    select(WikiClaim).where(WikiClaim.revision_id == page.current_revision_id)
+                    select(WikiClaim).where(
+                        WikiClaim.page_id == page.id,
+                        WikiClaim.superseded_by.is_(None),
+                    )
                 )
             )
             .scalars()
@@ -851,6 +900,21 @@ class CuratorService:
                             source_id=cite.source_id,
                             source_page_id=cite.source_page_id,
                             citation_marker=cite.citation_marker,
+                            # The WHOLE anchor, not just the join keys.
+                            #
+                            # These four were dropped here, so a carry-forward
+                            # replaced a citation that quoted a sentence with
+                            # one that quoted nothing. Now that citations are
+                            # keyed by `page_citation_locator` that is worse
+                            # than lossy: the anchorless copy hashes
+                            # differently from the row it came from, so the
+                            # carry would ADD a second, evidence-free citation
+                            # to the same claim on every recompile — and
+                            # confidence is derived from how many there are.
+                            chunk_id=cite.chunk_id,
+                            quote=cite.quote,
+                            char_start=cite.char_start,
+                            char_end=cite.char_end,
                         )
                         for cite in cites
                     ],

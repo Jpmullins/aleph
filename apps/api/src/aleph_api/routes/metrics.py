@@ -54,6 +54,11 @@ would be wrong the moment a worker restarted. They are read at scrape time and
 handed to the meter just before rendering — see `aleph_observability.metrics`.
 Both reads are best-effort: a metrics endpoint that 500s because Redis is down
 removes the instrument at the exact moment it is needed.
+
+The same applies to the storage gauge. Bytes used live on the disk and in the
+database catalog, not in this process — see `aleph_observability.storage` for
+what the two labels mean and why a number that could not be read is *absent*
+rather than zero.
 """
 
 from __future__ import annotations
@@ -66,12 +71,14 @@ import structlog
 from fastapi import APIRouter, Request, Response
 from sqlalchemy import func, select
 
+from aleph_api.routes.health import measure_storage
 from aleph_core.errors import PermissionDenied
 from aleph_db.models.agent import AgentRun
 from aleph_observability.metrics import (
     render_prometheus,
     replace_agent_run_counts,
     replace_queue_depths,
+    replace_storage_bytes,
 )
 
 if TYPE_CHECKING:
@@ -139,6 +146,11 @@ def _authorize(request: Request) -> None:
 async def _refresh_pull_gauges(request: Request) -> None:
     replace_queue_depths(await _queue_depths(request))
     replace_agent_run_counts(await _agent_run_counts(request))
+    series, errors = await measure_storage(request)
+    if errors:
+        # Absent from the exposition rather than zero — see `measure_storage`.
+        _log.warning("metrics.storage_bytes_partial", errors=errors)
+    replace_storage_bytes(series)
 
 
 async def _queue_depths(request: Request) -> dict[str, int]:

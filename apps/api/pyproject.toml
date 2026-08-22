@@ -19,7 +19,14 @@ dependencies = [
     # the Insights gateway only — see CLAUDE.md rule #2.
     "copilotkit>=0.1.91",
     "ag-ui-langgraph>=0.0.36",
-    "deepagents>=0.6,<0.7",
+    # >=0.6.8 is langchain-quickjs 0.2.0's floor, not a preference; the <0.7
+    # ceiling is unchanged because 0.7 moves deepagents' middleware API and
+    # langchain-quickjs 0.2/0.3 both refuse it.
+    "deepagents>=0.6.8,<0.7",
+    # The agent's QuickJS scratchpad (WS-H5). Pulls quickjs-rs, which ships
+    # cp313 wheels for macOS arm64 and manylinux — no toolchain needed in
+    # the API image.
+    "langchain-quickjs~=0.2.0",
     "langgraph>=1.2,<2",
     # Postgres-backed langgraph store for cross-session Deep Agent memory (Wave 6 D1).
     # Provides langgraph.store.postgres.AsyncPostgresStore; pulls psycopg (sync+async).

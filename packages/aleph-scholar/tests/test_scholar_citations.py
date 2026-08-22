@@ -64,7 +64,9 @@ def _citation_handler(requests: list[httpx.Request]) -> Callable[[httpx.Request]
 
 async def test_expand_citations_both_directions(make_http: MakeHttp) -> None:
     requests: list[httpx.Request] = []
-    service = ScholarService(mailto="test@aleph.local", http=make_http(_citation_handler(requests)))
+    service = ScholarService(
+        mailto="scholar-tests@aleph-fixture.org", http=make_http(_citation_handler(requests))
+    )
     expansion = await service.expand_citations(BASE_DOI, direction="both", limit=25)
     assert [w.title for w in expansion.backward] == ["Referenced one", "Referenced two"]
     assert [w.title for w in expansion.forward] == ["Citing work"]
@@ -79,7 +81,9 @@ async def test_expand_citations_both_directions(make_http: MakeHttp) -> None:
 
 async def test_expand_citations_backward_only(make_http: MakeHttp) -> None:
     requests: list[httpx.Request] = []
-    service = ScholarService(mailto="test@aleph.local", http=make_http(_citation_handler(requests)))
+    service = ScholarService(
+        mailto="scholar-tests@aleph-fixture.org", http=make_http(_citation_handler(requests))
+    )
     expansion = await service.expand_citations(BASE_DOI, direction="backward")
     assert len(expansion.backward) == 2
     assert expansion.forward == []
@@ -88,7 +92,9 @@ async def test_expand_citations_backward_only(make_http: MakeHttp) -> None:
 
 async def test_expand_citations_forward_only(make_http: MakeHttp) -> None:
     requests: list[httpx.Request] = []
-    service = ScholarService(mailto="test@aleph.local", http=make_http(_citation_handler(requests)))
+    service = ScholarService(
+        mailto="scholar-tests@aleph-fixture.org", http=make_http(_citation_handler(requests))
+    )
     expansion = await service.expand_citations(BASE_DOI, direction="forward")
     assert expansion.backward == []
     assert [w.openalex_id for w in expansion.forward] == ["W4"]
@@ -96,7 +102,9 @@ async def test_expand_citations_forward_only(make_http: MakeHttp) -> None:
 
 async def test_expand_citations_respects_limit(make_http: MakeHttp) -> None:
     requests: list[httpx.Request] = []
-    service = ScholarService(mailto="test@aleph.local", http=make_http(_citation_handler(requests)))
+    service = ScholarService(
+        mailto="scholar-tests@aleph-fixture.org", http=make_http(_citation_handler(requests))
+    )
     expansion = await service.expand_citations(BASE_DOI, direction="backward", limit=1)
     assert len(expansion.backward) == 1
 
@@ -105,7 +113,7 @@ async def test_expand_citations_unknown_ref_is_empty(make_http: MakeHttp) -> Non
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, json={"error": "not found"})
 
-    service = ScholarService(mailto="test@aleph.local", http=make_http(handler))
+    service = ScholarService(mailto="scholar-tests@aleph-fixture.org", http=make_http(handler))
     expansion = await service.expand_citations("10.9999/nope", direction="both")
     assert expansion.backward == []
     assert expansion.forward == []
@@ -153,7 +161,9 @@ def _ranked_handler(requests: list[httpx.Request]) -> Callable[[httpx.Request], 
 async def test_backward_expansion_is_ranked_by_influence(make_http: MakeHttp) -> None:
     """The most-cited reference must come first, not the one OpenAlex stored first."""
     requests: list[httpx.Request] = []
-    service = ScholarService(mailto="test@aleph.local", http=make_http(_ranked_handler(requests)))
+    service = ScholarService(
+        mailto="scholar-tests@aleph-fixture.org", http=make_http(_ranked_handler(requests))
+    )
     expansion = await service.expand_citations(BASE_DOI, direction="backward")
     assert [w.title for w in expansion.backward] == ["Ref W4", "Ref W3", "Ref W2"]
 
@@ -161,7 +171,9 @@ async def test_backward_expansion_is_ranked_by_influence(make_http: MakeHttp) ->
 async def test_backward_expansion_limit_keeps_the_most_cited(make_http: MakeHttp) -> None:
     """limit=1 must yield the most-cited reference, not the first-stored one."""
     requests: list[httpx.Request] = []
-    service = ScholarService(mailto="test@aleph.local", http=make_http(_ranked_handler(requests)))
+    service = ScholarService(
+        mailto="scholar-tests@aleph-fixture.org", http=make_http(_ranked_handler(requests))
+    )
     expansion = await service.expand_citations(BASE_DOI, direction="backward", limit=1)
     assert [w.title for w in expansion.backward] == ["Ref W4"]
 
@@ -169,7 +181,9 @@ async def test_backward_expansion_limit_keeps_the_most_cited(make_http: MakeHttp
 async def test_forward_expansion_requests_influence_sort(make_http: MakeHttp) -> None:
     """The `cites:` query must ask OpenAlex to sort; default order is not meaningful."""
     requests: list[httpx.Request] = []
-    service = ScholarService(mailto="test@aleph.local", http=make_http(_ranked_handler(requests)))
+    service = ScholarService(
+        mailto="scholar-tests@aleph-fixture.org", http=make_http(_ranked_handler(requests))
+    )
     await service.expand_citations(BASE_DOI, direction="forward")
     cites = [r for r in requests if r.url.params.get("filter", "").startswith("cites:")]
     assert cites, "no forward-citation request was made"

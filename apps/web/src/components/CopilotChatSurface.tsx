@@ -55,6 +55,7 @@ export function CopilotChatSurface({ projectId, threadId }: Props) {
   const {
     activeSurface,
     setActiveSurface,
+    openPane,
     openPageTitle,
     openPageId,
     setOpenPageId,
@@ -172,9 +173,14 @@ export function CopilotChatSurface({ projectId, threadId }: Props) {
       } catch (err) {
         return `Could not open that page: ${describeError(err)}`;
       }
-      const nav = res.result?.navigate as { page_id?: string } | undefined;
+      const nav = res.result?.navigate as { tab?: string; page_id?: string } | undefined;
       const resolvedId = nav?.page_id ?? page_id ?? null;
-      setActiveSurface("Wiki");
+      // The pane to open is the one the SERVER named. This used to be a literal
+      // `setActiveSurface("Wiki")` — a client-side surface name, and the wrong
+      // one twice over: it opened the wiki INDEX rather than the document, so
+      // the tool that says "open this page in the reader" left the reader
+      // showing a list.
+      if (resolvedId && nav?.tab) openPane(nav.tab, { params: { page_id: resolvedId } });
       if (resolvedId) setOpenPageId(resolvedId);
       return resolvedId
         ? `Opened wiki page ${resolvedId} in the reader.`
@@ -195,7 +201,11 @@ export function CopilotChatSurface({ projectId, threadId }: Props) {
       } catch (err) {
         return `Could not highlight claim ${claim_id}: ${describeError(err)}`;
       }
-      setActiveSurface("Wiki");
+      // No pane is opened here on purpose. This used to `setActiveSurface("Wiki")`,
+      // which opens the wiki INDEX — a list, in which no claim is rendered and
+      // nothing can be highlighted. The reader the analyst already has open is
+      // what rings the claim; if none is open, nothing does, and saying so is
+      // more useful than opening an unrelated surface.
       setHighlightedClaimId(claim_id);
       return `Highlighted claim ${claim_id} in the reader.`;
     },

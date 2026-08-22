@@ -32,6 +32,13 @@ export function ContextBar({
   const paneKinds = usePaneKinds(projectId);
   const { activeSurface, setActiveSurface, openPageTitle, setOpenPageId, selection } =
     useWorkspaceUI();
+  // `activeSurface` is a wire id (`dispute-queue`); a person reads the title the
+  // server gave it. Falls back to the id rather than to nothing, so a pane the
+  // registry has not answered for yet is still named.
+  // Empty until the board has a pane. Named in words rather than left blank: a
+  // button with no label is unreadable to a screen reader and looks broken.
+  const activeSurfaceTitle =
+    (activeSurface && (paneKinds.byId(activeSurface)?.title ?? activeSurface)) || "nothing open";
 
   return (
     <div
@@ -66,20 +73,25 @@ export function ContextBar({
         onClick={() => {
           // Cycle the surfaces that actually exist, in the order the server
           // returned them — not a compiled-in list that may not match.
-          const tabs = paneKinds.launchable.map((k) => k.title);
-          if (tabs.length === 0) return;
-          const i = tabs.indexOf(activeSurface);
-          setActiveSurface(tabs[(i + 1) % tabs.length]);
+          //
+          // By ID. It cycled by TITLE, and `activeSurface` is a pane kind, so
+          // `indexOf` returned -1 for every pane whose title is not its id and
+          // the button silently jumped to the first surface instead of the next
+          // one.
+          const ids = paneKinds.launchable.map((k) => k.id);
+          if (ids.length === 0) return;
+          const i = ids.indexOf(activeSurface);
+          setActiveSurface(ids[(i + 1) % ids.length]);
         }}
         // Distinct from the surface tab of the same visible text. Without this
         // there are two buttons named e.g. "Wiki" that do different things —
         // ambiguous to a screen reader, and it broke an existing Playwright
         // spec under strict-mode locator resolution.
-        aria-label={`Active surface: ${activeSurface}. Activate to cycle.`}
+        aria-label={`Active surface: ${activeSurfaceTitle}. Activate to cycle.`}
         title="Cycle the right-hand surface"
         className="inline-flex items-center gap-1.5 border border-line bg-sunken px-2 py-0.5 font-semibold text-ink hover:border-accent"
       >
-        {activeSurface}
+        {activeSurfaceTitle}
       </button>
 
       {openPageTitle && (

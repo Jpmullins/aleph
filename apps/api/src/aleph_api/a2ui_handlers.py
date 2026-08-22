@@ -730,9 +730,14 @@ async def _open(
 ) -> dict[str, Any]:
     """Resolve an `open` target to a navigable workspace location.
 
-    Returns `{navigate: {tab, page_id?, target_id, target_kind}}` — the
-    frontend `adapt()` switches the right panel accordingly. Unknown kinds
-    keep the legacy echo shape (no `tab`), which the frontend ignores.
+    Returns `{navigate: {tab, page_id?, params?, target_id, target_kind}}` — the
+    frontend `adapt()` opens the named pane accordingly. Unknown kinds keep the
+    legacy echo shape (no `tab`), which the frontend ignores.
+
+    `params` carries the pane's DECLARED parameters (`PaneKind.params`) by name.
+    A pane that is `launchable=False` — grounding is the only one today — is
+    meaningless without them: naming the tab alone opens an empty surface, which
+    is how "Open claim" appeared to work and did nothing.
     """
     target_id = UUID(request.params["target_id"])
     target_kind = str(request.params["target_kind"])
@@ -774,6 +779,32 @@ async def _open(
         nav["tab"] = "Library"
     elif target_kind == "note":
         nav["tab"] = "Notes"
+    elif target_kind == "claim":
+        # The claim -> citation -> chunk -> char-span chain's only route in from
+        # the UI. `ClaimCard` has emitted this since it was written; there was no
+        # branch here, so the response carried no `tab`, `adapt()` ignored it,
+        # and the button was decoration.
+        #
+        # The claim is resolved rather than echoed: `grounding` renders an empty
+        # surface for a claim it cannot find, so a stale or cross-project id
+        # would open a blank pane that looks exactly like an ungrounded claim —
+        # the one thing this surface exists to distinguish.
+        claim = (
+            await session.execute(
+                select(WikiClaim).where(
+                    WikiClaim.id == target_id,
+                    WikiClaim.project_id == project_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if claim is None:
+            msg = f"claim not found in this project: {target_id}"
+            raise NotFound(msg)
+        nav["tab"] = "Grounding"
+        # By name, and it must match `PaneKind(id="grounding").params`; the pane
+        # parser DROPS an undeclared key, so a rename here becomes a grounding
+        # pane that silently ignores its only argument.
+        nav["params"] = {"claim_id": str(target_id)}
     return {"navigate": nav}
 
 
@@ -1075,19 +1106,65 @@ async def _promote_note(
 async def _edit_note(
     *,
     session: AsyncSession,
+    principal: Principal,
     project_id: UUID,
     request: CardActionRequest,
     **_: Any,
 ) -> dict[str, Any]:
-    section_id = UUID(request.params["section_id"])
+    """Write a note body, creating the section to hold it if there is none.
+
+    A note is not guaranteed to have a section. `_notes_messages` binds
+    `section_id: None` for one that does not, and `NoteEditorCard` used to guard
+    its write on that value — so typing into such a note dispatched nothing at
+    all, while the badge said "Saved". Silent data loss, reported as success.
+
+    Creating on first write is the only behaviour that is not a lie: the
+    alternative is refusing, and the analyst has already typed.
+    """
     body_md = request.params["body_md"]
-    s = await update_note_section(
+    raw_section = request.params.get("section_id")
+    if raw_section:
+        s = await update_note_section(
+            session,
+            project_id=project_id,
+            section_id=UUID(str(raw_section)),
+            body_md=body_md,
+        )
+        return {"section_id": str(s.id), "ordinal": s.ordinal, "created": False}
+
+    raw_note = request.params.get("note_id")
+    if not raw_note:
+        msg = "edit_note needs a section_id, or the note_id of the note to create one in"
+        raise ValidationFailed(msg)
+    note_id = UUID(str(raw_note))
+
+    # The note must be THIS project's. `create_section` takes `project_id` from
+    # its caller and never checks it against the note, so an id from another
+    # project would graft a section onto somebody else's note and stamp it with
+    # this project's scope. `update_section` (the `section_id` branch above)
+    # does filter on both, which is why the same hole did not already exist.
+    from aleph_notes.models import Note
+
+    owner = (
+        await session.execute(
+            select(Note.id).where(Note.id == note_id, Note.project_id == project_id)
+        )
+    ).scalar_one_or_none()
+    if owner is None:
+        msg = f"note {note_id} not found"
+        raise NotFound(msg)
+
+    from aleph_notes.note_service import create_section
+
+    s = await create_section(
         session,
         project_id=project_id,
-        section_id=section_id,
+        note_id=note_id,
         body_md=body_md,
+        anchor=None,
+        created_by=principal.user_id,
     )
-    return {"section_id": str(s.id), "ordinal": s.ordinal}
+    return {"section_id": str(s.id), "ordinal": s.ordinal, "created": True}
 
 
 async def _mark_handedit(

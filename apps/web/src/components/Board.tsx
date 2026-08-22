@@ -264,7 +264,11 @@ function BoardCanvas({ projectId }: { projectId: string }) {
                 // The card impls call `useSurface()` for project scope and to
                 // POST actions, so the tree must sit inside a SurfaceProvider.
                 // Rendering <A2uiSurface> bare throws at mount.
-                <SurfaceProvider projectId={projectId} surface={`${pane.kind}Surface`}>
+                <SurfaceProvider
+                  projectId={projectId}
+                  surface={`${pane.kind}Surface`}
+                  paneKind={pane.kind}
+                >
                   <div className="p-2">
                     <A2uiSurface surface={surface} />
                   </div>

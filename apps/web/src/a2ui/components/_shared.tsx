@@ -5,7 +5,16 @@ import type { PillTone } from "../confidence";
 
 export interface RendererProps {
   component: A2UIComponent;
-  onAction: (action: string, params: Record<string, unknown>) => void;
+  /**
+   * Dispatch an action to the ledger-audited router.
+   *
+   * Returns a promise that settles when the ROUTER has answered — `adapt()`
+   * supplies it, and it never rejects, so a card that fires and forgets stays
+   * correct. A card that reports the outcome must await it: `NoteEditorCard`
+   * set its badge to "Saved" on the line after the dispatch, which is before
+   * the request has left the browser, so an autosave that 500s said "Saved".
+   */
+  onAction: (action: string, params: Record<string, unknown>) => void | Promise<boolean>;
 }
 
 /**

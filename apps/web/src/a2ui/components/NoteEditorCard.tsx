@@ -33,7 +33,7 @@ export function NoteEditorCard({ component, onAction }: RendererProps) {
   const [body, setBody] = useState(p.body_md ?? "");
   const [title, setTitle] = useState(p.title ?? "");
   const [preview, setPreview] = useState(false);
-  const [saved, setSaved] = useState<"idle" | "saving" | "saved">("idle");
+  const [saved, setSaved] = useState<"idle" | "saving" | "saved" | "failed">("idle");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -42,16 +42,39 @@ export function NoteEditorCard({ component, onAction }: RendererProps) {
     setSaved("idle");
   }, [noteId]);
 
+  /**
+   * Autosave, and it has to be honest about two things it was not.
+   *
+   * 1. **A note with no section discarded every edit.** `_notes_messages` binds
+   *    `section_id: null` for a note that has no sections — a promoted or
+   *    imported one — and the write was guarded on that value, so typing into
+   *    such a note dispatched nothing at all. The server creates the section on
+   *    first write now; the card just has to send the note id with the body.
+   * 2. **The badge said "Saved" before the request had left the browser.**
+   *    `setSaved("saved")` sat on the line after the dispatch. An autosave that
+   *    500s reported success, which is worse than reporting nothing.
+   */
+  const save = async (text: string) => {
+    const target = sectionId
+      ? { section_id: sectionId, body_md: text }
+      : noteId
+        ? { note_id: noteId, body_md: text }
+        : null;
+    if (!target) {
+      // No note and no section: there is nothing on the server to write to, and
+      // saying so is the only honest badge.
+      setSaved("failed");
+      return;
+    }
+    const ok = await onAction("edit_note", target);
+    setSaved(ok === false ? "failed" : "saved");
+  };
+
   const onChangeBody = (text: string) => {
     setBody(text);
     setSaved("saving");
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => {
-      if (sectionId) {
-        onAction("edit_note", { section_id: sectionId, body_md: text });
-        setSaved("saved");
-      }
-    }, 700);
+    timer.current = setTimeout(() => void save(text), 700);
   };
 
   const commitTitle = () => {
@@ -78,8 +101,17 @@ export function NoteEditorCard({ component, onAction }: RendererProps) {
           className="min-w-0 flex-1 truncate border border-transparent bg-transparent px-1 py-0.5 text-sm font-semibold text-ink hover:border-line focus:border-accent focus:outline-none"
           data-testid="note-title"
         />
-        <span className="text-xs text-ink-muted">
-          {saved === "saving" ? "Saving…" : saved === "saved" ? "Saved" : ""}
+        <span
+          className={saved === "failed" ? "text-xs text-badge-failed-fg" : "text-xs text-ink-muted"}
+          data-testid="note-save-state"
+        >
+          {saved === "saving"
+            ? "Saving…"
+            : saved === "saved"
+              ? "Saved"
+              : saved === "failed"
+                ? "Not saved"
+                : ""}
         </span>
         <button
           type="button"

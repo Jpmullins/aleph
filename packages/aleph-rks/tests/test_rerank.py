@@ -36,6 +36,7 @@ from aleph_models.client import (
 )
 from aleph_rks import retrieval as retrieval_mod
 from aleph_rks.rerank import (
+    _USER,
     REASON_UNBOUND,
     AdaptiveReranker,
     CrossEncoderReranker,
@@ -810,3 +811,75 @@ async def test_a_real_judgement_still_carries_no_skip_reason(
     attrs = _search_span(exporter).attributes or {}
     assert "retrieval.rerank.skipped" not in attrs
     assert ranked[0].text == "passage 7"
+
+
+# --- the bracketed id: 40 of 45 eval queries, judged and then discarded -----
+#
+# The prompt labels each candidate `[7] <text>`, and `gemma-4-e2b` — the model
+# bound to Capability.RERANK on this deployment — copied the label into the
+# answer: `{"relevant": [{"id": [7], "score": 2}]}`. `id` was not an int, the
+# entry was dropped, the list became empty, and `parse_judgement` correctly
+# reported "all 1 entries were unusable" and kept fusion order. Measured on the
+# 45-question set: 40 of 45 queries. The reranker was judging almost every
+# search and its judgement never reached the results.
+
+
+def test_a_bracket_echoed_id_is_read_as_the_passage_it_names() -> None:
+    """`[7]` around one integer is the prompt's own notation, not an ambiguity."""
+    judgement = parse_judgement({"relevant": [{"id": [1], "score": 3}]}, 5)
+    assert judgement.scores == [(1, 3.0)]
+    assert judgement.malformed is None, (
+        "a one-element id list is decidable; reporting it as malformed is what "
+        "discarded the reranker's judgement on 40 of 45 eval queries"
+    )
+
+
+def test_an_id_naming_two_passages_is_still_dropped() -> None:
+    """The line between a notation echo and a guess. `[1, 2]` names two
+    passages, and picking one would invent an intent the model did not have."""
+    judgement = parse_judgement({"relevant": [{"id": [1, 2], "score": 3}]}, 5)
+    assert judgement.scores == []
+    assert judgement.malformed is not None
+
+
+def test_an_empty_id_list_is_dropped() -> None:
+    assert parse_judgement({"relevant": [{"id": [], "score": 3}]}, 5).scores == []
+
+
+def test_a_bracket_echoed_id_still_respects_the_candidate_range() -> None:
+    """The coercion normalises the shape; it does not relax any other check."""
+    assert parse_judgement({"relevant": [{"id": [99], "score": 3}]}, 5).scores == []
+    assert parse_judgement({"relevant": [{"id": [True], "score": 3}]}, 5).scores == []
+
+
+@pytest.mark.asyncio
+async def test_a_bracket_echoed_reply_reorders_the_results() -> None:
+    """The end-to-end consequence, through the real reranker.
+
+    Before the fix this returned fusion order and set `skipped_reason`, which
+    is exactly what 40 of 45 eval queries did.
+    """
+    reranker, _fake = llm_reranker(
+        '{"relevant": [{"id": [3], "score": 3}, {"id": [0], "score": 1}]}'
+    )
+    ranked = await reranker.rank(query="q", hits=hits(5), top_k=5)
+    assert [h.text for h in ranked[:2]] == ["passage 3", "passage 0"]
+    assert reranker.skipped_reason is None, (
+        "the reply was intelligible, so the search must not be marked skipped"
+    )
+
+
+def test_the_prompt_tells_the_model_the_id_is_a_bare_integer() -> None:
+    """A prompt pin, and it is the half of this fix that the parser cannot do.
+
+    The coercion recovers a one-element list. It cannot recover the OTHER half
+    of what the bracketed reply cost: `gemma-4-e2b` also returned a single
+    entry per query, so even a recovered id reranked one passage out of forty.
+    Adding "list EVERY passage you scored 1 or above" is what changed that —
+    measured against the live gateway, the same three questions went from one
+    entry each to four, two and six.
+    """
+    rendered = _USER.format(query="q", passages="[0] a\n\n[1] b")
+    assert '"id": [7]' in rendered, "the prompt must show the shape it is rejecting"
+    assert "BARE INTEGER" in rendered
+    assert "EVERY passage" in rendered
