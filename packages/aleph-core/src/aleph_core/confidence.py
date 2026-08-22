@@ -32,6 +32,7 @@ __all__ = [
     "CONFIDENCE_VALUES",
     "LEGACY_CONFIDENCE",
     "Confidence",
+    "canonical_confidence",
     "is_canonical_confidence",
 ]
 
@@ -96,3 +97,30 @@ LEGACY_CONFIDENCE: dict[str, Confidence] = {
 def is_canonical_confidence(value: str) -> bool:
     """True when ``value`` is a member of the canonical vocabulary."""
     return value in CONFIDENCE_VALUES
+
+
+def canonical_confidence(value: str) -> Confidence:
+    """The canonical member ``value`` names, resolving a known legacy spelling.
+
+    The write-path guard. Every place that puts a string into
+    ``wiki_claims.confidence`` runs it through here, so the migration that
+    normalised 806 rows is not undone by the next commit — which is what would
+    happen with only a static sweep, because the sweep cannot see a value that
+    arrives at runtime from a caller in another package.
+
+    A legacy spelling is TRANSLATED, not rejected: ``"cited"`` had a defined
+    meaning for years and its callers are correct about what they meant. An
+    unrecognised string is a bug and RAISES, because the alternative — quietly
+    substituting a default — is how a column ends up meaning three things.
+    """
+    if value in CONFIDENCE_VALUES:
+        return Confidence(value)
+    legacy = LEGACY_CONFIDENCE.get(value.strip().lower())
+    if legacy is not None:
+        return legacy
+    msg = (
+        f"{value!r} is not a confidence. Canonical values are "
+        f"{list(CONFIDENCE_VALUES)}; known legacy spellings are "
+        f"{sorted(LEGACY_CONFIDENCE)}."
+    )
+    raise ValueError(msg)

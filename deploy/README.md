@@ -185,11 +185,68 @@ both look like something else:
 `/readyz` names the failing dependency rather than returning a bare 503, so the
 answer to "why won't it start" is usually one command.
 
+## Backing up, and getting it back
+
+All durable state is in two named volumes — `postgres-data` and `assets` — and
+neither is backed up by anything in this file. Nothing here runs on a schedule;
+these are commands an operator runs.
+
+```bash
+./scripts/backup.sh                        # -> data/backups/aleph-<utc timestamp>/
+./scripts/restore.sh <backup-dir> --into aleph_scratch
+```
+
+A backup nobody has restored from is a file, not a backup, so `restore.sh` does
+not just run `pg_restore` — it compares the result against a manifest the backup
+took **inside the dump's own snapshot**: every table's exact row count, every
+table's content digest, every pgvector embedding component by component, the
+extension versions, the alembic revision, and every trigger. Then it fires a
+real `UPDATE` and a real `DELETE` at each append-only table and requires both to
+be refused. It exits 1 and names the table if anything differs.
+
+Both scripts take `--dry-run`. Full procedure, the traps, and the drill:
+[`../docs/operations.md`](../docs/operations.md#backup-and-restore).
+
+### Proving it works, without touching this stack
+
+The drill runs against a **separate compose project**, so nothing here is
+stopped or dropped:
+
+```bash
+./scripts/backup.sh --out /tmp/drill
+
+export POSTGRES_PORT=5443 API_PORT_HOST=8010 REDIS_PORT=6390        RUNTIME_PORT=4010 WEB_PORT=5183
+DC="docker compose -p alephdrill -f deploy/compose/docker-compose.yml"
+
+$DC up -d postgres --wait                                  # an empty stack
+./scripts/restore.sh /tmp/drill --into aleph --drop-existing   --cluster-url "postgresql://aleph:$POSTGRES_PASSWORD@localhost:5443/postgres"   --assets-volume alephdrill_assets
+$DC up -d api --wait                                       # boots on the restored data
+curl -s localhost:8010/readyz | jq .status                 # "ready"
+curl -s localhost:8010/v1/projects | jq 'length'
+
+$DC down -v                                                # drops ONLY the drill
+```
+
+Measured on this stack: 65 tables, 88,504 rows, 3,451 embeddings and 98 assets
+restored into an empty stack, the API healthy against it, and the append-only
+triggers still refusing an `UPDATE`. `-p alephdrill` is what makes the last line
+safe — without it `down -v` destroys the volumes you just backed up from.
+
+There is a scripted version of the database half:
+
+```bash
+uv run python scripts/_acceptance/restore_drill.py
+```
+
+It backs up the live database, restores into `aleph_restore_drill_<pid>`, re-derives
+the ledger hash chain with the production verifier on both databases, and drops
+the scratch database on the way out — including after a failure.
+
 ## Starting over
 
 ```bash
 docker compose -f deploy/compose/docker-compose.yml down -v
 ```
 
-`-v` drops the volumes, so this deletes every project, source and claim. There
-is no undo.
+`-v` drops the volumes, so this deletes every project, source and claim. **Take a
+backup first** (above) — `docker volume rm` has no undo and neither does this.

@@ -16,7 +16,7 @@
  */
 import { render, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 interface ProviderProps {
   runtimeUrl?: string;
@@ -41,38 +41,48 @@ vi.mock("@/a2ui/aleph-catalog-v09", () => ({ buildAlephCatalog: () => ({ id: "al
 
 import { AlephCopilotProvider } from "@/lib/copilot";
 
+/**
+ * Render and wait for the credential to land.
+ *
+ * `getAccessToken` is async and the prop is not, so the FIRST render always
+ * carries `headers={}`. A test that asserts on the props synchronously is
+ * asserting on the empty pre-token render and passes whatever the effect later
+ * does — including nothing.
+ */
+async function mountAndSettle(children: ReactNode = <span>child</span>) {
+  const view = render(<AlephCopilotProvider>{children}</AlephCopilotProvider>);
+  await waitFor(() => {
+    expect(seen.at(-1)?.headers).toEqual({ Authorization: "Bearer local-dev" });
+  });
+  return { view, props: seen.at(-1) as ProviderProps };
+}
+
 describe("AlephCopilotProvider", () => {
-  it("mounts CopilotKitProvider with the caller's bearer token", async () => {
-    render(
-      <AlephCopilotProvider>
-        <span>child</span>
-      </AlephCopilotProvider>,
-    );
-    await waitFor(() => {
-      const latest = seen.at(-1);
-      expect(latest?.headers).toEqual({ Authorization: "Bearer local-dev" });
-    });
+  beforeEach(() => {
+    seen.length = 0;
   });
 
-  it("passes headers as an object, not a function", () => {
+  it("mounts CopilotKitProvider with the caller's bearer token", async () => {
+    const { props } = await mountAndSettle();
+    expect(props.headers).toEqual({ Authorization: "Bearer local-dev" });
+  });
+
+  it("passes headers as an object, not a function", async () => {
     // A function here is the silent-failure shape: JS accepts it, the transport
     // serialises it to nothing, and the request goes out with no Authorization
     // while the source still reads `headers={…}`.
-    const latest = seen.at(-1);
-    expect(typeof latest?.headers).toBe("object");
-    expect(typeof latest?.headers).not.toBe("function");
+    const { props } = await mountAndSettle();
+    expect(typeof props.headers).toBe("object");
+    expect(typeof props.headers).not.toBe("function");
   });
 
-  it("points at the configured runtime rather than a compiled-in guess", () => {
-    expect(seen.at(-1)?.runtimeUrl).toBe("http://localhost:4000/api/copilotkit");
+  it("points at the configured runtime rather than a compiled-in guess", async () => {
+    const { props } = await mountAndSettle();
+    expect(props.runtimeUrl).toBe("http://localhost:4000/api/copilotkit");
   });
 
-  it("renders its children", () => {
-    const view = render(
-      <AlephCopilotProvider>
-        <span data-testid="inner">child</span>
-      </AlephCopilotProvider>,
-    );
+  it("renders its children", async () => {
+    const { view } = await mountAndSettle(<span data-testid="inner">child</span>);
     expect(view.getByTestId("inner").textContent).toBe("child");
   });
 });

@@ -196,9 +196,28 @@ while stack:
             continue
         stack.append(target)
 
-modules = sorted(p.resolve() for p in SRC.rglob("*") if p.suffix in (".ts", ".tsx"))
+# ---------------------------------------------------------------------------
+# Test files are not product modules.
+#
+# A `*.test.ts(x)` is unreachable from `main.tsx` BY CONSTRUCTION — vitest is its
+# entry point, not the app — so requiring reachability would make every new test
+# an error and force an allowlist line per test file. That tax is how a project
+# ends up with a test runner and no tests.
+#
+# They are excluded from the list of modules that must be reached, and
+# deliberately NOT added as entry points. A module imported only by a test is
+# still dead product code, and making tests confer reachability is how a deleted
+# feature survives as a tested orphan.
+# ---------------------------------------------------------------------------
+def is_test(path: pathlib.Path) -> bool:
+    return path.name.endswith((".test.ts", ".test.tsx"))
+
+
+modules = sorted(
+    p.resolve() for p in SRC.rglob("*") if p.suffix in (".ts", ".tsx") and not is_test(p)
+)
 if not modules:
-    die(f"found no .ts/.tsx under {SRC} — the sweep would pass on an empty tree")
+    die(f"found no non-test .ts/.tsx under {SRC} — the sweep would pass on an empty tree")
 
 # ---------------------------------------------------------------------------
 # The allowlist. A line is `<path relative to apps/web/src>  <BACKLOG-ID>  <ISO date>  # why`.
@@ -316,7 +335,7 @@ if problems:
     raise SystemExit(1)
 
 print(
-    f"OK: {len(modules)} modules under {SRC}, all reachable from "
+    f"OK: {len(modules)} non-test modules under {SRC}, all reachable from "
     f"{entry.relative_to(pathlib.Path.cwd())}"
     + (f" ({len(allowed)} exempt)" if allowed else "")
     + f"; {len(icon_keys)} icons, all named and all shipped"

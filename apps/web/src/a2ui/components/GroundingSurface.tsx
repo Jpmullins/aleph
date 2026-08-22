@@ -1,3 +1,4 @@
+import { type Confidence, isConfidence } from "../confidence";
 import type { RendererProps } from "./_shared";
 
 /**
@@ -50,11 +51,23 @@ interface ClaimInfo {
   page_title?: string | null;
 }
 
-const CONFIDENCE_STYLES: Record<string, string> = {
-  cited: "bg-emerald-100 text-emerald-900",
-  inferred: "bg-amber-100 text-amber-900",
-  contested: "bg-rose-100 text-rose-900",
-  retracted: "bg-rose-200 text-rose-950 line-through",
+/**
+ * Badge classes per confidence state.
+ *
+ * Was keyed on `cited | inferred | contested | retracted` — a FOURTH
+ * vocabulary, and only one of those four words was ever a confidence:
+ * `inferred` is an `evidence_tier`, `cited` and `retracted` are not states the
+ * engine can produce. Every real state fell through to the neutral class, so
+ * this surface has never shown a colour that meant anything. Keyed on the
+ * union now, so a new state without a class is a compile error.
+ */
+const CONFIDENCE_STYLES: Record<Confidence, string> = {
+  well_supported: "bg-emerald-100 text-emerald-900",
+  weakly_supported: "bg-sky-100 text-sky-900",
+  under_investigation: "bg-sunken text-ink-soft",
+  contested: "bg-amber-100 text-amber-900",
+  refuted: "bg-rose-100 text-rose-900",
+  abandoned: "bg-rose-200 text-rose-950 line-through",
 };
 
 /** Why this citation reached no readable text — stated, never elided. */
@@ -113,7 +126,9 @@ export function GroundingSurface({ component }: RendererProps) {
             <span
               className={
                 "inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium " +
-                (CONFIDENCE_STYLES[claim.confidence] ?? "bg-sunken text-ink-soft")
+                (isConfidence(claim.confidence)
+                  ? CONFIDENCE_STYLES[claim.confidence]
+                  : "bg-sunken text-ink-soft")
               }
             >
               {claim.confidence}

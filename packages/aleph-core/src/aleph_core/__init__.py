@@ -4,6 +4,7 @@ from aleph_core.confidence import (
     CONFIDENCE_VALUES,
     LEGACY_CONFIDENCE,
     Confidence,
+    canonical_confidence,
     is_canonical_confidence,
 )
 from aleph_core.errors import (
@@ -25,6 +26,7 @@ __all__ = [
     "NotFound",
     "PermissionDenied",
     "ValidationFailed",
+    "canonical_confidence",
     "is_canonical_confidence",
     "utcnow",
     "uuid7",

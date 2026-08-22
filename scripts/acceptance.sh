@@ -495,6 +495,11 @@ run_shell G1a "the retrieval audit check is a known-answer probe, not a length a
   "grep -q 'body-phrase probe' audit/checks/wiki-first-retrieval.sh \
    && ! grep -q 'len} -ge 40 ] || fail \"retrieval composed_body_md too short' audit/checks/wiki-first-retrieval.sh \
    && echo 'known-answer probe in place'"
+# G3 is the one that stops this list going stale. Three batches of work each
+# shipped a correct sweep that nothing ran; wiring them one at a time fixes
+# three files and not the pattern.
+run_shell G3 "every sweep is run by something" \
+  "./scripts/check-sweeps-are-wired.sh 2>&1 | tail -1"
 run_shell G2 "CI has a behavioural gate" \
   "grep -q 'python-integration' .github/workflows/ci.yml && echo 'integration job present'"
 

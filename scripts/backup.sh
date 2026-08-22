@@ -362,6 +362,10 @@ with open(out_path, "w") as fh:
     fh.write("\n")
 PY
 rm -f "$DB_MANIFEST"
+# A zero-length log is noise in a directory an operator reads during an
+# incident. A non-empty one is pg_dump's own warnings and must be kept. Cleaned
+# up here rather than earlier because `pg_restore --list` appends to it too.
+[ -s "$DUMP_LOG" ] || rm -f "$DUMP_LOG"
 
 # --- report ------------------------------------------------------------------
 

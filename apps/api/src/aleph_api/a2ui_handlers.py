@@ -18,8 +18,9 @@ from sqlalchemy import select
 
 from aleph_a2ui.action_router import ActionRouter, CardActionRequest
 from aleph_a2ui.card_service import pin_card, unpin_card
-from aleph_a2ui.catalog import CatalogValidationError, validate_component
+from aleph_a2ui.catalog import CATALOG_ID, CatalogValidationError, validate_component
 from aleph_a2ui.models import InteractiveCard
+from aleph_a2ui.settings_card import settings_surface, submitted_values
 from aleph_api.settings import get_settings
 from aleph_connectors.models import (
     ApprovalDecision,
@@ -36,6 +37,8 @@ from aleph_notes.note_service import (
 )
 from aleph_observability.tracing import current_trace_id
 from aleph_reviewer.models import ApprovalRequest, ReviewFinding
+from aleph_rks.models import Connector, ConnectorBinding
+from aleph_security.roles import ProjectRole, require_at_least
 from aleph_wiki.curator_service import CuratorService
 from aleph_wiki.feedback_service import write_feedback
 from aleph_wiki.handedit_service import clear_section, mark_section
@@ -1232,6 +1235,180 @@ async def _clarify(*, request: CardActionRequest, **_: Any) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Plugin settings — the generated screen, and the save behind it
+# ---------------------------------------------------------------------------
+
+#: JSON Schema for a connector's per-project configuration.
+#:
+#: One field, and that is the honest size of it: `connector_bindings` has
+#: exactly one column an operator sets (`enabled`), plus a free-form
+#: `config_jsonb` that no connector declares a shape for. When a plugin
+#: manifest can carry its own config schema (WS-A1b), this constant is replaced
+#: by that declaration and NOTHING else here changes — which is the point of
+#: generating the screen instead of writing one.
+#:
+#: The credential deliberately is not here. A settings field's value travels in
+#: the action context, and every dispatched action's params are persisted to
+#: `card_actions.params_jsonb` AND to the ledger payload. Putting an API key in
+#: this schema would write it in plaintext to two append-only tables. Keys go
+#: through `ConnectorCredential`, which encrypts them.
+_CONNECTOR_CONFIG_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "description": "Whether the research loop may use this connector in this project.",
+        }
+    },
+}
+
+
+async def connector_settings_surface(
+    session: AsyncSession,
+    *,
+    project_id: UUID,
+    connector_id: UUID,
+) -> list[dict[str, Any]]:
+    """Render one connector's settings screen from its schema and stored values.
+
+    The read half of `plugin.settings.save`. A connector is the first
+    plugin-shaped thing in Aleph with a per-project settings row, so it is what
+    gives `aleph_a2ui.settings_card` a caller outside its own tests — the
+    generator was complete and unreachable, which is the same as absent.
+
+    `current` comes from `ConnectorBinding` when the project has bound this
+    connector and from `Connector.enabled_by_default` when it has not, matching
+    what `aleph_research.tools` actually resolves at job start. Seeding the
+    screen from the default rather than from `False` matters: an unbound
+    connector that IS running would otherwise render as switched off, and the
+    first save would silently turn it off for real.
+    """
+    connector = (
+        await session.execute(select(Connector).where(Connector.id == connector_id))
+    ).scalar_one_or_none()
+    if connector is None:
+        msg = f"connector not found: {connector_id}"
+        raise NotFound(msg)
+    binding = (
+        await session.execute(
+            select(ConnectorBinding).where(
+                ConnectorBinding.project_id == project_id,
+                ConnectorBinding.connector_id == connector_id,
+            )
+        )
+    ).scalar_one_or_none()
+    enabled = binding.enabled if binding is not None else connector.enabled_by_default
+
+    description = f"Connector · {connector.kind}"
+    if connector.requires_auth:
+        # Stated, not silently omitted: a screen with no key field on a
+        # connector that needs one reads as "no key required".
+        description += " · needs an API key, set under Credentials (never stored here)"
+
+    return settings_surface(
+        plugin_id=str(connector_id),
+        plugin_kind="connector",
+        plugin_title=connector.name,
+        config_schema=_CONNECTOR_CONFIG_SCHEMA,
+        catalog_id=CATALOG_ID,
+        current={"enabled": enabled},
+        description=description,
+    )
+
+
+async def _plugin_settings_save(
+    *,
+    session: AsyncSession,
+    ledger: LedgerWriter,
+    principal: Principal,
+    project_id: UUID,
+    request: CardActionRequest,
+) -> dict[str, Any]:
+    """Persist a generated settings screen's values, then re-render from storage.
+
+    Re-rendering rather than echoing the submitted values is deliberate: what
+    comes back is what the database now holds, so a value the server coerced,
+    ignored or does not have a column for shows up as unchanged on the screen
+    instead of appearing to have been saved.
+
+    `plugin_kind` decides which table is written. Only `connector` exists
+    today; an unknown kind is refused by name rather than defaulted, because
+    defaulting here would write one plugin's settings onto another's row.
+    """
+    # Card actions are gated at EDITOR (`routes/cards.py`), connector bindings
+    # at OWNER (`routes/connectors.py`). Without this line the card action is a
+    # way for an EDITOR to change a binding they cannot change over HTTP — the
+    # gate would be bypassed by the surface, not by the route.
+    require_at_least(principal, project_id, at_least=ProjectRole.OWNER)
+
+    kind = str(request.params["plugin_kind"])
+    if kind != "connector":
+        msg = f"unknown plugin_kind for settings save: {kind!r} (known: 'connector')"
+        raise ValidationFailed(msg)
+
+    connector_id = UUID(str(request.params["plugin_id"]))
+    values = submitted_values(request.params)
+    if "enabled" not in values:
+        msg = "plugin.settings.save for a connector carries no 'enabled' value"
+        raise ValidationFailed(msg)
+    enabled = bool(values["enabled"])
+
+    connector = (
+        await session.execute(select(Connector).where(Connector.id == connector_id))
+    ).scalar_one_or_none()
+    if connector is None:
+        msg = f"connector not found: {connector_id}"
+        raise NotFound(msg)
+
+    binding = (
+        await session.execute(
+            select(ConnectorBinding).where(
+                ConnectorBinding.project_id == project_id,
+                ConnectorBinding.connector_id == connector_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if binding is None:
+        binding = ConnectorBinding(
+            id=uuid7(),
+            project_id=project_id,
+            connector_id=connector_id,
+            enabled=enabled,
+            config_jsonb={},
+            created_by=principal.user_id,
+        )
+        session.add(binding)
+        action_kind = "connector_binding.create"
+    else:
+        binding.enabled = enabled
+        action_kind = "connector_binding.update"
+    await session.flush()
+
+    # Same action kinds as `routes/connectors.py::set_binding`, so a binding
+    # change is one thing in the ledger regardless of which door it came
+    # through. Two names for one state change makes an audit read as two.
+    await ledger.append(
+        project_id=project_id,
+        actor_id=principal.user_id,
+        actor_kind=principal.actor_kind,
+        action_kind=action_kind,
+        target_id=binding.id,
+        target_kind="connector_binding",
+        payload={"connector_kind": connector.kind, "enabled": enabled},
+        trace_id=current_trace_id(),
+    )
+
+    return {
+        "plugin_id": str(connector_id),
+        "plugin_kind": "connector",
+        "surface": await connector_settings_surface(
+            session, project_id=project_id, connector_id=connector_id
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
 
@@ -1259,4 +1436,6 @@ def build_action_router() -> ActionRouter:
     r.register("highlight_claim", _highlight_claim)
     r.register("compose_dossier", _compose_dossier)
     r.register("spotlight", _spotlight)
+    # WS-A3a: a plugin that cannot declare a settings screen is a library.
+    r.register("plugin.settings.save", _plugin_settings_save)
     return r

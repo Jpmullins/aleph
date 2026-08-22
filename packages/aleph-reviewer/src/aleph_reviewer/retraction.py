@@ -6,16 +6,39 @@ the manual EDITOR ``POST .../retract`` route, and the WP-2 reviewer
 
 - sets ``Source.status="retracted"`` + ``retracted_at`` + ``retraction_reason``
   and writes a ``source.retract`` ledger event;
-- walks the **blast-radius join** (the reviewer's ``_registry_sources``
-  inverted) — ``Source → SourcePage → Citation → WikiClaim`` — and for every
-  dependent claim sets ``status="retracted"`` (confidence stays derived) with a
-  per-claim ``wiki_claim.retract_flag`` ledger event;
+- walks the belief graph two hops — ``Citation.source_id`` for the claims that
+  cite the source, then ``claim_edges.kind='derived_from'`` for the conclusions
+  built on those claims — and marks each one according to what is left of its
+  evidence;
+- **recomputes the confidence of everything it touched**, because a retraction
+  that only writes a status column has not propagated. Evidence from a retracted
+  source stops counting, so a claim that rested on it drops out of
+  ``well_supported`` on the same transaction, derived from the remaining
+  evidence rather than asserted;
 - emits a ``retracted_source`` ``ReviewFinding`` (severity critical) under a
   minimal ``kind="retraction"`` ``ReviewRun`` so it lands in Briefs — the same
-  finding kind the WP-2 reviewer emits.
+  finding kind the WP-2 reviewer emits. The finding text **enumerates** the blast
+  radius: how many claims were reached directly, how many through a derivation,
+  how many were left with no surviving support and how many survive weakened.
 
-``dependent_claims`` exposes the queryable blast-radius set. Every mutation is
-in the caller's transaction (rule 4); the caller commits.
+`retraction_impact` exposes the blast-radius set without mutating anything, and
+is what a caller should ask. It replaced `dependent_claims`, which flattened the
+two branches back into one list and had exactly one caller — the write path
+below, which then wrote one status onto everything. Deleted rather than kept:
+a helper whose only purpose was to discard a distinction, left in the tree "for
+existing callers" it no longer has, is how the distinction gets discarded again.
+
+Every mutation is in the caller's transaction (rule 4); the caller commits.
+
+**Two statuses, not one.** A claim whose only support was the retracted source
+becomes ``retracted``; a claim that also rests on independent evidence becomes
+``weakened``. Writing ``retracted`` onto both — which this did until WS-RS9 —
+throws away the distinction the impact walk exists to make, and a flag that
+fires on beliefs that are still fine is a flag a reader learns to skip. The
+word is ``weakened`` and not ``contested`` because ``contested`` is already
+taken twice over: it is a ``Confidence`` state meaning *the evidence points both
+ways*, and it is the status ``a2ui_handlers`` writes when a **person** rejects a
+page. A withdrawn support is neither of those.
 
 Layering note: this lives in ``aleph_reviewer`` — the highest of the three
 packages it touches (it depends on ``aleph_rks`` for ``Source``, ``aleph_wiki``
@@ -24,13 +47,12 @@ finding). Placing it here keeps the strict higher→lower DAG intact (``aleph_rk
 is a low leaf and must not import ``aleph_wiki``/``aleph_reviewer``). Both
 callers — the reviewer's ``doi_verification`` retracted branch (same package)
 and the manual ``POST .../retract`` route (``aleph_api``, above everything) —
-share this one code path. Every mutation is in the caller's transaction
-(rule 4); the caller commits.
+share this one code path.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -42,6 +64,7 @@ from aleph_core.time import utcnow
 from aleph_observability.tracing import current_trace_id
 from aleph_reviewer.review_service import add_finding, finalize_run, start_run
 from aleph_rks.models import Source
+from aleph_wiki.belief_service import BeliefService
 from aleph_wiki.models import Citation, WikiClaim
 
 if TYPE_CHECKING:
@@ -51,15 +74,11 @@ if TYPE_CHECKING:
     from aleph_security.principal import Principal
 
 
-@dataclass(frozen=True)
-class RetractionResult:
-    """Blast-radius summary returned by ``retract_source``."""
+#: What a claim's status becomes when the retracted source was its only support.
+STATUS_UNSUPPORTED = "retracted"
 
-    source_id: UUID
-    page_ids: set[UUID]
-    claim_ids: set[UUID]
-    finding_id: UUID | None = None
-    already_retracted: bool = False
+#: What a claim's status becomes when it survives on independent evidence.
+STATUS_WEAKENED = "weakened"
 
 
 @dataclass(frozen=True)
@@ -77,16 +96,67 @@ class RetractionImpact:
     derived: set[UUID]
     unsupported: set[UUID]
     weakened: set[UUID]
+    #: Hops from the retracted source: 0 for a claim that cites it, 1 for a
+    #: claim derived from one of those, and so on. Carried so the ledger and the
+    #: finding can say *how* a claim was reached rather than only that it was.
+    depth_by_claim: dict[UUID, int] = field(default_factory=dict)
 
     @property
     def all_touched(self) -> set[UUID]:
         return self.directly_cited | self.derived
 
 
+@dataclass(frozen=True)
+class RetractionResult:
+    """Blast-radius summary returned by ``retract_source``."""
+
+    source_id: UUID
+    page_ids: set[UUID]
+    claim_ids: set[UUID]
+    finding_id: UUID | None = None
+    already_retracted: bool = False
+    #: The two hops, kept apart. `claim_ids` is their union and is what the
+    #: HTTP route has always returned; these say which is which.
+    directly_cited: set[UUID] = field(default_factory=set)
+    derived: set[UUID] = field(default_factory=set)
+    #: The declined branch, as written. `unsupported` claims are `retracted`;
+    #: `weakened` ones survive on independent evidence.
+    unsupported: set[UUID] = field(default_factory=set)
+    weakened: set[UUID] = field(default_factory=set)
+    #: Claims whose derived confidence actually moved, `claim_id -> (before, after)`.
+    #: A retraction that reaches ten claims and changes none of their confidence
+    #: is a fact worth being able to see.
+    confidence_changed: dict[UUID, tuple[str, str]] = field(default_factory=dict)
+    #: One sentence naming everything above. This is what lands in the
+    #: `retracted_source` finding, and it is the difference between a retraction
+    #: that propagated and a retraction that says it propagated.
+    summary: str = ""
+
+
 #: How far a retraction propagates along `derived_from`. Bounded because a
 #: cycle or a pathological chain must not turn one retraction into a full-table
 #: walk; the CTE also guards cycles explicitly.
 MAX_DERIVATION_DEPTH = 4
+
+
+def describe_impact(impact: RetractionImpact, *, short_id: str, reason: str) -> str:
+    """Say what the retraction reached, in one line, in numbers.
+
+    Written as a function so the finding, the ledger payload and any caller that
+    wants to log it all say the same thing. A blast radius that is only visible
+    by re-running the query is not a report.
+    """
+    deepest = max(impact.depth_by_claim.values(), default=0)
+    return (
+        f"Source {short_id} was retracted: {reason}. "
+        f"Reached {len(impact.all_touched)} claim(s): "
+        f"{len(impact.directly_cited)} citing it directly, "
+        f"{len(impact.derived)} derived from those (deepest hop {deepest}). "
+        f"{len(impact.unsupported)} left with no surviving support "
+        f"(status={STATUS_UNSUPPORTED}); "
+        f"{len(impact.weakened)} survive on independent evidence "
+        f"(status={STATUS_WEAKENED})."
+    )
 
 
 async def retraction_impact(session: AsyncSession, source_id: UUID) -> RetractionImpact:
@@ -116,6 +186,7 @@ async def retraction_impact(session: AsyncSession, source_id: UUID) -> Retractio
         .all()
     )
     directly_cited = set(direct_rows)
+    depth_by_claim: dict[UUID, int] = dict.fromkeys(directly_cited, 0)
 
     derived: set[UUID] = set()
     if directly_cited:
@@ -136,18 +207,24 @@ async def retraction_impact(session: AsyncSession, source_id: UUID) -> Retractio
                   AND d.depth < :max_depth
                   AND NOT (e.src_claim_id = ANY(d.path))
             )
-            SELECT DISTINCT claim_id FROM downstream
+            SELECT claim_id, MIN(depth) AS depth FROM downstream GROUP BY claim_id
             """
         )
         rows = await session.execute(
             walk,
             {"roots": list(directly_cited), "max_depth": MAX_DERIVATION_DEPTH},
         )
-        derived = {row[0] for row in rows.all()} - directly_cited
+        for claim_id, depth in rows.all():
+            if claim_id in directly_cited:
+                # A claim that both cites the source and is derived from another
+                # claim that does. The direct hop is the shorter and truer story.
+                continue
+            derived.add(claim_id)
+            depth_by_claim[claim_id] = int(depth)
 
     touched = directly_cited | derived
     if not touched:
-        return RetractionImpact(set(), set(), set(), set())
+        return RetractionImpact(set(), set(), set(), set(), {})
 
     # The declined branch: does anything else still support it?
     surviving = (
@@ -173,23 +250,8 @@ async def retraction_impact(session: AsyncSession, source_id: UUID) -> Retractio
         derived=derived,
         unsupported=touched - still_supported,
         weakened=touched & still_supported,
+        depth_by_claim=depth_by_claim,
     )
-
-
-async def dependent_claims(session: AsyncSession, source_id: UUID) -> list[tuple[UUID, UUID]]:
-    """``(page_id, claim_id)`` for every claim a retraction touches.
-
-    Kept for existing callers; the structured answer is `retraction_impact`.
-    """
-    impact = await retraction_impact(session, source_id)
-    if not impact.all_touched:
-        return []
-    rows = (
-        await session.execute(
-            select(WikiClaim.page_id, WikiClaim.id).where(WikiClaim.id.in_(impact.all_touched))
-        )
-    ).all()
-    return [(page_id, claim_id) for page_id, claim_id in rows]
 
 
 async def retract_source(
@@ -200,7 +262,7 @@ async def retract_source(
     source_id: UUID,
     reason: str,
 ) -> RetractionResult:
-    """Retract ``source_id`` and flag every dependent wiki claim.
+    """Retract ``source_id`` and propagate through every dependent claim.
 
     Idempotent: a source already retracted is not re-ledgered — the current
     blast-radius is returned with ``already_retracted=True``.
@@ -216,15 +278,34 @@ async def retract_source(
     trace = current_trace_id()
 
     if source.retracted_at is not None:
-        deps = await dependent_claims(session, source_id)
+        impact = await retraction_impact(session, source_id)
+        pages = await _pages_for(session, impact.all_touched)
         return RetractionResult(
             source_id=source_id,
-            page_ids={p for p, _ in deps},
-            claim_ids={c for _, c in deps},
+            page_ids=set(pages.values()),
+            claim_ids=set(impact.all_touched),
             already_retracted=True,
+            directly_cited=impact.directly_cited,
+            derived=impact.derived,
+            unsupported=impact.unsupported,
+            weakened=impact.weakened,
+            summary=describe_impact(
+                impact, short_id=source.short_id, reason=source.retraction_reason or reason
+            ),
         )
 
-    # 1. Retract the source itself.
+    # 1. Walk the graph BEFORE the source is marked retracted.
+    #
+    #    Order matters and is not cosmetic: `recompute_confidence` excludes
+    #    evidence from retracted sources, so the walk has to happen first if the
+    #    "does anything else still support this" question is to be asked against
+    #    the same graph the reader saw. Marking first, walking second would also
+    #    work for this particular query, but it makes the sequence depend on
+    #    which predicates happen to filter on `retracted_at` — a dependency
+    #    nobody would notice breaking.
+    impact = await retraction_impact(session, source_id)
+
+    # 2. Retract the source itself.
     source.status = "retracted"
     source.retracted_at = utcnow()
     source.retraction_reason = reason
@@ -235,33 +316,47 @@ async def retract_source(
         action_kind="source.retract",
         target_id=source.id,
         target_kind="source",
-        payload={"short_id": source.short_id, "reason": reason},
+        payload={
+            "short_id": source.short_id,
+            "reason": reason,
+            "claims_reached": len(impact.all_touched),
+            "claims_direct": len(impact.directly_cited),
+            "claims_derived": len(impact.derived),
+            "claims_unsupported": len(impact.unsupported),
+            "claims_weakened": len(impact.weakened),
+        },
         trace_id=trace,
     )
 
-    # 2. Walk the blast-radius join and flag every dependent claim.
-    deps = await dependent_claims(session, source_id)
+    # 3. Mark every dependent claim, and say which branch it fell into.
+    beliefs = BeliefService(session)
     page_ids: set[UUID] = set()
     claim_ids: set[UUID] = set()
-    claim_id_list = [c for _, c in deps]
-    if claim_id_list:
+    confidence_changed: dict[UUID, tuple[str, str]] = {}
+    if impact.all_touched:
         claims = list(
-            (await session.execute(select(WikiClaim).where(WikiClaim.id.in_(claim_id_list))))
+            (await session.execute(select(WikiClaim).where(WikiClaim.id.in_(impact.all_touched))))
             .scalars()
             .all()
         )
         for claim in claims:
-            # `status` carries the retraction; `confidence` does not. Confidence
-            # is DERIVED from the evidence by
+            unsupported = claim.id in impact.unsupported
+            # `status` carries the retraction; `confidence` is never written
+            # here. Confidence is DERIVED from the evidence by
             # `aleph_hypotheses.confidence.next_confidence_from_evidence`, and
             # "retracted" is not one of its states — writing it here would put a
             # value in the column that the state machine can never produce, so
-            # the next recompute would silently erase it. A claim whose support
-            # was withdrawn is `retracted` in status; what it is now worth is
-            # whatever its remaining evidence says.
-            claim.status = "retracted"
+            # the next recompute would silently erase it. What the claim is now
+            # worth is recomputed below, from whatever evidence survives.
+            claim.status = STATUS_UNSUPPORTED if unsupported else STATUS_WEAKENED
             page_ids.add(claim.page_id)
             claim_ids.add(claim.id)
+
+            before = claim.confidence
+            after = await beliefs.recompute_confidence(project_id=project_id, claim_id=claim.id)
+            if after != before:
+                confidence_changed[claim.id] = (before, after)
+
             await ledger.append(
                 project_id=project_id,
                 actor_id=principal.user_id,
@@ -269,11 +364,27 @@ async def retract_source(
                 action_kind="wiki_claim.retract_flag",
                 target_id=claim.id,
                 target_kind="wiki_claim",
-                payload={"source_id": str(source_id), "page_id": str(claim.page_id)},
+                payload={
+                    "source_id": str(source_id),
+                    "page_id": str(claim.page_id),
+                    # Which hop reached it, which branch it fell into, and what
+                    # the withdrawal did to its confidence. A per-claim ledger
+                    # row that says only "flagged" cannot answer "why is this
+                    # page different today", which is the question a retraction
+                    # exists to be able to answer.
+                    "hop": "direct" if claim.id in impact.directly_cited else "derived",
+                    "depth": impact.depth_by_claim.get(claim.id, 0),
+                    "branch": "unsupported" if unsupported else "weakened",
+                    "status": claim.status,
+                    "confidence_before": before,
+                    "confidence_after": after,
+                },
                 trace_id=trace,
             )
 
-    # 3. Emit a critical `retracted_source` finding under a minimal run so it
+    summary = describe_impact(impact, short_id=source.short_id, reason=reason)
+
+    # 4. Emit a critical `retracted_source` finding under a minimal run so it
     #    lands in Briefs — the same finding kind the WP-2 reviewer emits.
     run = await start_run(
         session,
@@ -293,13 +404,21 @@ async def retract_source(
         severity="critical",
         title=f"Retracted source: {source.short_id}",
         description=(
-            f"Source {source.short_id} ({source.title}) was retracted: {reason}. "
-            f"{len(claim_ids)} dependent claim(s) across {len(page_ids)} page(s) "
-            "flagged retracted/contested."
+            f"{summary} Across {len(page_ids)} page(s). "
+            f"{len(confidence_changed)} claim(s) changed derived confidence."
         ),
         target_source_id=source.id,
         evidence_refs=[
-            {"kind": "source", "source_id": str(source.id), "short_id": source.short_id}
+            {"kind": "source", "source_id": str(source.id), "short_id": source.short_id},
+            *[
+                {
+                    "kind": "wiki_claim",
+                    "claim_id": str(cid),
+                    "hop": "direct" if cid in impact.directly_cited else "derived",
+                    "branch": "unsupported" if cid in impact.unsupported else "weakened",
+                }
+                for cid in sorted(claim_ids)
+            ],
         ],
         auto_resolvable=False,
         created_by=principal.user_id,
@@ -311,4 +430,24 @@ async def retract_source(
         page_ids=page_ids,
         claim_ids=claim_ids,
         finding_id=finding.id,
+        directly_cited=impact.directly_cited,
+        derived=impact.derived,
+        unsupported=impact.unsupported,
+        weakened=impact.weakened,
+        confidence_changed=confidence_changed,
+        summary=summary,
     )
+
+
+async def _pages_for(session: AsyncSession, claim_ids: set[UUID]) -> dict[UUID, UUID]:
+    if not claim_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(WikiClaim.id, WikiClaim.page_id).where(WikiClaim.id.in_(claim_ids))
+        )
+    ).all()
+    pages: dict[UUID, UUID] = {}
+    for claim_id, page_id in rows:
+        pages[claim_id] = page_id
+    return pages

@@ -47,6 +47,7 @@ export const ACTION_NAMES = [
   "mark_handedit",
   "navigate_wiki",
   "open",
+  "plugin.settings.save",
   "promote_note",
   "reject",
   "rename_note",

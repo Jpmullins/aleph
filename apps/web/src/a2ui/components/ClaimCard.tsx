@@ -1,3 +1,4 @@
+import { confidenceLabel, confidenceTone, isConfidence } from "../confidence";
 import { useSurface } from "../surface-context";
 import { CardShell, FeedbackButton, Pill, type RendererProps } from "./_shared";
 
@@ -9,17 +10,20 @@ export function ClaimCard({ component, onAction }: RendererProps) {
     confidence: string;
     citations?: Array<{ marker: string; source_short_id?: string | null }>;
   };
-  const tone =
-    p.confidence === "well-supported"
-      ? "emerald"
-      : p.confidence === "contested"
-        ? "amber"
-        : p.confidence === "uncited" || p.confidence === "retracted"
-          ? "red"
-          : "slate";
+  // Three of the six states the engine can emit had no branch here and fell
+  // through to slate — including `refuted`, so a claim the evidence had
+  // disproved looked exactly like one nobody had assessed. `confidenceTone` is
+  // exhaustive over the union and fails the build if a state is added without
+  // a colour; the `isConfidence` guard is for the wire, where the value is a
+  // plain string and can predate the vocabulary being unified.
+  const confidence = p.confidence;
+  const known = isConfidence(confidence);
+  const tone = known ? confidenceTone(confidence) : "slate";
   return (
     <CardShell
-      subtitle={<Pill tone={tone}>{p.confidence}</Pill>}
+      subtitle={
+        <Pill tone={tone}>{known ? confidenceLabel(confidence) : `? ${confidence}`}</Pill>
+      }
       actions={
         <FeedbackButton
           onAction={onAction}

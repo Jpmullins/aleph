@@ -67,6 +67,128 @@ uv run alembic revision -m "<slug>" --autogenerate
 
 File pattern: `apps/api/alembic/versions/YYYYMMDD_HHMM_<slug>_<message>.py`.
 
+### The downgrade has to run, not just exist
+
+Every revision carries a `downgrade()` body and for a long time not one had ever been executed:
+`alembic check` guards the FORWARD path, and the reverse path was guarded by nothing. A `downgrade`
+that has never run is a rollback plan you find out about during the incident.
+
+```bash
+./scripts/check-migration-roundtrip.sh              # upgrade → downgrade -1 → upgrade → alembic check
+./scripts/check-migration-roundtrip.sh --full       # all the way down to base and back up
+```
+
+It runs against a **scratch database it creates and drops** — downgrading the development database
+would destroy the corpus, and a check nobody dares run is not a check. It needs `DATABASE_URL` to
+point at a Postgres it may create a database on, and it needs `pg_available_extensions` to list
+`vector`. The `--last` mode is wired into CI (`.github/workflows/ci.yml`), and
+`scripts/_acceptance/self_check.sh` proves it catches a broken downgrade by mutating the newest
+revision — it resolves which revision that is at run time, because a probe naming a fixed filename
+stops testing the thing the check executes the moment someone adds a migration.
+
+## Backup and restore
+
+**A backup nobody has restored from is a file, not a backup.** Two scripts and one drill:
+
+```bash
+./scripts/backup.sh                                  # -> data/backups/aleph-<utc timestamp>/
+./scripts/backup.sh --dry-run                        # what it would do; writes nothing
+./scripts/restore.sh <backup-dir> --into aleph_scratch
+./scripts/restore.sh <backup-dir> --into aleph_scratch --dry-run
+uv run python scripts/_acceptance/restore_drill.py   # back up the live DB, restore, verify, drop
+```
+
+`backup.sh` writes a directory, not a file: `database.dump` (pg_dump custom format),
+`manifest.json`, `toc.txt`, and — when docker is reachable and the `aleph_assets` volume exists —
+`assets.tar.gz` with a `assets.sha256` listing. Pass `--no-assets` to skip the volume, `--out DIR`
+to choose where, `--database-url URL` to name the database. With no arguments it reads
+`DATABASE_URL`, then `ALEPH_DATABASE_URL`, then `deploy/compose/.env` — because the password lives
+in that file and nowhere else, and a backup script that demands an unset environment variable is a
+backup script that does not get run.
+
+`restore.sh` **verifies and can say no.** It refuses to restore over the database it is connected
+to, refuses to restore into a database that already exists unless you pass `--drop-existing`,
+refuses a bare `.dump` with no manifest (there is nothing to verify it against), and after the
+restore compares the result to the manifest: every table's exact row count, every table's content
+digest, the pgvector embeddings component by component, the extension set and its versions, the
+alembic revision, and every trigger. Then it fires a real `UPDATE` and a real `DELETE` at each
+append-only table inside a rolled-back transaction and requires both to be refused. Only then does
+it print OK. Anything else exits 1 and says which table.
+
+### The three things that make a restore a trap
+
+- **pgvector.** The dump carries `CREATE EXTENSION vector`, but the extension has to be *available*
+  in the target cluster and the restoring role has to be allowed to create it. If that one statement
+  fails, the `vector` type never exists and every table with an embedding column is silently absent
+  from the result. `restore.sh` checks `pg_available_extensions` before it creates anything, and
+  pre-creates the extension so a role that may not create extensions still works when a DBA has
+  already installed it. It also asserts the dump's own table of contents contains the entry, at
+  backup time, where the fix is cheap.
+- **The append-only triggers.** Ten of them, on five tables — `action_ledger_events`,
+  `wiki_revisions`, `interactive_card_versions`, `hypothesis_versions`, `artifact_versions`. In a
+  custom-format dump they are **post-data**, so a full restore into an empty database recreates them
+  *after* the COPY: the data loads and the triggers come back enabled. That is a property of this
+  restore path, not of restores generally — a `pg_restore --data-only --disable-triggers` that dies
+  part way leaves them `tgenabled='D'`, which is a database that looks complete and has quietly lost
+  the guarantee the ledger's evidentiary value rests on. So the verification asserts `tgenabled` and
+  then exercises the trigger for real. Replacing `ledger_immutable()`'s body with `RETURN NEW` leaves
+  the trigger definition byte-identical; only firing an UPDATE catches it.
+- **A live source that will not hold still.** The manifest is computed *inside the dump's own
+  snapshot* — `pg_export_snapshot()`, handed to `pg_dump --snapshot=`, with the inventory query in
+  the same REPEATABLE READ transaction. Counting rows from a second connection a moment later counts
+  a different database: ingest and the research loop write continuously, and `document_chunks` was
+  measured moving by thousands of rows inside a minute. A verifier that fails for that reason is a
+  verifier people turn off.
+
+The content digests are only comparable if both sides render rows the same way, so `DateStyle`,
+`TimeZone`, `extra_float_digits` and `bytea_output` are pinned and **recorded in the manifest**. If
+they ever differ, `restore.sh` reports the restore as UNVERIFIED rather than as bad — a broken
+instrument and a broken restore are different findings.
+
+### The drill
+
+```bash
+export DATABASE_URL=...        # the live database
+uv run python scripts/_acceptance/restore_drill.py
+```
+
+Backs up the running database, restores it into `aleph_restore_drill_<pid>`, runs the whole
+verification above, re-derives the **ledger hash chain** with the production verifier
+(`aleph_db.repos.ledger.verify_project_chain`) on *both* databases, and drops the scratch database
+on the way out including after a failure. Roughly 15 seconds against the current corpus.
+
+The chain leg requires the two sides to **agree**, not the restore to verify clean, and that is
+deliberate. The development database contains projects whose chain genuinely does not verify: every
+run of `tests/integration/test_ledger_immutability.py::test_tampering_is_detectable` forges a
+`chain_hash` into a fresh project and leaves it behind. A drill that demanded a clean chain would be
+red forever for a reason that has nothing to do with backups, and a check that is red for an
+unrelated reason gets ignored. Requiring agreement still catches everything a restore can do wrong:
+move a divergence, introduce one, or silently repair one.
+
+### Restoring the assets
+
+The asset store is a docker volume, not rows.
+
+```bash
+./scripts/restore.sh <backup-dir> --into aleph_scratch --assets-volume aleph_assets_scratch
+```
+
+It refuses a volume that already has files unless you pass `--force`, because unpacking a backup over
+live assets mixes two generations of files and the result passes every count. After unpacking it
+re-hashes every file and compares against the listing taken at backup time.
+
+### What is NOT covered
+
+- **No schedule.** Nothing runs `backup.sh` on a timer; it is a command an operator runs. There is no
+  retention policy, no offsite copy and no quota.
+- **No point-in-time recovery.** This is dump-and-restore. WAL archiving to the object store is the
+  next step, not a thing that exists.
+- **No disk-usage reporting.** `postgres-data` and the asset root can fill the host and nothing
+  reports it before they do — `/readyz` carries no bytes-used field. That belongs with the metrics
+  work.
+- **Redis is not backed up**, deliberately: it holds queues and the sandbox bus, both reconstructible.
+  Anything durable is in Postgres.
+
 ## Rotating a secret
 
 Aleph holds two long-lived secrets and they do different jobs. They used to be

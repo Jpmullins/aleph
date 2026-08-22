@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import { confidenceLabel, confidenceTone, isConfidence } from "../confidence";
 import { HypothesisMatrix, type AchMatrix } from "./HypothesisMatrix";
 import { CardShell, FeedbackButton, Pill, SurfaceHeader, type RendererProps } from "./_shared";
 
@@ -13,15 +14,6 @@ interface HypothesisItem {
   last_evidence_change_at: string | null;
   created_at: string;
 }
-
-const TONE: Record<string, "emerald" | "sky" | "amber" | "red" | "slate" | "violet"> = {
-  supported: "emerald",
-  weakly_supported: "sky",
-  under_investigation: "violet",
-  contested: "amber",
-  refuted: "red",
-  initial: "slate",
-};
 
 /**
  * WP-4: the Hypotheses tab renders ONLY from the surface data model
@@ -88,7 +80,9 @@ function HypothesisRow({
       title={`${h.short_id} · ${h.title}`}
       subtitle={
         <span className="flex items-center gap-2">
-          <Pill tone={TONE[h.confidence] ?? "slate"}>{h.confidence.replace(/_/g, " ")}</Pill>
+          <Pill tone={isConfidence(h.confidence) ? confidenceTone(h.confidence) : "slate"}>
+            {confidenceLabel(h.confidence)}
+          </Pill>
           <Pill tone="slate">{h.status}</Pill>
         </span>
       }

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 
 import { WikiBodyMarkdown } from "@/components/WikiBodyMarkdown";
 import { useWorkspaceUI } from "@/lib/workspace-ui";
+import { confidenceTone, isConfidence } from "../confidence";
 import { HtmlDocCard } from "./HtmlDocCard";
 import { CardShell, FeedbackButton, Pill, type RendererProps } from "./_shared";
 import { stripFrontmatter } from "@/lib/frontmatter";
@@ -51,17 +52,6 @@ interface PageMeta {
   is_stub?: boolean;
   freshness?: string | null;
 }
-
-const CONFIDENCE_TONE: Record<string, "emerald" | "amber" | "red" | "sky" | "slate"> = {
-  "well-supported": "emerald",
-  well_supported: "emerald",
-  cited: "sky",
-  "weakly-supported": "amber",
-  weakly_supported: "amber",
-  contested: "amber",
-  uncited: "red",
-  retracted: "red",
-};
 
 const STATUS_TONE: Record<string, "emerald" | "amber" | "slate"> = {
   approved: "emerald",
@@ -366,7 +356,7 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
                 >
                   <CardShell
                     subtitle={
-                      <Pill tone={CONFIDENCE_TONE[c.confidence] ?? "slate"}>
+                      <Pill tone={isConfidence(c.confidence) ? confidenceTone(c.confidence) : "slate"}>
                         <span data-testid="claim-confidence">{c.confidence}</span>
                       </Pill>
                     }

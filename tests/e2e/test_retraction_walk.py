@@ -3,7 +3,7 @@
 `aleph_reviewer.retraction` is the single funnel every retraction trigger goes
 through — the manual `POST /sources/{id}/retract` route and the mechanical
 reviewer's DOI-verification branch both call `retract_source`. This file pins
-the four properties that make it mean anything:
+the properties that make it mean anything:
 
 1. **The join key is `Citation.source_id`.** The original blast-radius walked
    `Source → SourcePage → Citation.source_page_id`, and no production write path
@@ -14,28 +14,40 @@ the four properties that make it mean anything:
    the join is pinned in BOTH directions here — a claim reachable only through
    `source_page_id` must NOT be flagged, and a claim reachable only through
    `source_id` MUST be.
-2. **The declined branch.** A claim that still has independent supporting
-   evidence is `weakened`, not `unsupported`. Flagging both identically is how a
-   flag stops being read.
-3. **The mutation and its ledger events are one transaction.** Pinned by
+2. **The declined branch reaches the database.** A claim that still has
+   independent supporting evidence is `weakened`, not `retracted`. The walk
+   always made that distinction and the write path always threw it away one line
+   later; both halves are pinned now.
+3. **It says what it reached.** Per-claim ledger rows carrying hop, depth and
+   branch, a `source.retract` payload carrying the counts, and a finding whose
+   text and `evidence_refs` enumerate the radius. "It reached 12 claims" is not
+   a report.
+4. **Confidence moves.** A claim held at `well_supported` by three verbatim
+   quotes to one paper is not still well supported once that paper is withdrawn.
+   `recompute_confidence` excludes evidence from a retracted source and
+   `retract_source` re-derives everything it touched in the same transaction —
+   otherwise "propagation" is one status column and nothing else.
+5. **Two hops.** `retraction_impact` walks `claim_edges.kind='derived_from'`
+   transitively, depth-capped and cycle-guarded. Until WS-RS9 nothing in the
+   tree wrote such an edge (`ClaimEdge` was constructed in one place, with
+   `kind="supersedes"`, and `claim_edges` held zero rows of every other kind),
+   so the CTE was correct and blind and this file pinned the second hop as
+   unreachable. The writer is `aleph_wiki.derivation.record_derivations`, and
+   the two-hop tests below use it rather than hand-inserting a row: a test that
+   passes on a row no production code can create reads as proof that the
+   feature works.
+6. **The mutation and its ledger events are one transaction.** Pinned by
    rolling the transaction back and proving nothing survives, not merely by
    reading rows back through the same open session — which would pass for a
    ledger written on a separate autocommit connection.
-4. **Scope.** Retracting one project's source leaves a parallel project alone.
+7. **Scope.** Retracting one project's source leaves a parallel project alone,
+   and no derivation edge can be written across the boundary in the first place
+   — the recursive CTE has no project predicate, so one leaked edge is one
+   leaked blast radius.
 
 Plus idempotency, because the mechanical reviewer re-checks DOIs on a schedule
 and a second pass over an already-retracted source must not file a second
 critical finding against the same person's queue.
-
-**What this file does NOT prove.** `retraction_impact` contains a recursive CTE
-over `claim_edges.kind = 'derived_from'` — the second hop, a claim built on a
-claim built on the retracted paper. Nothing in the tree writes such an edge:
-`ClaimEdge` is constructed in exactly one place
-(`aleph_wiki.belief_service.BeliefService.supersede`) with `kind="supersedes"`,
-and `claim_edges` holds 0 rows of every kind on the live stack. The second hop
-is therefore pinned below as the one-hop reality it actually is —
-`test_the_second_hop_is_unreachable_because_nothing_writes_a_derived_from_edge`
-— and not as working capability. See `docs/plan.md` WS-RS9.
 
 Real Postgres, because the properties are transactional and the defect being
 guarded was precisely a join that returned nothing against real rows.
@@ -56,15 +68,24 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from aleph_belief.trust import TrustTier
+from aleph_core.confidence import Confidence
 from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
 from aleph_db.models.ledger import ActionLedgerEvent
 from aleph_db.models.project import Project
 from aleph_db.repos.ledger import LedgerWriter
+from aleph_hypotheses.confidence import weight_for_tier
 from aleph_reviewer.models import ReviewFinding
-from aleph_reviewer.retraction import dependent_claims, retract_source, retraction_impact
+from aleph_reviewer.retraction import (
+    STATUS_UNSUPPORTED,
+    STATUS_WEAKENED,
+    retract_source,
+    retraction_impact,
+)
 from aleph_rks.models import Source
 from aleph_security.principal import Principal
+from aleph_wiki.derivation import record_derivations
 from aleph_wiki.models import Citation, ClaimEdge, SourcePage, WikiClaim, WikiPage
 
 pytestmark = pytest.mark.integration
@@ -207,7 +228,12 @@ async def _add_source(s: AsyncSession, project_id: uuid.UUID, *, title: str) -> 
 
 
 async def _add_claim(
-    s: AsyncSession, project_id: uuid.UUID, page_id: uuid.UUID, *, body: str
+    s: AsyncSession,
+    project_id: uuid.UUID,
+    page_id: uuid.UUID,
+    *,
+    body: str,
+    confidence: str = Confidence.WEAKLY_SUPPORTED.value,
 ) -> uuid.UUID:
     claim = WikiClaim(
         id=uuid7(),
@@ -217,7 +243,7 @@ async def _add_claim(
         claim_key=uuid.uuid4().hex,
         origin="agent",
         evidence_tier="stated",
-        confidence="cited",
+        confidence=confidence,
         status="active",
         created_by=ACTOR,
     )
@@ -235,6 +261,7 @@ async def _add_citation(
     source_page_id: uuid.UUID | None = None,
     stance: str = "supports",
     marker: str = "c1",
+    weight: float = 1.0,
 ) -> uuid.UUID:
     cit = Citation(
         id=uuid7(),
@@ -243,7 +270,7 @@ async def _add_citation(
         source_id=source_id,
         source_page_id=source_page_id,
         stance=stance,
-        weight=1.0,
+        weight=weight,
         citation_marker=marker,
         quote="the quoted span",
         verbatim=False,
@@ -428,24 +455,24 @@ async def test_a_claim_with_independent_surviving_evidence_is_declined_not_unsup
     )
 
 
-async def test_the_declined_branch_is_computed_and_then_discarded_by_the_write_path(
+async def test_the_declined_branch_survives_the_write_path(
     maker: Callable[[], AsyncSession], project_ids: tuple[uuid.UUID, ...]
 ) -> None:
-    """PINS CURRENT BEHAVIOUR, NOT DESIRED BEHAVIOUR.
+    """The distinction the impact walk makes must reach the database.
 
-    `retraction_impact` separates `weakened` from `unsupported`, and its own
-    docstring says flagging both identically would train a reader to ignore the
-    flag. `retract_source` then calls `dependent_claims` — which flattens the two
-    back into `all_touched` — and writes `status="retracted"` onto every one. Its
-    own finding text says "flagged retracted/contested"; it writes exactly one of
-    those two words.
+    THIS TEST WAS INVERTED BY WS-RS9, and the previous version is worth knowing
+    about: `retraction_impact` separated `weakened` from `unsupported`,
+    `retract_source` then called `dependent_claims` — which flattens the two back
+    into `all_touched` — and wrote `status="retracted"` onto every one. The
+    declined branch was computed and thrown away one line later, so a claim with
+    independent surviving evidence was killed anyway on the only path that
+    mutates anything, and the finding's own text said "flagged
+    retracted/contested" while writing exactly one of those two words.
 
-    So the corroborated claim, which the declined branch correctly spared, is
-    killed anyway on the only path that actually mutates anything.
-
-    When that is fixed, this test SHOULD go red, and the assertion below becomes
-    `contested` (or whatever status the fix chooses). Do not delete this test to
-    make the fix green — change it, so the repaired behaviour keeps a pin.
+    Now the two branches get two statuses. `weakened` is not `contested`:
+    `contested` is a *confidence* state meaning the evidence points both ways,
+    and it is also the status a person's page rejection writes. A withdrawn
+    support is neither.
     """
     project_id = project_ids[0]
     async with maker() as s:
@@ -456,34 +483,147 @@ async def test_the_declined_branch_is_computed_and_then_discarded_by_the_write_p
         corroborated = await _add_claim(s, project_id, page_id, body="Also replicated elsewhere.")
         await _add_citation(s, project_id, corroborated, source_id=retracted, marker="c1")
         await _add_citation(s, project_id, corroborated, source_id=independent, marker="c2")
+
+        orphaned = await _add_claim(s, project_id, page_id, body="Rests on the bad paper alone.")
+        await _add_citation(s, project_id, orphaned, source_id=retracted, marker="c1")
         await s.commit()
 
     async with maker() as s:
         impact = await retraction_impact(s, retracted)
         assert impact.weakened == {corroborated}
-        # `dependent_claims` is the flattening step: it returns `all_touched`,
-        # so the distinction the impact walk just made is gone before the write.
-        deps = await dependent_claims(s, retracted)
-        assert [c for _, c in deps] == [corroborated]
+        assert impact.unsupported == {orphaned}
 
     async with maker() as s:
-        await retract_source(
+        result = await retract_source(
+            s, LedgerWriter(s), _principal(), source_id=retracted, reason="fabricated figures"
+        )
+        await s.commit()
+
+    assert result.weakened == {corroborated}
+    assert result.unsupported == {orphaned}
+
+    async with maker() as s:
+        rows = {
+            c.id: c
+            for c in (
+                await s.execute(select(WikiClaim).where(WikiClaim.id.in_([corroborated, orphaned])))
+            )
+            .scalars()
+            .all()
+        }
+        assert rows[orphaned].status == STATUS_UNSUPPORTED
+        assert rows[corroborated].status == STATUS_WEAKENED, (
+            "the claim with independent surviving evidence was killed rather than "
+            "declined — flagging both identically trains a reader to ignore the flag"
+        )
+
+
+async def test_the_ledger_says_which_branch_each_claim_fell_into(
+    maker: Callable[[], AsyncSession], project_ids: tuple[uuid.UUID, ...]
+) -> None:
+    """ "It reached 12 claims" is not a report; which 12, and how, is.
+
+    A per-claim ledger row saying only "flagged" cannot answer "why does this
+    page read differently today", which is the one question a retraction exists
+    to be answerable.
+    """
+    project_id = project_ids[0]
+    async with maker() as s:
+        page_id = await _seed_project(s, project_id)
+        retracted = await _add_source(s, project_id, title="The retracted paper")
+        independent = await _add_source(s, project_id, title="A replication")
+
+        orphaned = await _add_claim(s, project_id, page_id, body="Rests on the bad paper alone.")
+        await _add_citation(s, project_id, orphaned, source_id=retracted)
+        corroborated = await _add_claim(s, project_id, page_id, body="Also replicated elsewhere.")
+        await _add_citation(s, project_id, corroborated, source_id=retracted, marker="c1")
+        await _add_citation(s, project_id, corroborated, source_id=independent, marker="c2")
+        await s.commit()
+
+    async with maker() as s:
+        result = await retract_source(
             s, LedgerWriter(s), _principal(), source_id=retracted, reason="fabricated figures"
         )
         await s.commit()
 
     async with maker() as s:
-        claim = (
-            await s.execute(select(WikiClaim).where(WikiClaim.id == corroborated))
+        events = await _ledger_kinds(s, project_id, "wiki_claim.retract_flag")
+        by_claim = {e.target_id: e.payload_jsonb for e in events}
+        assert set(by_claim) == {orphaned, corroborated}
+        assert by_claim[orphaned]["branch"] == "unsupported"
+        assert by_claim[orphaned]["status"] == STATUS_UNSUPPORTED
+        assert by_claim[corroborated]["branch"] == "weakened"
+        assert by_claim[corroborated]["hop"] == "direct"
+        assert by_claim[corroborated]["depth"] == 0
+
+        source_events = await _ledger_kinds(s, project_id, "source.retract")
+        assert len(source_events) == 1
+        assert source_events[0].payload_jsonb["claims_reached"] == 2
+        assert source_events[0].payload_jsonb["claims_unsupported"] == 1
+        assert source_events[0].payload_jsonb["claims_weakened"] == 1
+
+    # And the same numbers reach a person, in the finding, in words.
+    assert "2 claim(s)" in result.summary
+    assert "1 left with no surviving support" in result.summary
+    async with maker() as s:
+        finding = (
+            await s.execute(select(ReviewFinding).where(ReviewFinding.id == result.finding_id))
         ).scalar_one()
-        assert claim.status == "retracted", (
-            "behaviour changed: the write path now distinguishes the declined branch. "
-            "Good — update this assertion to the new status."
+        assert "1 left with no surviving support" in finding.description
+        kinds = {ref.get("kind") for ref in finding.evidence_refs_jsonb}
+        assert kinds == {"source", "wiki_claim"}, (
+            "the finding names the source but not the claims it reached, so the "
+            "blast radius is only recoverable by re-running the query"
         )
-        # Confidence is DERIVED from evidence and is deliberately not touched, so
-        # the next recompute cannot silently erase a value its state machine
-        # could never produce.
-        assert claim.confidence == "cited"
+
+
+async def test_a_retraction_moves_the_confidence_it_bought(
+    maker: Callable[[], AsyncSession], project_ids: tuple[uuid.UUID, ...]
+) -> None:
+    """Propagation is not a status column.
+
+    A claim held at `well_supported` by three verbatim citations to one paper is
+    not still well supported when that paper is withdrawn. `recompute_confidence`
+    excludes evidence from a retracted source, and `retract_source` re-derives
+    every claim it touched in the same transaction — so the belief layer, not
+    just a flag, reflects the withdrawal.
+    """
+    project_id = project_ids[0]
+    earned = weight_for_tier(TrustTier.EARNED)
+    async with maker() as s:
+        page_id = await _seed_project(s, project_id)
+        source_id = await _add_source(s, project_id, title="The retracted paper")
+        claim_id = await _add_claim(
+            s,
+            project_id,
+            page_id,
+            body="Three earned quotes say so.",
+            confidence=Confidence.WELL_SUPPORTED.value,
+        )
+        for i in range(3):
+            await _add_citation(
+                s, project_id, claim_id, source_id=source_id, marker=f"c{i}", weight=earned
+            )
+        await s.commit()
+
+    async with maker() as s:
+        result = await retract_source(
+            s, LedgerWriter(s), _principal(), source_id=source_id, reason="fabricated figures"
+        )
+        await s.commit()
+
+    assert claim_id in result.confidence_changed
+    before, after = result.confidence_changed[claim_id]
+    assert before == Confidence.WELL_SUPPORTED.value
+    assert after == Confidence.UNDER_INVESTIGATION.value, (
+        "the claim kept the confidence the withdrawn paper bought it — the "
+        "retraction wrote a status and nothing else"
+    )
+
+    async with maker() as s:
+        claim = (await s.execute(select(WikiClaim).where(WikiClaim.id == claim_id))).scalar_one()
+        assert claim.confidence == Confidence.UNDER_INVESTIGATION.value
+        assert claim.status == STATUS_UNSUPPORTED
 
 
 # --------------------------------------------------------------------------
@@ -677,30 +817,26 @@ async def test_retraction_does_not_reach_across_projects(
 # --------------------------------------------------------------------------
 
 
-async def test_the_second_hop_is_unreachable_because_nothing_writes_a_derived_from_edge(
+async def test_a_retraction_reaches_a_claim_derived_from_a_claim(
     maker: Callable[[], AsyncSession], project_ids: tuple[uuid.UUID, ...]
 ) -> None:
-    """The two-hop case, pinned as the one-hop reality it currently is.
+    """The second hop, now that something writes the edge.
 
-    `retraction_impact` contains a depth-capped, cycle-guarded recursive CTE over
-    `claim_edges.kind = 'derived_from'`, so a conclusion built on a claim built
-    on the retracted paper would be reached. Nothing produces those edges.
-    `ClaimEdge` is constructed in exactly one place in the tree —
-    `aleph_wiki.belief_service.BeliefService.supersede` — and it writes
-    `kind="supersedes"`. `claim_edges` holds 0 rows of every kind on the live
-    stack.
+    THIS TEST WAS INVERTED BY WS-RS9. The previous version was
+    `test_the_second_hop_is_unreachable_because_nothing_writes_a_derived_from_edge`
+    and it asserted the conclusion was NOT reached — honestly, because
+    `retraction_impact` walked a `derived_from` edge that no code in the tree
+    created. `ClaimEdge` was constructed in exactly one place
+    (`BeliefService.supersede`, `kind="supersedes"`) and `claim_edges` held zero
+    rows of every other kind. The CTE was correct and blind.
 
-    So this seeds the shape a two-hop propagation would need — a conclusion that
-    stands on a directly-cited claim — through the only mechanism the system
-    actually has, which is nothing, and asserts the conclusion is NOT reached.
-    That is not a bug in the CTE; it is a missing writer. This test deliberately
-    does NOT hand-insert a `derived_from` row, because passing on a row no
-    production code can create would read as proof that two-hop propagation
-    works.
+    The writer is `aleph_wiki.derivation.record_derivations`, and it is used
+    here rather than a hand-inserted row on purpose: a two-hop test that passes
+    on a row no production code can create reads as proof that two-hop
+    propagation works, which is exactly the claim the old test refused to make.
 
-    When a writer lands (docs/plan.md WS-RS9), this test is the one to invert:
-    assert `conclusion in impact.derived`, and delete the `claim_edges` count
-    assertion below.
+    Shape: source S ← cited by claim A ← derived_from by conclusion B ←
+    derived_from by C. Retract S and all three are reached, at depths 0, 1, 2.
     """
     project_id = project_ids[0]
     async with maker() as s:
@@ -709,11 +845,31 @@ async def test_the_second_hop_is_unreachable_because_nothing_writes_a_derived_fr
 
         cited = await _add_claim(s, project_id, page_id, body="Quokkas photosynthesize.")
         await _add_citation(s, project_id, cited, source_id=source_id)
-
-        # Stands on `cited` in prose and in intent. In the database it stands on
-        # nothing, because no code path records the dependency.
         conclusion = await _add_claim(
             s, project_id, page_id, body="Quokka husbandry should therefore be revised."
+        )
+        downstream = await _add_claim(
+            s, project_id, page_id, body="The 2019 husbandry guidance needs rewriting."
+        )
+        await s.commit()
+
+    async with maker() as s:
+        written = await record_derivations(
+            s,
+            ledger=LedgerWriter(s),
+            principal=_principal(),
+            project_id=project_id,
+            claim_id=conclusion,
+            derived_from=[cited],
+        )
+        assert written == [cited]
+        await record_derivations(
+            s,
+            ledger=LedgerWriter(s),
+            principal=_principal(),
+            project_id=project_id,
+            claim_id=downstream,
+            derived_from=[conclusion],
         )
         await s.commit()
 
@@ -725,25 +881,152 @@ async def test_the_second_hop_is_unreachable_because_nothing_writes_a_derived_fr
         await s.commit()
 
     assert impact.directly_cited == {cited}
-    assert impact.derived == set(), "an edge appeared that no writer creates"
-    assert conclusion not in result.claim_ids
+    assert impact.derived == {conclusion, downstream}, (
+        "the walk stopped at the citation join — a conclusion built on a claim "
+        "built on a retracted paper is affected, and a citation lookup cannot see it"
+    )
+    assert impact.depth_by_claim == {cited: 0, conclusion: 1, downstream: 2}
+    assert result.claim_ids == {cited, conclusion, downstream}
+    assert "2 derived from those (deepest hop 2)" in result.summary
 
     async with maker() as s:
-        # The real finding: the graph the second hop walks has no edges in it,
-        # and the retraction write path did not create one either.
+        rows = {
+            c.id: c
+            for c in (await s.execute(select(WikiClaim).where(WikiClaim.project_id == project_id)))
+            .scalars()
+            .all()
+        }
+        # None of the three has independent evidence, so all three are unsupported.
+        assert {rows[c].status for c in (cited, conclusion, downstream)} == {STATUS_UNSUPPORTED}
+
+        events = await _ledger_kinds(s, project_id, "wiki_claim.retract_flag")
+        by_claim = {e.target_id: e.payload_jsonb for e in events}
+        assert by_claim[cited]["hop"] == "direct"
+        assert by_claim[downstream]["hop"] == "derived"
+        assert by_claim[downstream]["depth"] == 2
+
+
+async def test_the_derivation_walk_is_depth_capped_and_cycle_safe(
+    maker: Callable[[], AsyncSession], project_ids: tuple[uuid.UUID, ...]
+) -> None:
+    """A chain longer than the cap stops at the cap; a cycle terminates.
+
+    Both guards are in the CTE and neither was ever exercised, because no edge
+    existed to walk. An unbounded walk over a cyclic graph is a hung request in
+    the one code path a person triggers by hand and waits on.
+    """
+    project_id = project_ids[0]
+    depth_cap = 4
+    async with maker() as s:
+        page_id = await _seed_project(s, project_id)
+        source_id = await _add_source(s, project_id, title="The retracted paper")
+        chain = [
+            await _add_claim(s, project_id, page_id, body=f"Link {i} in the chain.")
+            for i in range(depth_cap + 3)
+        ]
+        await _add_citation(s, project_id, chain[0], source_id=source_id)
+        await s.commit()
+
+    async with maker() as s:
+        ledger = LedgerWriter(s)
+        for child, parent in zip(chain[1:], chain, strict=False):
+            await record_derivations(
+                s,
+                ledger=ledger,
+                principal=_principal(),
+                project_id=project_id,
+                claim_id=child,
+                derived_from=[parent],
+            )
+        # Close the loop: the last link is also a parent of the first.
+        await record_derivations(
+            s,
+            ledger=ledger,
+            principal=_principal(),
+            project_id=project_id,
+            claim_id=chain[0],
+            derived_from=[chain[-1]],
+        )
+        await s.commit()
+
+    async with maker() as s:
+        impact = await retraction_impact(s, source_id)
+
+    assert max(impact.depth_by_claim.values()) <= depth_cap
+    assert len(impact.derived) == depth_cap, (
+        "the walk did not stop at MAX_DERIVATION_DEPTH; a pathological chain "
+        "turns one retraction into a full-table walk"
+    )
+
+
+async def test_a_derivation_edge_cannot_be_written_across_projects(
+    maker: Callable[[], AsyncSession], project_ids: tuple[uuid.UUID, ...]
+) -> None:
+    """The write-side half of "retraction does not reach across projects".
+
+    The recursive CTE has no project predicate — it trusts the edges. One edge
+    pointing into another project is therefore one leaked blast radius, and the
+    read-side scope test below would still pass because it seeds no such edge.
+    """
+    a, b = project_ids
+    async with maker() as s:
+        page_a = await _seed_project(s, a)
+        page_b = await _seed_project(s, b)
+        here = await _add_claim(s, a, page_a, body="A claim in project A.")
+        elsewhere = await _add_claim(s, b, page_b, body="A claim in project B.")
+        await s.commit()
+
+    async with maker() as s:
+        written = await record_derivations(
+            s,
+            ledger=LedgerWriter(s),
+            principal=_principal(),
+            project_id=a,
+            claim_id=here,
+            derived_from=[elsewhere, here],
+        )
+        await s.commit()
+
+    assert written == [], "an edge was written to another project's claim, or to itself"
+    async with maker() as s:
         edges = (
             await s.execute(
-                select(func.count())
-                .select_from(ClaimEdge)
-                .where(ClaimEdge.project_id == project_id)
+                select(func.count()).select_from(ClaimEdge).where(ClaimEdge.project_id == a)
             )
         ).scalar_one()
         assert edges == 0
 
-        downstream = (
-            await s.execute(select(WikiClaim).where(WikiClaim.id == conclusion))
+
+async def test_recording_the_same_derivation_twice_writes_one_edge(
+    maker: Callable[[], AsyncSession], project_ids: tuple[uuid.UUID, ...]
+) -> None:
+    """Idempotence, because a rebuild re-derives the same graph from the same sources."""
+    project_id = project_ids[0]
+    async with maker() as s:
+        page_id = await _seed_project(s, project_id)
+        parent = await _add_claim(s, project_id, page_id, body="The premise.")
+        child = await _add_claim(s, project_id, page_id, body="The conclusion.")
+        await s.commit()
+
+    for _ in range(2):
+        async with maker() as s:
+            written = await record_derivations(
+                s,
+                ledger=LedgerWriter(s),
+                principal=_principal(),
+                project_id=project_id,
+                claim_id=child,
+                derived_from=[parent, parent],
+            )
+            await s.commit()
+        assert written == [parent]
+
+    async with maker() as s:
+        edges = (
+            await s.execute(
+                select(func.count())
+                .select_from(ClaimEdge)
+                .where(ClaimEdge.project_id == project_id, ClaimEdge.kind == "derived_from")
+            )
         ).scalar_one()
-        assert downstream.status == "active", (
-            "the derived claim was flagged, which would mean an edge exists — "
-            "if a writer landed, invert this test rather than deleting it"
-        )
+        assert edges == 1

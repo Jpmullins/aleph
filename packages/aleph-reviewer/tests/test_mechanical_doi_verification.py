@@ -240,9 +240,19 @@ async def test_fabricated_and_retracted_dois_yield_exact_findings(session_maker)
         assert retracted.target_source_id == source_id  # DOI came from the source row
         assert retracted.target_page_id is None
         assert retracted.target_revision_id is None
-        assert retracted.evidence_refs_jsonb == [
-            {"kind": "source", "source_id": str(source_id), "short_id": source.short_id}
-        ]
+        # The source, then one ref per claim the retraction reached. WS-RS9
+        # added the claim refs: a critical finding that names only the source
+        # leaves the blast radius recoverable solely by re-running the query,
+        # which is the same as not reporting it.
+        assert retracted.evidence_refs_jsonb[0] == {
+            "kind": "source",
+            "source_id": str(source_id),
+            "short_id": source.short_id,
+        }
+        claim_refs = retracted.evidence_refs_jsonb[1:]
+        assert claim_refs, "the finding names no claim, so it does not say what it reached"
+        assert {ref["kind"] for ref in claim_refs} == {"wiki_claim"}
+        assert {ref["hop"] for ref in claim_refs} == {"direct"}
         assert source.status == "retracted"
         assert source.retracted_at is not None
 

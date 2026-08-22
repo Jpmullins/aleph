@@ -375,6 +375,30 @@ ORPHAN
   rm -f apps/web/src/components/__selfcheck_orphan.tsx
 fi
 
+# The meta-check. A sweep nothing runs is the defect class this whole harness
+# exists to catch, and it has landed three times — so the probe adds an unwired
+# sweep and requires the check to notice.
+if [ -f scripts/check-sweeps-are-wired.sh ]; then
+  # The name is BUILT, never written literally.
+  #
+  # `check-sweeps-are-wired.sh` greps this very file for each sweep's basename,
+  # so spelling the orphan's name here would make this file its consumer and
+  # the probe would report the check green having proved nothing — a self-
+  # defeating probe, which is the exact shape the NO-OP guard above exists for.
+  ORPHAN="$(printf 'scripts/%s-%s-probe.sh' check selfcheck-orphan)"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$ORPHAN"
+  chmod +x "$ORPHAN"
+  if ./scripts/check-sweeps-are-wired.sh >/dev/null 2>&1; then
+    printf '  \033[31m%-8s\033[0m %s — check stayed GREEN while broken\n' \
+      "CANNOT" "an unwired sweep is noticed"
+    BAD=$((BAD+1))
+  else
+    printf '  \033[32m%-8s\033[0m %s\n' "can fail" "an unwired sweep is noticed"
+    OK=$((OK+1))
+  fi
+  rm -f "$ORPHAN"
+fi
+
 probe "the runtime bridge check notices an any-origin proxy" \
   apps/copilot-runtime/src/server.ts \
   's/^  cors: \{$/  cors: true, \/\/ probe\n  _unused: {/m' \
