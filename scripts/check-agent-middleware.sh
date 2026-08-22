@@ -101,19 +101,47 @@ for path in sorted(SUBAGENTS.glob("*.py")):
 if not builders:
     problems.append(f"{SUBAGENTS}: no build_*_subagent functions found — update this sweep")
 
+# Scoped to the BUILDER's own AST, not to the file's text. The file-level
+# search this replaced decided a subagent was guarded if the string
+# "AlephAgentMiddleware" appeared anywhere in the module — which the import
+# line and the explanatory comment both satisfy. Measured: emptying the
+# retriever's middleware list to `"middleware": [],` left this sweep at rc=0
+# and `test_agent_tool_guard.py` at 11 passed, with every tool that subagent
+# carries one exception away from ending the turn. A sweep that passes on its
+# own import statement is the defect it was written to prevent.
 for path, builder in builders:
-    text = path.read_text()
-    if '"middleware"' not in text:
+    module = ast.parse(path.read_text())
+    fn = next(
+        n
+        for n in ast.walk(module)
+        if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef) and n.name == builder
+    )
+    # The value bound to a "middleware" key anywhere inside this function.
+    value = None
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Dict):
+            continue
+        for key, val in zip(node.keys, node.values, strict=True):
+            if isinstance(key, ast.Constant) and key.value == "middleware":
+                value = val
+    if value is None:
         problems.append(
             f"{path}: {builder} returns a spec with no \"middleware\" key. deepagents "
             "REPLACES the parent's middleware when a spec declares its own and "
             "inherits only when it does not — either way this subagent's tools "
             "are unguarded unless the key is here."
         )
-    elif "AlephAgentMiddleware" not in text:
+        continue
+    constructed = {
+        n.func.id
+        for n in ast.walk(value)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+    }
+    if "AlephAgentMiddleware" not in constructed:
         problems.append(
-            f"{path}: {builder} declares middleware without AlephAgentMiddleware, "
-            "which OVERRIDES the parent's guard rather than adding to it"
+            f"{path}: {builder}'s middleware value constructs {sorted(constructed) or 'nothing'} "
+            "— AlephAgentMiddleware is not among them, so it OVERRIDES the parent's "
+            "guard rather than adding to it, and a raising tool ends the turn"
         )
 
 # --- 3. the browser's own tool handlers --------------------------------------
