@@ -287,3 +287,53 @@ regenerated. A legacy row that is a **record of something that happened** is
 kept, even when it is embarrassing, and the measurement moves rather than the
 data.
 
+
+---
+
+## D10 · A cosine-distance floor does not make retrieval abstain — 2026-08-22
+
+**Decision: do not ship a relevance threshold on the dense leg. Expose the
+absolute scores instead, and leave abstention to WS-RS6.**
+
+`WS-RS5`'s new `unanswerable` category measured something nobody had measured:
+asked a question its corpus cannot answer, Aleph's retrieval returns passages
+anyway, **8 times out of 8**. The abstain rate is 0.00. There is no relevance
+floor anywhere in `search_corpus` — RRF fuses two rankings, and a rank-based
+score says nothing about whether the top item is any good. The best of a bad set
+and a perfect match score identically.
+
+The obvious fix is a threshold on cosine distance. It was measured against the
+live corpus (53 sources, 3,479 chunks, `bedrock-titan-embed-text`), taking the
+nearest chunk for each query:
+
+| query | nearest-chunk cosine distance |
+| --- | --- |
+| "What is reward hacking in RLHF?" | **0.814** |
+| "How does neural architecture search reduce the cost of model design?" | **0.803** |
+| "What causes write amplification in solid state drives?" | **0.430** |
+| "the offside rule in association football" | 0.840 |
+| "how sourdough starter is maintained" | 0.909 |
+| "the tuning of a baroque harpsichord" | 0.894 |
+
+**The distributions overlap.** A floor at 0.82 abstains on two of the three real
+questions. The widest gap that separates nothing — 0.814 answerable against
+0.840 off-corpus — is 0.026, which is not a discriminator, it is noise with a
+threshold drawn through it.
+
+So a threshold would trade a defect nobody has complained about (answering an
+unanswerable question) for one they would complain about immediately (refusing
+to answer a real one), and it would look principled while doing it.
+
+**What ships instead.** `ChunkHit` now carries `cosine_distance` and
+`lexical_rank`. Both legs already computed them — the dense leg ordered by
+`cosine_distance` and selected five columns not including it, the lexical leg
+did the same with `ts_rank` — so the only signal capable of telling a real match
+from the nearest irrelevant passage was being discarded at the moment it was
+calculated. Anything that wants to reason about relevance now can, including
+RS6's reranker, which is the thing that can actually do this: a cross-encoder
+scores the pair rather than the distance between two independently-embedded
+points, and that is where the separation lives.
+
+`WS-RS5` criterion 6 (abstain rate ≥ 0.80) therefore stays **unmet**, and the
+eval reports `abstain 0.00` rather than omitting the row. A metric that is
+silently absent reads as a metric that passed.

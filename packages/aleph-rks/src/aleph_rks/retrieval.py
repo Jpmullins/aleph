@@ -49,8 +49,22 @@ class ChunkHit:
     ordinal: int
     text: str
     section_path: str | None
+    #: The FUSED rank score. Comparable within one result list and meaningless
+    #: across two: RRF is a function of rank, so the top hit scores the same
+    #: whether it is a perfect match or the least-bad of a bad set.
     score: float
     source_id: UUID | None = None
+    #: Absolute relevance, from the legs that produce it. `None` when that leg
+    #: did not return this chunk.
+    #:
+    #: These exist because RRF cannot answer "is anything here actually
+    #: relevant". Both legs computed them and both threw them away — the dense
+    #: leg ordered by `cosine_distance` and selected five columns not including
+    #: it, and the lexical leg ordered by `ts_rank` and did the same. So the one
+    #: signal that could tell a real match from the nearest irrelevant passage
+    #: was discarded at the point it was calculated.
+    cosine_distance: float | None = None
+    lexical_rank: float | None = None
 
 
 #: How many chunks any one source may contribute to a corpus-wide result.
@@ -98,6 +112,7 @@ async def _hybrid_search(
     # though it were a ranking. An empty dense leg is the honest answer;
     # `search_corpus` still answers from the lexical leg, which needs no model.
     if query_embedding is not None:
+        distance = DocumentChunk.embedding.cosine_distance(query_embedding)  # type: ignore[attr-defined]
         dense_stmt = (
             select(
                 DocumentChunk.id,
@@ -105,9 +120,11 @@ async def _hybrid_search(
                 DocumentChunk.text,
                 DocumentChunk.section_path,
                 DocumentChunk.source_id,
+                # SELECTED, not just ordered by. It was computed and discarded.
+                distance.label("distance"),
             )
             .where(*scope, DocumentChunk.embedding.isnot(None))
-            .order_by(DocumentChunk.embedding.cosine_distance(query_embedding))  # type: ignore[attr-defined]
+            .order_by(distance)
             .limit(fetch)
         )
         dense_rows = list((await session.execute(dense_stmt)).all())
@@ -117,6 +134,7 @@ async def _hybrid_search(
     # anything. `or_tsquery` widens the candidate set; ts_rank still orders a
     # full match above a partial one. See aleph_core.tsquery.
     tsquery = or_tsquery(query_text)
+    rank = func.ts_rank(DocumentChunk.text_tsv, tsquery)
     lexical_stmt = (
         select(
             DocumentChunk.id,
@@ -124,14 +142,17 @@ async def _hybrid_search(
             DocumentChunk.text,
             DocumentChunk.section_path,
             DocumentChunk.source_id,
+            rank.label("rank"),
         )
         .where(*scope, DocumentChunk.text_tsv.op("@@")(tsquery))
-        .order_by(func.ts_rank(DocumentChunk.text_tsv, tsquery).desc())
+        .order_by(rank.desc())
         .limit(fetch)
     )
     lexical_rows = list((await session.execute(lexical_stmt)).all())
 
     by_id = {row.id: row for row in [*dense_rows, *lexical_rows]}
+    distance_by_id = {row.id: float(row.distance) for row in dense_rows}
+    rank_by_id = {row.id: float(row.rank) for row in lexical_rows}
     fused = fuse([[r.id for r in dense_rows], [r.id for r in lexical_rows]])
 
     hits: list[ChunkHit] = []
@@ -151,6 +172,8 @@ async def _hybrid_search(
                 section_path=row.section_path,
                 score=score,
                 source_id=row.source_id,
+                cosine_distance=distance_by_id.get(chunk_id),
+                lexical_rank=rank_by_id.get(chunk_id),
             )
         )
         if len(hits) >= top_k:
