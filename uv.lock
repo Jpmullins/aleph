@@ -391,6 +391,7 @@ name = "aleph-hypotheses"
 version = "0.1.0"
 source = { editable = "packages/aleph-hypotheses" }
 dependencies = [
+    { name = "aleph-belief" },
     { name = "aleph-core" },
     { name = "aleph-db" },
     { name = "pydantic" },
@@ -399,6 +400,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aleph-belief", editable = "packages/aleph-belief" },
     { name = "aleph-core", editable = "packages/aleph-core" },
     { name = "aleph-db", editable = "packages/aleph-db" },
     { name = "pydantic", specifier = "==2.13.4" },

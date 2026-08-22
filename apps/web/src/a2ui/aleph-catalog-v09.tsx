@@ -75,6 +75,7 @@ import { ArtifactCard as ArtifactCardView } from "./components/ArtifactCard";
 import { ArtifactsSurface as ArtifactsSurfaceView } from "./components/ArtifactsSurface";
 import { BriefsSurface as BriefsSurfaceView } from "./components/BriefsSurface";
 import { GroundingSurface as GroundingSurfaceView } from "./components/GroundingSurface";
+import { InspectorSurface as InspectorSurfaceView } from "./components/InspectorSurface";
 import { ChartCard as ChartCardView } from "./components/ChartCard";
 import { ClaimCard as ClaimCardView } from "./components/ClaimCard";
 import { DiffCard as DiffCardView } from "./components/DiffCard";
@@ -532,6 +533,25 @@ export const GroundingSurfaceImpl = createComponentImplementation(
   adapt("GroundingSurface", GroundingSurfaceView, "grounding"),
 );
 
+export const InspectorSurfaceApi = {
+  name: "InspectorSurface",
+  // Every prop the producer binds is declared here. `check-surface-bindings.sh`
+  // exists because the wiki surface once shipped ten categories and a health
+  // summary the client never declared: the binder resolves only declared props,
+  // so the SSE payload was correct, the view read `undefined`, and nothing
+  // raised.
+  schema: z3.object({
+    runs: z3.any().optional(),
+    selected: z3.any().optional(),
+    events: z3.any().optional(),
+    children: z3.array(z3.any()).optional(),
+  }),
+};
+export const InspectorSurfaceImpl = createComponentImplementation(
+  InspectorSurfaceApi,
+  adapt("InspectorSurface", InspectorSurfaceView, "inspector"),
+);
+
 /**
  * Every Aleph domain impl (13 cards + 5 surfaces). `buildAlephCatalog` below
  * merges these with the basic-catalog primitives.
@@ -561,6 +581,7 @@ export const ALEPH_CARD_IMPLS = [
   HypothesesSurfaceImpl,
   BriefsSurfaceImpl,
   GroundingSurfaceImpl,
+  InspectorSurfaceImpl,
 ];
 
 /**

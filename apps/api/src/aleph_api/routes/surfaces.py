@@ -29,6 +29,7 @@ from aleph_a2ui.components.surfaces import (
     briefs_surface_v09,
     grounding_surface_v09,
     hypotheses_surface_v09,
+    inspector_surface_v09,
     notes_surface_v09,
     wiki_surface_v09,
 )
@@ -51,8 +52,16 @@ router = APIRouter(prefix="/v1/projects", tags=["surfaces"])
 
 
 @router.get("/{project_id}/panes")
-async def list_pane_kinds(project_id: UUID) -> dict[str, Any]:
+async def list_pane_kinds(project_id: ProjectScopeDep) -> dict[str, Any]:
     """What surfaces this project can open.
+
+    `ProjectScopeDep` rather than a bare `UUID`, even though the answer does not
+    depend on the project yet: a URL that names a project and checks nothing is
+    an existence oracle for any UUID a caller can guess, and the moment the
+    registry becomes per-project (below) it also becomes a listing of another
+    tenant's installed plugins. This was the one route in the API with a
+    `{project_id}` and no scope resolution — `scripts/check-project-scope.sh`
+    now refuses a second one.
 
     The rail renders from this. It is project-scoped on purpose even though the
     registry is process-wide today: once a plugin can be enabled per project,
@@ -139,14 +148,21 @@ async def _build_tab_messages(
     session: Any,
     project_id: UUID,
     tab_lc: str,
-    page_id: str | None = None,
+    params: dict[str, str] | None = None,
     surface_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Build the v0.9 message list for `tab_lc`. Shared by the snapshot route
     and the delta stream so both compute identical surfaces. `surface_id`
     defaults to `tab_lc` so the stamped delta `surfaceId` matches
-    `createSurface`."""
+    `createSurface`.
+
+    `params` carries whatever the pane DECLARED, keyed by its own name — so the
+    grounding pane gets `claim_id` and the Inspector gets `run_id`, rather than
+    both reaching in for a positional called `page_id`.
+    """
     sid = surface_id or tab_lc
+    args = params or {}
+    page_id = args.get("page_id")
     if tab_lc == "wiki":
         return await _wiki_messages(session, project_id, page_id, sid)
     # "library" is the renamed Artifacts tab (ingested Sources + built
@@ -160,7 +176,10 @@ async def _build_tab_messages(
     if tab_lc == "briefs":
         return await _briefs_messages(session, project_id)
     if tab_lc == "grounding":
-        return await _grounding_messages(session, project_id, page_id, sid)
+        # `claim_id`, under its own name at last.
+        return await _grounding_messages(session, project_id, args.get("claim_id"), sid)
+    if tab_lc == "inspector":
+        return await _inspector_messages(session, project_id, args.get("run_id"), sid)
     msg = f"unknown tab: {tab_lc}"
     raise NotFound(msg)
 
@@ -171,19 +190,49 @@ async def _build_tab_messages(
 #: accepts and the set the client is told about cannot drift — they did, and the
 #: result was `artifacts` and `grounding` being streamable with nowhere on the
 #: client to land. A plugin extending the registry widens both at once.
-def _pane_kinds() -> frozenset[str]:
-    return PANE_REGISTRY.ids()
+#: Runs the Inspector lists, and events it shows for one run.
+#:
+#: Stated, and shown in the surface, rather than silently truncating: a pane
+#: quietly showing the most recent N looks identical to one showing all of them,
+#: and the difference matters the moment somebody asks "did it run at all
+#: yesterday".
+INSPECTOR_RUN_LIMIT = 50
+INSPECTOR_EVENT_LIMIT = 500
 
 
-def _parse_pane_specs(raw: str) -> list[tuple[str, str, str | None]]:
-    """``"wiki,wiki:page_id=abc"`` → ``[(surface_id, tab, page_id), …]``.
+def _pane_kinds() -> dict[str, Any]:
+    """`pane id -> PaneKind`, so the parser can read each pane's declared params.
+
+    Was `frozenset[str]` — enough to reject an unknown tab and nothing else,
+    which is why `_parse_pane_specs` could only ever hand on one hardcoded key.
+    """
+    return {k.id: k for k in PANE_REGISTRY.all()}
+
+
+def _parse_pane_specs(raw: str) -> list[tuple[str, str, dict[str, str]]]:
+    """``"wiki,inspector:run_id=abc"`` → ``[(surface_id, tab, params), …]``.
 
     The surface id is the spec verbatim, which is exactly the pane id the client
     mints — so a delta stamped with it lands in the right pane without any
     further mapping. Unknown tabs are dropped rather than raising: one bad pane
     in a URL must not take down the whole workspace's stream.
+
+    **Params are passed through BY NAME, and only the ones the pane declares.**
+
+    This used to read exactly one key, `page_id`, and hand it on as a bare
+    positional. The grounding pane declares `params=("claim_id",)` and had to
+    receive its claim id under the name `page_id` anyway, with an apologetic
+    docstring at the far end explaining that "the `page_id` pane param carries
+    the CLAIM id here". One opaque parameter with the wrong name was survivable
+    with one such pane and stops being so at two.
+
+    An undeclared param is DROPPED rather than passed. `PaneKind.params` is the
+    contract; accepting anything a URL happens to carry would make the registry
+    a suggestion, and a pane builder receiving a key it never declared is how a
+    typo becomes a silently ignored filter.
     """
-    out: list[tuple[str, str, str | None]] = []
+    kinds = _pane_kinds()
+    out: list[tuple[str, str, dict[str, str]]] = []
     seen: set[str] = set()
     for raw_spec in raw.split(","):
         spec = raw_spec.strip()
@@ -191,15 +240,17 @@ def _parse_pane_specs(raw: str) -> list[tuple[str, str, str | None]]:
             continue
         tab, _, params = spec.partition(":")
         tab = tab.lower()
-        if tab not in _pane_kinds():
+        kind = kinds.get(tab)
+        if kind is None:
             continue
-        page_id = None
+        declared = set(kind.params)
+        parsed: dict[str, str] = {}
         for kv in params.split("&"):
             k, _, v = kv.partition("=")
-            if k == "page_id" and v:
-                page_id = v
+            if v and k in declared:
+                parsed[k] = v
         seen.add(spec)
-        out.append((spec, tab, page_id))
+        out.append((spec, tab, parsed))
     return out
 
 
@@ -229,7 +280,7 @@ async def stream_surfaces_multiplexed(
     await assert_stream_access(request, project_id, principal)
     specs = _parse_pane_specs(panes)
     if not specs:
-        specs = [("wiki", "wiki", None)]
+        specs = [("wiki", "wiki", {})]
 
     maker = request.app.state.session_maker
     broker = request.app.state.change_broker
@@ -246,8 +297,10 @@ async def stream_surfaces_multiplexed(
         async def _build_all() -> dict[str, tuple[list[dict[str, Any]], Any]]:
             out: dict[str, tuple[list[dict[str, Any]], Any]] = {}
             async with maker() as session:
-                for surface_id, tab, page_id in specs:
-                    msgs = await _build_tab_messages(session, project_id, tab, page_id, surface_id)
+                for surface_id, tab, pane_params in specs:
+                    msgs = await _build_tab_messages(
+                        session, project_id, tab, pane_params, surface_id
+                    )
                     out[surface_id] = split_surface_messages(msgs)
             return out
 
@@ -316,15 +369,37 @@ async def stream_surfaces_multiplexed(
     )
 
 
+def _params_from_query(tab_lc: str, request_params: Any) -> dict[str, str]:
+    """Every param the named pane DECLARES, read off the query string by name.
+
+    The single-surface routes took `page_id` as an explicit query parameter, so
+    a pane declaring anything else could not be addressed through them at all —
+    the Inspector's `run_id` would have been silently dropped and it would have
+    rendered "no run selected" for every run. `page_id` stays accepted for the
+    panes that declare it; nothing else changes for them.
+    """
+    kind = _pane_kinds().get(tab_lc)
+    if kind is None:
+        return {}
+    out: dict[str, str] = {}
+    for name in kind.params or ("page_id",):
+        value = request_params.get(name)
+        if value:
+            out[name] = str(value)
+    return out
+
+
 @router.get("/{project_id}/surfaces/{tab}", response_model=None)
 async def get_surface(
     project_id: ProjectScopeDep,
     tab: str,
     session: SessionDep,
-    page_id: str | None = Query(default=None),
+    request: Request,
 ) -> SurfaceMessagesOut:
     tab_lc = tab.lower()
-    messages = await _build_tab_messages(session, project_id, tab_lc, page_id)
+    messages = await _build_tab_messages(
+        session, project_id, tab_lc, _params_from_query(tab_lc, request.query_params)
+    )
     return SurfaceMessagesOut(tab=tab_lc, messages=messages)
 
 
@@ -334,7 +409,6 @@ async def stream_surface(
     tab: str,
     request: Request,
     principal: PrincipalDep,
-    page_id: str | None = Query(default=None),
 ) -> StreamingResponse:
     """Delta SurfaceStreamer with reconnect/resume + ordering (WP-4 sub-spec a).
 
@@ -368,6 +442,7 @@ async def stream_surface(
     # the exact project+tab stream that created it — never another project's
     # buffered surface bytes (wiki body_md, claims, notes, …). The membership
     # check above (assert_stream_access) gates the project; this gates replay.
+    pane_params = _params_from_query(tab_lc, request.query_params)
     raw_cid = request.query_params.get("cid")
     cid = f"{project_id}:{tab_lc}:{raw_cid}" if raw_cid else None
     last_event_id = _parse_last_event_id(request.headers.get("last-event-id"))
@@ -377,7 +452,7 @@ async def stream_surface(
         buf = _STREAM_BUFFERS.get(cid) if cid else None
 
         async with maker() as session:
-            fresh = await _build_tab_messages(session, project_id, tab_lc, page_id, surface_id)
+            fresh = await _build_tab_messages(session, project_id, tab_lc, pane_params, surface_id)
         structural, model = split_surface_messages(fresh)
 
         if buf is not None and last_event_id is not None and buf.can_replay(last_event_id):
@@ -421,7 +496,7 @@ async def stream_surface(
 
                 async with maker() as session:
                     fresh = await _build_tab_messages(
-                        session, project_id, tab_lc, page_id, surface_id
+                        session, project_id, tab_lc, pane_params, surface_id
                     )
                 structural, model = split_surface_messages(fresh)
 
@@ -920,13 +995,133 @@ async def _briefs_messages(session: Any, project_id: UUID) -> list[dict[str, Any
     return briefs_surface_v09(badge_count=len(ordered), children=ordered)
 
 
+async def _inspector_messages(
+    session: Any, project_id: UUID, run_id: str | None, surface_id: str
+) -> list[dict[str, Any]]:
+    """The project's assistant runs, and the timeline of the selected one.
+
+    Reads `agent_runs` and `agent_events` — the tables WS-C3a started writing on
+    the chat path. Before that, seventeen producers wrote `AgentRun` rows and not
+    one of them was a conversation, so this pane would have rendered an
+    authoritative-looking empty list for every project.
+
+    Runs are capped and ordered newest-first. The cap is stated rather than
+    silent: a pane that quietly shows the most recent N looks identical to one
+    showing all of them, and the difference matters the moment somebody asks
+    "did it run at all yesterday".
+    """
+    from sqlalchemy import select as _select
+
+    from aleph_db.models.agent import AgentEvent, AgentRun
+
+    rows = list(
+        (
+            await session.execute(
+                _select(AgentRun)
+                .where(AgentRun.project_id == project_id, AgentRun.agent_kind == "assistant")
+                .order_by(AgentRun.started_at.desc().nullslast())
+                .limit(INSPECTOR_RUN_LIMIT)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    def _run_dict(row: Any) -> dict[str, Any]:
+        started, completed = row.started_at, row.completed_at
+        return {
+            "id": str(row.id),
+            "status": row.status,
+            "started_at": started.isoformat() if started else None,
+            "completed_at": completed.isoformat() if completed else None,
+            "duration_ms": (
+                int((completed - started).total_seconds() * 1000) if started and completed else None
+            ),
+            # Truncated here rather than in the renderer: an error text is
+            # arbitrary length and a surface payload is not the place to
+            # discover that.
+            "error_text": (row.error_text or None) if row.error_text else None,
+        }
+
+    runs = [_run_dict(r) for r in rows]
+
+    selected_row = None
+    if run_id:
+        selected_row = next((r for r in rows if str(r.id) == run_id), None)
+        if selected_row is None:
+            # Named a run that is not in the window, or not in this project.
+            # Fetching it directly would leak another project's run, so this
+            # scopes the lookup rather than trusting the id.
+            selected_row = (
+                await session.execute(
+                    _select(AgentRun).where(
+                        AgentRun.id == _as_uuid(run_id),
+                        AgentRun.project_id == project_id,
+                    )
+                )
+            ).scalar_one_or_none()
+    elif rows:
+        # No run named: show the most recent, which is what somebody opening
+        # the pane after a turn is looking for.
+        selected_row = rows[0]
+
+    events: list[dict[str, Any]] = []
+    if selected_row is not None:
+        event_rows = list(
+            (
+                await session.execute(
+                    _select(AgentEvent)
+                    .where(AgentEvent.agent_run_id == selected_row.id)
+                    .order_by(AgentEvent.timestamp)
+                    .limit(INSPECTOR_EVENT_LIMIT)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for event in event_rows:
+            payload = event.payload_jsonb or {}
+            events.append(
+                {
+                    "kind": event.event_kind,
+                    "tool": payload.get("tool"),
+                    "subagent": payload.get("subagent"),
+                    "tool_call_id": payload.get("tool_call_id"),
+                    "duration_ms": payload.get("duration_ms"),
+                    "args": payload.get("args"),
+                    "error_class": payload.get("error_class"),
+                    "error": payload.get("error"),
+                    "at": event.timestamp.isoformat() if event.timestamp else None,
+                }
+            )
+
+    return inspector_surface_v09(
+        runs=runs,
+        selected=_run_dict(selected_row) if selected_row is not None else None,
+        events=events,
+        surface_id=surface_id,
+    )
+
+
+def _as_uuid(value: str) -> UUID:
+    """A run id from a URL. Invalid input must not reach the query."""
+    try:
+        return UUID(value)
+    except ValueError:
+        # A nil uuid matches nothing, which is the right answer for "that is not
+        # an id" — and it keeps the project scope in the WHERE clause rather
+        # than short-circuiting around it.
+        return UUID(int=0)
+
+
 async def _grounding_messages(
     session: Any, project_id: UUID, claim_id: str | None, surface_id: str
 ) -> list[dict[str, Any]]:
     """Walk claim → citation → chunk → span → source, and bind the result.
 
-    The `page_id` pane param carries the CLAIM id here (panes pass one opaque
-    param); naming it `claim_id` locally keeps the walk readable.
+    `claim_id` arrives under its own name now. It used to come through as
+    `page_id` because `_parse_pane_specs` read exactly one hardcoded key, so
+    every pane's parameter had to be called `page_id` whatever it actually was.
 
     Every hop is a real join. Nothing is synthesised: a claim with no citations,
     or citations with no resolvable chunks, renders as exactly that, because an

@@ -388,6 +388,17 @@ run_pytest D5 "probation: a capability that degrades is retired automatically" \
 # feature, the call is.
 run_pytest D7 "the agent is wired to author skills: two sources, allow before deny" \
   apps/api/tests/unit/test_agent_skill_wiring.py
+# C10/C11: the Inspector. C3a made a chat turn a recorded run with a tool
+# timeline; this is the pane that shows it. Before both, the only place an agent
+# failure was legible was the API container's stderr.
+run_pytest C10 "pane params arrive under the names the pane declared" \
+  apps/api/tests/unit/test_pane_specs.py
+if [ $NEEDS_SERVICES -eq 1 ]; then
+  run_shell C11 "the Inspector renders a failed run, naming the tool and the error" \
+    "uv run pytest -m integration tests/integration/test_inspector_surface.py -q -p no:randomly 2>&1 | tail -1"
+else
+  skip C11 "needs postgres"
+fi
 if [ $NEEDS_SERVICES -eq 1 ]; then
   run_shell D8 "an authored skill survives the conversation that wrote it" \
     "uv run pytest -m integration tests/integration/test_authored_skills.py -q -p no:randomly 2>&1 | tail -1"

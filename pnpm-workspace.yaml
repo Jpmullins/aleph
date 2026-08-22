@@ -1,9 +1,16 @@
 packages:
   - "apps/web"
-  # `tests/playwright` was declared here for a directory deleted in the
-  # harness reset, so every documented `pnpm -C tests/playwright ...` command
-  # was one that could never run. It goes back when the directory does
-  # (docs/plan.md WS-UI-2 / WS-P4).
+  # Restored by WS-P4 along with the directory itself. It had been removed
+  # because it named a directory deleted in the harness reset, which made every
+  # documented `pnpm -C tests/playwright ...` command one that could never run.
+  #
+  # A member whose directory is absent from a build context is NOT a problem for
+  # the two web images: `apps/web/Dockerfile*` COPY only this file, the lockfile
+  # and `apps/web/package.json`, and `pnpm --dir /app/apps/web install
+  # --frozen-lockfile` installs that one importer. Verified by simulating the
+  # image's exact file set — the install succeeds and does not rewrite the
+  # lockfile.
+  - "tests/playwright"
 
 allowBuilds:
   # Telemetry postinstall — keep blocked.

@@ -34,6 +34,29 @@ AGENT = pathlib.Path("apps/api/src/aleph_api/copilot_agent.py")
 SUBAGENTS = pathlib.Path("apps/api/src/aleph_api/subagents")
 SURFACE = pathlib.Path("apps/web/src/components/CopilotChatSurface.tsx")
 
+# --- 0. the subjects are where this sweep thinks they are --------------------
+#
+# `AGENT.read_text()` on a moved file raises a bare FileNotFoundError from the
+# middle of the sweep: nonzero, so CI is red, but the traceback names a line of
+# this script rather than saying "your subject moved" — and the reaction to that
+# is to delete the sweep. `SUBAGENTS` is worse: `glob` over a missing directory
+# yields nothing, which reaches the "no build_*_subagent functions" branch and
+# reads as a parser problem rather than as a moved package.
+for subject, why in (
+    (AGENT, "it is where create_deep_agent is called; the orchestrator's middleware "
+            "list cannot be checked without it"),
+    (SUBAGENTS, "it holds every build_*_subagent spec, and deepagents lets a spec "
+                "REPLACE the parent's guard rather than extend it"),
+):
+    if not subject.exists():
+        print(f"✗ agent tool guard: {subject} is not there — {why}", file=sys.stderr)
+        print(
+            "   Move the sweep with the code, in the same change. A gate pointed at "
+            "a path that no longer exists is a gate that stops checking.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
 # --- 1. the orchestrator -----------------------------------------------------
 tree = ast.parse(AGENT.read_text())
 found_call = False

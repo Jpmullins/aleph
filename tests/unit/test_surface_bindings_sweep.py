@@ -10,7 +10,17 @@ directions.
 
 from __future__ import annotations
 
-from surface_bindings import client_props, compare, producer_props
+import pathlib
+
+import pytest
+from surface_bindings import (
+    catalog_components,
+    client_props,
+    compare,
+    producer_props,
+    run,
+)
+from sweep_subject import MissingSubject
 
 PRODUCER = """
 def wiki_surface_v09(*, pages, open_page=None, categories=None):
@@ -99,9 +109,45 @@ def test_a_component_the_client_never_mentions_is_skipped() -> None:
 
 def test_the_real_tree_is_clean() -> None:
     """The sweep's own subject, so a regression fails here and not only in CI."""
-    import pathlib
-
-    from surface_bindings import run
-
     root = pathlib.Path(__file__).resolve().parents[2]
-    assert run(root) == []
+    assert run(root).mismatches == []
+
+
+def test_a_moved_subject_file_raises_instead_of_reporting_clean(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The fail-open that made this sweep worth re-reading.
+
+    `run()` used to return `[]` when either subject was missing. It looked safe
+    only because the wrapper re-read the same path a few lines later and died on
+    an unhandled `FileNotFoundError` — so the *analyzer* was answering "no
+    mismatches" about a file it had never opened, and reordering those two reads
+    would have turned a moved producer into a silent pass. Three sweeps in this
+    repo have already gone quiet by naming a path that moved.
+    """
+    with pytest.raises(MissingSubject) as caught:
+        run(tmp_path)
+    # The message must name the path, or the failure is "the sweep crashed"
+    # rather than "your subject moved" — and the usual answer to the first is to
+    # delete the sweep.
+    assert "surfaces.py" in str(caught.value)
+
+
+def test_the_coverage_denominator_is_the_canonical_catalog() -> None:
+    """`5 components` reads as complete; `5 of N` reads as coverage.
+
+    The denominator comes from `catalog.json` — the one editable copy — not from
+    the client zod file, which is one of the two things that can drift.
+    """
+    root = pathlib.Path(__file__).resolve().parents[2]
+    report = run(root)
+    catalog = catalog_components(
+        (root / "packages/aleph-a2ui/src/aleph_a2ui/catalog.json").read_text()
+    )
+    assert report.catalog_total == len(catalog)
+    # Coverage is genuinely partial today: the card components are bound from
+    # `cards.py`, which declares no `{"path": ...}` bindings at all. If this ever
+    # becomes 0 the sweep has either grown to cover the cards (good, update this)
+    # or lost its denominator (bad).
+    assert report.uncompared > 0
+    assert set(report.compared) <= catalog

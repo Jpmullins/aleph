@@ -20,11 +20,22 @@ sweep models reality.
 from __future__ import annotations
 
 import ast
+import json
 import pathlib
 import re
 from dataclasses import dataclass
 
-__all__ = ["Mismatch", "client_props", "compare", "producer_props"]
+from sweep_subject import require_subject
+
+__all__ = [
+    "Mismatch",
+    "Report",
+    "catalog_components",
+    "client_props",
+    "compare",
+    "producer_props",
+    "run",
+]
 
 #: A prop declaration inside a `schema: z3.object({…})` block. Matches BOTH
 #: spellings in use — `CommonSchemas.DynamicValue.optional()` and plain
@@ -116,12 +127,92 @@ def compare(producers: dict[str, set[str]], clients: dict[str, set[str]]) -> lis
     return out
 
 
-def run(repo_root: pathlib.Path) -> list[Mismatch]:
-    producer_file = repo_root / "packages/aleph-a2ui/src/aleph_a2ui/components/surfaces.py"
-    client_file = repo_root / "apps/web/src/a2ui/aleph-catalog-v09.tsx"
-    if not producer_file.exists() or not client_file.exists():
-        return []
-    return compare(
-        producer_props(producer_file.read_text()),
-        client_props(client_file.read_text()),
+@dataclass(frozen=True, slots=True)
+class Report:
+    """What the sweep found AND how much of the catalog it looked at.
+
+    The second half is the point. This sweep printed `5 components, 11 bound
+    props` for its whole life, which reads as "the catalog is clean" and means
+    "five of the components in the catalog have a Python producer that binds a
+    path, and those five are clean". The rest are the card components, bound
+    from `cards.py`, which declares no path bindings at all — so the sweep has
+    never looked at them. A coverage number that is *stated* invites somebody to
+    raise it; a bare count invites nobody.
+    """
+
+    mismatches: list[Mismatch]
+    compared: list[str]
+    catalog_total: int
+    bound_props: int
+
+    @property
+    def uncompared(self) -> int:
+        return self.catalog_total - len(self.compared)
+
+
+def catalog_components(catalog_json: str) -> set[str]:
+    """The component names the canonical A2UI catalog declares.
+
+    The denominator comes from `catalog.json` rather than from the client's zod
+    file, because `catalog.json` is the one editable copy (CLAUDE.md rule 5) and
+    the client file is one of the things that can drift away from it. Measuring
+    coverage against the drifting side would make coverage look complete exactly
+    when the two disagree.
+    """
+    parsed: object = json.loads(catalog_json)
+    if not isinstance(parsed, dict):
+        msg = "catalog.json is not a JSON object"
+        raise ValueError(msg)
+    components: object = parsed.get("components")
+    if not isinstance(components, dict):
+        msg = "catalog.json has no `components` object"
+        raise ValueError(msg)
+    return {str(name) for name in components}
+
+
+#: The three files this sweep reads, with what it needs from each. Named once so
+#: a move is reported against the path the sweep actually opened, and so the
+#: existence check cannot drift out of step with the read.
+_SUBJECTS: tuple[tuple[str, str], ...] = (
+    (
+        "packages/aleph-a2ui/src/aleph_a2ui/components/surfaces.py",
+        "it is where the Python producers bind surface props; with it gone this "
+        "sweep compares nothing and reports success",
+    ),
+    (
+        "apps/web/src/a2ui/aleph-catalog-v09.tsx",
+        "it holds the zod schemas the A2UI binder resolves against; with it gone "
+        "every producer binding looks declared",
+    ),
+    (
+        "packages/aleph-a2ui/src/aleph_a2ui/catalog.json",
+        "it is the canonical catalog, and the denominator of this sweep's coverage number",
+    ),
+)
+
+
+def run(repo_root: pathlib.Path) -> Report:
+    """Compare producers against client declarations, and state the coverage.
+
+    Raises `MissingSubject` if any subject file has moved. It used to return
+    `[]` in that case — a fail-OPEN in the one place a fail-open is least
+    affordable. The nonzero exit that made it look safe came from the wrapper
+    re-reading the same path a few lines later and getting an unhandled
+    `FileNotFoundError`; the sweep itself was reporting "no mismatches" about a
+    file it had never opened, so reordering those two reads would have made a
+    moved producer file a silent pass.
+    """
+    resolved = [require_subject(repo_root / name, why) for name, why in _SUBJECTS]
+    producer_file, client_file, catalog_file = resolved
+    producers = producer_props(producer_file.read_text())
+    clients = client_props(client_file.read_text())
+    catalog = catalog_components(catalog_file.read_text())
+
+    compared = sorted(set(producers) & set(clients))
+    bound = sum(len(producers[name]) for name in compared)
+    return Report(
+        mismatches=compare(producers, clients),
+        compared=compared,
+        catalog_total=len(catalog),
+        bound_props=bound,
     )

@@ -1,8 +1,11 @@
 """Aleph hypotheses — first-class structured analyst questions with evidence."""
 
 from aleph_hypotheses.confidence import (
+    TIER_WEIGHTS,
     Confidence,
+    EvidenceRow,
     next_confidence_from_evidence,
+    weight_for_tier,
 )
 from aleph_hypotheses.hypothesis_service import (
     add_evidence,
@@ -18,7 +21,9 @@ from aleph_hypotheses.models import (
 )
 
 __all__ = [
+    "TIER_WEIGHTS",
     "Confidence",
+    "EvidenceRow",
     "Hypothesis",
     "HypothesisEvidence",
     "HypothesisVersion",
@@ -28,4 +33,5 @@ __all__ = [
     "list_hypotheses",
     "next_confidence_from_evidence",
     "record_version",
+    "weight_for_tier",
 ]

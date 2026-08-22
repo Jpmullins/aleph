@@ -115,7 +115,7 @@
         "additionalProperties": false
       },
       "agent": {
-        "description": "An approve/reject gate for a consequential action (an agent_action build/connector change, a synthesis proposal, a review finding). Render this when a tool result asks you to surface an approval — the analyst clicks Approve/Reject and the ActionRouter executes. `target_id` + `target_kind` come from the tool result; do not fabricate them.",
+        "description": "An approve/reject gate for a consequential action (an agent_action build/connector change, a synthesis proposal, a review finding). Render this when a tool result asks you to surface an approval \u2014 the analyst clicks Approve/Reject and the ActionRouter executes. `target_id` + `target_kind` come from the tool result; do not fabricate them.",
         "props": {
           "type": "object",
           "properties": {
@@ -605,7 +605,7 @@
         "additionalProperties": false
       },
       "agent": {
-        "description": "A revision diff for a wiki page (from_revision_id → to_revision_id). Render when showing what changed between two wiki revisions. Supply `from_body_md`/`to_body_md` to render a real line diff.",
+        "description": "A revision diff for a wiki page (from_revision_id \u2192 to_revision_id). Render when showing what changed between two wiki revisions. Supply `from_body_md`/`to_body_md` to render a real line diff.",
         "props": {
           "type": "object",
           "properties": {
@@ -1590,6 +1590,53 @@
             "required": [
               "view_mode"
             ],
+            "additionalProperties": true
+          },
+          "data_bindings": {
+            "type": "object"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "props"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "InspectorSurface": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "props": {
+            "type": "object",
+            "properties": {
+              "runs": {
+                "type": "array"
+              },
+              "selected": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "events": {
+                "type": "array"
+              }
+            },
+            "required": [],
             "additionalProperties": true
           },
           "data_bindings": {

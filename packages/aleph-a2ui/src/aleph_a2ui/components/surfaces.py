@@ -245,3 +245,43 @@ def grounding_surface_v09(
         components=[component],
         data_model={"claim": claim, "groundings": groundings},
     )
+
+
+def inspector_surface_v09(
+    *,
+    runs: list[dict[str, Any]],
+    selected: dict[str, Any] | None,
+    events: list[dict[str, Any]],
+    surface_id: str = "inspector",
+    catalog_id: str = ALEPH_V09_CATALOG_ID,
+) -> list[dict[str, Any]]:
+    """What the assistant did, and where it stopped.
+
+    Data model: ``{runs: [{id, status, started_at, completed_at, duration_ms,
+    tool_calls, error_text}], selected: {...} | null, events: [{kind, tool,
+    subagent, duration_ms, args, error_class, error, at}]}``.
+
+    Until WS-C3a there was nothing to render: a chat turn wrote no `AgentRun`,
+    no events, and the only place an agent failure was legible was the API
+    container's stderr. That is what this removes the need for — "what did it
+    just do and why did it stop" is the primary operational question the moment
+    the agent starts authoring its own plugins, and there was no answer to it.
+
+    An empty `runs` is a first-class state, not an error. So is a `selected` run
+    with no events: a turn that died before its first tool call is exactly the
+    shape a reader needs to recognise, and rendering it as "nothing here" would
+    hide the most informative case.
+    """
+    component = {
+        "id": "root",
+        "component": "InspectorSurface",
+        "runs": {"path": "/runs"},
+        "selected": {"path": "/selected"},
+        "events": {"path": "/events"},
+    }
+    return full_surface(
+        surface_id=surface_id,
+        catalog_id=catalog_id,
+        components=[component],
+        data_model={"runs": runs, "selected": selected, "events": events},
+    )
