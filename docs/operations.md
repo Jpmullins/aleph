@@ -465,6 +465,12 @@ light.
   green, because pytest, ruff and pyright all read the untracked files sitting in the working tree.
   Nothing else looks at the repository as somebody else would receive it.
 - `check-migration-roundtrip.sh` — every migration's downgrade actually runs, not merely exists.
+- `check-modals-are-trapped.sh` — every dialog in the web app goes through `Modal.tsx`. WS-B1
+  converted three modals and tested one: reverting either of the others to a bare `fixed inset-0`
+  overlay left lint, 181 vitest tests and 23 Playwright tests green. The invariant is structural —
+  a dialog that is not a `Modal` cannot have Escape, a focus trap or focus restore, whoever wrote
+  it — so this checks the structure and the browser test proves the behaviour once. It tells prose
+  from code, because two components explain the overlay they used to be.
 - `check-security-overrides.sh` — every entry in `pnpm-workspace.yaml`'s `overrides:` block names a
   package the lockfile still resolves. An override forces a transitive dependency to a patched
   version, and that claim expires: upstream moves, the direct dependency bumps its range, and the

@@ -180,6 +180,8 @@ jobs:
         run: ./scripts/check-imports-resolve.sh
       - name: Every security override is still doing work
         run: ./scripts/check-security-overrides.sh
+      - name: Every dialog goes through Modal.tsx
+        run: ./scripts/check-modals-are-trapped.sh
 
   images:
     name: images build

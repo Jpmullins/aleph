@@ -11,8 +11,15 @@
  *
  * What a modal owes the person using it, and what each line below is for:
  *
- *   * **Escape closes it.** Bound on the panel, in the capture phase of a
- *     keydown that is then stopped, so a text field inside cannot swallow it.
+ *   * **Escape closes it.** Bound on the panel with `onKeyDown` — the BUBBLE
+ *     phase — and the event is stopped there so it does not reach the page
+ *     behind. This docstring said "capture phase" until 2026-08-22, which
+ *     `onKeyDownCapture` would be and this is not. It works because nothing
+ *     inside these dialogs swallows Escape; a component that did would break
+ *     it, and the capture phase is what would have made that impossible.
+ *     Described accurately rather than aspirationally: a comment claiming a
+ *     mechanism the code does not use is the same defect class as an
+ *     `aria-modal` asserting behaviour that is not implemented.
  *   * **Tab stays inside.** A real cycle, not a listener that merely notices:
  *     Tab on the last focusable wraps to the first, Shift+Tab on the first
  *     wraps to the last. The focusable list is recomputed on every keypress

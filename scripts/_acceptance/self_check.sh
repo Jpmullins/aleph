@@ -469,6 +469,14 @@ probe "an override for a package nothing depends on is noticed" \
   's/^overrides:$/overrides:\n  a-package-nothing-here-depends-on: ">=9.9.9"/m' \
   "./scripts/check-security-overrides.sh"
 
+# A modal that skips the trap. This is the mutation that left every gate green
+# when WS-B1 shipped: two of its three modals had no test at all, so either
+# could lose Escape, the focus trap and focus restore without anything noticing.
+probe "a dialog outside Modal.tsx is noticed" \
+  apps/web/src/components/ProjectList.tsx \
+  's/<Modal title=/<div className="fixed inset-0" role="dialog" aria-modal="true" title=/' \
+  "./scripts/check-modals-are-trapped.sh"
+
 probe "the runtime bridge check notices an any-origin proxy" \
   apps/copilot-runtime/src/server.ts \
   's/^  cors: \{$/  cors: true, \/\/ probe\n  _unused: {/m' \
