@@ -82,6 +82,11 @@ ALLOW = {
     # it — the probe has to add a module and remove it again. The path is
     # correctly absent between runs, and that is the point rather than a defect.
     "apps/web/src/components/__selfcheck_orphan.tsx",
+    # A worked example inside a docstring: `skill_name_from_path` explains what
+    # a fixed-prefix slice would do to the string "skills/x". It names a shape
+    # of input, not a file — and the docstring exists because that exact bug
+    # shipped once.
+    "skills/x",
 }
 
 problems: list[str] = []
