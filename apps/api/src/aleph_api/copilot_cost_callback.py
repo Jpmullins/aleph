@@ -399,13 +399,6 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
         cache_write_tokens: int = 0,
         failure: str | None = None,
     ) -> None:
-        session_maker = self._resolve_session_maker()
-        if session_maker is None:
-            logger.warning(
-                "agent cost attribution skipped: no session_maker bound (purpose=%s)",
-                self._purpose,
-            )
-            return
         pricing = self._resolve_pricing()
         # The model the request actually named. `self._model` is resolved when
         # the graph is built, so switching a project's profile mid-session
@@ -445,6 +438,47 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
             trace_id = current_trace_id()
         except Exception:
             trace_id = None
+
+        # The metrics the AGENT path was missing entirely.
+        #
+        # `record_llm_request`/`record_llm_usage` had six call sites, all inside
+        # `LiteLLMClient` — and the agent never touches `LiteLLMClient`, it
+        # builds `ChatOpenAI`. So an agent turn produced ZERO samples, and the
+        # question the counters exist to answer — backlog E5, "is the subagent
+        # fan-out what is rate-limiting us" — was about the one path with no
+        # counter on it.
+        #
+        # Emitted BEFORE the session is even looked up, and outside any
+        # transaction. A metric is not worth a transaction, and the case where
+        # the cost row cannot be written is exactly the case where the sample
+        # matters most — an early return here used to drop both.
+        try:
+            from aleph_observability import metrics as _metrics
+
+            _metrics.record_llm_request(
+                capability="chat",
+                purpose=self._purpose,
+                outcome="error" if failure else "ok",
+                duration_s=latency_ms / 1000.0,
+            )
+            _metrics.record_llm_usage(
+                capability="chat",
+                purpose=self._purpose,
+                pricing_source=priced.source,
+                input_tokens=input_tokens + cached_tokens,
+                output_tokens=completion_tokens,
+                cost_usd=cost,
+            )
+        except Exception:
+            logger.debug("agent cost metrics not recorded", exc_info=True)
+
+        session_maker = self._resolve_session_maker()
+        if session_maker is None:
+            logger.warning(
+                "agent cost attribution skipped: no session_maker bound (purpose=%s)",
+                self._purpose,
+            )
+            return
 
         from aleph_db.repos.cost import CostWriter
         from aleph_observability.tracing import start_span

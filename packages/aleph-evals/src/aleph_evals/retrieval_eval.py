@@ -528,21 +528,22 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if args.k is not None:
-        report = asyncio.run(run(k=args.k))
-        print(report.render())
-    else:
-        reports = [asyncio.run(run(k=k)) for k in (1, 3, 8)]
-        print(f"mode: {reports[0].mode}\n")
-        for r in reports:
-            print(f"recall@{r.k} = {r.recall:.2f}  ({r.hits}/{r.total})")
-        print()
-        # The breakdown is the useful part: a gap between verbatim and paraphrase
-        # is a vocabulary-mismatch gap, which is what the dense leg is for.
-        sharpest = reports[0]
-        for phrasing, (hit, total) in sorted(sharpest.by_phrasing.items()):
-            print(f"  @1 {phrasing:<14} {hit / total if total else 0:.2f}  ({hit}/{total})")
-        report = reports[-1]
+    # ONE run, not three.
+    #
+    # This used to call `run(k=k)` for k in (1, 3, 8) — three complete
+    # seed-and-embed cycles over the whole corpus to read three numbers off the
+    # same ranking. On twelve tiny documents that was free. On a real corpus it
+    # is 4,216 chunks embedded three times, which is most of an hour and three
+    # times the gateway spend for information one pass already has: `recall_at`
+    # is computed from the rank of the first hit, so every cut-off comes out of
+    # a single retrieval.
+    report = asyncio.run(run(k=args.k if args.k is not None else max(RECALL_KS)))
+    print(report.render())
+    print()
+    # The breakdown is the useful part: a gap between verbatim and paraphrase is
+    # a vocabulary-mismatch gap, which is what the dense leg is for.
+    for phrasing, (hit, total) in sorted(report.by_phrasing.items()):
+        print(f"  {phrasing:<14} {hit / total if total else 0:.2f}  ({hit}/{total})")
 
     if args.min_recall is not None and report.recall < args.min_recall:
         print(f"\nFAIL: recall {report.recall:.2f} < required {args.min_recall:.2f}")
