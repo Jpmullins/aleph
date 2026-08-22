@@ -578,8 +578,14 @@ Distribution `aleph-xxx` · module `aleph_xxx` · tables plural snake_case · ac
 
 **Start here if you are picking this up fresh:**
 
-1. **`docs/plan.md`** — the work. 59 workstreams, 348 criteria that can fail, each with what it is in
-   plain language, why, how, a review step and an iteration step. Read **Part 0 first**: the
+1. **`docs/plan.md`** — the work. 58 workstream headings (two withdrawn) and 339 criteria, each with
+   what it is in plain language, why, how, a review step and an iteration step. **Not '348 criteria
+   that can fail'** — that was the old wording and it was the same mistake the plan exists to catch.
+   Three audits found roughly fifteen criteria that can NEVER fail (a grep matching the prose that
+   documents the fix, a SQL predicate returning NULL, a mutation string absent from its file, a node
+   id whose command exits 4) and about as many that can never pass. They are corrected as they are
+   found; assume more remain, and when a criterion looks green, check that it could have been red.
+   Read **Part 0 first**: the
    acceptance gate is currently certifying things that are false, and repairing it comes before any
    other work. Part 1 is the eight numbers that mean "done". Part 7 lists every LangChain and
    CopilotKit doc to read, mapped to the workstreams that need it — **do not work from memory on
