@@ -573,6 +573,32 @@ else
   skip H8 "needs a database with a corpus to export"
 fi
 
+# P8a — the restore drill. `scripts/backup.sh` and `scripts/restore.sh` had
+# existed for weeks with no caller at all: `grep -rn restore_drill
+# scripts/acceptance.sh .github/workflows/` returned 0, so a backup nobody had
+# ever restored from was documented as a procedure. First run of it found the
+# live database was NOT restorable — postgres had Docker's 64 MB /dev/shm and
+# pg_restore died building the HNSW index, with 40 GB free on the host.
+#
+# The drill exits 2 for "cannot run here" — no psql, or a pg_dump older than
+# the server, which is what a runner image shipping the 16 client against a
+# pg17 service gives you. 2 is a SKIP; 1 is a real failure; `run_shell` cannot
+# tell them apart, so this row reads the exit code itself.
+#
+# ~110s against a 1.03M-row database. It creates and drops its own scratch
+# database and never writes to the live one.
+if [ $NEEDS_SERVICES -eq 1 ] && part_selected P8a; then
+  DRILL_OUT="$(uv run python scripts/_acceptance/restore_drill.py 2>&1)"; DRILL_RC=$?
+  DRILL_LAST="$(printf '%s' "$DRILL_OUT" | grep -v '^[[:space:]]*$' | tail -1)"
+  case $DRILL_RC in
+    0) record P8a PASS "$DRILL_LAST" ;;
+    2) record P8a SKIP "${DRILL_LAST:-the drill cannot run here}" ;;
+    *) record P8a FAIL "${DRILL_LAST:-backup → restore → verify failed}" ;;
+  esac
+elif [ $NEEDS_SERVICES -eq 0 ]; then
+  skip P8a "needs postgres (the drill backs up the live database)"
+fi
+
 run_shell B1e "every dialog goes through Modal.tsx" \
   "./scripts/check-modals-are-trapped.sh 2>&1 | tail -1"
 run_shell P12 "every security override still names a package the lockfile resolves" \

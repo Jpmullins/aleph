@@ -272,19 +272,19 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
       ALEPH_AUTH_MODE: local
 
-      # The eight below are every field `aleph_api.settings.Settings` declares
-      # with NO DEFAULT. Six integration files now boot the real app
-      # (test_route_smoke, test_route_upload_limit, test_route_storage_bytes,
+      # `Settings` declares TEN fields with no default; DATABASE_URL and
+      # REDIS_URL above are two of them, and these are the other eight. Six
+      # integration files now boot the real app (test_route_smoke,
+      # test_route_upload_limit, test_route_storage_bytes,
       # test_route_stage_metrics, test_plugin_routes, test_rubric) and each one
-      # raises `ValidationError: 8 validation errors for Settings` without them,
-      # before a single request is made. Measured under `env -i` with exactly
-      # the three variables above: 6 failed, 334 passed, 22 errors. With these
-      # eight added: 383 passed.
+      # raises `ValidationError: 8 validation errors for Settings` without
+      # them, before a single request is made. With all eleven: 383 passed.
       #
       # Load-bearing one at a time, not assumed: dropping any SINGLE variable
       # turns tests/integration/test_route_smoke.py from `7 passed` into
-      # `7 errors`, and the error names the missing field. That is the check to
-      # re-run if this block ever looks like dead weight.
+      # `7 errors`, and the error names the missing field — verified for
+      # LANGFUSE_HOST, LITELLM_BASE_URL and ALEPH_CREDENTIAL_MASTER_KEY. That
+      # is the check to re-run if this block ever looks like dead weight.
       #
       # Empty, not a fake host, for the four observability values: an empty
       # OTLP endpoint is the documented way to skip the exporter
@@ -414,6 +414,17 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
+      # postgresql-client-17, matching the pgvector/pgvector:pg17 service.
+      # ubuntu-24.04 ships the 16 client, and pg_dump refuses to dump a NEWER
+      # server — which the restore drill correctly reports as "cannot run here"
+      # (exit 2, recorded SKIP). Without this, row P8a is a permanent skip
+      # counting against the skip budget, which is the shape of a check that
+      # looks present and never runs.
+      - name: postgresql-client 17
+        run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update -qq && sudo apt-get install -y postgresql-client-17
       - run: uv sync --all-packages --all-extras
       - name: alembic upgrade head
         working-directory: apps/api
