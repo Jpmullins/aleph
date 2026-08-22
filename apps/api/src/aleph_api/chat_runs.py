@@ -187,6 +187,57 @@ async def record_tool_event(
         _log.warning("chat_run.event_failed", kind=kind, agent_run_id=str(agent_run_id))
 
 
+def current_config() -> dict[str, Any] | None:
+    """The running `RunnableConfig`, however this call site can reach it.
+
+    LangGraph's `Runtime` deliberately does NOT carry `config` — its own
+    docstring says so and points at `langgraph.config.get_config()`. `ToolRuntime`
+    *does* add one, so the tool path can read `request.runtime.config` directly;
+    the MODEL path cannot, and reading `runtime.config` there silently yields
+    None, which is how `model_calls.agent_run_id` stayed NULL through a fix
+    specifically written to populate it.
+
+    `get_config()` first, because it is the documented accessor and works in
+    both places. `runtime.context` second: `ag_ui_langgraph` copies the caller's
+    `configurable` into the graph's `context`, so it is a real second channel
+    rather than a guess.
+    """
+    from langgraph.config import get_config
+
+    try:
+        config = get_config()
+    except Exception:
+        config = None
+    if isinstance(config, dict) and isinstance(config.get("configurable"), dict):
+        return config
+    return None
+
+
+def run_id_from_runtime(runtime: object) -> UUID | None:
+    """The run id, from a tool or model runtime, whichever channel carries it."""
+    from_config = run_id_from_config(current_config())
+    if from_config is not None:
+        return from_config
+    direct = run_id_from_config(getattr(runtime, "config", None))
+    if direct is not None:
+        return direct
+    context = getattr(runtime, "context", None)
+    if isinstance(context, dict):
+        return run_id_from_config({"configurable": context})
+    return None
+
+
+def subagent_from_runtime(runtime: object) -> str:
+    config = current_config() or getattr(runtime, "config", None)
+    named = subagent_from_config(config)
+    if named != "orchestrator":
+        return named
+    context = getattr(runtime, "context", None)
+    if isinstance(context, dict):
+        return subagent_from_config({"configurable": context})
+    return "orchestrator"
+
+
 def run_id_from_config(config: object) -> UUID | None:
     """Read the run id out of a RunnableConfig's `configurable`.
 

@@ -48,6 +48,7 @@ line() {
   case "$verdict" in
     ok)      colour='\033[32m' ;;
     FAIL)    colour='\033[31m'; BAD=$((BAD+1)) ;;
+    info)    colour='\033[90m' ;;
     unknown) colour='\033[90m'; UNMEASURED=$((UNMEASURED+1)) ;;
     *)       colour='\033[90m' ;;
   esac
@@ -126,6 +127,7 @@ fi
 
 dbline 3 "ungrounded citations" ungrounded_citations
 dbline 5 "uncosted model calls" uncosted_model_calls
+dbline 5b "  ...all time (D9)" uncosted_model_calls_legacy
 dbline 6 "stuck agent runs" stuck_agent_runs
 
 # --- 4. the agent authors a skill that survives -------------------------------

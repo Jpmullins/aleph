@@ -43,8 +43,8 @@ from aleph_api.chat_runs import (
     ToolEventClock,
     model_call_scope,
     record_tool_event,
-    run_id_from_config,
-    subagent_from_config,
+    run_id_from_runtime,
+    subagent_from_runtime,
 )
 from aleph_core.errors import AlephError, NotFound, PermissionDenied
 
@@ -329,8 +329,8 @@ class AlephAgentMiddleware(AgentMiddleware):
 
     def _attribution(self, request: ToolCallRequest) -> tuple[Any, str]:
         """The run this tool call belongs to, and who is running it."""
-        config = getattr(getattr(request, "runtime", None), "config", None)
-        return run_id_from_config(config), subagent_from_config(config)
+        runtime = getattr(request, "runtime", None)
+        return run_id_from_runtime(runtime), subagent_from_runtime(runtime)
 
     async def _record(self, run_id: Any, kind: str, payload: dict[str, Any]) -> None:
         if self._session_maker is None or run_id is None:
@@ -393,9 +393,15 @@ class AlephAgentMiddleware(AgentMiddleware):
         # that ACTUALLY answers, rather than the one resolved when the process
         # started, which is what made a mid-session profile change mislabel
         # every row after it.
-        config = getattr(getattr(request, "runtime", None), "config", None)
+        # NOT `runtime.config`: LangGraph's `Runtime` has no `config` at all —
+        # its own docstring says so and points at `langgraph.config.get_config()`.
+        # `ToolRuntime` adds one, so the tool path can read it directly; the
+        # MODEL path cannot, and reading it here silently yielded None. That is
+        # how `agent_run_id` stayed NULL through a fix written to populate it,
+        # and it is the same class of mistake as reading `metadata` — a channel
+        # that does not carry the key.
         scope = ModelCallScope(
-            agent_run_id=run_id_from_config(config),
+            agent_run_id=run_id_from_runtime(getattr(request, "runtime", None)),
             model=_model_name(getattr(request, "model", None)),
         )
 

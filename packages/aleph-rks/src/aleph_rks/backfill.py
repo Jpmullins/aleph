@@ -54,6 +54,7 @@ async def backfill_unindexed_for_project(
     litellm: LiteLLMClient,
     principal: Principal,
     profile_bindings: dict[str, Any],
+    agent_run_id: UUID | None = None,
     purpose: str = "rks.backfill",
 ) -> tuple[int, int]:
     """Index every normalized document in the project that has no chunks.
@@ -85,7 +86,7 @@ async def backfill_unindexed_for_project(
                 litellm=litellm,
                 principal=principal,
                 profile_bindings=profile_bindings,
-                agent_run_id=None,
+                agent_run_id=agent_run_id,
                 purpose=purpose,
             )
         except Exception as exc:

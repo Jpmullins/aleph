@@ -232,3 +232,58 @@ pins the distinction so it cannot be re-made quietly.
 the event translation for something other than attribution. `stream.subagents`
 is not adopted; `deepagents.SubagentRunStream` stays unused.
 
+---
+
+## D9 · What happens to the rows written while attribution was broken
+
+**Decided 2026-08-21.** `docs/plan.md`'s sequence step 1 asks for this in
+writing: *"decide in writing what happens to 786 ungrounded claims: re-extract
+or delete."* Two different kinds of legacy row, and they get opposite answers,
+for the same reason.
+
+### Ungrounded citations — **re-extract, do not delete**
+
+831 citations carry no verbatim quote and no character span, because
+`BeliefService` has never run: the wiki ingest path built `CitationDraft` with
+`chunk_ids=[]` and no quote. They are not wrong, they are *thin* — each one
+names a real source for a real claim, and the source is still in the corpus.
+
+So they are **re-derivable**. `WS-RS8` writes the extractor and
+`BeliefService.rebuild` already accepts it as an injected callable and is tested
+for determinism, idempotence, and not destroying human corrections. Running it
+over the existing sources regenerates the same claims WITH quotes and spans.
+
+Deleting them would throw away the only record of which sources support which
+claims, in exchange for nothing: the number would go to zero because the
+denominator went to zero. That is the shape of measurement this project keeps
+catching itself in.
+
+**So number 3 stays red until `WS-RS8` runs.** That is the honest reading: the
+belief layer has not run, and the number says so.
+
+### Uncosted model calls — **retain, and measure forward**
+
+159 `model_calls` rows have `pricing_source='unknown'` or a NULL
+`agent_run_id`. Unlike the citations these are **not re-derivable and not
+wrong**: they are true records of calls that really were made during a period
+when the agent path had no price list (`WS-MEP-1`) and no run to attribute to
+(`WS-C3a` / `WS-D2`). The spend happened. Nobody can now say what it cost or
+which turn it belonged to, because nothing recorded it at the time.
+
+Deleting or backfilling them would make the ledger say something nobody knows to
+be true. The ledger is append-only and hash-chained precisely so that it records
+what happened rather than what would be convenient — a retrospective repair here
+would be the first exception, and there is never only one.
+
+**They stay. Number 5 is measured forward**, over rows written after the fix,
+and the historical count is printed beside it so it is retained rather than
+hidden. When the last of them ages out of any window anyone cares about, it will
+be because time passed, not because somebody edited history.
+
+### The rule this generalises to
+
+A legacy row that is **thin** and re-derivable from data still held is
+regenerated. A legacy row that is a **record of something that happened** is
+kept, even when it is embarrassing, and the measurement moves rather than the
+data.
+

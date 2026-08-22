@@ -1,0 +1,26 @@
+2026-08-22T01:04:00Z
+
+# The moment the deployed stack started recording model calls with BOTH a price
+# and a run to attribute them to.
+#
+# It took two deploys, and the gap between them is instructive. The first
+# (01:01) landed WS-MEP-1 and priced the calls — `pricing_source` went from
+# `unknown` on 100% of assistant traffic to `gateway`. It did NOT attribute
+# them: `awrap_model_call` read the run id from `runtime.config`, and LangGraph's
+# `Runtime` has no `config` at all. Its own docstring says so and points at
+# `langgraph.config.get_config()`; `ToolRuntime` adds one, which is why the TOOL
+# events were attributed correctly in the same deploy while the MODEL calls were
+# not. Reading a channel that does not carry the key is the same mistake as
+# reading `metadata`, made twice, two hours apart.
+#
+# The second deploy (01:04) reads `get_config()`. Verified on the live stack:
+# `assistant.turn` rows since carry `pricing_source=gateway` and a non-null
+# `agent_run_id`.
+#
+# `docs/plan.md` number 5 is measured FORWARD from here. `docs/decisions.md` D9
+# says why: the 159 rows before it are true records of calls that really were
+# made while the mechanism was broken, and editing an append-only ledger to make
+# a number look better is the first exception that there is never only one of.
+#
+# A cutoff in the FUTURE makes the number unfalsifiable, so
+# `scripts/_acceptance/status_numbers.py` refuses to report green on one.
