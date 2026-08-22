@@ -531,7 +531,7 @@ at the right file and the wrong row.
 - The format round-trips
   <br>`Export, import, export again; the two exports are byte-identical (diff -r exits 0).`
 - The false governance claim is gone from the tree
-  <br>`grep -rn 'runs on the write path' docs/ packages/aleph-wiki/src returns 0. Returns 2 today (docs/wiki-schema.md:16-18 and schema.py:14-16), both describing behaviour that does not exist.`
+  <br>`grep -rn 'runs on the write path' packages/ apps/ docs/wiki-schema.md CLAUDE.md returns 0 — docs/plan.md is OUT of scope, because the only hit under the old wording is line 534, this criterion quoting itself, which no amount of fixing can remove. Was 2 (docs/wiki-schema.md:16-18 and schema.py:14-16), both describing behaviour that does not exist.`
 - The documented lint count matches the code
   <br>`scripts/check-lint-count.sh compares the number in docs/wiki-schema.md:34 against grep -c 'check="' lint.py. FAILS TODAY: 13 documented vs 16 actual.`
 
@@ -1298,7 +1298,7 @@ belongs in `docs/decisions.md` either way.
 - No CSS class declared in styles.css's @layer components block is unused. FAILS TODAY: 9 unused selectors.
   <br>``./scripts/check-web-dead-css.sh` exits 0`
 - The drift ratchet passes on main and fails when one violation is added.
-  <br>``./scripts/check-web-drift.sh --ratchet` exits 0; then `perl -pi -e 's/border border-line bg-surface/border border-line rounded-lg bg-surface/' apps/web/src/components/Rail.tsx && ./scripts/check-web-drift.sh --ratchet` must exit non-zero naming rounded-lg; `git checkout apps/web/src/components/Rail.tsx``
+  <br>``./scripts/check-web-drift.sh --ratchet` exits 0; then `perl -pi -e 's/border-r border-line bg-surface/border-r border-line rounded-lg bg-surface/' apps/web/src/components/Rail.tsx && ./scripts/check-web-drift.sh --ratchet` must exit non-zero naming rounded-lg; `git checkout apps/web/src/components/Rail.tsx``
 - All three scripts run in CI.
   <br>``grep -c 'check-web-' .github/workflows/ci.yml` returns 3`
 - The three new checks are covered by the self-check harness that proves a check can fail.
@@ -1323,11 +1323,11 @@ belongs in `docs/decisions.md` either way.
 - A component test suite exists and runs. FAILS TODAY: apps/web has no test script and no runner.
   <br>``pnpm -C apps/web test 2>&1 | tail -3` reports 'Tests' with ≥6 passed and exits 0`
 - The tests can fail on a real regression, not just pass.
-  <br>`Delete the body of the onClick at apps/web/src/a2ui/components/ClaimCard.tsx:48, run `pnpm -C apps/web test`, confirm exactly 1 failure naming ClaimCard, then `git checkout` the file`
+  <br>`Delete the body of the onClick at apps/web/src/a2ui/components/ClaimCard.tsx:48, run `pnpm -C apps/web test`, confirm >= 1 failure, all of them in specs that exercise ClaimCard's open action (3 today, in `a2ui/navigate.test.tsx` — 'exactly 1' was measured before the spec grew), then `git checkout` the file`
 - A browser smoke opens a project and tiles two panes against the live stack.
-  <br>``./scripts/bootstrap-local.sh && pnpm -C tests/playwright exec playwright test workspace.spec.ts` exits 0`
+  <br>``./scripts/bootstrap-local.sh && pnpm -C tests/playwright exec playwright test workspace-three-panel-shell.spec.ts` exits 0`
 - The smoke fails on any console error or warning. FAILS TODAY on the Lit dev-mode notice.
-  <br>`Run the spec before the Vite condition fix and confirm it fails naming lit-html; apply the fix; re-run and confirm 0 console errors or warnings`
+  <br>`Inject one `console.error` during workspace load and confirm the smoke fails; remove it; confirm 0 console errors or warnings. The lit-html premise is gone — `vite.config.ts` has no `resolve.conditions` and `lit-html` appears nowhere in the tree, so a spec 'failing naming lit-html' cannot happen either way.`
 - Vitest runs in CI.
   <br>``grep -c 'apps/web test' .github/workflows/ci.yml` returns ≥1`
 - A coverage floor is recorded so later workstreams cannot silently drop it.
@@ -1358,7 +1358,7 @@ belongs in `docs/decisions.md` either way.
 - check-pane-registry.sh fails on the six hardcoded pane names present today, and passes once they are gone. FAILS TODAY only in the sense that it wrongly passes.
   <br>`After the sweep is made case-insensitive, run it on unmodified main and confirm exit 1 naming CopilotChatSurface.tsx and workspace-ui.tsx; run after the client fix and confirm exit 0`
 - Opening a pane does not re-create the already-open surfaces.
-  <br>`A Vitest test asserts `new MessageProcessor` is constructed once across two pane-set changes on SurfaceStreamProvider`
+  <br>`A Vitest test asserts `new MessageProcessor` is constructed once across a pane-set change on SurfaceStreamProvider. One change, not two — that is what the test performs.`
 - Declared params reach the builder. FAILS TODAY: only page_id is parsed.
   <br>`An integration test requests ?panes=grounding:claim_id=<uuid> and asserts the grounding builder receives claim_id`
 
@@ -1412,7 +1412,7 @@ belongs in `docs/decisions.md` either way.
 - settings is a pane kind served by the registry. FAILS TODAY: 7 panes, none of them settings.
   <br>``curl -s localhost:8000/v1/projects/$P/panes | jq -r '.panes[].id'` includes 'settings'`
 - Drawers.tsx no longer exists and nothing imports it.
-  <br>``test ! -f apps/web/src/components/Drawers.tsx` and `! git grep -q 'components/Drawers'`, with `./scripts/check-web-dead-code.sh` still exiting 0`
+  <br>``test ! -f apps/web/src/components/Drawers.tsx` and `git grep -n 'components/Drawers' -- 'apps/web/src' 'apps/*/src' 'packages/*/src' | wc -l returns 0 (scoped to SOURCE: over the whole repo nine files carry the string, four of them the prose documenting the deletion and one of them this criterion, so the repo-wide form is red forever)`, with `./scripts/check-web-dead-code.sh` still exiting 0`
 - Zero client-side copies of server-owned lists. FAILS TODAY: 3+ hits.
   <br>``git grep -n 'PROFILE_NAMES\|"aleph-dev"\|Capability order mirrors' apps/web/src | wc -l` returns 0`
 - Escape closes every modal and focus is trapped inside it. FAILS TODAY: `git grep -c '"Escape"' apps/web/src` returns 0 files.
@@ -1447,7 +1447,7 @@ belongs in `docs/decisions.md` either way.
 - The sweep fails on a newly introduced mismatch.
   <br>`Add "foo_id" to WikiSurface's props in catalog.json, run `uv run python scripts/gen_catalog.py && ./scripts/check-surface-bindings.sh`, confirm exit 1 naming WikiSurface.foo_id, then revert and re-run gen_catalog`
 - Exactly one @a2ui/web_core version resolves in the lockfile. **CORRECTED 2026-08-22:** the count of 2 is a `packages:` entry plus a `snapshots:` entry for ONE version, which is how pnpm writes a single resolution — so "returns 1" was never achievable. State it as: exactly one distinct VERSION resolves — `grep -oE "@a2ui/web_core@[0-9]+\.[0-9]+\.[0-9]+" pnpm-lock.yaml | sort -u | wc -l` returns 1. **The criterion itself still FAILS:** two genuinely different versions resolve today, 0.9.0 and 0.10.0, and a component registered against one catalog cannot render under the other. Only the counting method was wrong, not the concern.
-  <br>``grep -c "^ '@a2ui/web_core@" pnpm-lock.yaml` returns 1 — or, if two are accepted, a committed note states why and the assertion pins exactly those two`
+  <br>`The headline above is the check: `grep -o "@a2ui/web_core@[0-9.]*" pnpm-lock.yaml | sort -u | wc -l` plus `web-core-duplication.test.ts`, which pins the accepted pair. The old sub-bullet grepped `^ '@a2ui/web_core@` with ONE leading space; the lockfile indents with two, so it returned 0 whatever the truth was and contradicted the corrected headline directly above it`
 - Every prop the agent is told about is bindable. FAILS TODAY: 2 (ChartCard.dataset_version_id, ApprovalCard.diff_card_id).
   <br>`The sweep cross-checks catalog.json's agent.props block against the zod declarations and reports 0 discrepancies`
 
@@ -1470,7 +1470,7 @@ belongs in `docs/decisions.md` either way.
 - Clicking 'Open claim' opens the Grounding pane on that claim. FAILS TODAY: no claim branch in _open, so no navigation happens at all.
   <br>`A Playwright test clicks the control on a ClaimCard and asserts a Block with surfaceId grounding:claim_id=<uuid> appears`
 - Zero no-op handlers in the web app. FAILS TODAY: 3.
-  <br>``grep -rn '=> undefined' apps/web/src | wc -l` returns 0`
+  <br>``grep -rn '=> undefined' apps/web/src --include='*.tsx' --include='*.ts' | grep -v '\.test\.' | wc -l` (the unfiltered form counts nine test doubles and the Board.tsx:303 comment explaining the fix) returns 0`
 - Zero ternaries whose two arms are identical string literals. FAILS TODAY: 2.
   <br>``python3 -c "import re,pathlib;p=re.compile(r'\\?\\s*(\"(?:[^\"\\\\]|\\\\.)*\")\\s*:\\s*(\"(?:[^\"\\\\]|\\\\.)*\")');print(sum(1 for f in pathlib.Path('apps/web/src').rglob('*.tsx') for m in p.finditer(f.read_text()) if m.group(1)==m.group(2)))"` returns 0`
 - Zero inert hover/focus classes. FAILS TODAY: 7.
@@ -1504,10 +1504,10 @@ belongs in `docs/decisions.md` either way.
   <br>``grep -rEoh 'var\(--[a-z-]+, *(#[0-9a-fA-F]{3,8}|rgba?\([^)]*\))\)' apps/web/src --include='*.tsx' | wc -l` returns 0`
 - Zero bare `rounded` and zero raw hex/rgba in .tsx. FAILS TODAY: 50 and 27.
   <br>`The drift script's remaining two counters both return 0`
-- The drift check runs in --zero mode in CI and fails on one reintroduced violation.
-  <br>`Add rounded-lg to any component, run `./scripts/check-web-drift.sh --zero`, expect exit 1 naming the file and line; revert`
+- The drift check runs in CI and fails on one reintroduced violation.
+  <br>``./scripts/check-web-drift.sh --ratchet` exits 0 against the all-zero pin; add one `rounded-lg` to any component and it exits 1 naming the class and the file; revert. There is no `--zero` mode and there is not going to be — `check-web-drift.sh:18-21` records the decision that the ratchet subsumes it, so the criterion named a flag the script deliberately refuses.
 - Chart text is legible on the dark ground. FAILS TODAY: #475569 on #14171A.
-  <br>`A Playwright test renders a ChartCard in dark theme, samples the axis label colour from the canvas, and asserts ≥4.5:1 contrast against the surface token`
+  <br>`The pair that exists: `ChartCard.test.tsx` asserts the axis colours come from the live tokens and re-embed on a theme flip, and `styles/tokens.test.ts` asserts >= 4.5:1 for `--text-secondary` on `--surface-raised` in dark. No canvas pixel sampling — Playwright never grew one, and a token assertion is the stronger check anyway because it names the failing colour.`
 - No surface renders identically in both themes unless it is genuinely achromatic.
   <br>`A Playwright pass screenshots each surface in light and dark and asserts the images differ; any surface that does not differ is triaged as either achromatic by design or carrying a hardcoded colour`
 
