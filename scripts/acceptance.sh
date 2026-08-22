@@ -245,6 +245,15 @@ run_pytest A5 "boot manifest is the only source of protected capability" \
   packages/aleph-kernel/tests/test_manifest.py
 run_pytest A6 "agent plugin API: install, disable, and the addressability guard" \
   packages/aleph-kernel/tests/test_agent_api.py
+# A7: a plugin is a durable record, not a live object in one process. Before
+# this the schema had 61 tables and not one of them plugin-, skill- or
+# capability-related, so an agent that improved itself forgot at the next deploy.
+if [ $NEEDS_SERVICES -eq 1 ]; then
+  run_shell A7 "an installed plugin survives the process that installed it" \
+    "uv run pytest -m integration tests/integration/test_plugin_durability.py -q -p no:randomly 2>&1 | tail -1"
+else
+  skip A7 "needs postgres"
+fi
 
 # ---------------------------------------------------------------------------
 # B — Retrieval

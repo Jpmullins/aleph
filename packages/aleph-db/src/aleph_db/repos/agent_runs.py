@@ -18,7 +18,7 @@ silent hangs into visible state, not only the one that produced it.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -27,6 +27,7 @@ from sqlalchemy import select
 
 from aleph_core.time import utcnow
 from aleph_db.models.agent import AgentRun
+from aleph_db.repos.background_tasks import heartbeat_at
 from aleph_db.repos.ledger import LedgerWriter
 
 if TYPE_CHECKING:
@@ -58,6 +59,17 @@ async def stale_running_runs(
     A run with no ``started_at`` is left alone: it is ``pending`` work that was
     marked running without a timestamp, and guessing its age would reap runs
     that never began rather than runs that never ended.
+
+    **A run that is demonstrably alive is left alone too.** ``started_at`` alone
+    answers "how long has this been going", which is the wrong question for a
+    background task: a corpus reindex or a review sweep can legitimately run for
+    hours, and reaping it mid-flight would mark a working job ``failed``, tell
+    the analyst it died, and leave the real process writing to a row that now
+    says it is over. So a run that has written a heartbeat inside the same
+    window is excluded. Runs that never heartbeat — every worker job predating
+    ``background_tasks`` — are unaffected, which is why the filter is applied
+    after the query and not folded into it: the SQL keeps stating the original
+    rule, and this states the exemption.
     """
     cutoff = utcnow() - stale_after
     rows = await session.execute(
@@ -67,7 +79,14 @@ async def stale_running_runs(
             AgentRun.started_at < cutoff,
         )
     )
-    return list(rows.scalars().all())
+    candidates = list(rows.scalars().all())
+    return [r for r in candidates if not _alive_since(r, cutoff)]
+
+
+def _alive_since(run: AgentRun, cutoff: datetime) -> bool:
+    """Has this run proved it is alive more recently than the deadline?"""
+    beat = heartbeat_at(run)
+    return beat is not None and beat >= cutoff
 
 
 async def reap_stale_runs(
