@@ -36,11 +36,12 @@
   notes: "PATCH /v1/projects/{id} {status:deleted}; subsequent GET list must not contain it."
 
 - id: workspace-three-panel-shell
-  intent: "Opening a project shows the 3-panel shell: left rail (sessions/drawers), center chat+activity, right 5 surface tabs."
+  intent: "Opening a project shows the workspace shell: the rail, the board of panes, and the assistant dock. The right-hand strip of five surface TABS is gone — the reading region tiles up to three panes, and the rail is a launcher."
   evidence:
     - apps/web/src/components/ProjectWorkspace.tsx
-    - apps/web/src/components/LeftPanel.tsx
-    - apps/web/src/components/A2UIRightPanel.tsx
+    - apps/web/src/components/Rail.tsx
+    - apps/web/src/components/Board.tsx
+    - apps/web/src/components/AssistantDock.tsx
   check_type: e2e
   status: unverified
   wired: true
@@ -49,7 +50,7 @@
 - id: session-create
   intent: "The '+ New' button creates a chat session and enables the chat composer."
   evidence:
-    - apps/web/src/components/LeftPanel.tsx
+    - apps/web/src/components/AssistantDock.tsx
     - apps/api/src/aleph_api/routes/assistant.py
   check_type: e2e
   status: unverified
@@ -104,7 +105,7 @@
   evidence:
     - apps/api/src/aleph_api/routes/wiki.py
     - apps/web/src/a2ui/components/WikiSurface.tsx
-    - tests/playwright/specs/10-wiki-links-and-scaling.spec.ts
+    - tests/playwright/specs/wikilink-navigation.spec.ts
   check_type: dataflow
   status: unverified
   wired: true
@@ -115,7 +116,7 @@
   evidence:
     - apps/web/src/components/WikilinkChip.tsx
     - apps/web/src/components/WikiBodyMarkdown.tsx
-    - tests/playwright/specs/10-wiki-links-and-scaling.spec.ts
+    - tests/playwright/specs/wikilink-navigation.spec.ts
   check_type: e2e
   status: unverified
   wired: true
@@ -197,7 +198,6 @@
   intent: "The Briefs surface renders pending synthesis proposals as approval cards."
   evidence:
     - apps/web/src/a2ui/components/BriefsSurface.tsx
-    - apps/api/src/aleph_api/routes/briefs.py
     - apps/api/src/aleph_api/routes/surfaces.py
   check_type: dataflow
   status: unverified
@@ -251,7 +251,7 @@
   intent: "Per-project cost is tracked and rolled up (cap, spent, by-phase, by-model) and shown in Profile."
   evidence:
     - apps/api/src/aleph_api/routes/cost.py
-    - apps/web/src/components/Drawers.tsx
+    - apps/web/src/a2ui/components/SettingsSurface.tsx
   check_type: http
   status: unverified
   wired: true
@@ -280,13 +280,11 @@
   notes: "Each of changes/stream, agent-events/stream, surfaces/wiki/stream must emit at least one SSE frame on connect within a timeout."
 
 - id: viz-renderers
-  intent: "Chart (Vega-Lite), Table, Graph (SVG), and Map (MapLibre) cards render real visual output."
+  intent: "Chart (Vega-Lite) and Table cards render real visual output. The Graph (SVG) and Map (MapLibre) cards this claim also named do not exist — they were deleted, and naming them here made the claim unsatisfiable rather than unmet."
   evidence:
     - apps/web/src/a2ui/components/ChartCard.tsx
     - apps/web/src/a2ui/components/TableCard.tsx
-    - apps/web/src/a2ui/components/GraphCard.tsx
-    - apps/web/src/a2ui/components/MapCard.tsx
-    - tests/playwright/specs/05-charts-tables-graphs.spec.ts
+    - tests/playwright/specs/viz-renderers.spec.ts
   check_type: e2e
   status: unverified
   wired: true
@@ -302,14 +300,13 @@
   notes: "POST /model-profile/switch {profile_name} → 200; GET model-profile reflects it; ledger records the switch."
 
 - id: evals-suite
-  intent: "An eval suite with datasets and runs exists (gate CI runs)."
+  intent: "The retrieval eval runs the production path and reports a number."
   evidence:
-    - apps/api/src/aleph_api/routes/evals.py
     - packages/aleph-evals/src/aleph_evals
-  check_type: http
+  check_type: cli
   status: unverified
-  wired: false
-  notes: "Backend-only: /v1/eval-datasets and /v1/eval-runs respond, but NO frontend references them. Not a user-facing capability; wired only as a CI gate."
+  wired: true
+  notes: "REWRITTEN 2026-08-22. The old intent — 'an eval suite with datasets and runs exists (gate CI runs)' — was false in every clause: `routes/evals.py` is gone, /v1/eval-datasets and /v1/eval-runs do not respond, the datasets were deleted, and there is NO eval CI gate (docs/operations.md § On what is deliberately absent says why: the scorers read `expected` and `actual` out of the same JSONL line, so the job was green regardless of the code). What exists and is worth auditing: `uv run python -m aleph_evals.retrieval_eval` calls the real `search_corpus` and prints recall@k, MRR and nDCG@10; `--rerank both` prints the control and rerank arms side by side. It needs a gateway, so it is run by hand and the number recorded."
 
 - id: route-reachability
   intent: "Every client route resolves to a real component reachable from a UI entry point; API routers all mount; orphan endpoints are flagged."

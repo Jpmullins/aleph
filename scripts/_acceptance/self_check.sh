@@ -183,6 +183,40 @@ probe "check-dead-refs notices a path that is not there" \
 
 # An undocumented sweep, which is how the inventory in operations.md drifted from
 # two to twenty-one without a single gate noticing.
+# An evidence path naming a file that is gone. `audit/claims.yaml` is where an
+# auditor is pointed, so a dead path there is the strongest form of the defect
+# this sweep exists for — and it was out of scope until 2026-08-22, when adding
+# it found ELEVEN.
+#
+# The bogus path is ASSEMBLED at runtime and never spelled here. This file is
+# itself in the sweep's PROSE list, so writing the literal made self_check.sh
+# carry a dead reference of its own and the check went red before the mutation
+# — reported honestly as UNTESTED by the already-red guard rather than as a
+# pass, which is the only reason it was noticed.
+CLAIMS_SUBJECT="apps/web/src/components/Rail.tsx"
+# Derived from the subject rather than written out. Interpolating a suffix
+# onto a literal is not enough: the sweep's token pattern stops at the `$`, so
+# the prefix it leaves behind is itself a path that does not resolve — and so
+# is any copy of it in a comment explaining the problem.
+CLAIMS_BOGUS="${CLAIMS_SUBJECT%.tsx}IsGone.tsx"
+if grep -q -- "$CLAIMS_SUBJECT" audit/claims.yaml 2>/dev/null; then
+  cp audit/claims.yaml "$BACKUP_DIR/claims.bak"
+  perl -pi -e "s#\Q$CLAIMS_SUBJECT\E#$CLAIMS_BOGUS#" audit/claims.yaml
+  if cmp -s audit/claims.yaml "$BACKUP_DIR/claims.bak"; then
+    printf '  \033[31m%-8s\033[0m %s — the mutation changed NOTHING\n' \
+      "NO-OP" "an audit claim whose evidence is gone is noticed"
+    BAD=$((BAD+1))
+  elif ./scripts/check-dead-refs.sh >/dev/null 2>&1; then
+    printf '  \033[31m%-8s\033[0m %s — check stayed GREEN while broken\n' \
+      "CANNOT" "an audit claim whose evidence is gone is noticed"
+    BAD=$((BAD+1))
+  else
+    printf '  \033[32m%-8s\033[0m %s\n' "can fail" "an audit claim whose evidence is gone is noticed"
+    OK=$((OK+1))
+  fi
+  cp "$BACKUP_DIR/claims.bak" audit/claims.yaml
+fi
+
 probe "check-dead-refs notices a sweep the operations doc stopped naming" \
   docs/operations.md \
   's/`check-page-lock\.sh`/`check-page-lock-renamed-so-the-doc-no-longer-names-it.sh`/' \

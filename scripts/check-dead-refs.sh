@@ -53,6 +53,12 @@ PROSE = [
     pathlib.Path("scripts/acceptance.sh"),
     pathlib.Path("scripts/_acceptance/self_check.sh"),
     pathlib.Path("deploy/README.md"),
+    # An `evidence:` entry is a claim about the tree in the strongest form the
+    # repository has — it is what an auditor is pointed at. WS-B1 deleted
+    # `apps/web/src/components/Drawers.tsx` and the `cost-tracking` claim went
+    # on naming it, green, because this sweep scanned prose and gates and not
+    # the file whose entire purpose is naming evidence.
+    pathlib.Path("audit/claims.yaml"),
 ]
 PROSE += sorted(p for p in pathlib.Path("apps").rglob("*.py") if "__pycache__" not in p.parts)
 PROSE += sorted(p for p in pathlib.Path("packages").rglob("*.py") if "__pycache__" not in p.parts)
