@@ -347,7 +347,7 @@ at the right file and the wrong row.
 - Reranking measurably improves ranking quality
   <br>`uv run python -m aleph_evals --rerank on beats --rerank off by >= 0.05 nDCG@10 on the RS5 set, printed side by side by one command. Fails today: grep -rn 'def rerank' packages/aleph-models/src returns 0 — there is no rerank path at all.`
 - The rerank capability has a real caller
-  <br>`grep -rn 'Capability.RERANK' --include='*.py' . excluding tests, discovery.py and model_profile.py returns >= 1. Returns 0 today.`
+  <br>`grep -rn 'capability=Capability.RERANK' --include='*.py' apps packages | grep -v tests | wc -l` returns >= 1 (6 today: `aleph_rks/rerank.py:585` and five in `aleph_models/client.py`). Returns 0 today. `capability=`, not the bare name: the bare name also matches the docstrings explaining what reranking is, so it would stay green if every call site were deleted and the explanation left.
 - Vector scan settings are configured, not left at defaults
   <br>`grep -rn 'ef_search\|iterative_scan' packages/aleph-rks/src returns >= 1. Returns 0 today (repo-wide).`
 - The dense leg actually returns the number of rows it asks for
@@ -465,17 +465,17 @@ at the right file and the wrong row.
 **Criteria:**
 
 - Claim retrieval is measurable
-  <br>`uv run python -m aleph_evals --surface claims runs and prints recall@k and nDCG@10. Fails today: neither the flag nor the code path exists.`
+  <br>`uv run python -m aleph_evals.retrieval_eval --surface claims runs and prints recall@k and nDCG@10. The module matters: `python -m aleph_evals` is the dataset runner and computes no recall at all, so the criterion named a program that could not satisfy it.`
 - Claims are embedded at write time
   <br>`psql -tAc "select count(*) from wiki_claims where embedding is null and created_at > '<RS8 landing date>'" returns 0. All 786 existing rows are NULL today.`
 - The wiki-deletion gate is a single decidable command
   <br>`uv run python -m aleph_evals.retrieval_eval --surface both` prints chunks vs claims side by side and the delta is recorded. **CORRECTED 2026-08-22:** it is a MEASUREMENT, not a gate. The original made it a boolean gating the wiki deletion, and `docs/decisions.md` D1 reversed that deletion — both knowledge plugins stay, so there is nothing for claims-beating-chunks to unblock. Exiting non-zero because one retrieval surface scores lower than another would fail the build over a fact about the corpus.`
 - The acceptance document names a real command
-  <br>`The command quoted at docs/acceptance.md:158 runs and its flags appear in --help. Fails today: the named command has no belief mode at all.`
+  <br>`The command quoted at docs/acceptance.md:64 — row B5's `python -m aleph_evals.retrieval_eval` — runs and its flags appear in `--help`. Repointed from :158, which is Part D PROSE ('of those three is true, which is why four of these rows are 🟨'): there is no command there, so the criterion had no subject and nothing could turn it red. Third audit to flag it.`
 - Claim retrieval has a caller
   <br>`grep -rn 'search_claims' apps/api/src/aleph_api/copilot_agent.py >= 1.`
 - The graph hop contributes measurably or is removed
-  <br>`--surface claims --no-graph-hop is printed alongside the default; the difference on the multi-hop question category from RS5 is reported as a number in the run output, either way.`
+  <br>`The default claim run reports the hop as two counts — results reached ONLY via `claim_edges`, and questions answered only by one — and `--no-graph-hop` reproduces the run without it so the nDCG@10 delta can be stated. Measured: 0 and 0; 0.232 vs 0.228. Not 'the multi-hop question category from RS5': the set has `factual` and `unanswerable` and no multi-hop category, so the difference was to be reported over a slice that does not exist.`
 
 **Review.** Mutation: zero out the claim embeddings and confirm --surface claims recall collapses; remove the graph hop and confirm the multi-hop category drops (and if it does not, report that honestly and delete the hop). Restore. Crucially, run the final comparison against the held-out split from RS5's iteration step, never the dev split, because this number decides a structural change and the incentive to tune it is real.
 <br>**Iterate.** v2: if claims lose to passages, the correct next move is not to keep tuning claims — it is a hybrid that retrieves claims and then descends to their evidence chunks, which is what a knowledge graph is actually for. Measure that as a third surface before anyone decides to delete the wiki.
@@ -494,7 +494,7 @@ at the right file and the wrong row.
 **Criteria:**
 
 - PDF passages carry section labels
-  <br>`psql -tAc "select count(*) filter (where c.section_path is null)::float / nullif(count(*),0) from document_chunks c join normalized_documents n on n.id = c.normalized_document_id where n.parser like 'docling%'" is below 0.10.` **CORRECTED 2026-08-22:** the original joined `sources s ... where s.kind='pdf'` and `sources` **has no `kind` column** — the query errors rather than returning a number, so the criterion could not be evaluated at all. Which parser ran is recorded on `normalized_documents.parser`, which is also the honest discriminator: a pypdf row legitimately has no headings, so measuring "all PDFs" would grade the chooser rather than the parser. Measured today over pypdf rows: **0.903**.`
+  <br>`Both halves, and the first is not optional: `select count(*) from normalized_documents where parser like 'docling%'` is > 0, AND `select count(*) filter (where c.section_path is null)::float / count(*) from document_chunks c join normalized_documents n on n.id = c.normalized_document_id where n.parser like 'docling%'` is below 0.10. The ratio alone CANNOT FAIL: scoped to docling rows, of which production has zero, `nullif` makes it return NULL — neither a pass nor a fail, and a gate reading it as "not above 0.10" calls that green. The absence of docling rows is the defect this criterion exists to catch, so it has to be an explicit failure.` **CORRECTED 2026-08-22:** the original joined `sources s ... where s.kind='pdf'` and `sources` **has no `kind` column** — the query errors rather than returning a number, so the criterion could not be evaluated at all. Which parser ran is recorded on `normalized_documents.parser`, which is also the honest discriminator: a pypdf row legitimately has no headings, so measuring "all PDFs" would grade the chooser rather than the parser. Measured today over pypdf rows: **0.903**.`
 - Structure metadata is measured, not hardcoded
   <br>`psql -tAc "select count(*) from normalized_documents where (structure_jsonb->>'heading_count')::int > 0 and parser like 'docling%'" > 0`. **CORRECTED 2026-08-22:** the column is `structure_jsonb`; as written the query errors rather than returning a number, so the criterion could never be evaluated at all. Scoped to the docling parser, since a pypdf row legitimately has no headings.`
 - Tables are detected
@@ -504,7 +504,7 @@ at the right file and the wrong row.
 - Structure improves retrieval, or the result is reported
   <br>`uv run python -m aleph_evals over a PDF-derived corpus, layout normalizer vs flat text, prints the nDCG@10 delta. The gain may be small; the criterion is that the number is produced and recorded either way.`
 - The OCR flag has a reader
-  <br>`grep -rn 'ocr-required' --include='*.py' . excluding normalization.py returns >= 1. Returns 0 today.`
+  <br>`grep -rn 'OCR_REQUIRED in' --include='*.py' packages | grep -v tests | wc -l` returns >= 1 — a BRANCH on the flag, at `aleph_rks/indexing.py:345`. Returns 0 today. Not the literal string 'ocr-required': all four of its hits outside `normalization.py` are prose — two in a test docstring quoting the defect, one in the operator-facing message, one in the comment above the fix — so the criterion would be satisfied by writing about the flag and never reading it.
 
 **Review.** Mutation: swap the layout normalizer back to pypdf across the fixture set and confirm the first three criteria fail. Feed a scanned image-only PDF and confirm it is flagged and routed rather than silently ingested as a near-empty document — today a scan produces a flag nobody reads and an empty body nobody notices.
 <br>**Iterate.** v2 extracts tables into structured rows so a table in a paper becomes queryable data rather than markdown, and treats figure captions as separately retrievable units. That is where a structure-aware ingest starts paying compound interest.
