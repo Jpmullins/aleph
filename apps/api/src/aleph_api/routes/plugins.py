@@ -236,6 +236,12 @@ async def disable_plugin(
             actor_id=principal.user_id,
             name=name,
             ledger=LedgerWriter(session),
+            # Passed even though `PluginApi.disable` already gated: a service
+            # method whose safety depends on every caller remembering to check
+            # first is a convention, not a guardrail. The call is idempotent,
+            # so gating twice costs nothing.
+            kernel=getattr(request.app.state, "kernel", None),
+            force=force,
         )
         await session.commit()
     return {"plugin_id": str(plugin_id), "disabled": True}

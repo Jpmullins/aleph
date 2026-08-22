@@ -428,7 +428,35 @@ async def _fuse_then_rerank(
             span.set_attribute("retrieval.rerank.skipped", skipped or REASON_RERANK_NOT_REQUESTED)
             return fused[:top_k]
         span.set_attribute("retrieval.rerank.candidates", len(fused))
-        ranked = await reranker.rank(query=query_text, hits=fused, top_k=top_k)
+        try:
+            ranked = await reranker.rank(query=query_text, hits=fused, top_k=top_k)
+        except Exception as exc:
+            # A reranker is a second stage. It must never be able to take down
+            # the first one: search degrades to fused order, the way a dead
+            # embedder degrades to lexical-only rather than to an empty index.
+            #
+            # This is not hypothetical. The reference gateway answers
+            # `POST /v1/rerank` with **500** "Unsupported provider" — not the
+            # 4xx `RerankUnsupported` is written for — so on the deployment
+            # this repository is developed against, binding the capability
+            # turned every corpus search into an unhandled `HTTPStatusError`.
+            #
+            # Degraded OUT LOUD, with the exception's own words: a silent
+            # fallback to fused order is indistinguishable from a reranker that
+            # ran and agreed with fusion, which is the confusion
+            # `retrieval.rerank.skipped` exists to prevent.
+            _log.warning(
+                "rks.rerank.failed",
+                backend=reranker.name,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            span.set_attribute("retrieval.rerank.backend", reranker.name)
+            span.set_attribute(
+                "retrieval.rerank.skipped",
+                f"{reranker.name} failed: {type(exc).__name__}: {exc}"[:500],
+            )
+            span.set_attribute("retrieval.rerank.failed", True)
+            return fused[:top_k]
         span.set_attribute("retrieval.rerank.backend", reranker.name)
         span.set_attribute("retrieval.rerank.returned", len(ranked))
         # Zero results after a non-empty candidate list is the reranker saying

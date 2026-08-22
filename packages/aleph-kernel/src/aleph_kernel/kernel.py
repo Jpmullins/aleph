@@ -426,6 +426,25 @@ class Kernel:
                 if self._mounted[name].state is State.ACTIVE:
                     await self._teardown(name)
 
+    def plugin_id_for(self, name: str) -> PluginId | None:
+        """The handle for a capability, or None if it has no handle.
+
+        The inverse of `_name_for`, and public because a caller holding a NAME
+        (a database row, a manifest entry) needs the handle before it can ask
+        for anything to be retired.
+
+        `None` means core: a capability mounted from the boot manifest carries
+        no `plugin_id`, so there is nothing to pass to `deactivate` and nothing
+        to refuse. It is not protected-and-therefore-refused, it is
+        unaddressable — the guardrail is that the handle does not exist.
+
+        `None` is also the answer for a name nothing has mounted, and the two
+        are deliberately the same: a caller that must not remove core must also
+        not remove something absent, and neither is an error worth raising.
+        """
+        mounted = self._mounted.get(name)
+        return mounted.plugin_id if mounted is not None else None
+
     def _name_for(self, plugin_id: PluginId) -> str:
         for name, mounted in self._mounted.items():
             if mounted.plugin_id == plugin_id:

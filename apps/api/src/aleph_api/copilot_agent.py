@@ -1809,6 +1809,8 @@ async def disable_plugin(plugin_id: str, config: RunnableConfig, force: bool = F
             actor_id=principal.user_id if principal else _SYSTEM_ACTOR,
             name=known[plugin_id],
             ledger=LedgerWriter(session),
+            kernel=_runtime.get("kernel"),
+            force=force,
         )
         await session.commit()
     return f"Disabled {known[plugin_id]!r}. The record is kept, so it can be turned back on."
@@ -2020,6 +2022,7 @@ def build_assistant_deep_agent(
         AuthoredSkillsMiddleware,
         authored_namespace,
     )
+    from aleph_api.rubric import build_grading_middleware
     from aleph_api.subagents.analyst import build_analyst_subagent
     from aleph_api.subagents.researcher import build_researcher_subagent
     from aleph_api.subagents.retriever import build_retriever_subagent
@@ -2154,6 +2157,16 @@ def build_assistant_deep_agent(
                 actor_id=SYSTEM_ACTOR,
                 backend_factory=_memory_backend,
             ),
+            # WS-H3: the agent grades its own answer against the project's
+            # rubric before handing it over. Splatted as one list because the
+            # ORDER matters and getting it wrong does not fail — the source
+            # must run before the grader or the grading loop's budget never
+            # resets. `build_grading_middleware` returns them already ordered
+            # so this call site cannot get it wrong.
+            #
+            # Inert when the project has no rubric: no rubric file, no grader
+            # call, one model call, byte-identical answer.
+            *build_grading_middleware(settings=settings, backend_factory=_memory_backend),
             CopilotKitMiddleware(),
         ],
         backend=_memory_backend,

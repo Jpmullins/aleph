@@ -32,7 +32,11 @@ from sqlalchemy import select
 
 from aleph_core.ids import uuid7
 from aleph_db.models.plugin import Plugin
-from aleph_kernel.skills import skill_capability, skill_from_source
+from aleph_kernel.skills import (
+    skill_capability,
+    skill_capability_name,
+    skill_from_source,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -189,12 +193,38 @@ class PluginService:
         return mounted, failed
 
     async def disable(
-        self, *, project_id: UUID, actor_id: UUID, name: str, ledger: Any
+        self,
+        *,
+        project_id: UUID,
+        actor_id: UUID,
+        name: str,
+        ledger: Any,
+        kernel: Kernel | None = None,
+        force: bool = False,
     ) -> Plugin | None:
         """Stop mounting it, and keep the row so it can be turned back on.
 
         Deleting would lose the source an agent wrote, which is the one thing
         here that cannot be regenerated.
+
+        `kernel`, like on `install`, is the seam to the live process — and here
+        it is also the GUARDRAIL. The kernel refuses to retire a capability that
+        other mounted capabilities are standing on, and that refusal is the
+        product thesis: an agent may rearrange its own abilities and may not
+        saw through the branch. Without passing one, this method marks a row
+        `disabled` while the capability stays mounted and serving, so the
+        database and the running process disagree about what the system can do.
+
+        The HTTP route and the agent tool both go through `PluginApi.disable`
+        first, so the guardrail held on the paths a user reaches. It did not
+        hold HERE, and a service method whose safety depends on every caller
+        remembering to check first is not a guardrail — it is a convention.
+
+        Order matters: the kernel is asked FIRST, so a refusal leaves no row
+        edit to undo. `force` is passed through, and the kernel still refuses
+        when the collateral includes a protected capability — an operator may
+        accept breaking their own plugins; nobody may take down the kernel's
+        own footing.
         """
         row = (
             await self._session.execute(
@@ -207,6 +237,26 @@ class PluginService:
         ).scalar_one_or_none()
         if row is None:
             return None
+
+        if kernel is not None:
+            # The CAPABILITY name, not the row name. A plugin row called
+            # `base-notes` is mounted as `skill.base-notes`, and looking it up
+            # by the row name returns None — which reads as "core, nothing to
+            # retire" and skips the guardrail entirely.
+            key = skill_capability_name(name)
+            plugin_id = kernel.plugin_id_for(key)
+            # `is_provided` is ACTIVE, not merely registered. Skipping an
+            # already-torn-down capability makes this idempotent, which is what
+            # lets the HTTP route and the agent tool pass the kernel even
+            # though both already went through `PluginApi.disable`. Without it,
+            # the second deactivate of a plugin WITH dependents recomputes the
+            # blast radius against unchanged specs and raises — turning a
+            # successful forced removal into an error after the fact.
+            if plugin_id is not None and kernel.is_provided(key):
+                # Raises `DependentsWouldBreak` — the caller sees exactly what
+                # would stop, which is the whole point of a predictable refusal.
+                await kernel.deactivate(plugin_id, force=force)
+
         row.state = "disabled"
         await ledger.append(
             project_id=project_id,

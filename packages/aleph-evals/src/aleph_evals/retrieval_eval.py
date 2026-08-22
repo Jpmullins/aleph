@@ -329,6 +329,59 @@ async def _embedding_model(maker: Any) -> tuple[str, str] | None:
     return str(row[0]), label
 
 
+async def _rerank_model(maker: Any) -> tuple[Any, Any, UUID, dict[str, Any], str] | None:
+    """Everything `reranker_for` needs, read off the deployed profile.
+
+    Read rather than configured, for the same reason `_embedding_model` is: an
+    eval that reranks with a model the system does not use reports a number
+    nothing else can reproduce.
+    """
+    from sqlalchemy import text as sql_text
+
+    from aleph_core.ids import uuid7
+    from aleph_models.client import LiteLLMClient
+    from aleph_models.pricing import PricingTable
+    from aleph_security.principal import Principal
+
+    name = os.environ.get("ALEPH_DEFAULT_MODEL_PROFILE", "aleph-dev")
+    async with maker() as session:
+        row = (
+            await session.execute(
+                sql_text(
+                    "select bindings_jsonb, name, is_template "
+                    "from model_profiles "
+                    "where bindings_jsonb->'rerank'->>'model' is not null "
+                    "order by (name = :n) desc, is_template desc limit 1"
+                ),
+                {"n": name},
+            )
+        ).first()
+    if not row or not row[0]:
+        return None
+    bindings = dict(row[0])
+    label = f"{bindings['rerank']['model']} bound on {row[1]}{' template' if row[2] else ''}"
+    import httpx
+
+    # Its own client, and it outlives this function on purpose: the reranker
+    # holds it for the whole run. A `with` block here would close the transport
+    # before the first rerank call, which fails as "client has been closed" —
+    # an error that reads like a gateway problem.
+    client = LiteLLMClient(
+        base_url=os.environ["LITELLM_BASE_URL"],
+        api_key=os.environ["INSIGHTS_LITELLM_API_KEY"],
+        http_client=httpx.AsyncClient(timeout=120.0),
+        pricing=PricingTable(),
+        session_maker=maker,
+    )
+    principal = Principal(
+        user_id=uuid7(),
+        subject="retrieval-eval",
+        email="eval@localhost",
+        actor_kind="user",
+    )
+    return client, principal, uuid7(), bindings, label
+
+
 async def _embedder(maker: Any) -> tuple[Any, str]:
     """Return (embed_fn, mode).
 
@@ -359,7 +412,44 @@ async def _embedder(maker: Any) -> tuple[Any, str]:
     return embed, f"hybrid (dense leg via {model}, bound on {profile_label})"
 
 
-async def run(k: int = 8) -> Report:
+async def _reranker(maker: Any, *, enabled: bool) -> tuple[Any, str]:
+    """The reranker for this run, and a label saying what it actually is.
+
+    `--rerank off` must be a genuine control arm, so it returns a `NoReranker`
+    rather than skipping the parameter: `search_corpus` reads a missing
+    reranker and a stood-down one along different paths, and comparing two arms
+    that took different paths measures the paths.
+
+    The label goes into the report's `mode` line. "rerank on" that silently
+    degraded to fused order is the failure this exists to make visible — it
+    would otherwise print as an on-arm that happened to score the same.
+    """
+    from aleph_rks.rerank import NoReranker, reranker_for
+
+    if not enabled:
+        return NoReranker(skipped_reason="off (control arm)"), "off"
+    if not os.environ.get("INSIGHTS_LITELLM_API_KEY") or not os.environ.get("LITELLM_BASE_URL"):
+        return NoReranker(skipped_reason="no gateway configured"), "off (no gateway)"
+
+    bound = await _rerank_model(maker)
+    if bound is None:
+        return (
+            NoReranker(skipped_reason="no ModelProfile binds a rerank model"),
+            "off (nothing binds Capability.RERANK — run autoconfigure)",
+        )
+    client, principal, project_id, bindings, label = bound
+    built = reranker_for(
+        client=client,
+        principal=principal,
+        project_id=project_id,
+        profile_bindings=bindings,
+    )
+    if isinstance(built, NoReranker):
+        return built, f"off ({built.skipped_reason})"
+    return built, f"on ({label})"
+
+
+async def run(k: int = 8, *, rerank: bool = False) -> Report:
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     from aleph_core.ids import uuid7
@@ -402,6 +492,8 @@ async def run(k: int = 8) -> Report:
         # results) never exercised at all. Every one of those is a thing
         # production does and the measurement did not.
         embed, mode = await _embedder(maker)
+        reranker, rerank_mode = await _reranker(maker, enabled=rerank)
+        mode = f"{mode} · rerank {rerank_mode}"
 
         seeded: list[tuple[str, Chunk]] = []
         for doc in corpus:
@@ -471,6 +563,7 @@ async def run(k: int = 8) -> Report:
                     # single long document filling every slot, and a measurement
                     # that switches it off cannot see it working — or failing.
                     per_source_cap=PER_SOURCE_CAP,
+                    reranker=reranker,
                 )
                 wanted = {doc_to_source[d] for d in question.expect}
 
@@ -530,6 +623,68 @@ async def run(k: int = 8) -> Report:
         await engine.dispose()
 
 
+def _both_arms(args: argparse.Namespace) -> int:
+    """Control and rerank arms, over the same set, printed together.
+
+    WS-RS6 criterion 1 asks for the two numbers "printed side by side by one
+    command". The first pass produced 0.567 → 0.645 from a script in a
+    session-scoped temp directory that no longer exists, so nothing committed
+    could re-measure it and nothing would notice it regressing — which is
+    exactly the property Part 0 exists to remove.
+
+    Two caveats are printed with the delta rather than left to the reader,
+    because both were found by adversarial review of the first measurement:
+
+    * **Depth is part of it.** `search_corpus` fetches
+      `max(rerank_window, top_k)` candidates when a reranker is present and
+      `top_k` when it is not, so the rerank arm's pool strictly contains the
+      control arm's. Some of the gain is seeing more, not ordering better. The
+      split is not separated here; it is named so the number is not
+      over-claimed.
+    * **The arms share a seeding pass, not a corpus embedding.** Each arm
+      re-seeds, so run-to-run variance in the corpus is not controlled for.
+      Treat a delta smaller than that variance as noise.
+    """
+    k = args.k if args.k is not None else max(RECALL_KS)
+    print("control arm (no reranking)")
+    off = asyncio.run(run(k=k, rerank=False))
+    print(off.render())
+    print()
+    print("rerank arm")
+    on = asyncio.run(run(k=k, rerank=True))
+    print(on.render())
+
+    gain = on.ndcg - off.ndcg
+    print()
+    print(f"  {'metric':<12} {'off':>8} {'on':>8} {'delta':>8}")
+    print(f"  {'nDCG@' + str(NDCG_K):<12} {off.ndcg:>8.3f} {on.ndcg:>8.3f} {gain:>+8.3f}")
+    print(f"  {'MRR':<12} {off.mrr:>8.3f} {on.mrr:>8.3f} {on.mrr - off.mrr:>+8.3f}")
+    for cut in sorted(set(off.recall_at) | set(on.recall_at)):
+        a = off.recall_at.get(cut, 0.0)
+        b = on.recall_at.get(cut, 0.0)
+        print(f"  {'recall@' + str(cut):<12} {a:>8.2f} {b:>8.2f} {b - a:>+8.2f}")
+
+    if "rerank on" not in on.mode:
+        print(
+            f"\n  NOTE: the rerank arm did not rerank — {on.mode}. "
+            "The delta below is between two identical runs."
+        )
+    print(
+        "\n  Part of any gain is DEPTH, not judgement: the rerank arm fetches "
+        f"max(rerank_window, {k}) candidates and the control arm fetches {k}, "
+        "so the rerank arm's pool contains the control arm's plus hits the "
+        "control arm can never surface."
+    )
+
+    if args.min_rerank_gain is not None and gain < args.min_rerank_gain:
+        print(
+            f"\nFAIL: reranking gained {gain:+.3f} nDCG@{NDCG_K}, "
+            f"required {args.min_rerank_gain:+.3f}"
+        )
+        return 1
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Retrieval recall against the real retriever")
     parser.add_argument(
@@ -550,7 +705,29 @@ def main() -> int:
             "set whatever retrieval does, so a floor on it cannot fail."
         ),
     )
+    parser.add_argument(
+        "--rerank",
+        choices=("off", "on", "both"),
+        default="off",
+        help=(
+            "second-stage reranking. `both` runs the control arm and the "
+            "rerank arm over the same seeded corpus and prints them side by "
+            "side, which is the only form in which the delta means anything."
+        ),
+    )
+    parser.add_argument(
+        "--min-rerank-gain",
+        type=float,
+        default=None,
+        help=(
+            "with --rerank both, exit non-zero if reranking does not improve "
+            f"nDCG@{NDCG_K} by at least this much. WS-RS6 asks for 0.05."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.rerank == "both":
+        return _both_arms(args)
 
     # ONE run, not three.
     #
@@ -561,7 +738,9 @@ def main() -> int:
     # times the gateway spend for information one pass already has: `recall_at`
     # is computed from the rank of the first hit, so every cut-off comes out of
     # a single retrieval.
-    report = asyncio.run(run(k=args.k if args.k is not None else max(RECALL_KS)))
+    report = asyncio.run(
+        run(k=args.k if args.k is not None else max(RECALL_KS), rerank=args.rerank == "on")
+    )
     print(report.render())
     print()
     # The breakdown is the useful part: a gap between verbatim and paraphrase is

@@ -723,6 +723,14 @@ async def test_the_agent_writes_the_rubric_and_the_next_turn_grades_against_it(
 
     Without it, `RUBRIC_PATH` would be a claim about somebody else's routing
     table, and a wrong claim there fails by reading nothing forever.
+
+    It takes the PRODUCTION middleware list as-is and swaps only the two models.
+    It used to append `build_grading_middleware(...)` to that list, which worked
+    only while the feature was unwired: once the real builder included it,
+    deepagents refused the graph with "Please remove duplicate middleware
+    instances." A test that goes red the moment its subject ships is structurally
+    dependent on the subject not shipping, and this one guarded the single most
+    important thing in the workstream.
     """
     from deepagents import create_deep_agent
     from langgraph.checkpoint.memory import MemorySaver
@@ -750,22 +758,46 @@ async def test_the_agent_writes_the_rubric_and_the_next_turn_grades_against_it(
     agent_model = ScriptedModel(replies=[write, _answer("saved"), _answer("graded answer")])
     grader = ScriptedModel(replies=[_verdict("satisfied")])
 
+    # The production list already carries the two grading middlewares, in the
+    # order `build_grading_middleware` fixed. Only the grader's MODEL is
+    # swapped, so the routing under test is production's and the verdict is
+    # scripted.
+    production_middleware = list(kwargs["middleware"])
+    graders = [m for m in production_middleware if isinstance(m, CostedRubricMiddleware)]
+    assert len(graders) == 1, (
+        "the production agent does not carry exactly one CostedRubricMiddleware "
+        f"(found {len(graders)}). If it carries none, `build_grading_middleware` "
+        "has been unwired from `build_assistant_deep_agent` and self-grading is "
+        f"off. Middleware: {[type(m).__name__ for m in production_middleware]}"
+    )
+    sources = [m for m in production_middleware if isinstance(m, ProjectRubricMiddleware)]
+    assert len(sources) == 1, "the rubric source is missing from the production agent"
+    assert production_middleware.index(sources[0]) < production_middleware.index(graders[0]), (
+        "the grader runs before the rubric source. This does not fail loudly — it "
+        "degrades into a grading loop whose iteration budget never resets."
+    )
+    # Swap the grader instance for one with the scripted model, IN PLACE, so
+    # the position `build_grading_middleware` chose is preserved. Rebuilt rather
+    # than having its private `_model` reassigned: the attribute belongs to the
+    # library's `RubricMiddleware`, and a test that reaches into it would keep
+    # passing after an upstream rename while grading silently used the real
+    # gateway model.
+    rebuilt = build_grading_middleware(
+        settings=_settings(),
+        # The production factory, not a stand-in. This is the whole point.
+        backend_factory=kwargs["backend"],
+        model=grader,
+    )
+    scripted_grader = next(m for m in rebuilt if isinstance(m, CostedRubricMiddleware))
+    production_middleware[production_middleware.index(graders[0])] = scripted_grader
+
     agent = create_deep_agent(
         **{
             **kwargs,
             "model": agent_model,
             "store": store,
             "checkpointer": MemorySaver(),
-            "middleware": [
-                *kwargs["middleware"],
-                *build_grading_middleware(
-                    settings=_settings(),
-                    # The production factory, not a stand-in. This is the whole
-                    # point of the test.
-                    backend_factory=kwargs["backend"],
-                    model=grader,
-                ),
-            ],
+            "middleware": production_middleware,
         }
     )
     project = "proj:11111111-1111-1111-1111-111111111111"

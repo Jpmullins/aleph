@@ -229,18 +229,52 @@ def cast_dict(value: dict[Any, Any]) -> dict[str, Any]:
     return {str(k): v for k, v in value.items()}
 
 
-def parse_scores(reply: dict[str, Any], candidate_count: int) -> list[tuple[int, float]]:
-    """`(index, score)` pairs the model actually returned, cleaned.
+@dataclass(frozen=True)
+class Judgement:
+    """What the model said, and whether it said anything intelligible.
 
-    Split out and made public because this is where an LLM reranker breaks: an
-    id that names no candidate, the same id twice, a score outside the scale, a
-    string where a number belongs. Each of those, left alone, silently reorders
-    a passage the model never judged. Dropped rather than repaired — a repaired
-    id is a guess wearing the model's authority.
+    The two states this separates were one value until 2026-08-22, and
+    collapsing them is destructive rather than merely lossy:
+
+    * **A genuine abstention** — the model returned a well-formed, empty
+      `relevant` list. That is the signal that empties the result, and it is
+      the only thing in Aleph that can tell an answerable question from an
+      unanswerable one (docs/decisions.md D10).
+    * **An unintelligible reply** — no `relevant` key, or one that is not a
+      list, or a list from which every single entry had to be dropped. The
+      model has told us nothing, and reading that as "none of these passages
+      are relevant" is a broken reranker reporting perfect humility.
+
+    Measured: with `gemma-4-e2b` bound to `Capability.RERANK`, treating the
+    second as the first took the 45-question eval from **nDCG@10 0.970 to
+    0.133** — recall@20 fell from 1.00 to 0.13. Retrieval was not returning
+    worse answers; it was returning nothing, and reporting an abstention rate.
+    """
+
+    scores: list[tuple[int, float]]
+    #: `None` when the reply was intelligible. A sentence otherwise.
+    malformed: str | None = None
+
+
+def parse_judgement(reply: dict[str, Any], candidate_count: int) -> Judgement:
+    """`(index, score)` pairs the model actually returned, cleaned — and why not.
+
+    This is where an LLM reranker breaks: an id that names no candidate, the
+    same id twice, a score outside the scale, a string where a number belongs.
+    Each of those, left alone, silently reorders a passage the model never
+    judged. Dropped rather than repaired — a repaired id is a guess wearing the
+    model's authority.
+
+    Dropping every entry is different from being handed none, so the two leave
+    by different doors.
     """
     raw = reply.get("relevant")
     if not isinstance(raw, list):
-        return []
+        present = ", ".join(sorted(str(k) for k in reply)) or "nothing"
+        return Judgement(
+            [],
+            f"no 'relevant' list in the reply (keys: {present})",
+        )
     seen: set[int] = set()
     out: list[tuple[int, float]] = []
     for item in cast("list[object]", raw):
@@ -259,7 +293,25 @@ def parse_scores(reply: dict[str, Any], candidate_count: int) -> list[tuple[int,
             continue
         seen.add(index)
         out.append((index, float(score)))
-    return out
+
+    if not out and raw:
+        # A non-empty list from which nothing survived. Every entry was
+        # malformed, out of range, a duplicate, or below the relevance floor —
+        # and only the last of those is a judgement. Distinguishing further
+        # would need per-entry reasons; what matters is that the model did NOT
+        # hand back an empty list, so this is not the abstention signal.
+        return Judgement(
+            [],
+            f"all {len(raw)} entries were unusable (bad id, bad score, "
+            "duplicate, out of range, or below the relevance floor)",
+        )
+    return Judgement(out)
+
+
+def parse_scores(reply: dict[str, Any], candidate_count: int) -> list[tuple[int, float]]:
+    """`parse_judgement`, discarding the reason. Kept for callers that only
+    need the pairs."""
+    return parse_judgement(reply, candidate_count).scores
 
 
 def apply_ranking(
@@ -398,20 +450,24 @@ class ListwiseLlmReranker:
         )
         content = response.choices[0].message.content if response.choices else ""
         try:
-            scored = parse_scores(_loads_lenient(content), len(hits))
+            judgement = parse_judgement(_loads_lenient(content), len(hits))
         except ValueError as exc:
-            # A parse failure is NOT an abstention. Left to fall through to
-            # `apply_ranking` with an empty list it would empty the results and
-            # be indistinguishable from "the model judged nothing relevant" —
-            # a broken reranker reporting perfect humility.
+            # Not valid JSON at all.
+            judgement = Judgement([], f"the reply is not JSON: {exc}")
+        if judgement.malformed is not None:
+            # An unintelligible reply is NOT an abstention. Left to fall through
+            # to `apply_ranking` with an empty list it empties the results and
+            # is indistinguishable from "the model judged nothing relevant" — a
+            # broken reranker reporting perfect humility. Measured on a weak
+            # model, that difference is nDCG@10 0.970 vs 0.133.
             _log.warning(
                 "rks.rerank.unparseable",
                 backend=self.name,
-                error=str(exc),
+                error=judgement.malformed,
                 impact="fused order kept; this is NOT read as an abstention",
             )
             return list(hits[:top_k])
-        return apply_ranking(hits, scored, top_k=top_k, keep_unranked=self.keep_unranked)
+        return apply_ranking(hits, judgement.scores, top_k=top_k, keep_unranked=self.keep_unranked)
 
 
 @dataclass
@@ -436,11 +492,28 @@ class AdaptiveReranker:
         if self._native_supported is not False:
             try:
                 out = await self.native.rank(query=query, hits=hits, top_k=top_k)
-            except RerankUnsupported as exc:
+            except Exception as exc:
+                # ANY failure of the cross-encoder path, not only the 4xx that
+                # `RerankUnsupported` is written for.
+                #
+                # The reference gateway answers `POST /v1/rerank` with **500**
+                # "litellm.APIConnectionError: Unsupported provider:
+                # bedrock_mantle" — semantically "this model cannot rerank",
+                # syntactically a server error. Catching only `RerankUnsupported`
+                # meant the fallback that exists precisely for this deployment
+                # never ran on it: the exception escaped, and `search_corpus`
+                # degraded the whole search to fused order rather than using the
+                # LLM reranker sitting right there.
+                #
+                # The blast radius of being wrong in this direction is small and
+                # bounded: the fallback IS a reranker, and it is tried once per
+                # process because `_native_supported` latches. Being wrong in the
+                # other direction costs the feature entirely.
                 self._native_supported = False
                 _log.warning(
                     "rks.rerank.native_unsupported",
-                    reason=str(exc),
+                    reason=f"{type(exc).__name__}: {exc}",
+                    expected=isinstance(exc, RerankUnsupported),
                     fallback=self.fallback.name,
                     impact="every later search in this process uses the LLM reranker",
                 )

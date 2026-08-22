@@ -13,6 +13,7 @@ the ones that mutate the model's answer and require the result to move.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, cast
 from uuid import UUID, uuid4
 
@@ -42,6 +43,7 @@ from aleph_rks.rerank import (
     NoReranker,
     _loads_lenient,
     apply_ranking,
+    parse_judgement,
     parse_scores,
     reranker_for,
 )
@@ -555,3 +557,195 @@ async def test_an_abstention_is_recorded_as_an_abstention(
     assert ranked == []
     attrs = _search_span(exporter).attributes or {}
     assert attrs["retrieval.rerank.abstained"] is True
+
+
+# ---------------------------------------------------------------------------
+# A reranker may not take down the search it is decorating
+# ---------------------------------------------------------------------------
+
+
+class _ExplodingReranker:
+    """A reranker whose transport fails, the way the real one does.
+
+    Not hypothetical: the reference gateway answers `POST /v1/rerank` with
+    **500** "Unsupported provider: bedrock_mantle" — not the 4xx that
+    `RerankUnsupported` is written for — so on the deployment this repository
+    is developed against, binding `Capability.RERANK` turned every corpus
+    search into an unhandled `HTTPStatusError`. Retrieval is the primary
+    function; reranking is a second stage over its output.
+    """
+
+    name = "exploding"
+    skipped_reason: str | None = None
+
+    async def rank(self, *, query: str, hits: list[ChunkHit], top_k: int) -> list[ChunkHit]:
+        del query, hits, top_k
+        raise RuntimeError("Server error '500 Internal Server Error' for url '/v1/rerank'")
+
+
+@pytest.mark.asyncio
+async def test_a_failing_reranker_degrades_to_fused_order(
+    exporter: InMemorySpanExporter, fused: list[ChunkHit]
+) -> None:
+    ranked = await search_corpus(
+        cast("Any", object()),
+        project_id=PROJECT,
+        query_text="q",
+        query_embedding=None,
+        top_k=5,
+        reranker=cast("Any", _ExplodingReranker()),
+    )
+    assert len(ranked) == 5, "the search returned nothing because the reranker failed"
+    assert [h.text for h in ranked] == [h.text for h in fused[:5]], (
+        "a failed rerank must leave fusion order untouched"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_failing_reranker_says_so_rather_than_failing_quietly(
+    exporter: InMemorySpanExporter, fused: list[ChunkHit]
+) -> None:
+    """Degrading silently is indistinguishable from a reranker that ran and
+    agreed with fusion — the exact confusion `retrieval.rerank.skipped` exists
+    to prevent."""
+    del fused
+    await search_corpus(
+        cast("Any", object()),
+        project_id=PROJECT,
+        query_text="q",
+        query_embedding=None,
+        top_k=5,
+        reranker=cast("Any", _ExplodingReranker()),
+    )
+    attrs = _search_span(exporter).attributes or {}
+    assert attrs.get("retrieval.rerank.failed") is True
+    skipped = attrs.get("retrieval.rerank.skipped")
+    assert isinstance(skipped, str)
+    assert "exploding" in skipped and "500" in skipped, (
+        f"the reason must name the backend and what it said, got {skipped!r}"
+    )
+    assert attrs["retrieval.rerank.backend"] == "exploding"
+
+
+@pytest.mark.asyncio
+async def test_the_adaptive_reranker_falls_back_on_a_5xx_not_only_a_4xx() -> None:
+    """The reference gateway 500s where the code expected 4xx.
+
+    `POST /v1/rerank` answers 500 "litellm.APIConnectionError: Unsupported
+    provider: bedrock_mantle" — semantically "this model cannot rerank",
+    syntactically a server error. Catching only `RerankUnsupported` meant the
+    LLM fallback that exists precisely for this deployment never ran on it: the
+    exception escaped `AdaptiveReranker` and the whole search degraded to fused
+    order with a reranker sitting right there, unused.
+    """
+    candidates = hits(5)
+
+    class _Native:
+        name = "cross-encoder"
+        calls = 0
+
+        async def rank(self, *, query: str, hits: Sequence[ChunkHit], top_k: int) -> list[ChunkHit]:
+            type(self).calls += 1
+            raise RuntimeError("Server error '500 Internal Server Error' for url '/v1/rerank'")
+
+    class _Fallback:
+        name = "llm-listwise"
+        calls = 0
+
+        async def rank(self, *, query: str, hits: Sequence[ChunkHit], top_k: int) -> list[ChunkHit]:
+            type(self).calls += 1
+            return list(reversed(list(hits)))[:top_k]
+
+    adaptive = AdaptiveReranker(native=cast("Any", _Native()), fallback=cast("Any", _Fallback()))
+    out = await adaptive.rank(query="q", hits=candidates, top_k=3)
+
+    assert _Fallback.calls == 1, "the LLM reranker was never reached"
+    assert [h.text for h in out] == [h.text for h in reversed(candidates)][:3]
+    assert adaptive.name == "llm-listwise", "the span would name a backend that did not run"
+
+    # Latched: the dead route is not retried on every later search.
+    await adaptive.rank(query="q", hits=candidates, top_k=3)
+    assert _Native.calls == 1, "the cross-encoder was probed again after it failed"
+    assert _Fallback.calls == 2
+
+
+# ---------------------------------------------------------------------------
+# An unintelligible reply is not an abstention
+# ---------------------------------------------------------------------------
+#
+# `parse_scores` returned `[]` for BOTH "the model returned a well-formed empty
+# list" and "the model returned something we could not read", and
+# `apply_ranking` treats `[]` as a confident "none of these are relevant" —
+# which empties the result. So a reranker that could not be understood looked
+# exactly like a reranker exercising perfect judgement.
+#
+# Measured, not hypothetical: with `gemma-4-e2b` bound to Capability.RERANK,
+# this took the 45-question eval from nDCG@10 0.970 to 0.133 and recall@20 from
+# 1.00 to 0.13. Retrieval was not returning worse answers — it was returning
+# nothing, and reporting a high abstention rate while doing it.
+
+
+def test_an_empty_relevant_list_is_a_real_abstention() -> None:
+    judgement = parse_judgement({"relevant": []}, 5)
+    assert judgement.scores == []
+    assert judgement.malformed is None, (
+        "a well-formed empty list is the abstention signal and must survive"
+    )
+
+
+def test_a_missing_relevant_key_is_malformed_not_an_abstention() -> None:
+    judgement = parse_judgement({"results": [{"id": 1, "score": 3}]}, 5)
+    assert judgement.scores == []
+    assert judgement.malformed is not None
+    assert "relevant" in judgement.malformed
+    assert "results" in judgement.malformed, "the reason should name what WAS there"
+
+
+def test_a_list_whose_entries_are_all_unusable_is_malformed() -> None:
+    """The model answered with something; none of it could be used.
+
+    That is a broken reply, not a judgement — and it is the common shape from a
+    small model, which emits `{"relevant": [{"index": 3, "relevance": 0.9}]}`
+    or ids that name no candidate.
+    """
+    judgement = parse_judgement({"relevant": [{"index": 3, "relevance": 0.9}]}, 5)
+    assert judgement.scores == []
+    assert judgement.malformed is not None
+    assert "1 entries" in judgement.malformed
+
+    out_of_range = parse_judgement({"relevant": [{"id": 99, "score": 3}]}, 5)
+    assert out_of_range.scores == []
+    assert out_of_range.malformed is not None
+
+
+def test_a_partially_usable_list_is_not_malformed() -> None:
+    """One good entry among rubbish is a judgement, and the rubbish is dropped."""
+    judgement = parse_judgement(
+        {"relevant": [{"id": 1, "score": 3}, {"id": 99, "score": 3}, "nonsense"]}, 5
+    )
+    assert judgement.scores == [(1, 3.0)]
+    assert judgement.malformed is None
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_reply_keeps_fused_order_rather_than_emptying() -> None:
+    """The end-to-end consequence, through the real reranker."""
+    reranker, _fake = llm_reranker('{"results": [{"index": 3, "relevance": 0.9}]}')
+    candidates = hits(10)
+    out = await reranker.rank(query="q", hits=candidates, top_k=5)
+    assert [h.text for h in out] == [h.text for h in candidates[:5]], (
+        "an unreadable reranker reply emptied the search instead of leaving fusion order alone"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_genuine_abstention_still_empties_the_result() -> None:
+    """The fix must not remove the abstention signal it is protecting.
+
+    Without this, treating everything as malformed would pass every test above
+    and quietly delete the only thing in Aleph that can tell an answerable
+    question from an unanswerable one.
+    """
+    reranker, _fake = llm_reranker('{"relevant": []}')
+    out = await reranker.rank(query="q", hits=hits(10), top_k=5)
+    assert out == [], "a well-formed empty judgement must still abstain"

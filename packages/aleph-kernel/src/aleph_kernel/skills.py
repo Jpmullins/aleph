@@ -149,6 +149,18 @@ def load_skill(directory: Path) -> Skill:
     )
 
 
+def skill_capability_name(skill_name: str) -> str:
+    """The capability key a skill publishes itself under.
+
+    One function rather than an f-string at each site. `PluginService.disable`
+    looked the plugin up by its ROW name (`base-notes`) while the kernel had
+    mounted it as `skill.base-notes`, so `plugin_id_for` returned None, the
+    guardrail was skipped, and a disable that should have been refused went
+    through and marked the row.
+    """
+    return f"skill.{skill_name}"
+
+
 def skill_capability(skill: Skill, *, requires: frozenset[str] = frozenset()) -> CapabilitySpec:
     """Wrap a skill as a kernel capability so it gets the whole lifecycle.
 
@@ -162,7 +174,7 @@ def skill_capability(skill: Skill, *, requires: frozenset[str] = frozenset()) ->
     failure this catches, and it is invisible until someone follows the
     instructions.
     """
-    key = f"skill.{skill.name}"
+    key = skill_capability_name(skill.name)
 
     async def setup(ctx: Context) -> AsyncIterator[Callable[[], Awaitable[None]]]:
         ctx.provide(key, skill)

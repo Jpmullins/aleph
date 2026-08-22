@@ -253,6 +253,42 @@ async def test_grader_calls_write_a_model_call(
     assert {r.purpose for r in rows} == {RUBRIC_GRADER_PURPOSE}
     assert all(r.input_tokens == 120 and r.completion_tokens == 30 for r in rows)
 
+    # The LITERAL, not the constant. Every assertion above resolves the purpose
+    # through `RUBRIC_GRADER_PURPOSE`, so redefining the constant to
+    # `"assistant.turn"` — the orchestrator's own purpose — left all 27 tests
+    # green while making "what did self-grading cost this project" unanswerable,
+    # because grader rows and answer rows would share a label.
+    assert RUBRIC_GRADER_PURPOSE == "assistant.rubric.grader", (
+        "the grader's purpose is how its spend is separated from the "
+        "orchestrator's. Changing it is allowed; changing it silently is not."
+    )
+    assert RUBRIC_GRADER_PURPOSE != "assistant.turn"
+
+    # The MODEL, and therefore the price. `copilot_cost_callback` prices against
+    # `ModelCall.model`, so a wrong name there yields `pricing_source='unknown'`
+    # and `cost_usd=0` on every grader row — literally "self-grading is free",
+    # the one statement this whole module exists to prevent. Setting the scope's
+    # model to a name nobody prices left all 27 tests green.
+    # Compared against what `grader_model` actually builds, not against a
+    # literal: hardcoding a name here would go stale the moment the JUDGE
+    # binding changes, and the claim under test is "the row names the model
+    # that ran", not "the row names this string".
+    from aleph_api.rubric import grader_model
+
+    expected_model = grader_model(_settings("http://unused", "unused")).model_name
+    for row in rows:
+        assert row.model == expected_model, (
+            f"the grader row names {row.model!r}; the grader ran "
+            f"{expected_model!r}. Pricing resolves off this field, so a wrong "
+            "name prices the call at zero and reports self-grading as free."
+        )
+        # The orchestrator's model, specifically. A scope that falls through to
+        # the enclosing call's model is the shape this most plausibly breaks in.
+        assert row.model != "fake-chat", (
+            "the grader row is attributed to the ORCHESTRATOR's model, so "
+            "grader spend is priced as if the answering model produced it"
+        )
+
 
 @pytest.mark.asyncio
 async def test_the_grader_rows_join_to_the_turn(

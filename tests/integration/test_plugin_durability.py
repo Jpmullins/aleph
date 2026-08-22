@@ -334,3 +334,148 @@ def test_the_kernel_still_has_no_database_dependency() -> None:
         "aleph-core",
         "aleph-observability",
     ]
+
+
+# ---------------------------------------------------------------------------
+# The removal guardrail, on the service path
+# ---------------------------------------------------------------------------
+#
+# `PluginService.disable` set `row.state = "disabled"`, ledgered, and returned.
+# No `kernel.deactivate`, no blast-radius walk. So the guardrail — the product
+# thesis, an agent may rearrange its own abilities and may not saw through the
+# branch — held only because the HTTP route and the agent tool both happened to
+# call `PluginApi.disable` first. A service method whose safety depends on every
+# caller remembering to check is not a guardrail, it is a convention, and the
+# one test that drove this path succeeded unconditionally.
+
+
+async def test_disabling_a_plugin_another_plugin_needs_is_refused(
+    maker: Callable[[], AsyncSession], committed_project: uuid.UUID
+) -> None:
+    """The refusal names what would break, and the row is not touched."""
+    from aleph_kernel.errors import DependentsWouldBreak
+
+    kernel = Kernel()
+    async with maker() as session:
+        await PluginService(session).install(
+            project_id=committed_project,
+            actor_id=ACTOR,
+            draft=_draft(name="base-notes"),
+            ledger=LedgerWriter(session),
+            kernel=kernel,
+        )
+        await PluginService(session).install(
+            project_id=committed_project,
+            actor_id=ACTOR,
+            draft=_draft(name="review-pass", requires=["skill.base-notes"]),
+            ledger=LedgerWriter(session),
+            kernel=kernel,
+        )
+        await session.commit()
+    await kernel.boot()
+
+    async with maker() as session:
+        with pytest.raises(DependentsWouldBreak) as caught:
+            await PluginService(session).disable(
+                project_id=committed_project,
+                actor_id=ACTOR,
+                name="base-notes",
+                ledger=LedgerWriter(session),
+                kernel=kernel,
+            )
+    assert "review-pass" in str(caught.value), (
+        f"the refusal does not name what would break: {caught.value}"
+    )
+
+    # Still mounted, and still enabled in the database. A refusal that left the
+    # row disabled would mean the process and the database disagree about what
+    # the system can do — which is worse than either answer alone.
+    assert kernel.is_provided("skill.base-notes")
+    async with maker() as session:
+        row = (
+            await session.execute(
+                select(Plugin).where(
+                    Plugin.project_id == committed_project, Plugin.name == "base-notes"
+                )
+            )
+        ).scalar_one()
+        assert row.state != "disabled", "a refused disable still marked the row disabled"
+
+
+async def test_disabling_a_plugin_nothing_needs_unmounts_it_and_marks_the_row(
+    maker: Callable[[], AsyncSession], committed_project: uuid.UUID
+) -> None:
+    """The refusal above must not have closed the feature it guards."""
+    kernel = Kernel()
+    async with maker() as session:
+        await PluginService(session).install(
+            project_id=committed_project,
+            actor_id=ACTOR,
+            draft=_draft(name="standalone-thing"),
+            ledger=LedgerWriter(session),
+            kernel=kernel,
+        )
+        await session.commit()
+    await kernel.boot()
+    assert kernel.is_provided("skill.standalone-thing")
+
+    async with maker() as session:
+        row = await PluginService(session).disable(
+            project_id=committed_project,
+            actor_id=ACTOR,
+            name="standalone-thing",
+            ledger=LedgerWriter(session),
+            kernel=kernel,
+        )
+        await session.commit()
+
+    assert row is not None
+    assert row.state == "disabled"
+    assert not kernel.is_provided("skill.standalone-thing"), (
+        "the row says disabled and the capability is still mounted and serving"
+    )
+
+
+async def test_force_disables_a_depended_on_plugin_and_takes_its_dependents_down(
+    maker: Callable[[], AsyncSession], committed_project: uuid.UUID
+) -> None:
+    """`force` is the operator accepting the consequence, not bypassing it.
+
+    Without this, the refusal test above would pass against a `disable` that
+    simply always refuses.
+    """
+    kernel = Kernel()
+    async with maker() as session:
+        await PluginService(session).install(
+            project_id=committed_project,
+            actor_id=ACTOR,
+            draft=_draft(name="base-notes"),
+            ledger=LedgerWriter(session),
+            kernel=kernel,
+        )
+        await PluginService(session).install(
+            project_id=committed_project,
+            actor_id=ACTOR,
+            draft=_draft(name="review-pass", requires=["skill.base-notes"]),
+            ledger=LedgerWriter(session),
+            kernel=kernel,
+        )
+        await session.commit()
+    await kernel.boot()
+
+    async with maker() as session:
+        row = await PluginService(session).disable(
+            project_id=committed_project,
+            actor_id=ACTOR,
+            name="base-notes",
+            ledger=LedgerWriter(session),
+            kernel=kernel,
+            force=True,
+        )
+        await session.commit()
+
+    assert row is not None and row.state == "disabled"
+    assert not kernel.is_provided("skill.base-notes")
+    assert not kernel.is_provided("skill.review-pass"), (
+        "the dependent is still mounted with its provider withdrawn"
+    )
