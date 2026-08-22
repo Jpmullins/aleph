@@ -290,9 +290,15 @@ async def _probe(items: int, runs: int) -> int:
         f"completion(s) over {runs} runs"
     )
     if failures:
-        print(f"{summary} — NOT the criterion")
         for line in failures:
             print(f"FAIL: {line}")
+        # The summary goes LAST on BOTH paths. `run_shell` records the last
+        # non-empty line as the row's detail, so printing it first on failure
+        # meant the gate showed `D9 FAIL  FAIL: run 3 touched 5 item(s)…` and
+        # the completion count — the number the criterion is ABOUT — never
+        # reached the row. A failing row that omits the measurement is a row
+        # that tells you something broke and not what.
+        print(f"{summary} — NOT the criterion")
         return 1
     print(f"{summary} — identical, {best / counts[0]:.0f} tool calls per completion")
     return 0
