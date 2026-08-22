@@ -254,6 +254,7 @@ jobs:
           POSTGRES_DB: aleph
         ports: ["5432:5432"]
         options: >-
+          --shm-size=1g
           --health-cmd "pg_isready -U aleph"
           --health-interval 5s --health-timeout 5s --health-retries 20
       redis:
@@ -377,6 +378,7 @@ jobs:
           POSTGRES_DB: aleph
         ports: ["5432:5432"]
         options: >-
+          --shm-size=1g
           --health-cmd "pg_isready -U aleph"
           --health-interval 5s --health-timeout 5s --health-retries 20
       redis:

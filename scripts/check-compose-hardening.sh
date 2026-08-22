@@ -23,6 +23,16 @@
 # A grep in a doc cannot hold any of these: it reads the source text, not the
 # rendered configuration, so it cannot see a value that arrives through a YAML
 # merge key and cannot tell an anchor definition from a service that uses it.
+# SCOPE, because it is narrower than it looks: this renders from a scratch copy
+# of `.env.example`, so it measures WHAT A FRESH OPERATOR GETS from the shipped
+# defaults. It does not read your machine's `deploy/compose/.env`, and it does
+# not read the RUNNING container — a `.env` setting `POSTGRES_SHM_SIZE=64m`
+# leaves this green while giving that operator an unrestorable database.
+# That live path is acceptance row P8a's job: `restore_drill.py` performs a
+# real pg_restore against the real server, which is where a 64 MB /dev/shm
+# actually surfaces. The two rows are complementary and neither subsumes the
+# other; do not widen this one into a live probe.
+#
 # This sweep parses `docker compose config` — the merged, interpolated result
 # that the daemon is actually given.
 #
