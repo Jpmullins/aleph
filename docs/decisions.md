@@ -499,3 +499,45 @@ distrusts.** `tests/integration/test_plugin_settings_contract.py`:
 if `plugin.settings.save` is loosened below OWNER. Either change makes the
 provenance of the plugin start to matter again, and both are visible to the
 tests above.
+
+---
+
+## D14 · `derived_from` edges are not written, and that is the decision — 2026-08-22
+
+`aleph_wiki.derivation.record_derivations` is a complete, tested writer with no
+production caller, and it stays that way. `claim_edges` holds two rows, both
+`supersedes`. **Three agents have now declined to wire it**, each independently
+and for the same reason, and that reasoning has lived only in commit messages.
+
+A `derived_from` edge asserts that belief B rests on belief A. **Aleph never
+learns that.** Every claim is extracted from a source CHUNK with a verbatim
+quote and a character span, and `BeliefService.upsert_claim` is the only
+writer. The research composer cites chunks; the synthesis workflow cites
+chunks; the curator writes no claims at all. There is no point in the pipeline
+where one claim's dependence on another is *known* rather than guessable.
+
+**Writing the edge from a model's guess would be worse than leaving it empty.**
+`aleph_reviewer.retraction.retraction_impact`'s second hop propagates a
+retraction along these edges, so guessed dependencies mean retracting
+conclusions that do not rest on the withdrawn paper — a false blast radius,
+which is the one failure mode the belief layer exists to prevent.
+
+**What was NOT defensible was the silence.** `describe_impact` wrote
+`0 derived from those (deepest hop 0)` whether the walk found no dependants or
+whether there was no graph to walk, and on this instance it has only ever been
+the second. Those two readings are opposite and the sentence could not tell
+them apart. `RetractionImpact` now carries `derivation_graph_is_empty`,
+measured with one `LIMIT 1` and defaulting to the pessimistic reading, and the
+output says:
+
+> `0 derived from those — NOT because nothing depends on them: this project has
+> no 'derived_from' edge at all, so the second hop had no graph to walk`
+
+**This supersedes `WS-RS9` criterion 4** — *"`select count(*) from claim_edges
+where kind='derived_from'` > 0 after a research run"* — which is withdrawn. The
+replacement is the one above: the absence is reported AS an absence, in the two
+places a reader would otherwise read it as a measured zero.
+
+**Reopen this if** a pipeline stage ever learns a real dependency — a composer
+that cites a CLAIM rather than a chunk would be one. The writer is already
+there; only the caller is missing, deliberately.

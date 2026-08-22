@@ -456,8 +456,8 @@ at the right file and the wrong row.
   <br>`psql -tAc "select distinct confidence from wiki_claims" returns only Confidence members. Returns 'cited' today, which is in neither the engine enum nor a valid derived state.`
 - Retraction propagates two hops
   <br>`tests/e2e/test_retraction_walk.py passes with a two-hop case: retract a source, assert both the directly-cited claim and a claim derived from it are flagged. Fails today — the file does not exist, and the second hop is structurally dead regardless.`
-- derived_from edges are written
-  <br>`psql -tAc "select count(*) from claim_edges where kind='derived_from'" > 0 after a research run. Returns 0 today for every kind.`
+- ~~derived_from edges are written~~ — **WITHDRAWN, D14**
+  <br>**WITHDRAWN — `docs/decisions.md` D14.** Aleph never learns that belief B rests on belief A: every claim is extracted from a source CHUNK with a verbatim quote, and the composer, the synthesis workflow and the curator all cite chunks. Writing the edge from a model's guess would make `retraction_impact`'s second hop retract conclusions that do not rest on the withdrawn paper — a false blast radius, the one failure the belief layer exists to prevent. Three agents declined to wire it, independently and for the same reason. The replacement criterion is that the absence is reported AS an absence: `describe_impact` must say `NOT because nothing depends on them: this project has no 'derived_from' edge at all` rather than a bare `0 derived from those`, which reads identically to a measured zero. Pinned by `packages/aleph-reviewer/tests/test_retraction_summary.py`.
 - The top confidence state is reachable
   <br>`Test seeds three tier-A supporting citations and asserts next_confidence_from_evidence returns WELL_SUPPORTED. FAILS TODAY: weight is 1.0 everywhere, so max_pos never reaches the 1.5 threshold at confidence.py:62.`
 - The renderer cannot silently drop a state
