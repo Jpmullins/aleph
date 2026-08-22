@@ -24,9 +24,11 @@ import {
 } from "@copilotkit/react-core/v2";
 import { z } from "zod";
 import type { ReactNode } from "react";
+import { useEffect, useState } from "react";
 
 import { buildAlephCatalog } from "@/a2ui/aleph-catalog-v09";
 import { api } from "@/lib/api";
+import { getAccessToken } from "@/lib/auth";
 
 const RUNTIME_URL =
   (import.meta.env.VITE_COPILOT_RUNTIME_URL as string | undefined) ??
@@ -119,9 +121,40 @@ const sandboxFunctions = [
 ];
 
 export function AlephCopilotProvider({ children }: { children: ReactNode }) {
+  // The chat path called the runtime with no credential at all: the provider
+  // passed `runtimeUrl`, `renderActivityMessages` and `openGenerativeUI`, and
+  // nothing else. The bridge then called the API anonymously, so the API saw
+  // the BRIDGE rather than the person — and every other route in the app has
+  // been authenticated since the `/copilotkit` exemption was removed.
+  //
+  // Held in state rather than read inline for one reason: `getAccessToken` is
+  // async and this prop is not. Read once at mount and never refreshed, chat
+  // would work until the token expired and then stop — a failure that looks
+  // like the agent being broken rather than like a credential ageing out. In
+  // `local` mode the token is a constant and never expires, so this costs
+  // nothing today and is the part that would otherwise be missing later.
+  //
+  // NOTE: the installed CopilotKit types `headers` as
+  // `Record<string, string> | Headers` — an OBJECT, not a function. A function
+  // is silently accepted by JS and serialised to nothing.
+  const [headers, setHeaders] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    void getAccessToken().then((token) => {
+      if (!cancelled && token) {
+        setHeaders({ Authorization: `Bearer ${token}` });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <CopilotKitProvider
       runtimeUrl={RUNTIME_URL}
+      headers={headers}
       renderActivityMessages={[alephA2UIMessageRenderer]}
       openGenerativeUI={{ sandboxFunctions, designSkill: ALEPH_DESIGN_SKILL }}
     >

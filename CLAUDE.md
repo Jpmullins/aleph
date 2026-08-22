@@ -320,11 +320,6 @@ below only with a test that would have caught them.
   labels skips rather than hiding them, but a run over an empty stack exercises almost nothing while
   reporting no failures. `scripts/acceptance.sh` — which counts skips separately and can verify its
   own checks fail (`--self-check`) — is the gate to trust.
-- **The Node runtime bridge is an open proxy on port 4000.**
-  `apps/copilot-runtime/src/server.ts` constructs `new HttpAgent({ url: AGENT_URL })` with no
-  headers, and the port is published. Anything that can reach it can drive the agent. This is a
-  real problem in the only mode Aleph runs, and is `WS-D3` in `docs/plan.md`.
-
 ### Fixed, with the test that pins each
 
 **2026-08-21 (executing `docs/plan.md`)**

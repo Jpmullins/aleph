@@ -25,10 +25,46 @@ x-model-access: &model-access
   extra_hosts:
     - "host.docker.internal:host-gateway"
 
+# Log rotation. The json-file driver's DEFAULT IS UNBOUNDED: a container that
+# logs steadily fills the host disk and takes every other container with it,
+# and the failure looks like "postgres won't start" rather than "the disk is
+# full". 10m x 5 is 50MB per container, ~600MB for the whole stack.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+# Everything long-running merges this.
+#
+# `unless-stopped`, not `always`: `always` restarts a container the operator
+# deliberately stopped as soon as the daemon comes back, so `docker compose stop
+# api` while debugging silently undoes itself after a reboot. `unless-stopped`
+# survives a host reboot and a crash, and honours an explicit stop.
+#
+# The one-shot `migrate` is the deliberate exception and keeps `restart: "no"` —
+# a restart policy on a service whose whole contract is "exit 0 once" turns a
+# failed migration into an infinite retry loop against a database it cannot
+# migrate, and everything waiting on `service_completed_successfully` waits
+# forever with no error surfaced.
+x-managed: &managed
+  restart: unless-stopped
+  logging: *logging
+
 x-app-env: &app-env
   env_file: [.env]
   environment:
     DATABASE_URL: postgresql+asyncpg://aleph:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/aleph
+    # Named here, not left to `env_file`, and that is the whole point: compose
+    # uses an env_file value AS-IS, so a shell variable of the same name is
+    # neither interpolated into this file nor injected into the container.
+    # Until this line existed,
+    #   LITELLM_BASE_URL=http://127.0.0.1:1 docker compose up -d
+    # started the stack against whatever .env said — so the "does it boot with
+    # no gateway?" test silently tested the working gateway. `:?` because an
+    # empty value fails later and further away, inside LiteLLMClient's
+    # constructor, as a boot abort with no mention of compose.
+    LITELLM_BASE_URL: ${LITELLM_BASE_URL:?set LITELLM_BASE_URL in .env — see §1 of .env.example}
     REDIS_URL: redis://redis:6379/0
     CODE_RUNNER_REDIS_URL: redis://runner-redis:6379/0
     # The browser's origin, which is WEB_PORT — not the API's own port. Change
@@ -62,6 +98,7 @@ services:
 
   postgres:
     image: pgvector/pgvector:pg17
+    <<: *managed
     networks: [aleph]
     environment:
       POSTGRES_USER: aleph
@@ -83,6 +120,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    <<: *managed
     command: ["redis-server", "--appendonly", "yes"]
     # Both networks: the queue is the one thing code-runner is allowed to see.
     networks: [aleph, runner]
@@ -111,6 +149,7 @@ services:
   # on the platform Redis, which code-runner cannot reach at all.
   runner-redis:
     image: redis:7-alpine
+    <<: *managed
     command: ["redis-server", "--save", ""]
     networks: [aleph, runner]
     healthcheck:
@@ -141,6 +180,11 @@ services:
         condition: service_healthy
     working_dir: /app/apps/api
     command: ["/app/.venv/bin/alembic", "upgrade", "head"]
+    logging: *logging
+    # NOT `unless-stopped`, and not an oversight — see the comment on
+    # `x-managed`. A one-shot that restarts on failure retries a broken
+    # migration forever while every dependent waits on an exit code that never
+    # comes.
     restart: "no"
 
   # --- application -----------------------------------------------------------
@@ -151,7 +195,7 @@ services:
       dockerfile: apps/api/Dockerfile
     image: aleph-api:local
     networks: [aleph]
-    <<: [*app-env, *model-access]
+    <<: [*app-env, *model-access, *managed]
     depends_on:
       <<: *depends-on-data
       migrate:
@@ -159,6 +203,13 @@ services:
     volumes:
       - assets:/app/data/assets
     ports: ["${API_PORT_HOST:-8000}:8000"]
+    # This is the process that reads an upload into memory before it reaches the
+    # asset store, so it is the one that can take the host down by accident
+    # rather than by attack. Capped, and capped equal to memswap so the cap
+    # means "no memory" rather than "start swapping" — `deploy.resources` cannot
+    # express the swap half at all.
+    mem_limit: ${API_MEM_LIMIT:-2g}
+    memswap_limit: ${API_MEM_LIMIT:-2g}
     healthcheck:
       # /readyz, not /healthz: it round-trips the database, the queue and the
       # asset store. Liveness would report healthy while every request failed.
@@ -181,7 +232,7 @@ services:
       context: ../..
       dockerfile: apps/workers/Dockerfile
     networks: [aleph]
-    <<: [*app-env, *model-access]
+    <<: [*app-env, *model-access, *managed]
     depends_on:
       <<: *depends-on-data
       runner-redis:
@@ -190,6 +241,11 @@ services:
         condition: service_completed_successfully
     volumes:
       - assets:/app/data/assets
+    # Ingest normalizes whole documents in memory (PDF → markdown → chunks), so
+    # a single pathological source is the realistic way this grows without
+    # bound.
+    mem_limit: ${WORKERS_MEM_LIMIT:-2g}
+    memswap_limit: ${WORKERS_MEM_LIMIT:-2g}
     healthcheck:
       # arq's own health check, not a pgrep: it reads the health key the worker
       # writes to Redis, so it reports whether the worker is PROCESSING rather
@@ -216,6 +272,7 @@ services:
     # `runner` ONLY. No aleph network, so agent-written code cannot reach the
     # API, the database, the model endpoint or the internet — only the queue.
     networks: [runner]
+    <<: *managed
     environment:
       # Only the runner bus. The platform Redis is not on this container's
       # network at all, so this is a fact of the topology, not a promise.
@@ -248,6 +305,7 @@ services:
       context: ../..
       dockerfile: apps/copilot-runtime/Dockerfile
     networks: [aleph]
+    <<: *managed
     environment:
       # ALEPH_AGENT_URL, not AGENT_URL: server.ts reads the prefixed name and
       # otherwise falls back to http://aleph-api:8000, a hostname compose never
@@ -255,10 +313,28 @@ services:
       # and logs happily; the chat path is simply dead.
       ALEPH_AGENT_URL: http://api:8000/copilotkit/agent/assistant
       PORT: "4000"
+      # Shared with the API so the bridge and the thing it bridges to cannot
+      # disagree about who may talk to them. It was `cors: true` — every origin,
+      # with credentials — so any page the user had open could drive their
+      # assistant.
+      # The SAME expression as the API's (the `x-app-env` anchor above), not a
+      # second default that would silently drift from it. A bridge that allows
+      # an origin the API refuses is a bridge that has its own security policy.
+      ALEPH_CORS_ORIGINS: http://localhost:${WEB_PORT:-5173},http://127.0.0.1:${WEB_PORT:-5173}
     depends_on:
       api:
         condition: service_healthy
-    ports: ["${RUNTIME_PORT:-4000}:4000"]
+    # LOOPBACK, not every interface. CORS is enforced by browsers and stops a
+    # malicious page from using someone's session; it does nothing about a
+    # direct request, and this bridge drives the agent with no authentication
+    # of its own. Published as `0.0.0.0:4000` it was reachable from the whole
+    # LAN. The browser talks to it as `localhost:4000`, so nothing legitimate
+    # needs the wider binding.
+    ports: ["${RUNTIME_BIND_HOST:-127.0.0.1}:${RUNTIME_PORT:-4000}:4000"]
+    # A thin SSE proxy. It holds one open stream per conversation and nothing
+    # else, so this is a ceiling on a leak rather than a working-set budget.
+    mem_limit: ${RUNTIME_MEM_LIMIT:-512m}
+    memswap_limit: ${RUNTIME_MEM_LIMIT:-512m}
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:4000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 15s
@@ -269,8 +345,15 @@ services:
   web:
     build:
       context: ../..
+      # The DEV image: a Vite dev server with the source bind-mounted below, so
+      # an edit on the host is live in the browser. `apps/web/Dockerfile` is the
+      # production image — a compiled bundle behind a static server, no Node at
+      # runtime, non-root — and is deliberately NOT what this stack runs, because
+      # a production bundle bakes VITE_API_BASE_URL at BUILD time and every edit
+      # would need a rebuild. See deploy/README.md § Serving the built UI.
       dockerfile: apps/web/Dockerfile.dev
     networks: [aleph]
+    <<: *managed
     environment:
       # These names are read by the app; check `grep -rhoE "VITE_[A-Z_]+"
       # apps/web/src` before adding one. VITE_API_URL and VITE_RUNTIME_URL are
@@ -299,6 +382,18 @@ services:
     volumes:
       - ../../apps/web/src:/app/apps/web/src
       - ../../apps/web/index.html:/app/apps/web/index.html
+    # Vite's DEV server, and the number is measured rather than guessed: this
+    # container idles at 1.07 GiB with polling on. The first value tried here was
+    # 1g, and the result is worth recording — the container was OOM-killed on
+    # boot, the new restart policy restarted it, and it crash-looped while
+    # `docker compose ps` showed "Up 1 second (health: starting)" forever. A cap
+    # under the working set does not degrade a service, it hides its death
+    # behind a restart policy. 3g is roughly 3x the idle set.
+    #
+    # The production image (apps/web/Dockerfile — nginx serving a compiled
+    # bundle) needs about 10 MiB. Almost all of this is the dev server.
+    mem_limit: ${WEB_MEM_LIMIT:-3g}
+    memswap_limit: ${WEB_MEM_LIMIT:-3g}
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:5173/ || exit 1"]
       interval: 15s
@@ -318,6 +413,7 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.8-alpine
     profiles: [tracing]
+    <<: *managed
     networks: [aleph]
     environment:
       CLICKHOUSE_USER: langfuse
@@ -328,58 +424,170 @@ services:
     ulimits:
       nofile: {soft: 262144, hard: 262144}
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:8123/ping || exit 1"]
+      # 127.0.0.1, NOT localhost, and the difference is the whole reason the
+      # tracing profile had never once come up on this stack.
+      #
+      # This compose network has no IPv6, so ClickHouse's `<listen_host>::</>`
+      # binding fails — harmlessly, because the image also declares
+      # `<listen_host>0.0.0.0</>` and `<listen_try>1</>`, so it binds v4 and
+      # serves perfectly. But `localhost` inside this image resolves to `::1`
+      # first, so the probe connected to the one address family the server could
+      # not bind and got "Connection refused" every time. `docker compose ps`
+      # said `unhealthy`, `up -d --wait` failed with "dependency failed to start",
+      # and the server it was describing was answering requests the whole time.
+      # A probe that names a host is making a resolution decision; here it made
+      # the wrong one.
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8123/ping || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
-      start_period: 30s
+      # ClickHouse's first boot creates the user and the database and restarts
+      # the server twice before it listens; 30s did not cover that on a cold
+      # volume.
+      start_period: 90s
+      start_interval: 2s
+
+  # Creates the `langfuse` database, once, before Langfuse tries to migrate into
+  # it. Nothing else did: Postgres' entrypoint only creates POSTGRES_DB
+  # (`aleph`), Langfuse's own migrations assume the database already exists, and
+  # `--profile tracing up -d --wait` on a fresh volume therefore hung until the
+  # healthcheck gave up — with Langfuse logging a connection error naming a
+  # database that had never been created, which reads as a password problem.
+  #
+  # A one-shot rather than a `/docker-entrypoint-initdb.d` script on purpose:
+  # initdb runs ONLY on a first-boot empty data directory, so an initdb hook
+  # fixes a fresh volume and leaves every existing stack — which is all of them —
+  # unable to turn tracing on. The SELECT-then-CREATE is the guard because
+  # Postgres has no `CREATE DATABASE IF NOT EXISTS`; it is safe here because a
+  # one-shot has exactly one runner.
+  langfuse-db:
+    image: pgvector/pgvector:pg17
+    profiles: [tracing]
+    networks: [aleph]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >
+        psql -h postgres -U aleph -d aleph -tAc
+        "SELECT 1 FROM pg_database WHERE datname='langfuse'" | grep -q 1
+        || psql -h postgres -U aleph -d aleph -c "CREATE DATABASE langfuse"
+    logging: *logging
+    # One-shot, same reasoning as `migrate`.
+    restart: "no"
 
   langfuse:
     image: langfuse/langfuse:3
     profiles: [tracing]
+    <<: *managed
     networks: [aleph]
     depends_on:
       postgres:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
+      langfuse-db:
+        condition: service_completed_successfully
+      minio-buckets:
+        condition: service_completed_successfully
     environment:
       DATABASE_URL: postgresql://aleph:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/langfuse
       CLICKHOUSE_URL: http://clickhouse:8123
+      # The NATIVE protocol on :9000, not the HTTP one on :8123, and a separate
+      # setting from CLICKHOUSE_URL because Langfuse 3 runs its ClickHouse
+      # migrations over the native wire. Without it the container applies its 424
+      # Postgres migrations, prints "CLICKHOUSE_MIGRATION_URL is not configured",
+      # and exits 1 — which, with a restart policy, is a crash loop whose first
+      # 400 log lines look like a successful startup.
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
       CLICKHOUSE_USER: langfuse
       CLICKHOUSE_PASSWORD: ${POSTGRES_PASSWORD}
-      NEXTAUTH_URL: http://localhost:3000
-      NEXTAUTH_SECRET: ${ALEPH_AGENT_TOKEN_SECRET:?set ALEPH_AGENT_TOKEN_SECRET in .env}
-      SALT: ${ALEPH_AGENT_TOKEN_SECRET}
-      ENCRYPTION_KEY: ${ALEPH_AGENT_TOKEN_SECRET}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      # Langfuse 3 ingests asynchronously: the web tier writes an event to S3 and
+      # a queue, and the worker tier reads both. DB 1, not 0 — Aleph's own queues
+      # and agent tokens live on DB 0 of this same server, and Langfuse issues
+      # its own FLUSHDB.
+      REDIS_CONNECTION_STRING: redis://redis:6379/1
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${ALEPH_S3_ACCESS_KEY:-aleph}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${ALEPH_S3_SECRET_KEY:?set ALEPH_S3_SECRET_KEY in .env}
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      NEXTAUTH_URL: http://localhost:${LANGFUSE_PORT:-3000}
+      # Next.js' standalone server binds whatever HOSTNAME resolves to, and in a
+      # container that is the container's own network address — 172.x.y.z:3000
+      # and nothing else. It works through the published port and is unreachable
+      # on loopback, so ANY healthcheck that probes localhost or 127.0.0.1 gets
+      # "connection refused" from a server that is answering requests. Binding
+      # 0.0.0.0 fixes the cause; probing around it would only have hidden it.
+      HOSTNAME: "0.0.0.0"
+      # Langfuse's own secrets, not Aleph's. These were all three
+      # ALEPH_AGENT_TOKEN_SECRET, which put the key that signs Aleph's agent
+      # callback tokens inside a third-party container's session cookies and
+      # at-rest encryption — so Langfuse's blast radius included minting agent
+      # tokens. Required rather than defaulted back: a default would keep the
+      # coupling for every deployment that did not notice the change.
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:?set LANGFUSE_NEXTAUTH_SECRET in .env (openssl rand -hex 32)}
+      SALT: ${LANGFUSE_SALT:?set LANGFUSE_SALT in .env (openssl rand -hex 32)}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:?set LANGFUSE_ENCRYPTION_KEY in .env (openssl rand -hex 32)}
     ports: ["${LANGFUSE_PORT:-3000}:3000"]
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/public/health || exit 1"]
+      # 127.0.0.1 rather than `localhost`, for the same reason as clickhouse: a
+      # name is a resolution decision, and this image resolves it to an address
+      # family that is not always bound.
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/api/public/health || exit 1"]
       interval: 15s
       timeout: 6s
       retries: 12
-      start_period: 60s
+      # Langfuse 3 applies 424 Postgres migrations and then its ClickHouse
+      # migrations before it listens. On a cold volume that is minutes.
+      start_period: 180s
+      start_interval: 3s
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.111.0
     profiles: [tracing]
+    <<: *managed
     networks: [aleph]
     command: ["--config=/etc/otel/config.yaml"]
     volumes:
       - ./otel-collector-config.yaml:/etc/otel/config.yaml:ro
-    ports: ["4317:4317"]
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:13133/ || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 8
-      start_period: 20s
+    ports: ["${OTEL_PORT:-4317}:4317"]
+    # NO HEALTHCHECK, deliberately, and this is the honest option rather than the
+    # comfortable one. The collector-contrib image is DISTROLESS: it contains the
+    # collector binary and nothing else — no /bin/sh, no wget, no curl. The check
+    # that used to be here was
+    #   ["CMD-SHELL", "wget -q --spider http://localhost:13133/ || exit 1"]
+    # and every single invocation returned
+    #   OCI runtime exec failed: exec: "/bin/sh": stat /bin/sh: no such file or
+    #   directory
+    # so the container was reported unhealthy from birth, forever, while the
+    # collector was running correctly and its own health_check extension was
+    # answering `ready` on :13133. `up -d --wait` then failed on a healthy stack.
+    # This repo has shipped this exact defect before — the code-runner healthcheck
+    # called `pgrep`, which that image also does not contain.
+    #
+    # A container with no healthcheck is treated as ready by `--wait` as soon as
+    # it is running, which is the correct answer here: nothing depends on the
+    # collector, and Aleph's exporters are fire-and-forget by design. To check it
+    # by hand, from any container on the `aleph` network:
+    #   docker compose exec api python -c \
+    #     "import urllib.request;print(urllib.request.urlopen('http://otel-collector:13133/').status)"
 
   # --- object store (opt-in: --profile s3) -----------------------------------
 
+  # In BOTH profiles. `s3` is the opt-in asset backend; `tracing` needs it too
+  # because Langfuse 3 uploads every ingestion event to an object store before
+  # its worker reads it — there is no filesystem mode.
   minio:
     image: minio/minio:RELEASE.2024-10-13T13-34-11Z
-    profiles: [s3]
+    profiles: [s3, tracing]
+    <<: *managed
     networks: [aleph]
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
@@ -387,10 +595,32 @@ services:
       MINIO_ROOT_PASSWORD: ${ALEPH_S3_SECRET_KEY:?set ALEPH_S3_SECRET_KEY in .env}
     volumes:
       - minio-data:/data
-    ports: ["9000:9000", "9001:9001"]
+    ports: ["${MINIO_PORT:-9000}:9000", "${MINIO_CONSOLE_PORT:-9001}:9001"]
     healthcheck:
       test: ["CMD-SHELL", "mc ready local || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 10
       start_period: 20s
+
+  # Creates the buckets, once. MinIO does not create them on demand and neither
+  # Langfuse nor Aleph's S3 asset backend creates its own: the first write to a
+  # bucket that does not exist is a NoSuchBucket error at request time, long
+  # after everything reported healthy.
+  minio-buckets:
+    image: minio/mc:RELEASE.2024-10-08T09-37-26Z
+    profiles: [s3, tracing]
+    networks: [aleph]
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >
+        mc alias set local http://minio:9000
+        "${ALEPH_S3_ACCESS_KEY:-aleph}" "${ALEPH_S3_SECRET_KEY:?set ALEPH_S3_SECRET_KEY in .env}";
+        mc mb --ignore-existing local/langfuse;
+        mc mb --ignore-existing local/${ALEPH_S3_BUCKET:-aleph-assets}
+    logging: *logging
+    # One-shot, same reasoning as `migrate`.
+    restart: "no"

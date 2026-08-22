@@ -431,6 +431,17 @@ run_pytest F1 "agent endpoint is authenticated; project scope is authorized" \
 run_pytest F2 "untrusted ingested text is defanged at the boundary" \
   packages/aleph-rks/tests/test_ingest_defang.py packages/aleph-core/tests/test_grounding.py
 run_pytest F3 "agent token scoping" packages/aleph-security/tests
+# F4 checks where the port is published and whether the origin list is shared.
+# F5 BOOTS the bridge and checks what it does on the wire — a source grep for
+# `cors:` passes against a config that does not do what it says.
+run_shell F4 "the runtime bridge is not an any-origin, any-host proxy" \
+  "./scripts/check-runtime-bridge.sh 2>&1 | tail -1"
+if command -v node >/dev/null 2>&1; then
+  run_shell F5 "the bridge refuses an unlisted origin and forwards the caller's credential" \
+    "node scripts/_acceptance/runtime_bridge_probe.mjs 2>&1 | tail -1"
+else
+  skip F5 "node is not available to boot the bridge"
+fi
 
 # ---------------------------------------------------------------------------
 # G — Verification infrastructure

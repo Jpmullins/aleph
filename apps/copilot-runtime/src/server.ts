@@ -16,6 +16,40 @@ import { ALEPH_A2UI_CATALOG } from "./catalog.generated.js";
 
 const PORT = Number(process.env.PORT ?? 4000);
 const BASE_PATH = process.env.COPILOT_BASE_PATH ?? "/api/copilotkit";
+
+/**
+ * Origins allowed to drive the agent from a browser.
+ *
+ * This was `cors: true` — every origin, with credentials. Any page the user
+ * had open could POST to :4000 and drive their assistant: read their project,
+ * spend their tokens, write to their wiki. Nothing in the stack would have
+ * recorded anything unusual, because the request is indistinguishable from the
+ * real UI's.
+ *
+ * Configuration, not a constant, and it shares `ALEPH_CORS_ORIGINS` with the
+ * API so the bridge and the thing it bridges to cannot drift into disagreeing
+ * about who is allowed to talk to them.
+ *
+ * BE CLEAR ABOUT WHAT THIS DOES. CORS is enforced by browsers. It stops a
+ * malicious PAGE from using someone's session; it does not stop `curl`, and it
+ * never could. What narrows raw reachability is the publish address — see
+ * `docker-compose.yml`, where this port is now bound to loopback instead of
+ * every interface.
+ */
+const ALLOWED_ORIGINS = (process.env.ALEPH_CORS_ORIGINS ?? "http://localhost:5173")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+/**
+ * Interface to bind to INSIDE the container.
+ *
+ * Stays `0.0.0.0` by default and that is correct: a container's published port
+ * maps to the container's own interface, so binding to loopback here would make
+ * the service unreachable from the host entirely. The narrowing that matters
+ * happens at the publish address in `docker-compose.yml`.
+ */
+const BIND_ADDRESS = process.env.ALEPH_RUNTIME_BIND ?? "0.0.0.0";
 // AG-UI endpoint exposed by aleph-api (compose network).
 const AGENT_URL =
   process.env.ALEPH_AGENT_URL ?? "http://aleph-api:8000/copilotkit/agent/assistant";
@@ -41,6 +75,17 @@ const AGENT_URL =
 
 const runtime = new CopilotRuntime({
   agents: {
+    // No `fetch` override, and that is a MEASURED claim rather than an
+    // assumption. Backlog D3 says this bridge "does not forward the user's
+    // credential", and for this installed version that is false: the runtime
+    // already copies the incoming `Authorization` header onto its call to the
+    // agent. `scripts/_acceptance/runtime_bridge_probe.mjs` asserts it — a
+    // hand-written forwarding shim was built here first, and removing it
+    // changed nothing, which is how the redundancy was found.
+    //
+    // The real gap was on the OTHER side: the browser sent no credential at
+    // all, because `CopilotKitProvider` was mounted without a `headers` prop.
+    // Fixed in `apps/web/src/lib/copilot.tsx`.
     assistant: new HttpAgent({ url: AGENT_URL }),
   },
   // Inject the render_a2ui tool so the agent can emit A2UI surfaces, and
@@ -77,7 +122,12 @@ const runtime = new CopilotRuntime({
 const listener = createCopilotNodeListener({
   runtime,
   basePath: BASE_PATH,
-  cors: true,
+  cors: {
+    origin: ALLOWED_ORIGINS,
+    // Credentials are forwarded, so the origin list has to be exact — a
+    // wildcard with credentials is the combination browsers refuse anyway.
+    credentials: true,
+  },
 });
 
 /**
@@ -98,9 +148,10 @@ createServer((req, res) => {
     return;
   }
   listener(req, res);
-}).listen(PORT, "0.0.0.0", () => {
+}).listen(PORT, BIND_ADDRESS, () => {
   // eslint-disable-next-line no-console
   console.log(
-    `aleph-copilot-runtime listening on :${PORT}${BASE_PATH} → agent ${AGENT_URL}`,
+    `aleph-copilot-runtime listening on ${BIND_ADDRESS}:${PORT}${BASE_PATH} → ` +
+      `agent ${AGENT_URL}; origins ${ALLOWED_ORIGINS.join(", ")}`,
   );
 });

@@ -289,9 +289,18 @@ stripping invisible/bidi control characters and folding U+2028/U+2029 — and fl
 Both are the same class, both are out of scope until single-user auth deployment is taken up as a whole, and
 **`local` mode — the only deployed mode — is unaffected by either.**
 
-- **The runtime bridge does not forward the caller's credential.** `copilot-runtime/src/server.ts`
-  demands a credential it never receives. Closing it means per-request header propagation from
-  browser → runtime → API.
+- ~~**The runtime bridge does not forward the caller's credential.**~~ **CLOSED, and the premise was
+  half wrong.** The installed CopilotKit runtime already copies the incoming `Authorization` header
+  onto its call to the agent — measured, not assumed: a forwarding shim was written, and removing it
+  changed nothing `scripts/_acceptance/runtime_bridge_probe.mjs` could detect. The real gap was on
+  the browser side, where `CopilotKitProvider` was mounted with no `headers` prop at all and so sent
+  nothing to forward. Fixed in `apps/web/src/lib/copilot.tsx`.
+- ~~**Port 4000 is an any-origin proxy.**~~ **CLOSED.** `createCopilotNodeListener` ran with
+  `cors: true` — every origin, with credentials — so any page the user had open could drive their
+  assistant. Origins now come from `ALEPH_CORS_ORIGINS`, the same expression the API uses. Note what
+  that does and does not buy: CORS is enforced by browsers and stops a malicious *page*; it does
+  nothing about `curl`. What bounds raw reachability is that the port is now published on
+  **loopback** instead of every interface (`deploy/compose/docker-compose.yml`). Acceptance F4/F5.
 - **SSE cannot carry a bearer token.** `EventSource` cannot set an `Authorization` header, so the SSE
   streams (agent-events, surfaces, assistant, `changes`) and the `<iframe>`-consumed asset route have
   stream endpoints.
