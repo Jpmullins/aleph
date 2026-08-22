@@ -409,6 +409,19 @@ below only with a test that would have caught them.
   `card_actions` and the ledger. Refused at the generator, redacted at the persistence boundary.
   → `packages/aleph-a2ui/tests/test_secret_redaction.py`,
   `tests/integration/test_action_params_are_redacted.py`, acceptance F8.
+- **The chat bridge forwarded nobody's credential, and port 4000 answered every origin.**
+  `WS-D3`. `CopilotKitProvider` was mounted with no `headers` prop at all, so there was nothing for
+  the bridge to forward; the bridge itself ran `cors: true` — every origin, with credentials — so any
+  page the user had open could drive their assistant, spend their tokens and write to their wiki,
+  indistinguishably from the real UI. The browser now attaches the caller's bearer as a headers
+  **object**: the installed CopilotKit accepts a *function* without complaint and serialises it to
+  nothing, so the test pins the shape rather than the intent. Origins come from `ALEPH_CORS_ORIGINS`
+  and the port is published on loopback. The probe checks forwarding in BOTH directions — a bridge
+  that substitutes a credential of its own when the caller sent none passes a forwarding check that
+  only ever sends one, and every anonymous request then reaches the API looking authenticated,
+  attributed in the ledger to whoever that credential belongs to.
+  → `apps/web/src/lib/copilot.test.tsx` (`it("passes headers as an object, not a function")`),
+  `scripts/_acceptance/runtime_bridge_probe.mjs`, acceptance F4/F5.
 - **The Inspector.** A chat turn is a recorded run with a tool timeline, and there is a pane that
   shows it — the only place an agent failure had been legible was the API container's stderr.
   → `tests/integration/test_inspector_surface.py`, acceptance C11.

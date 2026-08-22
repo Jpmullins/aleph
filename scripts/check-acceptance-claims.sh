@@ -36,7 +36,7 @@ if not DOC.is_file():
 # `pytest packages/aleph-kernel/tests`, not just the bare path.
 CODE_SPAN = re.compile(r"`([^`]+)`")
 TOKEN = re.compile(
-    r"((?:packages|apps|tests|scripts)/[A-Za-z0-9_./-]+(?:::[A-Za-z0-9_]+)?"
+    r"((?:packages|apps|tests|scripts|audit|deploy)/[A-Za-z0-9_./-]+(?:::[A-Za-z0-9_]+)?"
     r"|\btest_[A-Za-z0-9_]+\.py(?:::[A-Za-z0-9_]+)?)"
 )
 

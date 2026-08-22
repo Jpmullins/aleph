@@ -439,6 +439,17 @@ run_pytest D5 "probation: a capability that degrades is retired automatically" \
 # feature, the call is.
 run_pytest D7 "the agent is wired to author skills: two sources, allow before deny" \
   apps/api/tests/unit/test_agent_skill_wiring.py
+
+# D9 prints two numbers because WS-H5 is an argument between two numbers, and a
+# green tick is not one. The RATIO is the finding: 20 tool calls for 2 upstream
+# completions. A model-driven fan-out cannot beat 1 per completion, because a
+# tool call the model issues IS a completion — so the completion count alone is
+# nearly unfalsifiable under a scripted gateway (measured: a PTC budget of 5,
+# and the interpreter removed entirely, both leave it at 2) and the ratio is
+# what separates the two designs. No socket, no gateway, no tokens, ~7s, so
+# unlike H2 it runs on every pass.
+run_shell D9 "one interpreter turn covers every item at a fixed upstream request count" \
+  "uv run python scripts/_acceptance/interpreter_fanout_probe.py 2>&1 | tail -6"
 # C10/C11: the Inspector. C3a made a chat turn a recorded run with a tool
 # timeline; this is the pane that shows it. Before both, the only place an agent
 # failure was legible was the API container's stderr.
