@@ -242,7 +242,7 @@ at the right file and the wrong row.
 - No unlocked page read remains in the create-or-lock path
   <br>`scripts/check-page-lock.sh asserts every select(WikiPage) inside _lock_or_create_page carries with_for_update() or is the ON CONFLICT upsert; exits 1 otherwise. Fails today against the current file.`
 - The acceptance gate covers it and the check can fail
-  <br>`./scripts/acceptance.sh --self-check exits 0 with the new D1 part included, proving the check fails when the lock is removed.`
+  <br>`./scripts/acceptance.sh --self-check exits 0 with rows C9/C9a included, proving the check fails when the lock is removed. Rows C9/C9a, not a 'D1 part': part D is the kernel/skills cluster and the wiki-commit rows are filed under C on purpose (acceptance.sh:398-407 says why).`
 
 **Review.** Mutation: revert the ON CONFLICT upsert to the plain SELECT and confirm the concurrency test fails with IntegrityError on uq_wiki_rev_page_no; remove with_for_update() and confirm the version-number test fails; restore both and confirm green. Then run the ingest workflow against two sources that mint the same topic title, 20 times, and confirm zero 500s in the API log.
 <br>**Iterate.** v2 generalises the retry helper across the other max+1 sites in the codebase and adds a sweep that flags any `max(...) + 1` computed outside a row lock. Once RS8 moves claim writes off commit_revision entirely, the retry can be deleted and only the lock remains.
@@ -269,7 +269,7 @@ at the right file and the wrong row.
 - The blanket status mapping is gone
   <br>`grep -n 'except ScholarUpstreamError' apps/api/src/aleph_api/routes/scholar.py shows a status-aware mapper, and grep -c 'GatewayUnavailable' in that file no longer covers the 4xx case; a unit test pins the mapping table.`
 - No 503s on the endpoint in a day of real traffic
-  <br>`docker logs aleph-api-1 --since 24h | grep -c 'scholar/search.*503' returns 0.`
+  <br>``scripts/_acceptance/scholar_search_under_fanout.py` completes with 0 responses carrying status 503. A probe run, not `docker logs … | grep -c 'scholar/search.*503'`: a log grep over a day with no traffic returns 0 by vacuum, so the old form is satisfied by the endpoint never being called.`
 
 **Review.** Mutation: point the OpenAlex base URL at a stub that always returns 400 and confirm the route returns 4xx with the upstream reason rather than 503; point it at a stub that always returns 429 and confirm 503 plus Retry-After; set the token bucket rate to 0.01 and confirm the fan-out probe fails on the deadline rather than hanging. Restore each and confirm the probe passes.
 <br>**Iterate.** v2 moves the token bucket into Redis so the limit is per-deployment rather than per-process (it is per-process today, so two API replicas silently double the rate), and adds a per-host circuit breaker that opens after N consecutive failures and reports 'OpenAlex is unreachable' on the pipeline strip instead of failing every individual query.
@@ -911,13 +911,13 @@ belongs in `docs/decisions.md` either way.
 - The agent's Postgres pool is no longer single-connection. FAILS TODAY (max_size resolves to 1).
   <br>``uv run pytest apps/api/tests/unit/test_agent_store_pool.py::test_pool_max_size_is_not_one -q` — calls `build_agent_store(...)` and asserts `pool.max_size >= 8` and `pool.max_size > pool.min_size`.`
 - Model timeout and retry budget are configuration, not literals.
-  <br>``grep -n 'timeout=60\|max_retries=2' apps/api/src/aleph_api/copilot_agent.py | wc -l` returns 0 (returns 2 today at :1504-1505), and `uv run pytest apps/api/tests/unit/test_agent_store_pool.py::test_no_model_timeout_or_retry_literal_remains -q` asserts the built model's `request_timeout` equals the settings value when that val…`
+  <br>``uv run pytest apps/api/tests/unit/test_agent_store_pool.py::test_no_model_timeout_or_retry_literal_remains -q` passes. NOT a file-wide grep for `timeout=60`: an unrelated `httpx.AsyncClient(timeout=60.0)` at copilot_agent.py:1401 keeps it red for a reason that has nothing to do with the model client, and green again if that innocent line is renamed. The test walks the `ChatOpenAI` CALL NODE with the AST, which is the actual property. Old form, for the record: `grep -n 'timeout=60|max_retries=2' … | wc -l` returns 0 (2 at the time), and `uv run pytest apps/api/tests/unit/test_agent_store_pool.py::test_no_model_timeout_or_retry_literal_remains -q` asserts the built model's `request_timeout` equals the settings value when that val…`
 - A rate-limit response is retried with backoff instead of killing the turn. FAILS TODAY.
   <br>``uv run pytest apps/api/tests/unit/test_agent_model_retry.py::test_rate_limit_is_retried_with_backoff -q` — the middleware's `awrap_model_call` is driven with a handler that raises a rate-limit error twice then succeeds;`
 - Exhausting the retry budget produces a typed, reportable failure — not a bare exception.
   <br>``uv run pytest apps/api/tests/unit/test_agent_model_retry.py::test_budget_exhaustion_is_typed -q` — handler always raises; asserts the escaping exception carries the `rate_limited` code E1a's iteration step consumes, and asserts the attempt count equals the configured budget.`
 - The per-turn upstream request count is a printed number, so E5 can be argued about with data.
-  <br>``./scripts/acceptance.sh --part E` prints a row naming the count of chat-completion requests issued for one scripted turn (measured by a counting wrapper on the gateway client). Fails today only in the sense that no such row exists;`
+  <br>``./scripts/acceptance.sh --part H` runs row H2 (`scripts/_acceptance/agent_turn_probe.py`), which prints the per-turn upstream chat-completion count read from `model_calls`, plus time-to-first-token. Part H, not E — the probe's own docstring already names this criterion and only the part letter was wrong. Needs a reachable gateway and `ALEPH_ACCEPTANCE_DRIVE_AGENT=1`; it spends tokens. Fails today only in the sense that no such row exists;`
 
 **Review.** Mutation testing plus a load probe. (a) Set `max_size` back to 1 and confirm `test_pool_max_size_is_not_one` fails; restore. (b) Make the backoff sleep a no-op and confirm `test_rate_limit_is_retried_with_backoff` fails on the sleep assertion; restore.
 <br>**Iterate.** Second pass adds a concurrency ceiling with a queue rather than only retrying: a semaphore around the model call sized from settings, so a six-way subagent fan-out issues a bounded number of concurrent gateway requests instead of all of them at once. Retry is what you do after being rate limited; a ceiling is what stops you getting there. Pair it with the counting probe so the before/after is a number.
@@ -965,13 +965,13 @@ belongs in `docs/decisions.md` either way.
 **Criteria:**
 
 - Every recorded agent ModelCall carries a non-null agent_run_id. FAILS TODAY — the column is unconditionally NULL.
-  <br>``uv run pytest -m integration tests/integration/test_agent_cost_attribution.py::test_run_id_is_populated -q` — runs a turn, then asserts `select count(*) from model_calls where agent_run_id is null and purpose like 'assistant%'` is 0 for rows created during the turn.`
+  <br>``uv run pytest apps/api/tests/unit/test_agent_cost_attribution.py -q` (the integration path of that name does not exist and never has, so the command exited 4 — neither a pass nor a fail), or `uv run python scripts/_acceptance/status_numbers.py` reporting number 5 as 0 — runs a turn, then asserts `select count(*) from model_calls where agent_run_id is null and purpose like 'assistant%'` is 0 for rows created during the turn.`
 - A model call that fails after producing usage is still costed. FAILS TODAY — `on_llm_error` records nothing.
   <br>``uv run pytest apps/api/tests/unit/test_agent_cost_callback.py::test_a_failed_call_is_recorded_not_dropped -q` — drives `awrap_model_call` with a handler that raises after a partial response carrying usage; asserts one ModelCall row was written.`
 - The recorded model name is the model that answered, not the one resolved at boot.
   <br>``uv run pytest apps/api/tests/unit/test_agent_cost_callback.py::test_the_recorded_model_is_the_one_that_answered -q` — builds a request whose `.model` differs from the handler's construction-time model and asserts the written row names the request's model.`
 - A usage-free response produces a visible unpriced row, never an absence.
-  <br>`Same file, `::test_no_usage_writes_unknown_row` — asserts a row exists with `pricing_source='unknown'` and a populated reason. This replaces `test_skips_when_no_usage` (:262), which pins the defect.`
+  <br>``apps/api/tests/unit/test_agent_cost_callback.py::test_no_usage_writes_an_unpriced_row_rather_than_nothing` — asserts a row exists with `pricing_source='unknown'` and a populated reason. Written as a full path, not a bare `::name`: `check-acceptance-claims.sh` skips any token whose path part is empty, which is the only reason this citation survived the sweep that caught c2/c3/c6. This replaces `test_skips_when_no_usage` (:262), which pins the defect.`
 - Retrieval spend is attributed to the real caller, not to a synthetic dev user.
   <br>``grep -n '_dev_principal(' apps/api/src/aleph_api/copilot_agent.py | wc -l` returns 0 — again a CALL. **CORRECTED 2026-08-22:** 2 mentions, **0 call sites**; both remaining hits are the definition and the comment recording that retrieval spend used to be billed to a synthetic user.
 - Cache-write tokens stop being a column nothing writes.
@@ -994,15 +994,15 @@ belongs in `docs/decisions.md` either way.
 **Criteria:**
 
 - The Inspector is a real pane the server advertises. FAILS TODAY — the registry has 7 kinds and none is an inspector.
-  <br>``curl -s $API/v1/projects/$PID/panes | jq '[.panes[].id] | index("inspector")'` returns a number, not null; and `./scripts/check-pane-registry.sh` exits 0 with 8 kinds reported (7 today).`
+  <br>``curl -s $API/v1/projects/$PID/panes | jq '[.panes[].id] | index("inspector")'` returns a number, not null; and `./scripts/check-pane-registry.sh` exits 0. No pane COUNT: it was written as '8 kinds (7 today)', there are 12, and a count here goes red every time a plugin adds a pane — which is the feature.`
 - A pane parameter other than page_id survives the round trip. FAILS TODAY — the parser drops everything but page_id.
   <br>``uv run pytest apps/api/tests/unit/test_pane_specs.py::test_declared_params_are_parsed -q` — asserts `_parse_pane_specs('inspector:run_id=abc')` yields the run id under the name `run_id`, and that a param not declared on the PaneKind is rejected rather than silently passed.`
 - The pane renders a real failing run end to end, including the failure point.
   <br>``uv run pytest -m integration tests/integration/test_inspector_surface.py::test_failed_run_shows_its_failure -q` — seeds a run with a `tool_failed` event, calls `GET /v1/projects/{id}/surfaces/inspector?run_id=...`, and asserts the returned A2UI message list contains the failing tool's name and the error text.`
 - The dead ActivityCard is gone and its endpoint has a live consumer again.
-  <br>``test -e apps/web/src/components/ActivityCard.tsx` returns non-zero, and `grep -rn 'agent-events' apps/web/src | wc -l` is ≥ 1 pointing at Inspector code rather than at an unimported file.`
+  <br>``test -e apps/web/src/components/ActivityCard.tsx` returns non-zero, and `grep -c 'AgentEvent' apps/api/src/aleph_api/routes/surfaces.py` is ≥ 1 — the consumer is the SERVER-side `_inspector_messages` builder. Not `grep -rn 'agent-events' apps/web/src`: its two hits are SSE-budgeting comments in `SurfaceStreamProvider`, so it reads green whether or not the Inspector exists; and 'pointing at Inspector code' is unsatisfiable now that a pane owns no transport and therefore fetches nothing.`
 - The new UI is born inside the design spec rather than adding to the 180-violation backlog.
-  <br>``grep -cE 'rounded-(sm|md|lg|xl|full)|shadow-(sm|md|lg|xl)|text-(slate|gray|zinc|red|green|blue)-[0-9]' apps/web/src/a2ui/components/RunTimeline.tsx apps/web/src/a2ui/components/RunList.tsx apps/web/src/a2ui/components/ToolCallCard.tsx` returns 0 for every file.`
+  <br>``grep -cE 'rounded-(sm|md|lg|xl|full)|shadow-(sm|md|lg|xl)|text-(slate|gray|zinc|red|green|blue)-[0-9]' apps/web/src/a2ui/components/InspectorSurface.tsx` returns 0. ONE file: the Inspector shipped as a single component, not the three (`RunTimeline`, `RunList`, `ToolCallCard`) this criterion predicted, so the command exited 2 on three missing paths — neither a pass nor a fail.`
 - Every catalog and binding sweep stays green with the new components.
   <br>``./scripts/check-catalog-generated.sh && ./scripts/check-single-catalog.sh && ./scripts/check-surface-bindings.sh && pnpm -C apps/web lint && pnpm -C apps/web build` all exit 0.`
 
@@ -1060,7 +1060,7 @@ belongs in `docs/decisions.md` either way.
 - The prompt no longer claims an inline subagent runs in the background.
   <br>``grep -n 'Runs in the background' apps/api/src/aleph_api/copilot_agent.py apps/api/src/aleph_api/subagents/*.py` returns 0 hits for any subagent that is invoked with `await subagent.ainvoke`; the phrase survives only where a real ticket is returned.`
 - The rejected alternative is recorded so it is not re-litigated.
-  <br>``grep -n 'AsyncSubAgent' docs/decisions.md` returns an entry citing the `graph_id` requirement and the `langgraph_api.server` import as the reason Aleph does not use the library path.`
+  <br>``grep -n 'AsyncSubAgent' docs/decisions.md` returns an entry giving the three reasons actually recorded: a detached coroutine has no record across a reload, cancellation must be a checkpoint rather than a signal, and the work does not belong in the API process. NOT the `graph_id` / `langgraph_api.server` clause — neither string appears in `docs/decisions.md`, and what was written is the stronger argument.`
 
 **Review.** Mutation testing plus a failure drill. (a) Make the worker ignore the cancellation flag and confirm `test_cancel_stops_the_job` fails; restore. (b) Break the parent link and confirm `test_parent_link` fails; restore. (c) Failure drill: kill the arq worker while a background run is in flight and confirm the run does not sit at `running` forever — either a heartbeat marks it stale or a startup reaper resolves it;
 <br>**Iterate.** Second pass replaces polling with a push: when a background run terminates, emit into the conversation rather than waiting to be asked — the `/agent-events` broker already wakes on a Postgres NOTIFY the instant a row commits (routes/agent_events.py docstring), so the notification path exists and only needs a consumer that reaches the chat surface.
@@ -1385,7 +1385,7 @@ belongs in `docs/decisions.md` either way.
 - A value that violates the declared schema is refused, not stored.
   <br>`Submit {"max_concurrent_runs": "banana"} against {"type":"integer"}; assert a refusal response and zero rows written`
 - A password-format field never reaches plugin_settings.values.
-  <br>`Submit a schema with `format: password` or `writeOnly: true`; assert `SecretFieldRefused` at the generator, so no such field can render and therefore no such value can be submitted. Secret-SHAPED keys that slip past the schema are redacted before persistence, and `SELECT values::text FROM plugin_settings` contains no plaintext. Not a credential reference in the JSONB: a settings value reaches `card_actions` and the append-only ledger, so the design is refusal, not storage — credentials go through `ConnectorCredential`. `packages/aleph-a2ui/tests/test_secret_redaction.py::test_a_schema_declaring_a_secret_is_refused_before_it_can_be_shown` and `::test_a_secret_by_name_only_still_reaches_the_screen_and_is_redacted` pin both halves.`
+  <br>`Submit a schema with `format: password` or `writeOnly: true`; assert `SecretFieldRefused` at the generator, so no such field can render and therefore no such value can be submitted. Secret-SHAPED keys that slip past the schema are redacted before persistence, and `SELECT values::text FROM plugin_settings` contains no plaintext. Not a credential reference in the JSONB: a settings value reaches `card_actions` and the append-only ledger, so the design is refusal, not storage — credentials go through `ConnectorCredential`. `packages/aleph-a2ui/tests/test_secret_redaction.py::test_a_schema_declaring_a_secret_is_refused_before_it_can_be_submitted` and `::test_a_secret_by_name_only_still_reaches_the_screen_and_is_redacted_on_write` pin both halves.`
 - settings_card.py has a non-test importer. FAILS TODAY: returns 0.
   <br>``grep -rn 'from aleph_a2ui.settings_card import' --include='*.py' apps packages | grep -v tests | wc -l` returns ≥1. The import form, not the bare name: twelve of the twenty bare-name hits are docstrings explaining what `settings_card.py` is, so the loose grep counts the prose documenting the fix`
 - The three trust tiers are observable at the API and change behaviour.
