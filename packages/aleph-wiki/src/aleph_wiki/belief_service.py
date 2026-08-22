@@ -27,11 +27,12 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
 from aleph_belief.patch import BeliefPatch
-from aleph_belief.reconcile import Candidate, ClaimRef, propose
+from aleph_belief.reconcile import Candidate, ClaimRef, propose_with_stats
 from aleph_core.errors import PermissionDenied
 from aleph_core.grounding import ground
 from aleph_core.ids import uuid7
@@ -146,6 +147,9 @@ class UpsertResult:
     confidence: str
     citations_written: int
     citations_rejected: list[str]
+
+
+_log = structlog.get_logger(__name__)
 
 
 class BeliefService:
@@ -401,12 +405,26 @@ class BeliefService:
         """
         claims = await self.live_claims(project_id=project_id)
         refs = [ClaimRef(id=c.id, text=c.text, origin=c.origin) for c in claims]
-        return propose(
+        proposals, stats = propose_with_stats(
             refs,
             project_id=project_id,
             profile_hash=profile_hash or "unset",
             graph_hash=graph_hash or _graph_hash_for(refs),
         )
+        if stats.truncated:
+            # A dedupe pass that quietly stopped early is indistinguishable from
+            # one that found nothing to merge — both return a short list. Say it
+            # out loud, because the caller cannot tell and will otherwise treat
+            # a sample as a sweep.
+            _log.warning(
+                "belief.propose_truncated",
+                project_id=str(project_id),
+                claims=stats.claims,
+                pairs_scored=stats.pairs_scored,
+                pairs_total=stats.pairs_total,
+                limit=stats.limit,
+            )
+        return proposals
 
     async def rebuild(
         self,

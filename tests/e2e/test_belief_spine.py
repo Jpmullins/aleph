@@ -74,7 +74,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from aleph_belief.patch import PatchOperation, PatchStatus
-from aleph_belief.reconcile import Candidate, RejectReason
+from aleph_belief.reconcile import Candidate, ClaimRef, RejectReason, score_pair
 from aleph_belief.trust import TrustTier
 from aleph_core.errors import PermissionDenied
 from aleph_core.ids import uuid7
@@ -1026,8 +1026,10 @@ async def test_duplicate_beliefs_are_proposed_for_merge_without_a_model(
     proposals = await svc.propose_merges(project_id=project_id, profile_hash="test-profile")
     again = await svc.propose_merges(project_id=project_id, profile_hash="test-profile")
 
-    # Every unordered pair of the three live claims is scored.
-    assert len(proposals) == 3
+    # One pair, not three. `propose` no longer materializes a REJECT_MATCH for
+    # every pair in the project — see the block below, which pins the property
+    # that replaced it.
+    assert len(proposals) == 1
 
     def _key(candidate: Candidate) -> tuple[str, str]:
         return (str(candidate.left.id), str(candidate.right.id))
@@ -1053,14 +1055,27 @@ async def test_duplicate_beliefs_are_proposed_for_merge_without_a_model(
     assert patch.evidence_refs
     assert set(patch.target) >= {"source_claim_id", "target_claim_id", "score"}
 
-    # The unrelated claim is rejected with a NAMED reason, not a bare threshold.
-    others = [(c, p) for c, p in proposals if ids[2] in {c.left.id, c.right.id}]
-    assert len(others) == 2
-    for c, p in others:
-        assert c.verdict == "reject"
-        assert c.reason is RejectReason.DIFFERENT_SUBJECT
-        assert p is not None
-        assert p.operation is PatchOperation.REJECT_MATCH
+    # The unrelated claim produces NO proposal at all, and that is a deliberate
+    # change from "a REJECT_MATCH patch naming DIFFERENT_SUBJECT".
+    #
+    # The old behaviour scored every pair, so a 5,000-claim project returned
+    # 12,497,500 patches, almost all of them recording that two claims about
+    # different subjects are about different subjects. That is not an audit
+    # trail, it is a memory bomb, and it is a large part of why this function
+    # was never callable on real data.
+    #
+    # The guarantee is not lost, only unmaterialized: a pair sharing no content
+    # term has containment 0, and `score = 0.35*jaccard + 0.65*containment`
+    # with `jaccard <= containment` means score 0 — a reject, necessarily. The
+    # next two assertions pin exactly that, so the reasoning stays checkable
+    # rather than becoming a comment nobody can verify.
+    assert not [c for c, _p in proposals if ids[2] in {c.left.id, c.right.id}]
+    unrelated = score_pair(
+        ClaimRef(id=ids[0], text=texts[0], origin="agent"),
+        ClaimRef(id=ids[2], text=texts[2], origin="agent"),
+    )
+    assert unrelated.verdict == "reject"
+    assert unrelated.reason is RejectReason.DIFFERENT_SUBJECT
 
     # Proposed, never applied.
     await session.rollback()
