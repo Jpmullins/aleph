@@ -489,6 +489,11 @@ light.
   this measures the gap rather than asserting it is zero.
 - `check-sweeps-are-wired.sh` — every `scripts/check-*.sh` is run by `ci.yml`, `acceptance.sh` or
   `self_check.sh`. An unwired sweep is a file, not a gate.
+- `check-acceptance-claims.sh` also VERIFIES counts now, not just paths. A ✅ row whose
+  check is a bare `pytest <path>` and which asserts "N passed" is collected and compared.
+  Row A1 claimed 142 against a suite of 165 and survived three audits, because the sweep
+  resolved node ids and never counted anything. Rows with flags, node ids or env prefixes
+  are left alone — running those here would be guessing at the author's intent.
 - `check-acceptance-rows.sh` — every row `acceptance.sh` runs has a row in
   `docs/acceptance.md`. The gate ran 64 checks while the table listed 46; the whole
   plugin cluster A7-A11 was invisible, and eight of CLAUDE.md's own evidence citations

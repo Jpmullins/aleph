@@ -211,6 +211,46 @@ if PLAN.is_file():
                 "is skipped by the rule above, so nothing was checking it"
             )
 
+# ---------------------------------------------------------------------------
+# A row that asserts a COUNT must be able to be wrong about it.
+#
+# This sweep resolved paths and node ids and never counted anything, so
+# docs/acceptance.md row A1 claimed "142 passed" against a suite of 165 and
+# stayed green through three audits. A stale count is not cosmetic: the number
+# is the evidence the row offers, and one that only ever grows silently is the
+# same shape as a coverage claim nobody re-measured.
+#
+# Only rows whose check is a bare `pytest <path>` are counted — anything with
+# flags, a node id, or an env prefix is somebody's shorthand and running it
+# here would be guessing at their intent.
+# `--collect-only` counts what pytest FINDS, which includes skips, so a row
+# saying "165 passed, 1 skipped" must be compared against 166. Comparing the
+# passed figure alone reports a one-off drift on every correct row.
+COUNTED = re.compile(r"`pytest ([A-Za-z0-9_/.-]+)`[^|]*?— (\d+) passed(?:, (\d+) skipped)?")
+for row_line in DOC.read_text(encoding="utf-8").splitlines():
+    if "✅" not in row_line:
+        continue
+    for target, claimed, skipped in COUNTED.findall(row_line):
+        if not pathlib.Path(target).exists():
+            continue  # the path rule above already judged it
+        collected = subprocess.run(
+            ["uv", "run", "pytest", target, "--collect-only", "-q", "-p", "no:randomly"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+        found = re.search(r"(\d+)(?:/\d+)? tests? collected", collected)
+        if found is None:
+            continue  # cannot collect here; not this sweep's business to guess
+        actual = int(found.group(1))
+        expected = int(claimed) + (int(skipped) if skipped else 0)
+        if actual != expected:
+            problems.append(
+                f"docs/acceptance.md: a row claims `{target}` is {expected} test(s), "
+                f"and pytest collects {actual}. The count IS the evidence the row "
+                "offers; update it or stop asserting it"
+            )
+
 if problems:
     print("✗ rows citing something that is not there:", file=sys.stderr)
     for problem in problems:

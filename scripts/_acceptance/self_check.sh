@@ -258,6 +258,14 @@ probe "check-acceptance-rows notices prose citing a row that does not exist" \
   's/acceptance A8\./acceptance A99./' \
   "./scripts/check-acceptance-rows.sh"
 
+# A row that ASSERTS a count must be able to be wrong about it. Row A1 claimed
+# "142 passed" against a suite of 165 and stayed green through three audits,
+# because this sweep resolved paths and node ids and never counted anything.
+probe "check-acceptance-claims notices a stale test count" \
+  docs/acceptance.md \
+  's/— 165 passed, 1 skipped/— 142 passed, 1 skipped/m' \
+  "./scripts/check-acceptance-claims.sh"
+
 # The mutation that matters is not "delete the rule" — it is "widen the allow",
 # which is how this gate silently reopens.
 #

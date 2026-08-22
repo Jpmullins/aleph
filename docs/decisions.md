@@ -446,3 +446,48 @@ exactly this deployment, never ran on it.
 indistinguishable from a reranker that ran and agreed with fusion, which is the
 confusion the attribute exists to prevent — and it is the same rule the embedder
 already follows: a dead embedder degrades to lexical-only and says so.
+
+---
+
+## D13 · Plugin trust is a display attribute, not an approval gate — 2026-08-22
+
+`WS-A4` c6 asked for two things: the three trust tiers observable at the API,
+and an `authored`-tier save answering `requires_approval: true`. The first is
+built. **The second is withdrawn**, on two facts verified rather than assumed:
+
+1. **`plugin.settings.save` is already gated at OWNER** (`a2ui_handlers.py`),
+   on top of the route's EDITOR gate. `requires_approval: true` would ask a
+   project owner to approve their own change.
+2. **No agent tool can dispatch an arbitrary card action.** An AST pass over
+   `copilot_agent.py` finds exactly two call sites of
+   `_dispatch_card_action_impl`, both naming their action as a string literal
+   — `compose_dossier` and `spotlight`. There is no agent path to
+   `plugin.settings.save` at all.
+
+So the tier of the *plugin* is not the authority of the *actor*. An approval
+gate keyed on provenance gates the wrong thing: it would stop an owner editing
+a plugin they authored, and it would not stop anything an agent can do,
+because an agent cannot reach the action.
+
+**Trust stays visible and load-bearing where it belongs** — the API reports it
+so a person can see what a capability came from before they configure it, and
+`preview_removal` reads the same declaration graph the refusal does.
+
+**Pinned, because a withdrawal recorded only in prose is what this repository
+distrusts.** `tests/integration/test_plugin_settings_contract.py`:
+
+- `test_a_save_does_not_branch_on_the_declared_trust[core|verified|authored]`
+  asserts against the WHOLE serialised response — not a key someone must
+  remember to check — that no tier answers `requires_approval`, and that the
+  value really lands at every tier.
+- `test_the_agent_cannot_reach_the_settings_save_action` is an AST pass, not a
+  grep. The property is not "the string is absent" (still true of a tool that
+  takes `action_kind` as a parameter) but "every dispatch names its action as
+  a literal, so the reachable set is decidable, and this one is not in it". It
+  carries an anti-vacuity assertion so renaming the seam fails rather than
+  passing silently.
+
+**Reopen this if** an agent tool ever dispatches a card action by variable, or
+if `plugin.settings.save` is loosened below OWNER. Either change makes the
+provenance of the plugin start to matter again, and both are visible to the
+tests above.
