@@ -225,9 +225,7 @@ def gateway_clients(request: Request) -> ProjectLiteLLMClients:
     return clients
 
 
-async def litellm_for_project(
-    request: Request, session: AsyncSession, project_id: UUID
-) -> Any:
+async def litellm_for_project(request: Request, session: AsyncSession, project_id: UUID) -> Any:
     """The model client THIS project's calls should go through.
 
     What `request.app.state.litellm` was standing in for, resolved properly.
@@ -254,9 +252,7 @@ async def resolve_for_project(
     )
 
 
-async def _litellm_dep(
-    request: Request, project_id: ProjectScopeDep, session: SessionDep
-) -> Any:
+async def _litellm_dep(request: Request, project_id: ProjectScopeDep, session: SessionDep) -> Any:
     """The model client for THIS project. See `deps.py`'s note on why it is here."""
     return await litellm_for_project(request, session, project_id)
 

@@ -191,6 +191,21 @@ async def _run() -> int:
                         FROM projects p
                         JOIN citations c ON c.project_id = p.id
                         WHERE p.status <> 'deleted'
+                          -- Must have something to EXPORT, not just something to
+                          -- cite. This arm picked purely by anchored-citation
+                          -- count, and a project whose pages are all stubs
+                          -- exports zero concept documents — which `check-okf`
+                          -- correctly refuses as an empty bundle. So the gate
+                          -- flipped between PASS and FAIL on two identical runs
+                          -- twenty minutes apart, with no change to the tree:
+                          -- integration tests had created a new most-anchored
+                          -- project in between. A gate whose subject is chosen
+                          -- from live data has to constrain the choice to
+                          -- subjects it can actually grade.
+                          AND EXISTS (
+                            SELECT 1 FROM wiki_pages w
+                            WHERE w.project_id = p.id AND NOT w.is_stub
+                          )
                         GROUP BY p.id, p.title
                         ORDER BY anchored DESC
                         LIMIT 1
