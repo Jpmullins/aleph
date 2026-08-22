@@ -394,6 +394,12 @@ run_pytest D7 "the agent is wired to author skills: two sources, allow before de
 run_pytest C10 "pane params arrive under the names the pane declared" \
   apps/api/tests/unit/test_pane_specs.py
 if [ $NEEDS_SERVICES -eq 1 ]; then
+  run_shell C12 "claims are embedded at write time, and searchable — graph hop included" \
+    "uv run pytest -m integration tests/integration/test_claim_search.py -q -p no:randomly 2>&1 | tail -1"
+else
+  skip C12 "needs postgres"
+fi
+if [ $NEEDS_SERVICES -eq 1 ]; then
   run_shell C11 "the Inspector renders a failed run, naming the tool and the error" \
     "uv run pytest -m integration tests/integration/test_inspector_surface.py -q -p no:randomly 2>&1 | tail -1"
 else

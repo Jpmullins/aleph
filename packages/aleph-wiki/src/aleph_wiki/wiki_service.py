@@ -23,6 +23,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
+from aleph_core.confidence import Confidence, canonical_confidence
 from aleph_core.errors import Conflict, NotFound
 from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
@@ -52,7 +53,14 @@ PageKind = Literal["topic", "source", "synthesis", "stub"]
 @dataclass(frozen=True)
 class ClaimDraft:
     text: str
-    confidence: str = "cited"
+    #: One of `aleph_core.confidence.Confidence`. A known legacy spelling
+    #: ("cited", "uncited", the hyphenated pair) is translated on the way into
+    #: the column by `canonical_confidence`; anything else raises. The default
+    #: was "cited", which is not a member of any vocabulary the engine, the
+    #: catalog or the renderer agreed on — it just meant "a citation is
+    #: attached", and a draft that says nothing about its evidence has had none
+    #: assessed.
+    confidence: str = Confidence.UNDER_INVESTIGATION.value
     section_anchor: str | None = None
     citations: list[CitationDraft] = field(default_factory=list)
 
@@ -450,7 +458,12 @@ class WikiService:
                         revision_id=revision_id,
                         section_anchor=c.section_anchor,
                         text=c.text[:2048],
-                        confidence=c.confidence,
+                        # Canonicalised here rather than trusted: this is the
+                        # legacy wiki write path, its callers span three
+                        # packages, and it is what put 806 rows of "cited" in a
+                        # column whose readers each recognised a different set
+                        # of words.
+                        confidence=canonical_confidence(c.confidence).value,
                         status="active",
                         created_by=principal.user_id,
                     )

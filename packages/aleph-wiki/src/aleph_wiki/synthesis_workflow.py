@@ -23,6 +23,7 @@ from uuid import UUID
 
 from langgraph.graph import END, START, StateGraph
 
+from aleph_core.confidence import Confidence
 from aleph_core.ids import uuid7
 from aleph_db.repos.agent_events import with_phase
 from aleph_observability.tracing import start_span
@@ -304,7 +305,18 @@ async def _node_commit_revision(state: SynthesisState) -> dict:
             claim_drafts.append(
                 ClaimDraft(
                     text=c.text,
-                    confidence="cited" if citations else "uncited",
+                    # WS-RS9. Was `"cited" if citations else "uncited"` — two
+                    # words in neither the state machine's vocabulary nor the
+                    # renderer's. The meaning is unchanged: a claim with at
+                    # least one citation has net positive evidence and nothing
+                    # that has earned more; a claim with none has had no
+                    # evidence assessed. `BeliefService.recompute_confidence`
+                    # re-derives both from the citations themselves.
+                    confidence=(
+                        Confidence.WEAKLY_SUPPORTED.value
+                        if citations
+                        else Confidence.UNDER_INVESTIGATION.value
+                    ),
                     section_anchor=c.section_anchor,
                     citations=citations,
                 )

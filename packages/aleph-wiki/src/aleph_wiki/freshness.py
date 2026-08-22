@@ -31,6 +31,14 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+from aleph_core.confidence import Confidence
+
+#: The confidence states in which the evidence stands behind the claim.
+#: `CONTESTED` is deliberately absent — evidence pointing both ways is not
+#: verification — and so is `UNDER_INVESTIGATION`, which is the absence of a
+#: judgement rather than a negative one.
+_SUPPORTED = frozenset({Confidence.WEAKLY_SUPPORTED.value, Confidence.WELL_SUPPORTED.value})
+
 if TYPE_CHECKING:
     from aleph_wiki.models import WikiPage, WikiRevision
 
@@ -49,11 +57,12 @@ class ClaimCitation:
 
     ``source_ids`` are the (non-null) ``Source`` ids this claim cites through a
     ``Citation`` → ``SourcePage`` → ``Source`` chain; an empty tuple is an
-    uncited claim. ``confidence`` is the ``WikiClaim.confidence`` string.
+    uncited claim. ``confidence`` is the ``WikiClaim.confidence`` string — a
+    member of ``aleph_core.confidence.Confidence``.
     """
 
     claim_id: UUID
-    confidence: str = "cited"
+    confidence: str = Confidence.UNDER_INVESTIGATION.value
     source_ids: tuple[UUID, ...] = ()
 
 
@@ -117,8 +126,14 @@ def _verification(
         and page.verified_at > revision.created_at
     ):
         return _DIM_MAX
-    cited = sum(1 for c in citations if c.confidence == "cited")
-    return _DIM_MAX * cited / len(citations)
+    # WS-RS9: was `c.confidence == "cited"`, a word the confidence column no
+    # longer holds and that the state machine could never have produced. The
+    # question this dimension asks is "does the evidence stand behind the
+    # claim", and the two states that answer yes are the two supported ones.
+    # Matching on a string the migration renamed would have scored every page
+    # zero on this dimension with nothing reporting a problem.
+    supported = sum(1 for c in citations if c.confidence in _SUPPORTED)
+    return _DIM_MAX * supported / len(citations)
 
 
 def compute_freshness(

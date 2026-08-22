@@ -815,6 +815,50 @@ async def _node_commit_revision(state: WikiIngestState) -> dict:
         }
 
 
+async def _embed_claim_texts(state: WikiIngestState, texts: list[str]) -> dict[str, list[float]]:
+    """`claim text -> vector`, or an empty map when the embedder is unavailable.
+
+    Returns a MAP rather than a list so `dict.get` is the injected embedder: a
+    text with no vector yields `None` and the claim is written without one,
+    which is the honest outcome and keeps the lexical leg working.
+
+    A failure here costs the vectors and not the claims. Losing a belief because
+    a model was unreachable would be trading the thing for the index of it.
+    """
+    if not texts:
+        return {}
+    from aleph_rks.embedding import embed_texts
+
+    ctx = _ctx()
+    try:
+        result = await embed_texts(
+            client=ctx.litellm,
+            principal=ctx.principal,
+            project_id=state["project_id"],
+            agent_run_id=state["agent_run_id"],
+            profile_bindings=state["profile_bindings"],
+            texts=texts,
+            purpose="wiki.claim_embed",
+        )
+    except Exception:
+        _log.warning(
+            "wiki.claim_extraction.embed_failed",
+            source_id=str(state["source_id"]),
+            claims=len(texts),
+        )
+        return {}
+    if len(result.embeddings) != len(texts):
+        # A partial batch cannot be zipped safely — the vectors would attach to
+        # the wrong claims, which is worse than no vectors at all.
+        _log.warning(
+            "wiki.claim_extraction.embed_count_mismatch",
+            asked=len(texts),
+            got=len(result.embeddings),
+        )
+        return {}
+    return dict(zip(texts, result.embeddings, strict=True))
+
+
 @with_phase("claim_extraction", ctx_getter=lambda: _ctx())
 async def _node_claim_extraction(state: WikiIngestState) -> dict:
     """Give the belief layer its first caller.
@@ -908,6 +952,19 @@ async def _node_claim_extraction(state: WikiIngestState) -> dict:
             revision_id=revision_ids[0] if revision_ids else None,
         )
 
+        # Embed every claim in ONE call, before the loop.
+        #
+        # `wiki_claims.embedding` has been NULL on all 1,325 rows and the HNSW
+        # index at `models.py:204` has never had anything to index — a vector
+        # index over an empty column, which from the outside looks exactly like
+        # a working one.
+        #
+        # Batched here rather than per claim inside `upsert_claim`: one gateway
+        # round trip for a document's claims instead of one each, and the
+        # embedder stays injectable so the write path is runnable with no
+        # gateway at all.
+        vectors = await _embed_claim_texts(state, [d.text for d in drafts])
+
         written = 0
         rejected = 0
         async with ctx.session_maker() as session:
@@ -919,6 +976,7 @@ async def _node_claim_extraction(state: WikiIngestState) -> dict:
                     ledger=ledger,
                     project_id=state["project_id"],
                     draft=draft,
+                    embed=vectors.get,
                 )
                 written += result.citations_written
                 rejected += len(result.citations_rejected)

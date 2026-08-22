@@ -246,9 +246,18 @@ class WikiClaim(CommonColumns, Base):
     last_surfaced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    #: RECOMPUTED from evidence, never written by a model. 32 because the
-    #: state machine's longest value is "under_investigation" (19).
-    confidence: Mapped[str] = mapped_column(String(32), nullable=False, server_default="cited")
+    #: RECOMPUTED from evidence, never written by a model. One of
+    #: `aleph_core.confidence.Confidence`; 32 because the state machine's
+    #: longest value is "under_investigation" (19).
+    #:
+    #: The default was "cited", a word in none of the three vocabularies that
+    #: read this column, and it is why 806 of 850 live rows carried it: an
+    #: INSERT that omitted the field got a value the state machine could never
+    #: produce and the renderer had no branch for. A row with no evidence yet
+    #: is UNDER_INVESTIGATION.
+    confidence: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default="under_investigation"
+    )
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="active")
 
 

@@ -22,6 +22,20 @@ from __future__ import annotations
 from html import escape
 from typing import Any
 
+from aleph_core.confidence import Confidence, canonical_confidence
+
+#: Badge colours, by state. Keyed on the enum so adding a member without a
+#: colour is a KeyError at import — loud, and at the moment the state is added
+#: rather than the first time a claim reaches it.
+_CONF_STYLE: dict[Confidence, str] = {
+    Confidence.UNDER_INVESTIGATION: "background:#f1f5f9;color:#475569",
+    Confidence.WEAKLY_SUPPORTED: "background:#fef3c7;color:#854d0e",
+    Confidence.WELL_SUPPORTED: "background:#d1fae5;color:#065f46",
+    Confidence.CONTESTED: "background:#ffedd5;color:#9a3412",
+    Confidence.REFUTED: "background:#fee2e2;color:#991b1b",
+    Confidence.ABANDONED: "background:#e2e8f0;color:#334155",
+}
+
 # System font stack only — no @font-face, no external font URLs.
 _FONT_STACK = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
 
@@ -54,23 +68,30 @@ _STYLE = (
     ".claim .conf{display:inline-block;font-size:.7rem;font-weight:700;"
     "text-transform:uppercase;letter-spacing:.04em;padding:.1rem .4rem;"
     "border-radius:.25rem;margin-bottom:.3rem}"
-    ".conf-well-supported{background:#d1fae5;color:#065f46}"
-    ".conf-cited{background:#dbeafe;color:#1e3a8a}"
-    ".conf-weakly-supported{background:#fef3c7;color:#854d0e}"
-    ".conf-contested{background:#fef3c7;color:#854d0e}"
-    ".conf-uncited{background:#fee2e2;color:#991b1b}"
-    ".conf-default{background:#f1f5f9;color:#475569}"
+    # One class per member of `aleph_core.confidence.Confidence`, generated
+    # from the enum rather than typed out, so a new state cannot arrive with no
+    # styling. Three of the six used to have no rule at all — refuted,
+    # abandoned and under_investigation all fell through to `.conf-default`,
+    # which is how a claim the evidence had DISPROVED rendered in the same grey
+    # as one nobody had looked at yet.
+    + "".join(f".conf-{c.value}{{{_CONF_STYLE[c]}}}" for c in Confidence)
+    + ".conf-unknown{background:#f1f5f9;color:#475569}"
 )
 
-_CONF_CLASSES = {
-    "well-supported": "conf-well-supported",
-    "well_supported": "conf-well-supported",
-    "cited": "conf-cited",
-    "weakly-supported": "conf-weakly-supported",
-    "weakly_supported": "conf-weakly-supported",
-    "contested": "conf-contested",
-    "uncited": "conf-uncited",
-}
+
+def _conf_class(confidence: str) -> str:
+    """CSS class for a confidence value.
+
+    A value outside the vocabulary gets `conf-unknown` and is rendered as
+    itself, not silently relabelled: the compiler is a READER of whatever the
+    column holds, and a page that quietly showed "under investigation" for a
+    word it did not recognise would hide the drift this workstream exists to
+    remove. `canonical_confidence` translates the known legacy spellings only.
+    """
+    try:
+        return f"conf-{canonical_confidence(confidence).value}"
+    except ValueError:
+        return "conf-unknown"
 
 
 def _markdown_to_html(md: str) -> str:
@@ -85,10 +106,6 @@ def _markdown_to_html(md: str) -> str:
     md_render = MarkdownIt("commonmark", {"html": False, "linkify": False})
     md_render.enable("table")
     return md_render.render(md)
-
-
-def _conf_class(confidence: str) -> str:
-    return _CONF_CLASSES.get(confidence.strip().lower(), "conf-default")
 
 
 def _render_infobox(title: str, infobox: dict[str, Any] | None) -> str:
@@ -111,7 +128,9 @@ def _render_claims(claims: list[dict[str, Any]]) -> str:
     for claim in claims:
         confidence = str(claim.get("confidence", "") or "")
         text = str(claim.get("text", "") or "")
-        conf_label = escape(confidence) if confidence else "uncited"
+        # An empty confidence is not "uncited" — it is a row nobody has
+        # derived yet, and the vocabulary has a word for that.
+        conf_label = escape(confidence) if confidence else Confidence.UNDER_INVESTIGATION.value
         items.append(
             f'<div class="claim">'
             f'<span class="conf {_conf_class(confidence)}">{conf_label}</span>'

@@ -36,6 +36,7 @@ from uuid import UUID
 import structlog
 from sqlalchemy import delete, func, select, text, update
 
+from aleph_core.confidence import canonical_confidence
 from aleph_core.ids import uuid7
 from aleph_core.schemas.model_profile import Capability
 from aleph_core.time import utcnow
@@ -761,7 +762,11 @@ class CuratorService:
                         revision_id=target.current_revision_id,
                         section_anchor=c.section_anchor,
                         text=c.text[:2048],
-                        confidence=c.confidence,
+                        # Same guard as the commit path: a merge carries a
+                        # claim's confidence across, and a pre-migration row
+                        # carrying "cited" must not re-enter the column under
+                        # the old spelling.
+                        confidence=canonical_confidence(c.confidence).value,
                         status="active",
                         created_by=principal.user_id,
                     )

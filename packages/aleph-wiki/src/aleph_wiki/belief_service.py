@@ -33,12 +33,19 @@ from sqlalchemy.dialects.postgresql import insert
 
 from aleph_belief.patch import BeliefPatch
 from aleph_belief.reconcile import Candidate, ClaimRef, propose_with_stats
+from aleph_belief.trust import TrustTier
+from aleph_core.confidence import Confidence
 from aleph_core.errors import PermissionDenied
 from aleph_core.grounding import ground
 from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
-from aleph_hypotheses.confidence import EvidenceRow, next_confidence_from_evidence
+from aleph_hypotheses.confidence import (
+    EvidenceRow,
+    next_confidence_from_evidence,
+    weight_for_tier,
+)
 from aleph_observability.tracing import current_trace_id, start_span
+from aleph_rks.models import Source
 from aleph_wiki.models import Citation, ClaimEdge, WikiClaim
 
 if TYPE_CHECKING:
@@ -99,7 +106,13 @@ class EvidenceDraft:
     source_text: str
     chunk_id: UUID | None = None
     stance: str = "supports"
-    weight: float = 1.0
+    #: WS-RS9. Every citation this service writes has had its quote located
+    #: verbatim in the source by `ground()` — `_attach_evidence` refuses the
+    #: rest — which is exactly `TrustTier.EARNED`. The old default of a flat
+    #: 1.0 (`TrustTier.ASSERTED`, an agent's say-so) is why `WELL_SUPPORTED` was
+    #: structurally unreachable: the state machine requires one piece of
+    #: evidence weighing >= 1.5 and no writer in the tree produced one.
+    weight: float = weight_for_tier(TrustTier.EARNED)
     citation_marker: str = "[c1]"
     #: Where ``source_text`` begins inside the whole document.
     #:
@@ -167,6 +180,29 @@ class UpsertResult:
 _log = structlog.get_logger(__name__)
 
 
+#: Turns a claim's proposition into a vector. Injected, never imported — see
+#: `BeliefService.upsert_claim`.
+ClaimEmbedder = Callable[[str], "list[float] | None"]
+
+
+def _embed_or_none(embed: ClaimEmbedder | None, text: str) -> list[float] | None:
+    """The claim's vector, or None if there is no embedder or it failed.
+
+    Swallowing the failure is deliberate and narrow. A claim with no vector is
+    still a claim: the lexical leg finds it, `claim_key` still identifies it,
+    and `BeliefService.rebuild` can fill the column later. Refusing to record a
+    belief because a model was unreachable would lose the thing to protect the
+    index of it.
+    """
+    if embed is None:
+        return None
+    try:
+        return embed(text)
+    except Exception:
+        _log.warning("belief.claim_embed_failed", chars=len(text))
+        return None
+
+
 class BeliefService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -178,8 +214,22 @@ class BeliefService:
         ledger: LedgerWriter,
         project_id: UUID,
         draft: ClaimUpsert,
+        embed: ClaimEmbedder | None = None,
     ) -> UpsertResult:
-        """Create or update a belief, attach its evidence, recompute confidence."""
+        """Create or update a belief, attach its evidence, recompute confidence.
+
+        ``embed`` fills `wiki_claims.embedding`, and it is INJECTED rather than
+        imported for the same reason the extractor's model call is: the write
+        path must stay runnable with no gateway, and the caller owns capability
+        routing and cost attribution. Passing nothing leaves the column NULL,
+        which is what it has been for all 1,325 existing rows — the HNSW index
+        at `models.py:204` has never had anything to index.
+
+        An embedding failure does NOT fail the write. A claim without a vector
+        is still a claim, findable by the lexical leg; refusing to record it
+        because a model was unreachable would lose the belief to protect an
+        index.
+        """
         with start_span(
             "belief.upsert_claim",
             **{"aleph.project_id": str(project_id), "aleph.origin": draft.origin},
@@ -222,8 +272,9 @@ class BeliefService:
                     origin=draft.origin,
                     evidence_tier=draft.evidence_tier,
                     rationale=rationale,
-                    confidence="under_investigation",
+                    confidence=Confidence.UNDER_INVESTIGATION.value,
                     status="active",
+                    embedding=_embed_or_none(embed, proposition),
                     created_by=principal.user_id,
                 )
                 self._session.add(claim)
@@ -325,11 +376,22 @@ class BeliefService:
 
         Called in the same transaction as any citation or edge write, so the
         stored value can never disagree with the evidence it summarises.
+
+        WS-RS9: evidence from a **retracted** source does not count. Without
+        this predicate a retraction only wrote a status column — every claim
+        resting on the withdrawn paper kept the confidence that paper bought it,
+        for as long as nobody re-derived it, which is never. The outer join is
+        deliberate: a citation with no `source_id` is unanchored, not retracted,
+        and dropping those would quietly delete the evidence the legacy wiki
+        path wrote.
         """
         rows = (
             await self._session.execute(
-                select(Citation.stance, Citation.weight, Citation.source_id).where(
-                    Citation.claim_id == claim_id
+                select(Citation.stance, Citation.weight, Citation.source_id)
+                .outerjoin(Source, Source.id == Citation.source_id)
+                .where(
+                    Citation.claim_id == claim_id,
+                    Source.retracted_at.is_(None),
                 )
             )
         ).all()
