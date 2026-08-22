@@ -24,9 +24,12 @@ from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+import structlog
 from langchain_core.callbacks import AsyncCallbackHandler
 
 from aleph_core.time import utcnow
+
+_log = structlog.get_logger(__name__)
 
 if TYPE_CHECKING:
     from langchain_core.outputs import LLMResult
@@ -92,8 +95,8 @@ def _as_int(value: Any) -> int:
         return 0
 
 
-def _extract_usage(response: LLMResult) -> tuple[int, int, int] | None:
-    """Pull (input_tokens, cached_tokens, completion_tokens) from an LLMResult.
+def _extract_usage(response: LLMResult) -> tuple[int, int, int, int] | None:
+    """Pull (input_tokens, cached_tokens, completion_tokens, cache_write_tokens).
 
     Handles both shapes defensively:
       1. `response.generations[0][0].message.usage_metadata` — the LangChain
@@ -117,8 +120,14 @@ def _extract_usage(response: LLMResult) -> tuple[int, int, int] | None:
                     completion_tokens = _as_int(usage.get("output_tokens"))
                     details: dict[str, Any] = dict(usage.get("input_token_details") or {})
                     cached = _as_int(details.get("cache_read"))
+                    # Cache WRITES were never read here, and `PricingTable`
+                    # models them at a 1.25x premium — so every first call in a
+                    # cached conversation under-reported, which is the opposite
+                    # failure to the one caching exists to fix and is invisible
+                    # because the reported number simply gets smaller.
+                    cache_write = _as_int(details.get("cache_creation", details.get("cache_write")))
                     if input_tokens or completion_tokens:
-                        return input_tokens, cached, completion_tokens
+                        return input_tokens, cached, completion_tokens, cache_write
     except Exception:
         logger.debug("usage_metadata extraction failed", exc_info=True)
 
@@ -137,8 +146,11 @@ def _extract_usage(response: LLMResult) -> tuple[int, int, int] | None:
             )
             details = dict(token_usage.get("prompt_tokens_details") or {})
             cached = _as_int(details.get("cached_tokens"))
+            cache_write = _as_int(
+                details.get("cache_creation_tokens", details.get("cache_write_tokens"))
+            )
             if input_tokens or completion_tokens:
-                return input_tokens, cached, completion_tokens
+                return input_tokens, cached, completion_tokens, cache_write
     except Exception:
         logger.debug("llm_output token_usage extraction failed", exc_info=True)
 
@@ -173,6 +185,9 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
         # size cap is exceeded (a CANCELLED run never reaches
         # on_llm_end/on_llm_error to pop itself).
         self._pending: OrderedDict[UUID, tuple[UUID, UUID | None, float]] = OrderedDict()
+        #: Log the unbound case once per handler rather than once per call: an
+        #: error repeated on every model call trains people to filter it out.
+        self._warned_unbound = False
 
     # ---- runtime resolution (lazy) ----------------------------------------
 
@@ -188,12 +203,58 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
             return None
 
     def _resolve_pricing(self) -> PricingTable:
+        """The pricing table the kernel bound, or an empty one — and say which.
+
+        This used to *fabricate* an empty `PricingTable()` and MEMOISE it. Two
+        consequences, and the second is the one that made it invisible:
+
+        1. Every model call on the agent path recorded `pricing_source="unknown"`
+           — 100% of assistant traffic, which is the most expensive traffic in
+           the system. CLAUDE.md's stated commitment is "an unpriced call is
+           never a silent $0"; a permanent "unknown" is worse than a silent $0,
+           because it looks like a recorded fact.
+        2. Memoising the empty table meant that even once the gateway came up
+           and discovery filled the real one, this handler kept its empty copy
+           for the life of the process.
+
+        So: read the bound table lazily, the same way `_resolve_session_maker`
+        does, and do NOT cache the miss. `refresh_pricing` merges into the bound
+        table in place, so holding the object (rather than a copy) is what makes
+        newly discovered rates reach the cost path with no restart.
+
+        The two failures are also logged apart. "No pricing table is bound" is a
+        wiring bug; "this model is absent from the table" is a discovery gap.
+        They were indistinguishable, and they need different fixes.
+        """
         if self._pricing is not None:
             return self._pricing
+
+        try:
+            from aleph_api.copilot_agent import get_runtime
+
+            bound = get_runtime().get("pricing")
+        except Exception:
+            bound = None
+
+        if bound is not None:
+            # Cache only a HIT. Caching the miss is what froze the empty table.
+            self._pricing = bound
+            return bound
+
         from aleph_models.pricing import PricingTable
 
-        self._pricing = PricingTable()
-        return self._pricing
+        if not self._warned_unbound:
+            self._warned_unbound = True
+            _log.error(
+                "agent.cost.no_pricing_table_bound",
+                purpose=self._purpose,
+                detail=(
+                    "the kernel's PRICING capability is not on the agent runtime, so "
+                    "every agent ModelCall will record pricing_source='unknown'. This "
+                    "is a wiring bug, not a discovery gap."
+                ),
+            )
+        return PricingTable()
 
     # ---- lifecycle hooks ---------------------------------------------------
 
@@ -250,7 +311,7 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
                 self._purpose,
             )
             return
-        input_tokens, cached_tokens, completion_tokens = usage
+        input_tokens, cached_tokens, completion_tokens, cache_write_tokens = usage
         latency_ms = max(int((time.monotonic() - t0) * 1000), 0)
         try:
             await self._write(
@@ -259,6 +320,7 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
                 input_tokens=input_tokens,
                 cached_tokens=cached_tokens,
                 completion_tokens=completion_tokens,
+                cache_write_tokens=cache_write_tokens,
                 latency_ms=latency_ms,
             )
         except Exception:
@@ -284,6 +346,7 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
         cached_tokens: int,
         completion_tokens: int,
         latency_ms: int,
+        cache_write_tokens: int = 0,
     ) -> None:
         session_maker = self._resolve_session_maker()
         if session_maker is None:
@@ -298,6 +361,7 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
             input_tokens=input_tokens,
             cached_tokens=cached_tokens,
             completion_tokens=completion_tokens,
+            cache_write_tokens=cache_write_tokens,
         )
         cost, savings = priced.cost_usd, priced.cache_savings_usd
         if not priced.priced:
@@ -339,6 +403,10 @@ class AgentCostCallbackHandler(AsyncCallbackHandler):
                     input_tokens=input_tokens,
                     cached_tokens=cached_tokens,
                     completion_tokens=completion_tokens,
+                    # `cache_write_tokens` was a column nothing wrote. Cache
+                    # writes bill at a premium, so omitting them made every
+                    # first call in a cached conversation under-report.
+                    cache_write_tokens=cache_write_tokens,
                     cost_usd=cost,
                     cache_savings_usd=savings,
                     pricing_source=priced.source,

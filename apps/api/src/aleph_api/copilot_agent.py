@@ -207,6 +207,7 @@ def bind_runtime(
     settings: Settings | None = None,
     litellm: LiteLLMClient | None = None,
     agent_bindings: dict[str, Any] | None = None,
+    pricing: Any = None,
 ) -> None:
     _runtime["session_maker"] = session_maker
     if settings is not None:
@@ -215,6 +216,13 @@ def bind_runtime(
         _runtime["litellm"] = litellm
     if agent_bindings is not None:
         _runtime["agent_bindings"] = agent_bindings
+    if pricing is not None:
+        # The kernel's PRICING object, not a copy. `refresh_pricing` merges into
+        # it in place, so holding the object is what lets newly discovered rates
+        # reach the agent's cost path without a restart — the agent path used to
+        # fabricate its own empty table and memoise it, so 100% of assistant
+        # traffic recorded pricing_source="unknown" forever.
+        _runtime["pricing"] = pricing
 
 
 def get_runtime() -> dict[str, Any]:

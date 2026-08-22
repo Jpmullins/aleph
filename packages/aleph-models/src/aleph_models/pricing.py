@@ -60,6 +60,17 @@ class ModelPricing:
     #: derived percentage is an assumption, a reported rate is a fact.
     cache_read_per_token: Decimal | None = None
     cache_write_per_token: Decimal | None = None
+    #: Where THIS model's rates came from — `gateway` (the endpoint reported
+    #: them) or `static` (asserted from the operator hints file).
+    #:
+    #: Per model, not per table. The table carried one `_source` for everything
+    #: in it and `from_discovery` labelled the whole thing `static` if any single
+    #: priced model came from hints — so on a normal restricted-key gateway,
+    #: where most rates are reported and a few are filled in, every cost row
+    #: claimed to be asserted. "Asserted" and "reported" carry very different
+    #: weight in an audit, and collapsing them loses the distinction in the
+    #: direction that understates confidence in the numbers that deserve it.
+    source: str = "static"
 
     @property
     def read_rate(self) -> Decimal:
@@ -120,6 +131,7 @@ class PricingTable:
             if m.input_per_token is None:
                 continue
             table[m.id] = ModelPricing(
+                source=m.rates_source or "static",
                 input_per_token=m.input_per_token,
                 output_per_token=m.output_per_token or Decimal("0"),
                 cache_read_per_token=m.cache_read_per_token,
@@ -133,8 +145,10 @@ class PricingTable:
                     Decimal("1.25") if m.cache_write_per_token is not None else Decimal("1")
                 ),
             )
-        # The weaker claim wins the label: if any priced model's rate was
-        # asserted rather than reported, the table as a whole is `static`.
+        # The table-level label survives only as the fallback for a model that
+        # is not in the table at all. Per-model provenance is on each row, so a
+        # gateway-reported rate is no longer relabelled `static` because some
+        # OTHER model in the same table came from hints.
         priced = [m for m in models if m.input_per_token is not None]
         reported = bool(priced) and all(m.rates_source == "gateway" for m in priced)
         return cls(table, source="gateway" if reported else "static")
@@ -146,7 +160,18 @@ class PricingTable:
         return sorted(self._table)
 
     def merge(self, other: PricingTable) -> None:
-        """Fold in another table, `other` winning. Used to refresh from a gateway."""
+        """Fold in another table, `other` winning. Used to refresh from a gateway.
+
+        Merging in place is deliberate and load-bearing: the kernel's PRICING
+        capability hands the SAME object to `LiteLLMClient` and to the agent's
+        cost callback, so a refresh reaches both without either being rebuilt.
+        A merge that returned a new table would silently strand every holder of
+        the old one — which is how the agent path spent its life with an empty
+        price list.
+
+        Each row carries its own `source`, so folding a hints-filled table into a
+        gateway-reported one no longer relabels the gateway's rows.
+        """
         self._table.update(other._table)
         if other._table:
             self._source = other._source
@@ -184,7 +209,10 @@ class PricingTable:
             cost.quantize(_UNIT),
             savings.quantize(_UNIT),
             priced=True,
-            source=self._source,
+            # The model's OWN provenance. The table-level label is only a
+            # fallback for a model that is not in the table, and that path
+            # already returned `unknown` above.
+            source=p.source,
             input_rate_usd=p.input_per_token,
             output_rate_usd=p.output_per_token,
         )

@@ -39,6 +39,7 @@ from aleph_runtime.capabilities import (
     BOUND_KEYS,
     DB_SESSIONS,
     LITELLM,
+    PRICING,
     SETTINGS,
     bind_to_app_state,
 )
@@ -125,6 +126,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             settings=settings,
             litellm=reader.get(LITELLM),
             agent_bindings=agent_bindings,
+            pricing=reader.get(PRICING),
         )
 
         # Durable per-thread conversation state, sharing the agent store's

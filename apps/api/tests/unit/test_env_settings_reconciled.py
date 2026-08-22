@@ -40,6 +40,16 @@ ALEPH_KEY_IGNORE: dict[str, str] = {
     # deliberately not a Settings field: it is a property of where the browser
     # loaded the page from, not of the API, and compose derives it from WEB_PORT.
     "ALEPH_CORS_ORIGINS": "read by create_app for the CORS allow-list, no settings field",
+    # Read by `aleph_models.hints.load_hints` from `os.environ`, deliberately not
+    # a Settings field. `aleph-models` is used by BOTH aleph-api and
+    # aleph-workers and has no Settings of its own; promoting the path would
+    # mean threading it Settings → GatewayCatalog → discover_models →
+    # apply_hints → load_hints in two processes, to configure the location of a
+    # file. It is a deployment-level path like a mount point, not a behaviour of
+    # the API. Documented in .env.example so an operator can find it.
+    "ALEPH_MODEL_HINTS_PATH": (
+        "operator-supplied rates file path, read from os.environ by aleph-models"
+    ),
 }
 
 

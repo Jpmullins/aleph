@@ -27,7 +27,7 @@ from decimal import Decimal
 
 import pytest
 
-from aleph_models.discovery import parse_model_info
+from aleph_models.discovery import DiscoveredModel, parse_model_info
 from aleph_models.pricing import ModelPricing, PricingTable, get_default_pricing
 
 FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "bedrock_gateway_model_info.json"
@@ -163,3 +163,107 @@ class TestProvenanceIsRecordable:
             "cost cannot be re-derived from the persisted rates — the audit trail "
             "would not survive the gateway changing its prices"
         )
+
+
+# ---------------------------------------------------------------------------
+# Per-model provenance
+#
+# The table carried ONE `_source` for everything in it, and `from_discovery`
+# labelled the whole table `static` if any single priced model came from hints.
+# On a normal restricted-key gateway — where most rates are reported and a few
+# are filled in — that meant every cost row claimed to be asserted. "Asserted"
+# and "reported" carry very different weight in an audit.
+# ---------------------------------------------------------------------------
+
+
+def _discovered(model_id: str, *, rates_source: str) -> DiscoveredModel:
+    return DiscoveredModel(
+        id=model_id,
+        mode="chat",
+        input_per_token=Decimal("0.000003"),
+        output_per_token=Decimal("0.000015"),
+        max_input_tokens=200_000,
+        max_output_tokens=8_192,
+        cache_read_per_token=None,
+        cache_write_per_token=None,
+        supports_vision=False,
+        supports_function_calling=True,
+        supports_reasoning=False,
+        supports_prompt_caching=False,
+        rates_source=rates_source,
+    )
+
+
+def test_two_models_in_one_table_keep_different_provenance() -> None:
+    table = PricingTable.from_discovery(
+        [
+            _discovered("reported-model", rates_source="gateway"),
+            _discovered("asserted-model", rates_source="static"),
+        ]
+    )
+
+    reported = table.breakdown(
+        model="reported-model", input_tokens=100, cached_tokens=0, completion_tokens=10
+    )
+    asserted = table.breakdown(
+        model="asserted-model", input_tokens=100, cached_tokens=0, completion_tokens=10
+    )
+
+    assert reported.source == "gateway", (
+        "a gateway-reported rate was relabelled because ANOTHER model in the "
+        "same table came from hints"
+    )
+    assert asserted.source == "static"
+    # Both are genuinely priced — the labels differ, the arithmetic does not.
+    assert reported.priced and asserted.priced
+    assert reported.cost_usd == asserted.cost_usd
+
+
+def test_merging_a_hints_table_does_not_relabel_gateway_rows() -> None:
+    """A refresh must not downgrade the provenance of rates it did not touch."""
+    live = PricingTable.from_discovery([_discovered("reported-model", rates_source="gateway")])
+    hints = PricingTable.from_discovery([_discovered("asserted-model", rates_source="static")])
+
+    live.merge(hints)
+
+    assert (
+        live.breakdown(
+            model="reported-model", input_tokens=10, cached_tokens=0, completion_tokens=1
+        ).source
+        == "gateway"
+    )
+    assert (
+        live.breakdown(
+            model="asserted-model", input_tokens=10, cached_tokens=0, completion_tokens=1
+        ).source
+        == "static"
+    )
+
+
+def test_an_absent_model_is_unknown_and_unpriced() -> None:
+    """The check has to be able to say "no" — otherwise `source` is a constant."""
+    table = PricingTable.from_discovery([_discovered("known", rates_source="gateway")])
+    out = table.breakdown(model="never-seen", input_tokens=10, cached_tokens=0, completion_tokens=1)
+    assert out.priced is False
+    assert out.source == "unknown"
+    assert out.cost_usd == Decimal("0")
+
+
+def test_merge_is_in_place_so_every_holder_sees_the_refresh() -> None:
+    """The kernel hands ONE PricingTable to LiteLLMClient and to the agent's cost
+    callback. A merge that returned a new table would strand both holders on the
+    old one — which is how the agent path spent its life with an empty table."""
+    live = PricingTable()
+    holder = live  # what a long-lived consumer captured at boot
+
+    assert not holder.has("late-arriving-model")
+    live.merge(
+        PricingTable.from_discovery([_discovered("late-arriving-model", rates_source="gateway")])
+    )
+    assert holder.has("late-arriving-model"), "the refresh did not reach an existing holder"
+    assert (
+        holder.breakdown(
+            model="late-arriving-model", input_tokens=10, cached_tokens=0, completion_tokens=1
+        ).source
+        == "gateway"
+    )

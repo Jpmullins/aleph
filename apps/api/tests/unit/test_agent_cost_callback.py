@@ -281,3 +281,170 @@ async def test_skips_when_no_usage() -> None:
     gen = ChatGeneration(message=AIMessage(content="hi"))
     await handler.on_llm_end(LLMResult(generations=[[gen]]), run_id=run_id)
     assert session.added == []
+
+
+# ---------------------------------------------------------------------------
+# WS-MEP-1 — the agent path had no price list at all
+#
+# `_resolve_pricing` FABRICATED an empty `PricingTable()` and memoised it. So
+# every model call on the agent path recorded `pricing_source="unknown"` — 100%
+# of assistant traffic, the most expensive traffic in the system — and even once
+# the gateway came up and discovery filled the real table, this handler kept its
+# empty copy for the life of the process.
+#
+# The backlog blamed the gateway for not reporting rates. That is false:
+# `claude-sonnet-4-6` is priced in the shipped hints file and `apply_hints`
+# fills it. The rates existed; the agent could not see them.
+# ---------------------------------------------------------------------------
+
+
+def _production_shaped_handler() -> AgentCostCallbackHandler:
+    """Exactly how `_gateway_chat_model` builds it: no `pricing=` argument.
+
+    A test that passes `pricing=` proves the handler can use a table it is
+    handed, which was never in doubt. The defect was that production hands it
+    none.
+    """
+    return AgentCostCallbackHandler(model=MODEL, purpose="assistant.turn")
+
+
+def test_a_handler_built_the_production_way_finds_the_bound_table() -> None:
+    from aleph_api.copilot_agent import _runtime
+    from aleph_models.pricing import PricingTable
+
+    bound = PricingTable()
+    previous = _runtime.get("pricing")
+    _runtime["pricing"] = bound
+    try:
+        handler = _production_shaped_handler()
+        # Object IDENTITY, not equality: `refresh_pricing` merges into the bound
+        # table in place, so anything that copied it would be frozen at whatever
+        # discovery had found at boot.
+        assert handler._resolve_pricing() is bound
+    finally:
+        if previous is None:
+            _runtime.pop("pricing", None)
+        else:
+            _runtime["pricing"] = previous
+
+
+def test_an_unbound_table_is_not_cached_so_a_late_gateway_still_prices() -> None:
+    """The memoised miss is the half that made this permanent.
+
+    A gateway that was down at boot must produce priced calls once it comes up,
+    with no restart — so a resolve that found nothing must not be remembered.
+    """
+    from aleph_api.copilot_agent import _runtime
+    from aleph_models.pricing import PricingTable
+
+    previous = _runtime.get("pricing")
+    _runtime.pop("pricing", None)
+    try:
+        handler = _production_shaped_handler()
+        first = handler._resolve_pricing()
+        assert first.models() == []
+
+        late = PricingTable()
+        _runtime["pricing"] = late
+        assert handler._resolve_pricing() is late, (
+            "the empty table was memoised — the gateway coming up cannot help"
+        )
+    finally:
+        if previous is None:
+            _runtime.pop("pricing", None)
+        else:
+            _runtime["pricing"] = previous
+
+
+def test_no_pricing_table_bound_is_reported_as_its_own_failure() -> None:
+    """ "No table is bound" is a wiring bug; "this model is absent from the
+    table" is a discovery gap. They were indistinguishable and need different
+    fixes."""
+    from structlog.testing import capture_logs
+
+    from aleph_api.copilot_agent import _runtime
+
+    previous = _runtime.get("pricing")
+    _runtime.pop("pricing", None)
+    try:
+        with capture_logs() as captured:
+            _production_shaped_handler()._resolve_pricing()
+        events = [entry.get("event") for entry in captured]
+        assert "agent.cost.no_pricing_table_bound" in events, captured
+    finally:
+        if previous is not None:
+            _runtime["pricing"] = previous
+
+
+def test_the_callback_no_longer_invents_a_table() -> None:
+    """Pinned as a property of the source, because the alternative rename —
+    `_empty_table()` — would satisfy a grep while changing nothing."""
+    import ast
+    import pathlib
+
+    source = pathlib.Path("apps/api/src/aleph_api/copilot_cost_callback.py").read_text()
+    tree = ast.parse(source)
+    resolvers = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_resolve_pricing"
+    ]
+    assert resolvers, "_resolve_pricing is gone — update this test"
+    body = ast.dump(resolvers[0])
+    # Constructing an empty table as a FALLBACK is fine; caching it is not.
+    assert "self._pricing" not in body.split("PricingTable()")[-1], (
+        "the empty fallback table is memoised again"
+    )
+
+
+def test_cache_write_tokens_are_extracted() -> None:
+    """A column nothing wrote, against a rate the pricing table models at 1.25x.
+
+    Omitting cache writes made every FIRST call in a cached conversation
+    under-report — the opposite failure to the one caching exists to fix, and
+    invisible because the reported number simply gets smaller.
+    """
+    from types import SimpleNamespace
+
+    from aleph_api.copilot_cost_callback import _extract_usage
+
+    message = SimpleNamespace(
+        usage_metadata={
+            "input_tokens": 1000,
+            "output_tokens": 50,
+            "input_token_details": {"cache_read": 200, "cache_creation": 300},
+        }
+    )
+    response = SimpleNamespace(generations=[[SimpleNamespace(message=message)]], llm_output=None)
+
+    usage = _extract_usage(response)  # type: ignore[arg-type]
+    assert usage is not None
+    input_tokens, cached, completion, cache_write = usage
+    assert (input_tokens, cached, completion, cache_write) == (1000, 200, 50, 300)
+
+
+def test_cache_write_tokens_cost_more_than_plain_input() -> None:
+    """The premium is the point: modelling the discount without it is what made
+    the numbers systematically wrong in the flattering direction."""
+    from decimal import Decimal
+
+    from aleph_models.pricing import ModelPricing, PricingTable
+
+    table = PricingTable(
+        {
+            MODEL: ModelPricing(
+                input_per_token=Decimal("0.000003"),
+                output_per_token=Decimal("0.000015"),
+                source="gateway",
+            )
+        }
+    )
+    plain = table.breakdown(model=MODEL, input_tokens=1000, cached_tokens=0, completion_tokens=0)
+    written = table.breakdown(
+        model=MODEL,
+        input_tokens=1000,
+        cached_tokens=0,
+        completion_tokens=0,
+        cache_write_tokens=1000,
+    )
+    assert written.cost_usd > plain.cost_usd
