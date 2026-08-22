@@ -24,7 +24,7 @@ export function WikilinkChip({ text, target, onNavigate, broken = false }: Props
   if (broken) {
     return (
       <span
-        className="mx-0.5 inline-flex items-center rounded border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-700"
+        className="mx-0.5 inline-flex items-center border border-dashed border-badge-warning-fg bg-badge-warning-bg px-1.5 py-0.5 text-xs font-medium text-badge-warning-fg"
         title={
           destination === text
             ? "Unresolved link — no page with this title yet"
@@ -39,7 +39,7 @@ export function WikilinkChip({ text, target, onNavigate, broken = false }: Props
   return (
     <button
       type="button"
-      className="mx-0.5 inline-flex items-center rounded border border-line-strong bg-elevated px-1.5 py-0.5 text-xs font-medium text-ink-soft hover:bg-line"
+      className="mx-0.5 inline-flex items-center border border-line-strong bg-elevated px-1.5 py-0.5 text-xs font-medium text-ink-soft hover:bg-line"
       onClick={() => onNavigate?.(destination)}
       data-testid="wikilink-chip"
     >

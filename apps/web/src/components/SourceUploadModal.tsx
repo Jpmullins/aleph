@@ -47,7 +47,7 @@ export function SourceUploadModal({ projectId, onClose, onUploaded }: Props) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 px-4">
-      <div className="w-full max-w-md rounded-lg bg-surface p-6 shadow-xl">
+      <div className="w-full max-w-md border border-line-strong bg-surface p-6">
         <h2 className="mb-4 text-xl font-semibold">Upload source</h2>
         <form
           onSubmit={(e) => {
@@ -71,11 +71,11 @@ export function SourceUploadModal({ projectId, onClose, onUploaded }: Props) {
             <input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm"
+              className="mt-1 w-full border border-line-strong px-3 py-2 text-sm"
             />
           </label>
           {upload.isError && (
-            <p className="text-sm text-red-600">
+            <p className="text-sm text-bad">
               {(upload.error as ApiError).message}
             </p>
           )}
@@ -83,14 +83,14 @@ export function SourceUploadModal({ projectId, onClose, onUploaded }: Props) {
             <button
               type="button"
               onClick={onClose}
-              className="rounded-md border border-line-strong px-4 py-2 text-sm hover:border-line-strong"
+              className="border border-line-strong px-4 py-2 text-sm hover:border-line-strong"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={!file || upload.isPending}
-              className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-ink-inverse hover:bg-ink-soft disabled:opacity-50"
+              className="bg-ink px-4 py-2 text-sm font-medium text-ink-inverse hover:bg-ink-soft disabled:opacity-50"
             >
               {upload.isPending ? "Uploading…" : "Upload"}
             </button>

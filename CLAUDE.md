@@ -247,12 +247,11 @@ packages/
   aleph-artifacts     builder agent, rendered assets, exporters
   aleph-a2ui          A2UI catalog (`catalog.json`) + Python SDK glue
   aleph-notes         analyst notes
-  aleph-datasets      Dataset / DatasetVersion / Observation
   aleph-evals         eval runner, scorers, and the retrieval eval that calls the real path
   aleph-wiki          the wiki knowledge plugin — pages, schema, lint, hubs; hosts the Claim Spine write path
 ```
 
-23 workspace packages. `docs/acceptance.md` E4 asserts the count does not grow. There is no
+20 workspace packages. `docs/acceptance.md` E4 asserts the count does not grow. There is no
 reduction coming: `docs/decisions.md` D1 reversed the wiki deletion, and both knowledge plugins
 stay.
 

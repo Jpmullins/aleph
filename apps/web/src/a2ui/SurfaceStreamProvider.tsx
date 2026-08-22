@@ -26,7 +26,12 @@ import {
   type ReactNode,
 } from "react";
 
-import { buildAlephCatalog, type AlephComponentApi } from "./aleph-catalog-v09";
+import {
+  buildAlephCatalogs,
+  type AlephComponentApi,
+  type PluginCatalogDescriptor,
+} from "./aleph-catalog-v09";
+import { api } from "@/lib/api";
 
 
 type AnySurface = SurfaceModel<AlephComponentApi>;
@@ -59,7 +64,43 @@ export function SurfaceStreamProvider({
   panes: string[];
   children: ReactNode;
 }) {
-  const catalog = useMemo(() => buildAlephCatalog(), []);
+  // What catalogs this project's renderer should hold, from
+  // `GET /v1/projects/{id}/catalogs` — core, core's legacy alias, and one per
+  // enabled plugin. Starts at the static pair rather than at nothing, so a pane
+  // never waits on a network call to paint: every surface the product itself
+  // emits names core or its alias, and the plugin entries only widen the set.
+  //
+  // A failure is deliberately not raised here. The observable consequence of a
+  // missing plugin catalog is that its surfaces answer `Catalog not found`,
+  // which `onmessage` already reports through `setError` — a second error path
+  // for the same fact would just be noisier.
+  const [plugins, setPlugins] = useState<PluginCatalogDescriptor[]>([]);
+  useEffect(() => {
+    let live = true;
+    void api
+      .get<{ catalogs?: PluginCatalogDescriptor[] }>(`/v1/projects/${projectId}/catalogs`)
+      .then((body) => {
+        if (!live) return;
+        // Replaced only when the SET actually changed. `catalogs` is a
+        // dependency of the effect that opens the SSE stream, so handing back a
+        // fresh array with identical contents would close the connection and
+        // rebuild every surface — once per mount for a project with no plugins
+        // at all, which is every project today.
+        setPlugins((prev) => {
+          const next = (body.catalogs ?? []).filter((c) => Boolean(c.plugin));
+          const same =
+            prev.length === next.length &&
+            prev.every((p, i) => p.catalogId === next[i].catalogId);
+          return same ? prev : next;
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [projectId]);
+
+  const catalogs = useMemo(() => buildAlephCatalogs(plugins), [plugins]);
   const [surfaces, setSurfaces] = useState<Map<string, AnySurface>>(new Map());
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -77,7 +118,7 @@ export function SurfaceStreamProvider({
   const paneKey = panes.join(",");
 
   useEffect(() => {
-    const processor = new MessageProcessor([catalog]);
+    const processor = new MessageProcessor(catalogs);
     let live = true;
     let lastSeq = -1;
 
@@ -132,7 +173,7 @@ export function SurfaceStreamProvider({
       created.unsubscribe();
       deleted.unsubscribe();
     };
-  }, [catalog, projectId, paneKey]);
+  }, [catalogs, projectId, paneKey]);
 
   const value = useMemo<StreamCtx>(
     () => ({ surfaces, connected, error }),

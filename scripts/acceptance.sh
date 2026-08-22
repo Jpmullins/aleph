@@ -455,8 +455,13 @@ fi
 # ---------------------------------------------------------------------------
 # E — Deletion
 # ---------------------------------------------------------------------------
+# Counted from git, not from `ls`. The aleph-datasets package was deleted in
+# cd73f12 and its directory survived on disk holding four stale .pyc files, so
+# `ls packages | wc -l` counted a package that no longer exists — this check
+# read 21 when 20 were real. A husk must not be able to move this number in
+# either direction.
 run_shell E4 "workspace package count does not grow unchecked" \
-  "n=\$(ls packages | wc -l); echo \"\$n packages\"; [ \"\$n\" -le 21 ]"
+  "n=\$(git ls-files 'packages/*/pyproject.toml' | wc -l | tr -d ' '); echo \"\$n packages\"; [ \"\$n\" -le 21 ]"
 # Deliberately red: the patch contract shipped before its consumer, which is
 # the exact defect class this refactor exists to remove. It goes green when the
 # Claim Spine (part C) uses it, or the code gets deleted.
@@ -531,6 +536,23 @@ run_shell E10 "design-token drift does not grow" \
 # ---------------------------------------------------------------------------
 # G — Verification infrastructure
 # ---------------------------------------------------------------------------
+# E11 is the only check here that renders the real interface. Every other web
+# check reads source: a class counter cannot see a colour that arrives as an
+# inline style, an SVG fill or a canvas paint, and the last hardcoded colour
+# found in this app was on a canvas. It needs the web container AND the API, so
+# it is separate from the source sweeps above and skips loudly when either is
+# down. It is also the only consumer of tests/playwright, which was eight specs
+# no gate ran.
+if curl -fsS -o /dev/null --max-time 3 "${ALEPH_WEB_BASE_URL:-http://localhost:5273}" 2>/dev/null \
+  && curl -fsS -o /dev/null --max-time 3 "${ALEPH_API_BASE_URL:-http://localhost:8000}/openapi.json" 2>/dev/null; then
+  run_shell E11 "no surface renders identically in light and dark" \
+    "ALEPH_WEB_BASE_URL=${ALEPH_WEB_BASE_URL:-http://localhost:5273} \
+     ALEPH_API_BASE_URL=${ALEPH_API_BASE_URL:-http://localhost:8000} \
+     pnpm -s -C tests/playwright test specs/theme-differs-per-surface.spec.ts 2>&1 | tail -3"
+else
+  skip E11 "needs the web container and the API — set ALEPH_WEB_BASE_URL / ALEPH_API_BASE_URL"
+fi
+
 run_shell G1a "the retrieval audit check is a known-answer probe, not a length assertion" \
   "grep -q 'body-phrase probe' audit/checks/wiki-first-retrieval.sh \
    && ! grep -q 'len} -ge 40 ] || fail \"retrieval composed_body_md too short' audit/checks/wiki-first-retrieval.sh \

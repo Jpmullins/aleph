@@ -32,7 +32,7 @@ export function NotesSurface({ component, onAction }: RendererProps) {
           <button
             type="button"
             onClick={() => onAction("create_note", {})}
-            className="rounded-md bg-[var(--accent,#0f172a)] px-3 py-1 text-xs font-medium text-ink-inverse hover:opacity-90"
+            className="bg-accent px-3 py-1 text-xs font-medium text-accent-fg hover:opacity-90"
             data-testid="new-note"
           >
             + New
@@ -50,9 +50,9 @@ export function NotesSurface({ component, onAction }: RendererProps) {
                 type="button"
                 onClick={() => setSelected(n.id)}
                 className={
-                  "w-full truncate rounded px-2 py-1.5 text-left text-xs " +
+                  "w-full truncate px-2 py-1.5 text-left text-xs " +
                   (n.id === selected
-                    ? "bg-[var(--accent-muted,rgba(249,115,22,0.1))] text-[var(--accent,#0f172a)]"
+                    ? "bg-accent-muted text-accent"
                     : "text-ink-soft hover:bg-sunken")
                 }
                 data-testid={`note-${n.id}`}

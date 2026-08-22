@@ -126,7 +126,7 @@ export function Block({
       className="flex h-full min-h-0 bg-surface"
       style={{
         border: `1px solid ${selected ? "var(--accent)" : "var(--border-muted)"}`,
-        boxShadow: selected ? "0 0 0 3px var(--accent-muted)" : "var(--shadow-sm)",
+        boxShadow: selected ? "0 0 0 3px var(--accent-muted)" : "none",
       }}
       data-testid="block"
       data-trust={trust}

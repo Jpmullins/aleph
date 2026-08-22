@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
+import { readToken, useThemeEpoch } from "../../lib/theme-tokens";
 import { useSurface } from "../surface-context";
 import { CardShell, FeedbackButton, Pill, type RendererProps } from "./_shared";
 
@@ -38,21 +39,42 @@ export function ChartCard({ component, onAction }: RendererProps) {
     chart_id?: string;
   };
   const ref = useRef<HTMLDivElement>(null);
+  // Vega paints onto a canvas, so the axis colours must be resolved literals —
+  // it cannot read `var(--text-secondary)`. Re-embedding on a theme change is
+  // the other half: a chart that resolves the token once is correct until
+  // somebody uses the theme toggle, and then wrong with no way to notice.
+  const themeEpoch = useThemeEpoch();
 
-  const hasInlineSpec = !!p.vega_lite_spec && Object.keys(p.vega_lite_spec).length > 0;
-  const source: Record<string, unknown> | null = hasInlineSpec
-    ? {
-        ...(p.vega_lite_spec as Record<string, unknown>),
-        // Normalize to the installed Vega-Lite major version.
-        $schema: "https://vega.github.io/schema/vega-lite/v6.json",
-      }
-    : null;
+  // Memoised because it is the embed effect's dependency. Rebuilt inline, this
+  // object had a new identity on every render, so the effect fired on every
+  // render too — a full Vega compile and canvas repaint each time the parent
+  // re-rendered for any reason. It also made `themeEpoch` below decorative:
+  // the redraw on a theme change happened by accident, and would have kept
+  // happening after somebody deleted the dependency.
+  const spec = p.vega_lite_spec;
+  const source: Record<string, unknown> | null = useMemo(() => {
+    if (!spec || Object.keys(spec).length === 0) return null;
+    return {
+      ...spec,
+      // Normalize to the installed Vega-Lite major version.
+      $schema: "https://vega.github.io/schema/vega-lite/v6.json",
+    };
+  }, [spec]);
 
   useEffect(() => {
     if (!ref.current || source === null) return;
     let disposed = false;
     void import("vega-embed").then(({ default: embed }) => {
       if (disposed || !ref.current) return;
+      // A token that resolves to nothing means tokens.css did not load. Omit
+      // the key rather than substituting a literal: Vega's own default is at
+      // least a stated default, where a hardcoded hex is a second palette that
+      // only appears when the first one fails.
+      const axis: Record<string, unknown> = { labelFontSize: 10, titleFontSize: 11 };
+      const labelColor = readToken("--text-secondary");
+      const titleColor = readToken("--text-primary");
+      if (labelColor) axis.labelColor = labelColor;
+      if (titleColor) axis.titleColor = titleColor;
       embed(ref.current, source as never, {
         actions: false,
         renderer: "canvas",
@@ -61,29 +83,24 @@ export function ChartCard({ component, onAction }: RendererProps) {
         loader: _NO_NET_LOADER,
         config: {
           background: "transparent",
-          axis: {
-            labelFontSize: 10,
-            titleFontSize: 11,
-            labelColor: "#475569",
-            titleColor: "#0f172a",
-          },
+          axis,
           legend: { labelFontSize: 10, titleFontSize: 11 },
           view: { stroke: "transparent" },
         },
       }).catch((err: unknown) => {
         if (!disposed && ref.current) {
-          ref.current.innerHTML = `<div class="text-xs text-red-700 p-2">Chart render failed: ${String(err)}</div>`;
+          ref.current.innerHTML = `<div class="text-xs text-bad p-2">Chart render failed: ${String(err)}</div>`;
         }
       });
     });
     return () => {
       disposed = true;
     };
-  }, [source]);
+  }, [source, themeEpoch]);
 
   if (source === null) {
     return (
-      <CardShell title={p.title || "Chart"} subtitle={<Pill tone="slate">No chart data</Pill>}>
+      <CardShell title={p.title || "Chart"} subtitle={<Pill tone="neutral">No chart data</Pill>}>
         <p className="text-xs text-ink-muted">
           This chart has no bound spec. An agent produces one via the sandbox
           (code_runner) or supplies an inline Vega-Lite spec.

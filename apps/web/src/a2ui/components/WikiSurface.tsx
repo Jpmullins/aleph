@@ -66,19 +66,19 @@ interface OpenPage {
 // the rule itself is enforced server-side.
 const STUB_PROMOTION_MENTIONS = 2;
 
-const STATUS_TONE: Record<string, "emerald" | "amber" | "slate"> = {
-  approved: "emerald",
-  draft: "amber",
-  archived: "slate",
+const STATUS_TONE: Record<string, "good" | "warn" | "neutral"> = {
+  approved: "good",
+  draft: "warn",
+  archived: "neutral",
   // A stub is a red link: a title something pointed at that nobody has written
   // yet. It is not a proposal and carries no claim, so it gets the quietest
   // tone we have — noticing it should take deliberate attention.
-  stub: "slate",
+  stub: "neutral",
 };
 
 function StatusBadge({ status }: { status: string }) {
   return (
-    <Pill tone={STATUS_TONE[status] ?? "slate"}>
+    <Pill tone={STATUS_TONE[status] ?? "neutral"}>
       <span data-testid="wiki-status-badge">{status}</span>
     </Pill>
   );
@@ -214,7 +214,7 @@ export function WikiSurface({ component, onAction }: RendererProps) {
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder="Filter pages…"
-          className="w-full rounded border border-line-strong px-2 py-1 text-xs focus:border-line-strong focus:outline-none"
+          className="w-full border border-line-strong px-2 py-1 text-xs focus:border-line-strong focus:outline-none"
           data-testid="wiki-filter"
         />
       </div>
@@ -248,8 +248,8 @@ export function WikiSurface({ component, onAction }: RendererProps) {
           onClick={() => setDraftsOnly((v) => !v)}
           className={`flex items-center justify-between gap-2 border-b border-line px-3 py-1.5 text-left text-xs ${
             draftsOnly
-              ? "bg-[var(--badge-warning-bg)] text-[var(--badge-warning-fg)]"
-              : "bg-[var(--badge-warning-bg)] text-[var(--badge-warning-fg)] opacity-80 hover:opacity-100"
+              ? "bg-badge-warning-bg text-badge-warning-fg"
+              : "bg-badge-warning-bg text-badge-warning-fg opacity-80 hover:opacity-100"
           }`}
           data-testid="wiki-needs-attention"
         >
@@ -304,7 +304,7 @@ export function WikiSurface({ component, onAction }: RendererProps) {
 
 function WikiEmptyState() {
   return (
-    <div className="rounded-lg border border-dashed border-line-strong p-6 text-center">
+    <div className="border border-dashed border-line-strong p-6 text-center">
       <p className="text-sm font-medium text-ink-soft">No wiki pages yet</p>
       <p className="mt-2 text-xs text-ink-muted">
         The wiki compiles from ingested sources. Click <strong>+ Upload source</strong> in the left
@@ -337,30 +337,30 @@ function PageGroup({
             <button
               type="button"
               onClick={() => onSelect(p.id)}
-              className="block w-full rounded-md border border-line bg-surface px-3 py-2 text-left transition-colors hover:border-line-strong"
+              className="block w-full border border-line bg-surface px-3 py-2 text-left transition-colors hover:border-line-strong"
               data-testid={`wiki-page-${p.id}`}
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="truncate text-sm font-medium text-ink">{p.title}</span>
                 <span className="flex items-center gap-1">
                   {p.retracted && (
-                    <Pill tone="red">
+                    <Pill tone="bad">
                       <span data-testid={`wiki-row-retracted-${p.id}`}>⚠</span>
                     </Pill>
                   )}
-                  {p.is_stub && <Pill tone="amber">stub</Pill>}
+                  {p.is_stub && <Pill tone="warn">stub</Pill>}
                   {p.contested && (
-                    <Pill tone="red">
+                    <Pill tone="bad">
                       <span data-testid={`wiki-row-contested-${p.id}`}>contested</span>
                     </Pill>
                   )}
                   {/* Unset confidence is not the same as high, and the whole
                       point of recording it is that a reader can tell. */}
-                  {!p.is_stub && !p.confidence && <Pill tone="slate">unjudged</Pill>}
-                  {p.confidence === "low" && <Pill tone="amber">low</Pill>}
+                  {!p.is_stub && !p.confidence && <Pill tone="neutral">unjudged</Pill>}
+                  {p.confidence === "low" && <Pill tone="warn">low</Pill>}
                   {p.status !== "approved" && <StatusBadge status={p.status} />}
                   {p.freshness != null && (
-                    <Pill tone={p.freshness >= 60 ? "emerald" : p.freshness >= 30 ? "amber" : "red"}>
+                    <Pill tone={p.freshness >= 60 ? "good" : p.freshness >= 30 ? "warn" : "bad"}>
                       <span data-testid={`wiki-row-freshness-${p.id}`}>{p.freshness}</span>
                     </Pill>
                   )}

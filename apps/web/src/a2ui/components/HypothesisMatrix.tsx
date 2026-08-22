@@ -36,9 +36,9 @@ export interface AchMatrix {
 }
 
 const STANCE: Record<string, { glyph: string; cls: string; label: string }> = {
-  supports: { glyph: "+", cls: "bg-emerald-500/15 text-emerald-500", label: "supports" },
-  contradicts: { glyph: "−", cls: "bg-red-500/15 text-red-500", label: "contradicts" },
-  contextualizes: { glyph: "○", cls: "bg-amber-500/15 text-amber-500", label: "contextualizes" },
+  supports: { glyph: "+", cls: "bg-good/15 text-good", label: "supports" },
+  contradicts: { glyph: "−", cls: "bg-bad/15 text-bad", label: "contradicts" },
+  contextualizes: { glyph: "○", cls: "bg-badge-warning-fg/15 text-badge-warning-fg", label: "contextualizes" },
 };
 
 export function HypothesisMatrix({ ach }: { ach: AchMatrix | null }) {
@@ -50,7 +50,7 @@ export function HypothesisMatrix({ ach }: { ach: AchMatrix | null }) {
     cells.find((c) => c.hypothesis_id === hid && c.target_id === tid);
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-line bg-surface">
+    <div className="overflow-x-auto border border-line bg-surface">
       <div className="flex items-center justify-between px-3 py-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-ink-soft">
           ACH matrix
@@ -74,7 +74,7 @@ export function HypothesisMatrix({ ach }: { ach: AchMatrix | null }) {
                   className={
                     "px-2 py-1 text-center font-semibold " +
                     (leading
-                      ? "bg-[var(--accent-muted,rgba(249,115,22,0.1))] text-[var(--accent,#f97316)]"
+                      ? "bg-accent-muted text-accent"
                       : "text-ink-soft")
                   }
                 >
@@ -105,7 +105,7 @@ export function HypothesisMatrix({ ach }: { ach: AchMatrix | null }) {
                     {s && (
                       <span
                         title={`${s.label}${c && c.weight !== 1 ? ` ×${c.weight}` : ""}${c?.note ? ` — ${c.note}` : ""}`}
-                        className={"inline-grid h-5 w-5 place-items-center rounded font-bold " + s.cls}
+                        className={"inline-grid h-5 w-5 place-items-center font-bold " + s.cls}
                       >
                         {s.glyph}
                       </span>

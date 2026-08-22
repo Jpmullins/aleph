@@ -37,7 +37,9 @@ vi.mock("@copilotkit/react-core/v2", () => ({
 
 // The real catalog pulls in all 21 card renderers (vega-embed among them) to
 // prove nothing about the credential. Stubbed so this file tests one thing.
-vi.mock("@/a2ui/aleph-catalog-v09", () => ({ buildAlephCatalog: () => ({ id: "aleph://v1" }) }));
+vi.mock("@/a2ui/aleph-catalog-v09", () => ({
+  buildAlephChatCatalog: () => ({ id: "aleph://v1" }),
+}));
 
 import { AlephCopilotProvider } from "@/lib/copilot";
 

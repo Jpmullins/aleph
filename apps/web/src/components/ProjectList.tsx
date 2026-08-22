@@ -178,7 +178,7 @@ function ProjectRow({
               }
             }}
             disabled={archive.isPending}
-            className="border-l border-line px-4 text-xs font-medium text-ink-muted hover:bg-red-50 hover:text-bad disabled:opacity-50"
+            className="border-l border-line px-4 text-xs font-medium text-ink-muted hover:bg-badge-failed-bg hover:text-badge-failed-fg disabled:opacity-50"
             data-testid={`project-delete-${project.id}`}
             title="Delete project"
           >
@@ -227,7 +227,7 @@ function ProjectCreateModal({ onClose, onCreated }: CreateProps) {
   });
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-ink/40 px-4">
-      <div className="w-full max-w-md bg-surface p-6 shadow-xl">
+      <div className="w-full max-w-md border border-line-strong bg-surface p-6">
         <h2 className="mb-4 text-xl font-semibold">New project</h2>
         <form
           onSubmit={(e) => {

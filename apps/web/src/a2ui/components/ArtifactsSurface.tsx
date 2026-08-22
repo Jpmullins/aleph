@@ -25,12 +25,12 @@ interface SourceOut {
   created_at: string;
 }
 
-const KIND_TONE: Record<string, "sky" | "emerald" | "amber" | "slate"> = {
-  report_pdf: "sky",
-  report_docx: "sky",
-  report_markdown_bundle: "sky",
-  source_pack: "emerald",
-  deck_pdf: "amber",
+const KIND_TONE: Record<string, "info" | "good" | "warn" | "neutral"> = {
+  report_pdf: "info",
+  report_docx: "info",
+  report_markdown_bundle: "info",
+  source_pack: "good",
+  deck_pdf: "warn",
 };
 
 /**
@@ -58,7 +58,7 @@ export function ArtifactsSurface({ component }: RendererProps) {
             Sources
           </h3>
           {sources.length === 0 && (
-            <div className="rounded-lg border border-dashed border-line-strong p-4 text-center text-xs text-ink-muted">
+            <div className="border border-dashed border-line-strong p-4 text-center text-xs text-ink-muted">
               No sources yet. Upload a document or ingest a URL, or run research.
             </div>
           )}
@@ -72,7 +72,7 @@ export function ArtifactsSurface({ component }: RendererProps) {
             Artifacts
           </h3>
           {artifacts.length === 0 && (
-            <div className="rounded-lg border border-dashed border-line-strong p-4 text-center text-xs text-ink-muted">
+            <div className="border border-dashed border-line-strong p-4 text-center text-xs text-ink-muted">
               No artifacts yet.
             </div>
           )}
@@ -95,8 +95,8 @@ function SourceRow({ s, onView }: { s: SourceOut; onView: () => void }) {
       title={`${s.short_id} · ${s.title}`}
       subtitle={
         <span className="flex items-center gap-2">
-          <Pill tone="slate">{s.connector_kind}</Pill>
-          <Pill tone={ready ? "emerald" : s.status === "failed" ? "amber" : "slate"}>
+          <Pill tone="neutral">{s.connector_kind}</Pill>
+          <Pill tone={ready ? "good" : s.status === "failed" ? "warn" : "neutral"}>
             {s.status}
           </Pill>
         </span>
@@ -179,12 +179,12 @@ function ArtifactRow({ a, projectId }: { a: ArtifactOut; projectId: string }) {
       title={`${a.short_id} · ${a.title}`}
       subtitle={
         <span className="flex items-center gap-2">
-          <Pill tone={KIND_TONE[a.artifact_kind] ?? "slate"}>
+          <Pill tone={KIND_TONE[a.artifact_kind] ?? "neutral"}>
             {a.artifact_kind.replace(/_/g, " ")}
           </Pill>
-          <Pill tone={ready ? "emerald" : "amber"}>{ready ? "ready" : "building"}</Pill>
+          <Pill tone={ready ? "good" : "warn"}>{ready ? "ready" : "building"}</Pill>
           {a.drifted && (
-            <Pill tone="amber">
+            <Pill tone="warn">
               <span data-testid={`artifact-drifted-${a.id}`}>drifted</span>
             </Pill>
           )}

@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 
 import type { A2UIComponent } from "../catalog";
+import type { PillTone } from "../confidence";
 
 export interface RendererProps {
   component: A2UIComponent;
@@ -27,24 +28,46 @@ export function isSandboxedAssetSrc(src: unknown): src is string {
   return typeof src === "string" && _ASSET_SRC_RE.test(src);
 }
 
-export function Pill({
-  tone = "slate",
-  children,
-}: {
-  tone?: "slate" | "amber" | "emerald" | "red" | "sky" | "violet";
-  children: ReactNode;
-}) {
-  const cls: Record<string, string> = {
-    amber: "bg-[var(--badge-warning-bg,#fef3c7)] text-[var(--badge-warning-fg,#854d0e)]",
-    emerald: "bg-[var(--badge-completed-bg,#d1fae5)] text-[var(--badge-completed-fg,#065f46)]",
-    red: "bg-[var(--badge-failed-bg,#fee2e2)] text-[var(--badge-failed-fg,#991b1b)]",
-    sky: "bg-[var(--badge-running-bg,#dbeafe)] text-[var(--badge-running-fg,#1e3a8a)]",
-    violet: "bg-[var(--badge-idle-bg)] text-[var(--badge-idle-fg)]",
-    slate: "bg-[var(--badge-idle-bg,#f1f5f9)] text-[var(--badge-idle-fg,#475569)]",
-  };
+/**
+ * Badge classes per tone.
+ *
+ * `Record<PillTone, string>` and not `Record<string, string>`, which is what it
+ * was. The looser type is why the tone vocabulary could be renamed off Tailwind
+ * hue names (`tone="emerald"`) to state names without a single compile error
+ * while every key here still said `emerald:` — `cls[tone]` would have been
+ * `undefined` for all six tones and every badge in the app would have quietly
+ * rendered idle grey. Keyed by the union, a missed key is a build failure.
+ *
+ * The values named their token with a hardcoded pale-cream literal after the
+ * comma — the arbitrary-value form of a var() fallback. The literal is what
+ * renders whenever the token is absent, in whichever theme that happens to be,
+ * and on the day
+ * `--badge-warning-bg` was undefined every "draft" badge painted itself bright
+ * cream on the near-black ground with nothing reporting it. tokens.css defines
+ * all five pairs for both themes and styles.css maps them into the Tailwind
+ * theme, so these are plain semantic utilities with nothing to fall back to.
+ */
+const PILL_CLASS: Record<PillTone, string> = {
+  neutral: "bg-badge-idle-bg text-badge-idle-fg",
+  info: "bg-badge-running-bg text-badge-running-fg",
+  good: "bg-badge-completed-bg text-badge-completed-fg",
+  warn: "bg-badge-warning-bg text-badge-warning-fg",
+  bad: "bg-badge-failed-bg text-badge-failed-fg",
+  // `inactive` and `neutral` currently render identically, which is a real gap
+  // rather than a tidy-up: `confidenceTone` maps `abandoned` to `inactive` and
+  // `under_investigation` to `neutral`, so a hypothesis somebody GAVE UP ON
+  // looks exactly like one nobody has assessed. That is the same defect
+  // `confidence.ts`'s own docstring records for the four-literal switch. It
+  // needs a sixth badge pair in tokens.css, which is a palette decision, not a
+  // rename — kept distinct here so the day someone adds that pair, one line
+  // changes and every call site is already correct.
+  inactive: "bg-badge-idle-bg text-badge-idle-fg",
+};
+
+export function Pill({ tone = "neutral", children }: { tone?: PillTone; children: ReactNode }) {
   return (
     <span
-      className={`inline-flex items-center px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${cls[tone] ?? cls.slate}`}
+      className={`inline-flex items-center px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${PILL_CLASS[tone]}`}
     >
       {children}
     </span>
@@ -65,7 +88,7 @@ export function CardShell({
   children: ReactNode;
 }) {
   return (
-    <div className="rounded-lg border border-line bg-surface p-3 shadow-sm">
+    <div className="border border-line bg-surface p-3">
       {(title || actions) && (
         <div className="mb-1 flex items-start justify-between gap-2">
           {title && (
@@ -163,7 +186,7 @@ export function FeedbackButton({ targetKind, targetId, surface, onAction }: Feed
 
   if (submitted) {
     return (
-      <span className="inline-flex items-center rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+      <span className="inline-flex items-center bg-badge-completed-bg px-1.5 py-0.5 text-[10px] font-medium text-badge-completed-fg">
         Thanks — flagged
       </span>
     );
@@ -174,7 +197,7 @@ export function FeedbackButton({ targetKind, targetId, surface, onAction }: Feed
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="rounded p-1 text-xs text-ink-muted hover:bg-elevated hover:text-ink-soft"
+        className="p-1 text-xs text-ink-muted hover:bg-elevated hover:text-ink-soft"
         title="Flag a problem with this card"
         data-testid={`feedback-${targetKind}-${targetId}`}
       >
@@ -182,7 +205,7 @@ export function FeedbackButton({ targetKind, targetId, surface, onAction }: Feed
       </button>
       {open && (
         <div
-          className="absolute right-0 z-10 mt-1 w-56 rounded-md border border-line bg-elevated p-2 text-xs shadow-lg"
+          className="absolute right-0 z-10 mt-1 w-56 border border-line-strong bg-elevated p-2 text-xs"
           onClick={(e) => e.stopPropagation()}
         >
           <p className="mb-2 font-medium text-ink-soft">What's wrong?</p>
@@ -192,7 +215,7 @@ export function FeedbackButton({ targetKind, targetId, surface, onAction }: Feed
                 <button
                   type="button"
                   onClick={() => submit(opt.signal)}
-                  className="w-full rounded px-2 py-1 text-left text-ink-soft hover:bg-elevated"
+                  className="w-full px-2 py-1 text-left text-ink-soft hover:bg-elevated"
                 >
                   {opt.label}
                 </button>
@@ -204,7 +227,7 @@ export function FeedbackButton({ targetKind, targetId, surface, onAction }: Feed
             onChange={(e) => setNote(e.target.value)}
             placeholder="Optional note (e.g. 'cited chunk doesn't say this')"
             rows={2}
-            className="w-full resize-none rounded border border-line px-2 py-1 text-xs focus:border-line-strong focus:outline-none"
+            className="w-full resize-none border border-line px-2 py-1 text-xs focus:border-line-strong focus:outline-none"
           />
           <div className="mt-2 flex justify-end">
             <button

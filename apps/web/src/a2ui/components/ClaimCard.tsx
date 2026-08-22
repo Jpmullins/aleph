@@ -18,7 +18,7 @@ export function ClaimCard({ component, onAction }: RendererProps) {
   // plain string and can predate the vocabulary being unified.
   const confidence = p.confidence;
   const known = isConfidence(confidence);
-  const tone = known ? confidenceTone(confidence) : "slate";
+  const tone = known ? confidenceTone(confidence) : "neutral";
   return (
     <CardShell
       subtitle={
@@ -39,7 +39,7 @@ export function ClaimCard({ component, onAction }: RendererProps) {
           {p.citations.map((c) => (
             <span
               key={c.marker}
-              className="mr-1 inline-flex rounded bg-amber-50 px-1 py-0.5 text-amber-900"
+              className="mr-1 inline-flex bg-badge-warning-bg px-1 py-0.5 text-badge-warning-fg"
               title={c.source_short_id ? `from ${c.source_short_id}` : undefined}
             >
               {c.marker}

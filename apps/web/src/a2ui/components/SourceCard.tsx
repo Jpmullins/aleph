@@ -25,12 +25,12 @@ export function SourceCard({ component, onAction }: RendererProps) {
   };
   const tone =
     p.status === "wiki_done"
-      ? "emerald"
+      ? "good"
       : p.status.includes("failed")
-        ? "red"
+        ? "bad"
         : p.status === "indexed"
-          ? "sky"
-          : "slate";
+          ? "info"
+          : "neutral";
   const preview = p.normalized_preview ?? "";
   return (
     <CardShell
@@ -39,7 +39,7 @@ export function SourceCard({ component, onAction }: RendererProps) {
         <span className="flex items-center gap-2">
           <Pill tone={tone}>{p.status}</Pill>
           {(p.retracted || p.status === "retracted") && (
-            <Pill tone="red">
+            <Pill tone="bad">
               <span data-testid={`source-retracted-${p.source_id}`}>⚠ retracted</span>
             </Pill>
           )}
@@ -83,7 +83,7 @@ export function SourceCard({ component, onAction }: RendererProps) {
           <button
             type="button"
             onClick={() => setReading((r) => !r)}
-            className="ml-auto text-xs font-medium text-[var(--accent,#f97316)] hover:opacity-80"
+            className="ml-auto text-xs font-medium text-accent hover:opacity-80"
             data-testid={`source-read-${p.source_id}`}
           >
             {reading ? "Hide text ▲" : "Read ▾"}
@@ -91,7 +91,7 @@ export function SourceCard({ component, onAction }: RendererProps) {
         )}
       </div>
       {reading && preview && (
-        <div className="mt-2 max-h-[28rem] overflow-y-auto rounded-md border border-line bg-sunken p-3">
+        <div className="mt-2 max-h-[28rem] overflow-y-auto border border-line bg-sunken p-3">
           <WikiBodyMarkdown body={preview} />
         </div>
       )}

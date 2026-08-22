@@ -31,7 +31,7 @@ export const CONFIDENCE = [
 
 export type Confidence = (typeof CONFIDENCE)[number];
 
-export type PillTone = "slate" | "amber" | "emerald" | "red" | "sky" | "violet";
+export type PillTone = "neutral" | "warn" | "good" | "bad" | "info" | "inactive";
 
 /**
  * True when `value` is a member of the vocabulary.
@@ -54,17 +54,17 @@ export function isConfidence(value: unknown): value is Confidence {
 export function confidenceTone(value: Confidence): PillTone {
   switch (value) {
     case "well_supported":
-      return "emerald";
+      return "good";
     case "weakly_supported":
-      return "sky";
+      return "info";
     case "contested":
-      return "amber";
+      return "warn";
     case "refuted":
-      return "red";
+      return "bad";
     case "abandoned":
-      return "violet";
+      return "inactive";
     case "under_investigation":
-      return "slate";
+      return "neutral";
     default: {
       const unhandled: never = value;
       return unhandled;

@@ -30,7 +30,7 @@ export function FormCard({ component, onAction }: RendererProps) {
           <label key={f.name} className="block text-xs">
             <span className="mb-1 block font-medium text-ink-soft">
               {f.label}
-              {f.required && <span className="text-red-500"> *</span>}
+              {f.required && <span className="text-bad"> *</span>}
             </span>
             {f.type === "textarea" && (
               <textarea
@@ -39,7 +39,7 @@ export function FormCard({ component, onAction }: RendererProps) {
                 onChange={(e) =>
                   setValues((v) => ({ ...v, [f.name]: e.target.value }))
                 }
-                className="w-full rounded border border-line-strong px-2 py-1 text-sm"
+                className="w-full border border-line-strong px-2 py-1 text-sm"
               />
             )}
             {f.type === "text" && (
@@ -49,7 +49,7 @@ export function FormCard({ component, onAction }: RendererProps) {
                 onChange={(e) =>
                   setValues((v) => ({ ...v, [f.name]: e.target.value }))
                 }
-                className="w-full rounded border border-line-strong px-2 py-1 text-sm"
+                className="w-full border border-line-strong px-2 py-1 text-sm"
               />
             )}
             {f.type === "boolean" && (
@@ -66,7 +66,7 @@ export function FormCard({ component, onAction }: RendererProps) {
                 onChange={(e) =>
                   setValues((v) => ({ ...v, [f.name]: e.target.value }))
                 }
-                className="w-full rounded border border-line-strong px-2 py-1 text-sm"
+                className="w-full border border-line-strong px-2 py-1 text-sm"
               >
                 <option value="">— select —</option>
                 {(f.options ?? []).map((opt) => (
@@ -80,7 +80,7 @@ export function FormCard({ component, onAction }: RendererProps) {
         ))}
         <button
           type="submit"
-          className="rounded-md bg-ink px-3 py-1 text-xs font-medium text-ink-inverse hover:bg-ink-soft"
+          className="bg-ink px-3 py-1 text-xs font-medium text-ink-inverse hover:bg-ink-soft"
         >
           Submit
         </button>

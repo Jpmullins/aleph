@@ -26,7 +26,7 @@ import { z } from "zod";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 
-import { buildAlephCatalog } from "@/a2ui/aleph-catalog-v09";
+import { buildAlephChatCatalog } from "@/a2ui/aleph-catalog-v09";
 import { api } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 
@@ -36,9 +36,21 @@ const RUNTIME_URL =
 
 // Built once: maps the agent's A2UI surface messages to the shared Aleph
 // catalog (same impls the right panel renders — cards defined once).
+//
+// `createA2UIMessageRenderer` takes ONE catalog, unlike `MessageProcessor`,
+// which the reading region hands an array. So chat is a merge, and a merge is
+// where the silent overwrite that per-plugin catalog ids removed comes back:
+// `buildAlephChatCatalog` runs the same collision rule and drops a component
+// name two plugins both claim rather than letting the last one registered win.
+// Isolation that holds in panes and fails in chat is not isolation.
+//
+// It is built at module scope, so it carries core only. Wiring the project's
+// plugin catalogs in here needs the renderer to be rebuilt per project, which
+// `CopilotKitProvider` takes as a prop and would remount the whole chat on
+// change; the pane path is where plugin surfaces live today.
 const alephA2UIMessageRenderer = createA2UIMessageRenderer({
   theme: a2uiDefaultTheme,
-  catalog: buildAlephCatalog(),
+  catalog: buildAlephChatCatalog(),
 });
 
 /**

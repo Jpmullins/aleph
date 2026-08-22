@@ -67,7 +67,7 @@ function ExternalLink({ href, label, k }: { href: string; label: string; k: stri
       href={href}
       target="_blank"
       rel="noreferrer"
-      className="break-words text-sky-700 underline decoration-sky-300 underline-offset-2 hover:text-sky-900 hover:decoration-sky-500"
+      className="break-words text-accent underline decoration-line-strong underline-offset-2 hover:decoration-accent"
       data-testid="wiki-external-link"
     >
       {label}
@@ -118,7 +118,7 @@ function renderInline(
           <span
             key={`c-${k}`}
             title={m[4]}
-            className="mx-0.5 inline-flex items-baseline rounded bg-amber-100 px-1 text-[10px] font-semibold uppercase tracking-wider text-amber-900"
+            className="mx-0.5 inline-flex items-baseline bg-badge-warning-bg px-1 text-[10px] font-semibold uppercase tracking-wider text-badge-warning-fg"
           >
             {m[4]}
           </span>

@@ -78,13 +78,13 @@ export function Rail({ projectId, onBack, onOpenDrawer }: Props) {
             {active && (
               <span
                 aria-hidden
-                className="absolute -left-2.5 top-2.5 bottom-2.5 w-[3px]  bg-accent"
+                className="absolute -left-2.5 top-2.5 bottom-2.5 w-[3px] bg-accent"
               />
             )}
             <Icon />
             <span
               aria-hidden
-              className="pointer-events-none absolute left-12 z-50 whitespace-nowrap  border border-line bg-elevated px-2 py-1 text-xs text-ink opacity-0 shadow-lg transition-opacity group-hover:opacity-100"
+              className="pointer-events-none absolute left-12 z-50 whitespace-nowrap border border-line-strong bg-elevated px-2 py-1 text-xs text-ink opacity-0 transition-opacity group-hover:opacity-100"
             >
               {tab}
             </span>
@@ -111,7 +111,7 @@ export function Rail({ projectId, onBack, onOpenDrawer }: Props) {
             aria-label={label}
             title={label}
             data-testid={`rail-${kind}`}
-            className="grid h-9 w-9 place-items-center  text-ink-muted hover:bg-sunken hover:text-ink"
+            className="grid h-9 w-9 place-items-center text-ink-muted hover:bg-sunken hover:text-ink"
           >
             <Icon size={17} />
           </button>

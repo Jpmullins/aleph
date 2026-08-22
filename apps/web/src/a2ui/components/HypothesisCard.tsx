@@ -8,7 +8,7 @@ export function HypothesisCard({ component, onAction }: RendererProps) {
     confidence?: string;
     evidence_count?: number;
   };
-  // Was `<Pill tone="sky">{p.confidence ?? "initial"}</Pill>` — one colour for
+  // Was `<Pill tone="info">{p.confidence ?? "initial"}</Pill>` — one colour for
   // every state, and a default of `initial`, a word the confidence engine has
   // never emitted. A hypothesis carries the same six states a claim does
   // (`Hypothesis.confidence` defaults to `under_investigation` and is written
@@ -20,7 +20,7 @@ export function HypothesisCard({ component, onAction }: RendererProps) {
       title={p.title}
       subtitle={
         <span className="flex items-center gap-2">
-          <Pill tone={known ? confidenceTone(confidence) : "slate"}>
+          <Pill tone={known ? confidenceTone(confidence) : "neutral"}>
             {known ? confidenceLabel(confidence) : `? ${confidence}`}
           </Pill>
           <span className="text-xs text-ink-muted">{p.evidence_count ?? 0} evidence</span>

@@ -39,7 +39,19 @@ vi.mock("@a2ui/web_core/v0_9", () => {
   return { MessageProcessor: FakeProcessor };
 });
 
-vi.mock("@/a2ui/aleph-catalog-v09", () => ({ buildAlephCatalog: () => ({ id: "aleph://v1" }) }));
+vi.mock("@/a2ui/aleph-catalog-v09", () => ({
+  buildAlephCatalogs: (plugins: { catalogId: string }[] = []) => [
+    { id: "aleph://core@1" },
+    { id: "aleph://v1" },
+    ...plugins.map((p) => ({ id: p.catalogId })),
+  ],
+}));
+
+// The provider asks the server which catalogs this project should hold. Stubbed
+// per test rather than left to jsdom's absent `fetch`: an unhandled rejection
+// here would fail an unrelated assertion three tests later.
+const catalogsResponse = vi.fn(async () => ({ catalogs: [] as unknown[] }));
+vi.mock("@/lib/api", () => ({ api: { get: () => catalogsResponse() } }));
 
 import { SurfaceStreamProvider, useSurfaceStream } from "@/a2ui/SurfaceStreamProvider";
 

@@ -168,8 +168,12 @@ The refactor is not done until the replaced thing is gone.
 | ~~E1~~ | ~~Wiki subsystems removed~~ | **Withdrawn** — `decisions.md` D1. There is no deletion to unblock, so the row is removed from the gate rather than left skipping forever on a condition nobody intends to meet | — |
 | ~~E2~~ | ~~`Capability.PAGE_SELECTION` removed~~ | **Withdrawn** with E1 | — |
 | ~~E3~~ | ~~Dead tables dropped~~ | **Withdrawn** with E1 | — |
-| E4 | Package count does not grow | `acceptance.sh` asserts ≤21 workspace packages. Currently 21 — `aleph-kernel`, `aleph-belief` and `aleph-runtime` were added; the reduction comes with E1 | ✅ |
+| E4 | Package count does not grow | `acceptance.sh` asserts ≤21 workspace packages, counted from `git ls-files 'packages/*/pyproject.toml'`. Currently **20**. It counted `ls packages` until 2026-08-22, which read 21: `aleph-datasets` was deleted in `cd73f12` and its directory survived on disk holding four stale `.pyc` files. A husk must not be able to move this number | ✅ |
 | E5 | `aleph-belief/patch.py` is wired or deleted | asserts ≥1 importer outside its own tests. Wired by `BeliefService.propose_merges` | ✅ |
+| E8 | Every web module is reachable | `scripts/check-web-dead-code.sh` — 57 non-test modules under `apps/web/src`, all reachable from `main.tsx` | ✅ |
+| E9 | No unused class selector | `scripts/check-web-dead-css.sh` | ✅ |
+| E10 | Design-token drift does not grow | `scripts/check-web-drift.sh`, pinned at **0** across six counters | ✅ |
+| E11 | No surface renders identically in light and dark | `tests/playwright/specs/theme-differs-per-surface.spec.ts` renders each surface the server declares, screenshots it in both themes and compares pixels. Every source-reading web check is blind to a colour that arrives as an inline style, an SVG fill or a canvas paint, and the last hardcoded colour found in this app was on a canvas. All six surfaces measure 100% changed; the floor is 2% | ✅ |
 
 **Why E is blocked, and what unblocks it.**
 
@@ -191,10 +195,11 @@ to unblock, so there is no condition to state.
 
 What survives from E, restated honestly:
 
-- The **extractor** — turning an ingested source into claim drafts — still does
-  not exist, and it is why the Claim Spine has never run (786 claims, 0 edges,
-  0 verbatim quotes, no callers). It is now scoped as the wiki's evidence layer
-  rather than as its replacement. `plan.md` `WS-RS8`.
+- The **extractor** — turning an ingested source into claim drafts — now
+  exists (`aleph_wiki.claim_extraction`) and the Claim Spine runs. It is scoped
+  as the wiki's evidence layer rather than as its replacement. What is still
+  outstanding is a `BeliefService.rebuild` pass over the whole corpus, which is
+  why number 3 (ungrounded citations) is still red — see `decisions.md` D9.
 - The comparison *claim-level vs chunk-level retrieval on the same eval* is
   still worth measuring, because it says whether claims add retrieval value on
   top of chunks. It is a measurement, not a gate on a deletion. `plan.md`
@@ -203,7 +208,10 @@ What survives from E, restated honestly:
   directory was deleted. Aleph connects to whatever OpenAI-compatible endpoint
   is configured, and ships none.
 
-**E-complete when:** nothing imports the wiki, and the line count is down, not up.
+**E-complete when:** there is no condition left to state. The deletion this part
+was written to gate does not exist any more (D1), and what remains under the E
+prefix is the web-surface hygiene set — E4, E5 and E8 through E11 — which is
+green.
 
 ---
 

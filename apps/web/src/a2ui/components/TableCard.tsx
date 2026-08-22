@@ -47,7 +47,7 @@ export function TableCard({ component }: RendererProps) {
 
   if (p._placeholder || rows.length === 0) {
     return (
-      <CardShell title={p.title || "Table"} subtitle={<Pill tone="slate">No data bound</Pill>}>
+      <CardShell title={p.title || "Table"} subtitle={<Pill tone="neutral">No data bound</Pill>}>
         <p className="text-xs text-ink-muted">Bind a DatasetVersion or pass rows to render.</p>
       </CardShell>
     );
@@ -66,7 +66,7 @@ export function TableCard({ component }: RendererProps) {
         value={filter}
         onChange={(e) => setFilter(e.target.value)}
         placeholder="Filter…"
-        className="mb-2 w-full rounded border border-line px-2 py-1 text-xs focus:border-line-strong focus:outline-none"
+        className="mb-2 w-full border border-line px-2 py-1 text-xs focus:border-line-strong focus:outline-none"
       />
       <div className="max-h-72 overflow-auto">
         <table className="w-full border-collapse text-xs">

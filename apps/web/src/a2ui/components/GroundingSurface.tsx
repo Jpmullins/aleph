@@ -65,12 +65,12 @@ const CONFIDENCE_STYLES: Record<Confidence, string> = {
   // Semantic badge tokens, not palette scales. `tokens.css` already defines a
   // light and a dark value for each of these; a raw `emerald-100` has no theme
   // behind it and reads as a bright chip on a dark background.
-  well_supported: "bg-[var(--badge-completed-bg)] text-[var(--badge-completed-fg)]",
-  weakly_supported: "bg-[var(--badge-running-bg)] text-[var(--badge-running-fg)]",
+  well_supported: "bg-badge-completed-bg text-badge-completed-fg",
+  weakly_supported: "bg-badge-running-bg text-badge-running-fg",
   under_investigation: "bg-sunken text-ink-soft",
-  contested: "bg-[var(--badge-warning-bg)] text-[var(--badge-warning-fg)]",
-  refuted: "bg-[var(--badge-failed-bg)] text-[var(--badge-failed-fg)]",
-  abandoned: "bg-[var(--badge-failed-bg)] text-[var(--badge-failed-fg)] line-through",
+  contested: "bg-badge-warning-bg text-badge-warning-fg",
+  refuted: "bg-badge-failed-bg text-badge-failed-fg",
+  abandoned: "bg-badge-failed-bg text-badge-failed-fg line-through",
 };
 
 /** Why this citation reached no readable text — stated, never elided. */
@@ -112,10 +112,10 @@ export function GroundingSurface({ component }: RendererProps) {
         <span
           data-testid="grounding-status"
           className={
-            "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold " +
+            "inline-flex items-center px-2 py-0.5 text-[10px] font-semibold " +
             (grounded
-              ? "bg-[var(--badge-completed-bg)] text-[var(--badge-completed-fg)]"
-              : "bg-[var(--badge-warning-bg)] text-[var(--badge-warning-fg)]")
+              ? "bg-badge-completed-bg text-badge-completed-fg"
+              : "bg-badge-warning-bg text-badge-warning-fg")
           }
         >
           {grounded
@@ -124,13 +124,13 @@ export function GroundingSurface({ component }: RendererProps) {
         </span>
       </div>
 
-      <div className="mb-3 rounded-md border border-line bg-elevated p-2.5">
+      <div className="mb-3 border border-line bg-elevated p-2.5">
         <p className="text-sm text-ink">{claim.text}</p>
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
           {claim.confidence && (
             <span
               className={
-                "inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium " +
+                "inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium " +
                 (isConfidence(claim.confidence)
                   ? CONFIDENCE_STYLES[claim.confidence]
                   : "bg-sunken text-ink-soft")
@@ -146,7 +146,7 @@ export function GroundingSurface({ component }: RendererProps) {
       </div>
 
       {groundings.length === 0 ? (
-        <p className="text-sm text-amber-700" data-testid="grounding-empty">
+        <p className="text-sm text-badge-warning-fg" data-testid="grounding-empty">
           This claim has no citations at all. Nothing in the corpus is recorded as
           supporting it.
         </p>
@@ -158,7 +158,7 @@ export function GroundingSurface({ component }: RendererProps) {
             return (
               <li
                 key={`${g.marker ?? "cite"}-${i}`}
-                className="rounded-md border border-line p-2.5"
+                className="border border-line p-2.5"
                 data-testid="grounding-citation"
               >
                 <div className="mb-1.5 flex flex-wrap items-baseline gap-1.5">
@@ -171,7 +171,7 @@ export function GroundingSurface({ component }: RendererProps) {
                         {g.source.title || g.source.short_id || g.source.id}
                       </span>
                       {g.source.retracted && (
-                        <span className="inline-flex items-center rounded bg-rose-200 px-1.5 py-0.5 text-[10px] font-semibold text-rose-950">
+                        <span className="inline-flex items-center bg-badge-failed-bg px-1.5 py-0.5 text-[10px] font-semibold text-badge-failed-fg">
                           retracted
                         </span>
                       )}
@@ -182,13 +182,13 @@ export function GroundingSurface({ component }: RendererProps) {
                 </div>
 
                 {gap ? (
-                  <p className="text-xs text-amber-700" data-testid="grounding-gap">
+                  <p className="text-xs text-badge-warning-fg" data-testid="grounding-gap">
                     {gap}
                   </p>
                 ) : (
                   <ul className="space-y-1.5">
                     {chunks.map((c) => (
-                      <li key={c.id} className="rounded bg-sunken p-2">
+                      <li key={c.id} className="bg-sunken p-2">
                         <blockquote className="whitespace-pre-wrap text-xs text-ink-soft">
                           {c.text}
                         </blockquote>

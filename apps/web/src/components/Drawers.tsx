@@ -32,7 +32,7 @@ export function Drawer({ kind, projectId, onClose }: Props) {
     >
       <div className="flex-1 bg-ink/30" />
       <div
-        className="flex h-full w-[28rem] flex-col border-l border-line bg-surface shadow-xl"
+        className="flex h-full w-[28rem] flex-col border-l border-line-strong bg-surface"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-line px-5 py-3">
@@ -42,7 +42,7 @@ export function Drawer({ kind, projectId, onClose }: Props) {
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md px-2 py-1 text-ink-muted hover:bg-elevated"
+            className="px-2 py-1 text-ink-muted hover:bg-elevated"
             aria-label="Close"
           >
             ✕
@@ -102,7 +102,7 @@ function SettingsBody({ projectId }: { projectId: string }) {
           {members.data?.map((m) => (
             <li key={m.id} className="flex items-center justify-between">
               <span className="truncate font-mono text-xs">{m.user_id}</span>
-              <span className="rounded bg-elevated px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider">
+              <span className="bg-elevated px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider">
                 {m.role}
               </span>
             </li>
@@ -156,7 +156,7 @@ function ModelProfileSection({ projectId }: { projectId: string }) {
               disabled={active || switchProfile.isPending}
               onClick={() => switchProfile.mutate(name)}
               className={
-                "rounded-md border px-2.5 py-1 text-xs font-medium transition-colors " +
+                "border px-2.5 py-1 text-xs font-medium transition-colors " +
                 (active
                   ? "border-transparent bg-ink text-ink-inverse"
                   : "border-line-strong text-ink-soft hover:bg-elevated disabled:opacity-50")
@@ -168,7 +168,7 @@ function ModelProfileSection({ projectId }: { projectId: string }) {
         })}
       </div>
       {switchProfile.isError && (
-        <p className="mt-1.5 text-xs text-red-600">{errMsg(switchProfile.error)}</p>
+        <p className="mt-1.5 text-xs text-bad">{errMsg(switchProfile.error)}</p>
       )}
       {switchProfile.isPending && <p className="mt-1.5 text-xs text-ink-muted">Switching…</p>}
       <CapabilityBindings projectId={projectId} profile={current.data} />
@@ -256,7 +256,7 @@ function CapabilityBindings({
   }
   if (models.isError) {
     return (
-      <p className="mt-3 text-xs text-red-600">
+      <p className="mt-3 text-xs text-bad">
         Could not reach the model gateway: {errMsg(models.error)}. Aleph ships no built-in model
         list, so there is nothing to choose from until it responds.
       </p>
@@ -265,7 +265,7 @@ function CapabilityBindings({
   const available = models.data ?? [];
   if (available.length === 0) {
     return (
-      <p className="mt-3 text-xs text-amber-600">
+      <p className="mt-3 text-xs text-badge-warning-fg">
         The gateway responded but advertises no models. Check its configuration — capability
         bindings cannot be edited until it serves at least one.
       </p>
@@ -281,7 +281,7 @@ function CapabilityBindings({
           disabled={autoconfigure.isPending}
           onClick={() => autoconfigure.mutate()}
           title="Pick the best available model for every capability, testing each one first"
-          className="shrink-0 rounded-md border border-line-strong px-2 py-1 text-[11px] font-medium text-ink-soft hover:bg-elevated disabled:opacity-50"
+          className="shrink-0 border border-line-strong px-2 py-1 text-[11px] font-medium text-ink-soft hover:bg-elevated disabled:opacity-50"
         >
           {autoconfigure.isPending ? "Testing models…" : "Configure from gateway"}
         </button>
@@ -291,18 +291,18 @@ function CapabilityBindings({
         Prices are the gateway&apos;s own rates.
       </p>
       {autoconfigure.isError && (
-        <p className="mb-2 text-xs text-red-600">{errMsg(autoconfigure.error)}</p>
+        <p className="mb-2 text-xs text-bad">{errMsg(autoconfigure.error)}</p>
       )}
       {autoconfigure.data && (
-        <div className="mb-2 rounded-md border border-line bg-elevated px-2 py-1.5 text-[11px] text-ink-soft">
+        <div className="mb-2 border border-line bg-elevated px-2 py-1.5 text-[11px] text-ink-soft">
           <div>Bound {Object.keys(autoconfigure.data.bound).length} capabilities.</div>
           {autoconfigure.data.unbound.length > 0 && (
-            <div className="text-amber-600">
+            <div className="text-badge-warning-fg">
               No model for: {autoconfigure.data.unbound.join(", ")}.
             </div>
           )}
           {Object.keys(autoconfigure.data.unreachable).length > 0 && (
-            <div className="text-amber-600">
+            <div className="text-badge-warning-fg">
               Advertised but unreachable, so skipped:{" "}
               {Object.keys(autoconfigure.data.unreachable).join(", ")}.
             </div>
@@ -322,7 +322,7 @@ function CapabilityBindings({
               </div>
               {eligible.length === 0 ? (
                 <span
-                  className="shrink-0 text-[11px] text-amber-600"
+                  className="shrink-0 text-[11px] text-badge-warning-fg"
                   title="No model on this gateway meets this capability's requirements. It is left unbound on purpose — binding a model that cannot do the job fails later, and less visibly."
                 >
                   unsupported by gateway
@@ -330,7 +330,7 @@ function CapabilityBindings({
               ) : (
                 <select
                   aria-label={`Model for ${cap.replace(/_/g, " ")}`}
-                  className="max-w-[62%] shrink-0 rounded-md border border-line-strong bg-surface px-1.5 py-1 text-[11px] text-ink disabled:opacity-50"
+                  className="max-w-[62%] shrink-0 border border-line-strong bg-surface px-1.5 py-1 text-[11px] text-ink disabled:opacity-50"
                   value={bound ?? ""}
                   disabled={pending}
                   onChange={(e) => {
@@ -350,7 +350,7 @@ function CapabilityBindings({
           );
         })}
       </ul>
-      {bind.isError && <p className="mt-1.5 text-xs text-red-600">{errMsg(bind.error)}</p>}
+      {bind.isError && <p className="mt-1.5 text-xs text-bad">{errMsg(bind.error)}</p>}
     </div>
   );
 }
@@ -441,7 +441,7 @@ function ConnectorRow({
 
   const hasKey = cred?.has_project_specific ?? false;
   return (
-    <li className="rounded-md border border-line px-3 py-2">
+    <li className="border border-line px-3 py-2">
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <div className="truncate text-sm font-medium text-ink">{connector.name}</div>
@@ -459,13 +459,13 @@ function ConnectorRow({
           disabled={toggle.isPending}
           onClick={() => toggle.mutate(!enabled)}
           className={
-            "relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-50 " +
-            (enabled ? "bg-emerald-500" : "bg-line-strong")
+            "relative h-5 w-9 shrink-0 transition-colors disabled:opacity-50 " +
+            (enabled ? "bg-good" : "bg-line-strong")
           }
         >
           <span
             className={
-              "absolute top-0.5 h-4 w-4 rounded-full bg-surface transition-transform " +
+              "absolute top-0.5 h-4 w-4 bg-surface transition-transform " +
               (enabled ? "translate-x-4" : "translate-x-0.5")
             }
           />
@@ -476,7 +476,7 @@ function ConnectorRow({
         <div className="mt-2">
           {hasKey && !editing ? (
             <div className="flex items-center gap-2 text-xs">
-              <span className="rounded bg-emerald-50 px-1.5 py-0.5 font-medium text-emerald-700">
+              <span className="bg-badge-completed-bg px-1.5 py-0.5 font-medium text-badge-completed-fg">
                 Key set
               </span>
               <button
@@ -490,7 +490,7 @@ function ConnectorRow({
                 type="button"
                 disabled={removeKey.isPending}
                 onClick={() => removeKey.mutate()}
-                className="text-red-500 hover:text-red-700 disabled:opacity-50"
+                className="text-bad hover:opacity-80 disabled:opacity-50"
               >
                 Remove
               </button>
@@ -503,13 +503,13 @@ function ConnectorRow({
                 onChange={(e) => setKeyDraft(e.target.value)}
                 placeholder={hasKey ? "New key…" : "Paste API key…"}
                 autoComplete="off"
-                className="min-w-0 flex-1 rounded border border-line-strong px-2 py-1 text-xs focus:border-line-strong focus:outline-none"
+                className="min-w-0 flex-1 border border-line-strong px-2 py-1 text-xs focus:border-line-strong focus:outline-none"
               />
               <button
                 type="button"
                 disabled={!keyDraft.trim() || saveKey.isPending}
                 onClick={() => saveKey.mutate(keyDraft.trim())}
-                className="rounded bg-ink px-2 py-1 text-xs font-medium text-ink-inverse disabled:opacity-40"
+                className="bg-ink px-2 py-1 text-xs font-medium text-ink-inverse disabled:opacity-40"
               >
                 Save
               </button>
@@ -528,12 +528,12 @@ function ConnectorRow({
             </div>
           )}
           {saveKey.isError && (
-            <p className="mt-1 text-xs text-red-600">{errMsg(saveKey.error)}</p>
+            <p className="mt-1 text-xs text-bad">{errMsg(saveKey.error)}</p>
           )}
         </div>
       )}
       {(toggle.isError || removeKey.isError) && (
-        <p className="mt-1 text-xs text-red-600">{errMsg(toggle.error ?? removeKey.error)}</p>
+        <p className="mt-1 text-xs text-bad">{errMsg(toggle.error ?? removeKey.error)}</p>
       )}
     </li>
   );
@@ -568,7 +568,7 @@ function LogsBody({ projectId }: { projectId: string }) {
   return (
     <ul className="space-y-1.5">
       {ledger.data.map((e) => (
-        <li key={e.id} className="rounded-md border border-line px-3 py-2 text-xs">
+        <li key={e.id} className="border border-line px-3 py-2 text-xs">
           <div className="flex items-center justify-between">
             <span className="font-medium text-ink">{e.action_kind}</span>
             <span className="text-ink-muted">{new Date(e.timestamp).toLocaleTimeString()}</span>
@@ -614,10 +614,10 @@ function NotificationsBody({ projectId }: { projectId: string }) {
       {failed.length > 0 && (
         <Section title={`Failed (${failed.length})`}>
           {failed.map((r) => (
-            <div key={r.id} className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs">
-              <div className="font-medium text-red-900">{r.agent_kind}</div>
-              {r.error_text && <div className="mt-1 text-red-700">{r.error_text}</div>}
-              <div className="mt-1 text-red-500">
+            <div key={r.id} className="border border-line bg-badge-failed-bg px-3 py-2 text-xs">
+              <div className="font-medium text-badge-failed-fg">{r.agent_kind}</div>
+              {r.error_text && <div className="mt-1 text-badge-failed-fg">{r.error_text}</div>}
+              <div className="mt-1 text-badge-failed-fg">
                 {new Date(r.created_at).toLocaleString()}
               </div>
             </div>
@@ -627,16 +627,16 @@ function NotificationsBody({ projectId }: { projectId: string }) {
       <Section title={`Running (${active.length})`}>
         {active.length === 0 && <p className="text-ink-muted">No active agents.</p>}
         {active.map((r) => (
-          <div key={r.id} className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs">
-            <div className="font-medium text-blue-900">{r.agent_kind}</div>
-            <div className="mt-1 text-blue-600">{r.status}</div>
+          <div key={r.id} className="border border-line bg-badge-running-bg px-3 py-2 text-xs">
+            <div className="font-medium text-badge-running-fg">{r.agent_kind}</div>
+            <div className="mt-1 text-badge-running-fg">{r.status}</div>
           </div>
         ))}
       </Section>
       <Section title={`Recent succeeded (${succeeded.length})`}>
         {succeeded.length === 0 && <p className="text-ink-muted">None yet.</p>}
         {succeeded.slice(0, 8).map((r) => (
-          <div key={r.id} className="rounded-md border border-line px-3 py-2 text-xs">
+          <div key={r.id} className="border border-line px-3 py-2 text-xs">
             <div className="font-medium text-ink">{r.agent_kind}</div>
             <div className="mt-1 text-ink-muted">
               {r.completed_at ? new Date(r.completed_at).toLocaleString() : "—"}

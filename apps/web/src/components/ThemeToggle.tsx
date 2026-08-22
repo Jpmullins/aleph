@@ -75,7 +75,7 @@ export function ThemeToggle({ className }: Props) {
       role="group"
       aria-label="Display theme"
       className={
-        "inline-flex items-center gap-0.5 rounded-md border border-line " +
+        "inline-flex items-center gap-0.5 border border-line " +
         "bg-sunken p-0.5 " +
         (className ?? "")
       }
@@ -91,15 +91,10 @@ export function ThemeToggle({ className }: Props) {
             aria-label={`${label} theme`}
             aria-pressed={active}
             className={
-              "rounded px-2 py-1 text-sm leading-none transition-colors " +
+              "px-2 py-1 text-sm leading-none transition-colors " +
               (active
-                ? "font-medium"
+                ? "bg-accent font-medium text-accent-fg"
                 : "text-ink-muted hover:text-ink")
-            }
-            style={
-              active
-                ? { background: "var(--accent,#f97316)", color: "var(--accent-fg,#ffffff)" }
-                : undefined
             }
             // Keep the legacy testid on the Dark segment so existing e2e that
             // clicks `theme-toggle` and expects data-theme ∈ {light,dark} passes.

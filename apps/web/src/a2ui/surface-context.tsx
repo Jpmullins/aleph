@@ -112,7 +112,7 @@ export function renderChildCard(
   const View = CARD_VIEWS[component.type];
   if (!View) {
     return (
-      <div className="rounded border border-red-200 bg-red-50 p-3 text-xs text-red-900">
+      <div className="border border-line bg-badge-failed-bg p-3 text-xs text-badge-failed-fg">
         Unknown A2UI component: {component.type}
       </div>
     );

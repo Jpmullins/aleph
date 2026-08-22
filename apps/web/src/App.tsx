@@ -68,7 +68,7 @@ export function App() {
         <button
           type="button"
           onClick={() => login()}
-          className="rounded-lg bg-ink px-6 py-3 text-sm font-medium text-ink-inverse shadow hover:bg-ink-soft"
+          className="bg-ink px-6 py-3 text-sm font-medium text-ink-inverse hover:bg-ink-soft"
         >
           Sign in to Aleph
         </button>

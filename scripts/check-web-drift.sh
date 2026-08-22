@@ -10,15 +10,21 @@
 # theme and wrong in the other, and why no screenshot of a single theme can find
 # it.
 #
-# Nothing counts these today, so the number moves in whichever direction the
-# last person happened to push it. This pins each count. WS-UI-G1 drives them to
-# zero; until then the only rule is that they may not grow.
+# Nothing counted these, so the number moved in whichever direction the last
+# person happened to push it. This pins each count.
 #
-# The pin is two-sided on purpose. "It may only fall" is a claim, and a pin that
-# is allowed to sit above the real number does not enforce it — after G1 takes
-# `rounded-*` to zero, a pin still reading 56 would silently permit all 56 back.
-# So a count that has FALLEN is also an error, with the new block printed ready
-# to paste. Lowering the pin is part of the change that earned it.
+# WS-G drove all six to zero on 2026-08-22, so the pin below is all zeros and
+# this sweep is now a hard gate rather than a ratchet: one reintroduced
+# `rounded-lg`, one `text-slate-500`, one `var(--accent, #f97316)` fails the
+# build and is named with its file. There is no --zero mode because a pin of
+# zero IS zero mode — a second flag would be a second source of truth about the
+# same number.
+#
+# The pin stays two-sided. "It may only fall" is a claim, and a pin allowed to
+# sit above the real number does not enforce it — a pin still reading 53 after
+# `rounded-*` reached zero would silently permit all 53 back. So a count that
+# has FALLEN is also an error, with the new block printed ready to paste.
+# Lowering the pin is part of the change that earned it.
 #
 # Usage:
 #   check-web-drift.sh [--ratchet]   compare against the pin (default)
@@ -54,18 +60,70 @@ SRC = pathlib.Path("apps/web/src")
 #                        A2UIRightPanel) and four orphan icons were deleted.
 #                        Baseline before that deletion was 56 / 9 / 122 / 50 /
 #                        25 / 27 = 289.
+#   2026-08-22  WS-G     256 -> 0. What each category became:
+#
+#                        rounded (99: 53 sized + 46 bare) — deleted, not
+#                          swapped. The design is squared: `--radius: 0px` in
+#                          tokens.css and `--radius-none` in styles.css, so
+#                          there is no radius token to move to and the property
+#                          itself is the violation.
+#                        shadow (9) — replaced by a hairline. Three modals and a
+#                          drawer used `shadow-xl` for separation, which is
+#                          invisible over the near-black ground; they carry
+#                          `border-line-strong` now. `Block`'s unselected
+#                          `var(--shadow-sm)` became `none` and the three dead
+#                          `--shadow-*` tokens were removed from tokens.css.
+#                        palette-scale colour (96) — onto the semantic tokens.
+#                          Most of it was a status badge: tokens.css already
+#                          defined --badge-{idle,running,completed,failed,
+#                          warning}-{bg,fg} for BOTH themes and nothing reached
+#                          them, because `bg-[var(--badge-failed-bg)]` is longer
+#                          to type than `bg-red-50`. styles.css maps all ten
+#                          into @theme inline, so the token is now the shorter
+#                          thing to write. Filled action buttons went to
+#                          bg-good / bg-bad; links and highlight rings to the
+#                          single accent.
+#                        var(--token, LITERAL) (25) + raw hex (27) — fourteen of
+#                          these named the accent with an orange literal after
+#                          the comma, an accent from a design Aleph no longer
+#                          has, which is what rendered whenever the token was
+#                          absent. ChartCard's two axis hexes could not become
+#                          classes at all — Vega paints onto a canvas, which has
+#                          no cascade — so they resolve through
+#                          `lib/theme-tokens.ts` at embed time and re-resolve on
+#                          a theme change.
+#
+#                        The first pass reported 258 and "shadow (7)". Both were
+#                          artefacts of the counters, not measurements:
+#
+#                          Two of the 258 were PROSE — a doc comment and a live
+#                          model prompt in `lib/copilot.tsx` using the word
+#                          "rounded". The counters read whole files, so English
+#                          was indistinguishable from a utility class, and the
+#                          only way to reach zero was to reword a string the
+#                          model reads. They now read only what a `className=`,
+#                          `class=`, `clsx(`, `cn(`, `twMerge(` or `cva(` is
+#                          actually given, so prose is out of scope and both
+#                          strings were restored to their original wording.
+#
+#                          The other two were UNDERCOUNTING. `shadow-(sm|md|lg|
+#                          xl|2xl)` could not see bare `shadow` or Tailwind v4's
+#                          `shadow-xs`/`shadow-2xs`, and `rounded-(sm|md|lg|...)`
+#                          could not see `rounded-t-lg`, `rounded-tl-*` or
+#                          `rounded-[6px]`. A live drop shadow survived the
+#                          sweep on the primary button in App.tsx — on a line
+#                          the same change had edited — while the counter read
+#                          zero. Both now match the whole family and exempt only
+#                          the conformant `-none`.
+#
 # ---------------------------------------------------------------------------
 PIN = {
-    "rounded-{sm..full}": 53,
-    "rounded (bare)": 48,
-    "shadow-{sm..2xl}": 9,
-    # 108 -> 96: GroundingSurface's confidence badges moved from emerald/amber/
-    # rose scales onto the semantic --badge-* tokens tokens.css already defines
-    # for light and dark. A raw `emerald-100` has no theme behind it and reads
-    # as a bright chip on a dark background.
-    "palette-scale colour": 96,
-    "var(--token, LITERAL)": 25,
-    "raw hex / rgba()": 27,
+    "rounded-* (any)": 0,
+    "rounded (bare)": 0,
+    "shadow-* (any)": 0,
+    "palette-scale colour": 0,
+    "var(--token, LITERAL)": 0,
+    "raw hex / rgba()": 0,
 }
 
 PALETTE_PROPS = (
@@ -79,8 +137,8 @@ PALETTE_HUES = (
 
 # Each counter says, in its name, what a reader should write instead.
 COUNTERS: dict[str, tuple[re.Pattern[str], str]] = {
-    "rounded-{sm..full}": (
-        re.compile(r"\brounded-(?:sm|md|lg|xl|2xl|3xl|full)\b"),
+    "rounded-* (any)": (
+        re.compile(r"(?<![\w-])rounded(?:-(?!none(?![\w-]))[\w\[\]().%/-]+)(?![\w-])"),
         "tokens.css sets --radius: 0px; Aleph is squared",
     ),
     # Tailwind's bare `rounded` is 0.25rem, which is still not zero. The
@@ -89,8 +147,8 @@ COUNTERS: dict[str, tuple[re.Pattern[str], str]] = {
         re.compile(r"\brounded\b(?!-)"),
         "bare `rounded` is 0.25rem, not --radius: 0px",
     ),
-    "shadow-{sm..2xl}": (
-        re.compile(r"\bshadow-(?:sm|md|lg|xl|2xl)\b"),
+    "shadow-* (any)": (
+        re.compile(r"(?<![\w-])shadow(?:-(?!none(?![\w-]))[\w\[\]().%/-]+)?(?![\w-])"),
         "the spec has no drop shadows; use a hairline border",
     ),
     "palette-scale colour": (
@@ -114,6 +172,80 @@ if not files:
     print(f"✗ no .ts/.tsx under {SRC} — this pin would pass on an empty tree", file=sys.stderr)
     raise SystemExit(1)
 
+# `rounded` and `shadow` are utility classes only inside a class list. The word
+# also occurs in English ("refuses a plugin component that would shadow a core
+# one") and as an identifier, and counting those would make the pin unfixable
+# for a reason that is not a design violation. So those two counters read only
+# class-list strings, while the colour counters stay file-wide on purpose — a
+# raw hex in a chart config is a real hardcoded colour wherever it sits.
+#
+# A class-list string is a quoted or backticked run containing at least one
+# token of Tailwind shape (`bg-ink`, `px-6`, `hover:bg-x`). That is what
+# separates `"bg-ink px-6 shadow hover:bg-ink-soft"` from `"shadow"` passed as
+# a plugin name. A className whose ONLY content is a bare `rounded`/`shadow`
+# and nothing else is therefore invisible here; it has never occurred, and the
+# built-stylesheet check below is what would catch it.
+CLASS_SCOPED = {"rounded-* (any)", "rounded (bare)", "shadow-* (any)"}
+
+#: Where a class list can actually live. Anything else in a .tsx file is prose,
+#: an identifier, or a model prompt.
+CLASS_SITE = re.compile(r"(?:className|class)\s*=\s*|(?:clsx|cn|twMerge|cva)\s*\(")
+STRING_LITERAL = re.compile(r"\"([^\"\n]*)\"|'([^'\n]*)'|`([^`]*)`", re.S)
+
+
+def class_lists(text: str) -> str:
+    """Every string that a class attribute or class helper actually receives.
+
+    A first attempt guessed instead — "any string literal containing a token of
+    Tailwind shape" — and that is not a definition, it is a resemblance.
+    `shadcn-flavoured` in a doc comment and `no rounded pills` in a live model
+    prompt both resemble one, so the guess kept flagging English while the real
+    violation on the primary button went uncounted for a different reason.
+
+    This reads the region after each `className=` / `class=` / `clsx(` / `cn(`
+    and takes the string literals inside it, following balanced braces and
+    parens so a conditional class expression is covered whole:
+
+        className={clsx("px-2", open && "shadow-lg")}
+
+    Both literals are read. A class name assembled at runtime from fragments
+    that are individually not utilities is invisible here; nothing in this tree
+    does that, and the built-stylesheet is the backstop if something starts.
+    """
+    out: list[str] = []
+    for site in CLASS_SITE.finditer(text):
+        i = site.end()
+        while i < len(text) and text[i] in " \t\n":
+            i += 1
+        if i >= len(text):
+            continue
+        if text[i] in "\"'`":
+            quote = text[i]
+            closer = text.find(quote, i + 1)
+            region = text[i : closer + 1] if closer != -1 else text[i:]
+        else:
+            # A braced or parenthesised expression: walk to its matching close
+            # so `clsx("a", cond && "b")` is taken as one region.
+            opener = "{" if text[i] == "{" else "("
+            closer_ch = "}" if opener == "{" else ")"
+            depth = 0
+            j = i if text[i] in "{(" else site.end() - 1
+            start_j = j
+            while j < len(text):
+                if text[j] == opener:
+                    depth += 1
+                elif text[j] == closer_ch:
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            region = text[start_j : j + 1]
+        for match in STRING_LITERAL.finditer(region):
+            body = next((g for g in match.groups() if g is not None), "")
+            out.append(body)
+    return "\n".join(out)
+
+
 counts: dict[str, int] = {}
 tokens: dict[str, Counter[str]] = {}
 where: dict[str, Counter[str]] = {}
@@ -121,7 +253,10 @@ for name, (pattern, _) in COUNTERS.items():
     tok: Counter[str] = Counter()
     loc: Counter[str] = Counter()
     for path in files:
-        hits = pattern.findall(path.read_text())
+        text = path.read_text()
+        if name in CLASS_SCOPED:
+            text = class_lists(text)
+        hits = pattern.findall(text)
         if hits:
             tok.update(hits)
             loc[str(path)] += len(hits)
@@ -156,9 +291,15 @@ if grew:
         top = ", ".join(f"{pathlib.Path(f).name}×{c}" for f, c in where[name].most_common(4))
         print(f"      worst files: {top}", file=sys.stderr)
     print(
-        "\n  Use a semantic token from apps/web/src/styles/tokens.css. If the "
-        "growth is genuinely intended, raise the pin in scripts/check-web-drift.sh "
-        "and say why in the same change — but WS-UI-G1 is driving these to zero.",
+        "\n  Use a semantic token. apps/web/src/styles.css maps every one into "
+        "the Tailwind theme, so the class you want already exists: bg-surface / "
+        "text-ink / border-line for chrome, text-good / text-bad for state, "
+        "bg-badge-<state>-bg + text-badge-<state>-fg for a status chip, "
+        "bg-accent / text-accent for the one signal. Corners are squared — "
+        "delete the `rounded`, do not swap it. A popover or modal separates with "
+        "border-line-strong, not a shadow. This pin is ZERO: raising it needs a "
+        "reason written into scripts/check-web-drift.sh in the same change, and "
+        "'the design changed' is the only one that qualifies.",
         file=sys.stderr,
     )
 

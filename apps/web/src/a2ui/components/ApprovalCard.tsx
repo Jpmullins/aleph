@@ -13,7 +13,7 @@ export function ApprovalCard({ component, onAction }: RendererProps) {
   };
   const [reason, setReason] = useState("");
   const [showReject, setShowReject] = useState(false);
-  const tone = p.severity === "high" ? "red" : p.severity === "medium" ? "amber" : "slate";
+  const tone = p.severity === "high" ? "bad" : p.severity === "medium" ? "warn" : "neutral";
   return (
     <CardShell
       title={p.title}
@@ -40,14 +40,14 @@ export function ApprovalCard({ component, onAction }: RendererProps) {
           onClick={() =>
             onAction("approve", { target_id: p.target_id, target_kind: p.target_kind })
           }
-          className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-medium text-ink-inverse hover:bg-emerald-700"
+          className="bg-good px-3 py-1 text-xs font-medium text-ink-inverse hover:opacity-90"
         >
           Approve
         </button>
         <button
           type="button"
           onClick={() => setShowReject(true)}
-          className="rounded-md border border-line-strong px-3 py-1 text-xs font-medium hover:border-line-strong"
+          className="border border-line-strong px-3 py-1 text-xs font-medium hover:border-line-strong"
         >
           Reject
         </button>
@@ -62,13 +62,13 @@ export function ApprovalCard({ component, onAction }: RendererProps) {
         </button>
       </div>
       {showReject && (
-        <div className="mt-3 rounded border border-line bg-sunken p-2">
+        <div className="mt-3 border border-line bg-sunken p-2">
           <textarea
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             rows={2}
             placeholder="Reason for rejection…"
-            className="w-full rounded border border-line-strong px-2 py-1 text-xs"
+            className="w-full border border-line-strong px-2 py-1 text-xs"
           />
           <div className="mt-2 flex justify-end gap-2">
             <button
@@ -77,7 +77,7 @@ export function ApprovalCard({ component, onAction }: RendererProps) {
                 setShowReject(false);
                 setReason("");
               }}
-              className="rounded border border-line-strong px-2 py-1 text-xs hover:border-line-strong"
+              className="border border-line-strong px-2 py-1 text-xs hover:border-line-strong"
             >
               Cancel
             </button>
@@ -93,7 +93,7 @@ export function ApprovalCard({ component, onAction }: RendererProps) {
                 setShowReject(false);
                 setReason("");
               }}
-              className="rounded bg-red-600 px-2 py-1 text-xs font-medium text-ink-inverse hover:bg-red-700 disabled:opacity-50"
+              className="bg-bad px-2 py-1 text-xs font-medium text-ink-inverse hover:opacity-90 disabled:opacity-50"
             >
               Confirm reject
             </button>

@@ -9,7 +9,7 @@ export function FindingCard({ component, onAction }: RendererProps) {
     kind: string;
     summary: string;
   };
-  const tone = p.severity === "high" ? "red" : p.severity === "medium" ? "amber" : "slate";
+  const tone = p.severity === "high" ? "bad" : p.severity === "medium" ? "warn" : "neutral";
   return (
     <CardShell
       title={p.kind}
@@ -42,7 +42,7 @@ export function FindingCard({ component, onAction }: RendererProps) {
               target_kind: "review_finding",
             })
           }
-          className="ml-auto text-xs text-emerald-700 hover:text-emerald-900"
+          className="ml-auto text-xs text-good hover:opacity-80"
         >
           Resolve
         </button>
@@ -55,7 +55,7 @@ export function FindingCard({ component, onAction }: RendererProps) {
               reason: "dismissed",
             })
           }
-          className="text-xs text-red-700 hover:text-red-900"
+          className="text-xs text-bad hover:opacity-80"
         >
           Dismiss
         </button>

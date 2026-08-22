@@ -53,10 +53,10 @@ interface PageMeta {
   freshness?: string | null;
 }
 
-const STATUS_TONE: Record<string, "emerald" | "amber" | "slate"> = {
-  approved: "emerald",
-  draft: "amber",
-  archived: "slate",
+const STATUS_TONE: Record<string, "good" | "warn" | "neutral"> = {
+  approved: "good",
+  draft: "warn",
+  archived: "neutral",
 };
 
 function CitationBadge({ marker, citation }: { marker: string; citation: Citation | undefined }) {
@@ -67,14 +67,14 @@ function CitationBadge({ marker, citation }: { marker: string; citation: Citatio
         type="button"
         onClick={() => setOpen((v) => !v)}
         title={citation?.source_title ?? marker}
-        className="inline-flex items-baseline rounded bg-amber-100 px-1 text-[10px] font-semibold uppercase tracking-wider text-amber-900 hover:bg-amber-200"
+        className="inline-flex items-baseline bg-badge-warning-bg px-1 text-[10px] font-semibold uppercase tracking-wider text-badge-warning-fg hover:opacity-90"
         data-testid={`citation-${marker}`}
       >
         {marker}
       </button>
       {open && (
         <span
-          className="absolute left-0 top-5 z-20 w-64 rounded-md border border-line-strong bg-surface p-2 text-xs shadow-lg"
+          className="absolute left-0 top-5 z-20 w-64 border border-line-strong bg-surface p-2 text-xs"
           data-testid={`citation-popover-${marker}`}
         >
           {citation ? (
@@ -87,7 +87,7 @@ function CitationBadge({ marker, citation }: { marker: string; citation: Citatio
                   href={citation.url}
                   target="_blank"
                   rel="noreferrer"
-                  className="mt-1 block break-words text-sky-700 underline"
+                  className="mt-1 block break-words text-accent underline"
                 >
                   {citation.url}
                 </a>
@@ -187,24 +187,24 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
           <span className="text-sm font-semibold text-ink">{meta.title}</span>
         )}
         {status && (
-          <Pill tone={STATUS_TONE[status] ?? "slate"}>
+          <Pill tone={STATUS_TONE[status] ?? "neutral"}>
             <span data-testid="wiki-status-badge">{status}</span>
           </Pill>
         )}
-        {meta.is_stub && <Pill tone="amber">stub</Pill>}
+        {meta.is_stub && <Pill tone="warn">stub</Pill>}
         {p.retracted && (
-          <Pill tone="red">
+          <Pill tone="bad">
             <span data-testid="wiki-retracted-badge">⚠ retracted source</span>
           </Pill>
         )}
-        <Pill tone="slate">
+        <Pill tone="neutral">
           <span data-testid="wiki-freshness">freshness: {meta.freshness ?? "—"}</span>
         </Pill>
         {p.html_url && (
           <button
             type="button"
             onClick={() => setView((v) => (v === "reader" ? "document" : "reader"))}
-            className="rounded border border-line-strong px-2 py-0.5 text-xs text-ink-soft hover:bg-elevated"
+            className="border border-line-strong px-2 py-0.5 text-xs text-ink-soft hover:bg-elevated"
             data-testid="wiki-view-toggle"
           >
             {view === "reader" ? "Document view" : "Reader view"}
@@ -231,7 +231,7 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
                 onClick={() =>
                   onAction("approve", { target_id: meta.page_id, target_kind: "wiki_page" })
                 }
-                className="rounded bg-emerald-600 px-3 py-1 text-xs font-medium text-ink-inverse hover:bg-emerald-700"
+                className="bg-good px-3 py-1 text-xs font-medium text-ink-inverse hover:opacity-90"
                 data-testid="wiki-approve"
               >
                 Approve
@@ -239,7 +239,7 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
               <button
                 type="button"
                 onClick={() => setRejecting(true)}
-                className="rounded border border-line-strong px-3 py-1 text-xs font-medium text-ink-soft hover:bg-elevated"
+                className="border border-line-strong px-3 py-1 text-xs font-medium text-ink-soft hover:bg-elevated"
                 data-testid="wiki-reject"
               >
                 Reject
@@ -252,7 +252,7 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
             // analyst has, so the confirm button stays disabled until there is
             // one and the server rejects an empty reason outright
             // (`RejectPageIn.reason` is `min_length=1`).
-            <div className="rounded-md border border-line bg-sunken p-2">
+            <div className="border border-line bg-sunken p-2">
               <label
                 htmlFor="wiki-reject-reason"
                 className="mb-1 block text-xs font-medium text-ink-soft"
@@ -266,7 +266,7 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
                 value={rejectReason}
                 onChange={(e) => setRejectReason(e.target.value)}
                 placeholder="e.g. conflates two different trials; the 2019 figure is from the retracted paper"
-                className="w-full rounded border border-line px-2 py-1 text-xs focus:border-line-strong focus:outline-none"
+                className="w-full border border-line px-2 py-1 text-xs focus:border-line-strong focus:outline-none"
                 data-testid="wiki-reject-reason"
               />
               <div className="mt-2 flex items-center gap-2">
@@ -282,7 +282,7 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
                     setRejecting(false);
                     setRejectReason("");
                   }}
-                  className="rounded bg-red-600 px-3 py-1 text-xs font-medium text-ink-inverse hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="bg-bad px-3 py-1 text-xs font-medium text-ink-inverse hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                   data-testid="wiki-reject-confirm"
                 >
                   Reject page
@@ -293,7 +293,7 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
                     setRejecting(false);
                     setRejectReason("");
                   }}
-                  className="rounded border border-line-strong px-3 py-1 text-xs font-medium text-ink-soft hover:bg-elevated"
+                  className="border border-line-strong px-3 py-1 text-xs font-medium text-ink-soft hover:bg-elevated"
                   data-testid="wiki-reject-cancel"
                 >
                   Cancel
@@ -306,7 +306,7 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
 
       {p.retracted && (
         <div
-          className="mb-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-xs font-medium text-red-800"
+          className="mb-3 border border-line bg-badge-failed-bg px-3 py-2 text-xs font-medium text-badge-failed-fg"
           data-testid="wiki-retracted-banner"
         >
           ⚠ A source cited by this page has been retracted — its dependent claims are
@@ -349,14 +349,14 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
                 <button
                   type="button"
                   onClick={() => selectClaim(c)}
-                  className={`block w-full rounded text-left ${
-                    highlightedClaimId === c.id ? "ring-2 ring-amber-400" : ""
+                  className={`block w-full text-left ${
+                    highlightedClaimId === c.id ? "ring-2 ring-accent" : ""
                   }`}
                   data-testid={`wiki-claim-${c.id}`}
                 >
                   <CardShell
                     subtitle={
-                      <Pill tone={isConfidence(c.confidence) ? confidenceTone(c.confidence) : "slate"}>
+                      <Pill tone={isConfidence(c.confidence) ? confidenceTone(c.confidence) : "neutral"}>
                         <span data-testid="claim-confidence">{c.confidence}</span>
                       </Pill>
                     }
@@ -380,7 +380,7 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
               <button
                 type="button"
                 onClick={() => onAction("repair_links", {})}
-                className="rounded border border-amber-400 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
+                className="border border-badge-warning-fg bg-badge-warning-bg px-2 py-0.5 text-xs font-medium text-badge-warning-fg hover:opacity-90"
                 data-testid="wiki-repair-links"
               >
                 Repair {brokenLinks} broken link{brokenLinks === 1 ? "" : "s"}
@@ -394,7 +394,7 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
                   key={`${l.dst_title}-${i}`}
                   type="button"
                   onClick={() => openPageId(l.dst_page_id as string)}
-                  className="inline-flex items-center rounded border border-line-strong bg-elevated px-2 py-0.5 text-xs text-ink-soft hover:bg-line"
+                  className="inline-flex items-center border border-line-strong bg-elevated px-2 py-0.5 text-xs text-ink-soft hover:bg-line"
                   data-testid="wiki-linkout"
                 >
                   [[{l.dst_title}]]
@@ -404,11 +404,11 @@ export function WikiPageCard({ component, onAction }: RendererProps) {
                 <span
                   key={`${l.dst_title}-${i}`}
                   title="Unresolved link — no page with this title yet"
-                  className="inline-flex items-center rounded border border-dashed border-amber-400 bg-amber-50 px-2 py-0.5 text-xs text-amber-700"
+                  className="inline-flex items-center border border-dashed border-badge-warning-fg bg-badge-warning-bg px-2 py-0.5 text-xs text-badge-warning-fg"
                   data-testid="wiki-linkout-broken"
                 >
                   [[{l.dst_title}]]
-                  {l.occurrences > 1 && <span className="ml-1 text-amber-500">×{l.occurrences}</span>}
+                  {l.occurrences > 1 && <span className="ml-1 text-badge-warning-fg">×{l.occurrences}</span>}
                 </span>
               ),
             )}

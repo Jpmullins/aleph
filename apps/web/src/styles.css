@@ -39,6 +39,27 @@
   --color-bad: var(--state-bad);
   --color-grid: var(--grid-dot);
 
+  /* Status badges — the bg/fg pairs tokens.css already defines for BOTH themes.
+     They were reachable only through Tailwind's arbitrary-value escape hatch,
+     which is long enough that components reached for a palette scale instead:
+     96 of the 258 design-token violations WS-G cleared were a status badge
+     painted from Tailwind's fixed palette, with no theme behind it, so a
+     "failed" chip rendered as a bright pink chip on the near-black ground.
+     Mapping them here is what makes the token the SHORTER thing to write,
+     which is the only durable way this stays true. Names mirror tokens.css
+     exactly, so one grep for `badge-failed` finds the definition, the theme
+     mapping and every use. */
+  --color-badge-idle-bg: var(--badge-idle-bg);
+  --color-badge-idle-fg: var(--badge-idle-fg);
+  --color-badge-running-bg: var(--badge-running-bg);
+  --color-badge-running-fg: var(--badge-running-fg);
+  --color-badge-completed-bg: var(--badge-completed-bg);
+  --color-badge-completed-fg: var(--badge-completed-fg);
+  --color-badge-failed-bg: var(--badge-failed-bg);
+  --color-badge-failed-fg: var(--badge-failed-fg);
+  --color-badge-warning-bg: var(--badge-warning-bg);
+  --color-badge-warning-fg: var(--badge-warning-fg);
+
   /* Three roles. Mono is the instrument — chrome, labels, controls,
      measurements. Sans is for interface sentences. The serif appears only
      where you read at length. */
@@ -111,10 +132,10 @@
      carried any of them. Tailwind v4 tree-shakes the utilities it GENERATES; a
      rule authored inside `@layer components` is authored CSS and ships whether
      or not anything applies it, so nothing could notice. They also read as the
-     way to style a badge or a card, while the real one is two files away:
-     `a2ui/components/_shared.tsx` writes `bg-[var(--badge-warning-bg,…)]`
-     inline. Two systems, one of them fictional. `scripts/check-web-dead-css.sh`
-     is what stops the next one being written one line lower.
+     way to style a badge or a card, while the real one is two files away, in
+     `a2ui/components/_shared.tsx`'s `PILL_CLASS` map. Two systems, one of them
+     fictional. `scripts/check-web-dead-css.sh` is what stops the next one being
+     written one line lower.
 
      What is left here is not a class: the scrollbar rules below match a
      pseudo-element on every scrollable region, so they have no class to be
@@ -139,14 +160,16 @@
    to Aleph's surfaces/accent and use the serif prose face so it reads like
    the rest of the product. Scoped to the live-chat wrapper only. */
 .aleph-live-chat {
-  /* Accent (orange) — the chat uses amber/blue for buttons, links, focus. */
+  /* The chat hardcodes amber and blue for buttons, links and focus. Both are
+     redirected onto Aleph's single accent — umber on the light ground, bone on
+     the dark — because two accents on one screen is two signals. */
   --cpk-color-amber-400: var(--accent);
   --cpk-color-amber-500: var(--accent);
   --cpk-color-amber-800: var(--accent-hover);
   --cpk-color-blue-500: var(--accent);
 
-  /* Surfaces + text — fold the chat's gray/zinc ramps onto Aleph's slate
-     palette so light/dark themes stay consistent. */
+  /* Surfaces + text — fold the chat's gray/zinc ramps onto Aleph's surface and
+     ink tokens, so the chat follows the theme with the rest of the page. */
   --cpk-color-white: var(--surface-raised);
   --cpk-color-gray-50: var(--surface-sunken);
   --cpk-color-zinc-50: var(--surface-sunken);

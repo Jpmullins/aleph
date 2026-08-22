@@ -45,8 +45,8 @@ function lineDiff(from: string, to: string): DiffLine[] {
 
 const LINE_STYLE: Record<DiffLine["kind"], string> = {
   same: "text-ink-muted",
-  add: "bg-emerald-50 text-emerald-800",
-  del: "bg-red-50 text-red-800 line-through decoration-red-300",
+  add: "bg-badge-completed-bg text-badge-completed-fg",
+  del: "bg-badge-failed-bg text-badge-failed-fg line-through decoration-badge-failed-fg",
 };
 const LINE_PREFIX: Record<DiffLine["kind"], string> = { same: " ", add: "+", del: "−" };
 
@@ -79,7 +79,7 @@ export function DiffCard({ component }: RendererProps) {
       ) : (
         <pre
           data-testid="diff-card-body"
-          className="max-h-72 overflow-auto rounded-md border border-line bg-sunken p-2 text-[11px] leading-snug"
+          className="max-h-72 overflow-auto border border-line bg-sunken p-2 text-[11px] leading-snug"
         >
           {diff.map((l, idx) => (
             <div key={idx} className={`whitespace-pre-wrap ${LINE_STYLE[l.kind]}`}>

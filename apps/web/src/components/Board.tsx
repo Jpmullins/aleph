@@ -242,6 +242,11 @@ function BoardCanvas({ projectId }: { projectId: string }) {
             className="absolute"
             style={{ left: r.x, top: r.y, width: r.w, height: r.h }}
             onPointerDown={() => setFocusedPaneId(pane.id)}
+            // Which surface this block is, so a test can address one by name.
+            // `data-testid="block"` is on every block, and `.last()` is
+            // positional — it silently means a different pane once MAX_PANES
+            // starts closing the oldest.
+            data-pane-kind={pane.kind}
           >
             <Block
               title={pane.title || pane.kind}

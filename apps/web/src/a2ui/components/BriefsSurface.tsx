@@ -12,7 +12,7 @@ export function BriefsSurface({ component, onAction }: RendererProps) {
           Briefs
         </div>
         {(p.badge_count ?? 0) > 0 && (
-          <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-900">
+          <span className="inline-flex items-center bg-badge-warning-bg px-2 py-0.5 text-[10px] font-semibold text-badge-warning-fg">
             {p.badge_count}
           </span>
         )}
@@ -33,7 +33,7 @@ export function BriefsSurface({ component, onAction }: RendererProps) {
                     onClick={() => onAction("unpin", { card_id: pinnedCardId })}
                     title="Unpin from Briefs"
                     aria-label="Unpin from Briefs"
-                    className="absolute right-2 top-2 z-10 hidden rounded px-1.5 py-0.5 text-xs text-ink-muted hover:bg-sunken hover:text-ink group-hover:block"
+                    className="absolute right-2 top-2 z-10 hidden px-1.5 py-0.5 text-xs text-ink-muted hover:bg-sunken hover:text-ink group-hover:block"
                     data-testid={`unpin-${pinnedCardId}`}
                   >
                     ✕ Unpin

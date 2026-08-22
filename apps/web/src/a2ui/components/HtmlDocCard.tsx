@@ -26,7 +26,7 @@ export function HtmlDocCard({ component }: RendererProps) {
   if (!isSandboxedAssetSrc(p.src)) {
     return (
       <div
-        className="rounded border border-red-200 bg-red-50 p-3 text-xs text-red-700"
+        className="border border-line bg-badge-failed-bg p-3 text-xs text-badge-failed-fg"
         data-testid="html-doc-refused"
       >
         Refusing to render: document source is not a project asset streaming route.
@@ -39,14 +39,14 @@ export function HtmlDocCard({ component }: RendererProps) {
       {p.title && (
         <div className="mb-1 flex items-center gap-2 text-xs text-ink-muted">
           <span className="truncate font-medium text-ink-soft">{p.title}</span>
-          {p.derived && <span className="rounded bg-elevated px-1.5 py-0.5">derived</span>}
+          {p.derived && <span className="bg-elevated px-1.5 py-0.5">derived</span>}
         </div>
       )}
       <iframe
         title={p.title ?? "Compiled document"}
         src={src}
         sandbox=""
-        className="h-[60vh] w-full rounded-md border border-line bg-surface"
+        className="h-[60vh] w-full border border-line bg-surface"
         data-testid="html-doc-frame"
       />
     </div>

@@ -301,7 +301,7 @@ at the right file and the wrong row.
   <br>`The acceptance run reports E5 as a known, unfixed defect until RS8 lands, rather than 'FIXED'. Today it reports FIXED for a module with no callers.`
 
 **Review.** Mutation across three layers. Flip `or_tsquery` back to `plainto_tsquery` at retrieval.py:98 and confirm the CI eval job fails on the recall floor; restore. Delete one tests/e2e file and confirm acceptance reports FAIL, not SKIP; restore.
-<br>**Iterate.** v2 records every eval run into the existing Dataset / DatasetVersion / Observation tables in aleph-datasets, so the number has a history and a regression is a visible trend rather than a single boolean, and publishes it on a health pane. That also gives the self-improving-harness thesis its first real feedback signal: the agent can see whether its own changes moved the number.
+<br>**Iterate.** v2 records every eval run into a small results table of its own, so the number has a history and a regression is a visible trend rather than a single boolean, and publishes it on a health pane. That also gives the self-improving-harness thesis its first real feedback signal: the agent can see whether its own changes moved the number.
 <br>**Depends on:** WS-RS1
 <br>**Risk.** Checked-in embeddings pin one embedding model; if the default embedder changes, the baseline silently measures something else. Mitigate by recording the model id in baseline.json and failing loudly on mismatch. Second risk: the deleted tests are being rewritten from the acceptance script's node ids, which describe the pre-reset design — some parts may no longer be the right ass…
 
@@ -508,7 +508,7 @@ at the right file and the wrong row.
   <br>`grep -rn 'ocr-required' --include='*.py' . excluding normalization.py returns >= 1. Returns 0 today.`
 
 **Review.** Mutation: swap the layout normalizer back to pypdf across the fixture set and confirm the first three criteria fail. Feed a scanned image-only PDF and confirm it is flagged and routed rather than silently ingested as a near-empty document — today a scan produces a flag nobody reads and an empty body nobody notices.
-<br>**Iterate.** v2 extracts tables into aleph-datasets Observation rows so a table in a paper becomes queryable data rather than markdown, and treats figure captions as separately retrievable units. That is where a structure-aware ingest starts paying compound interest.
+<br>**Iterate.** v2 extracts tables into structured rows so a table in a paper becomes queryable data rather than markdown, and treats figure captions as separately retrievable units. That is where a structure-aware ingest starts paying compound interest.
 <br>**Depends on:** WS-RS1, WS-RS5
 <br>**Risk.** Docling and Marker pull heavy ML dependencies including torch into the worker image, which means a large container, a slow cold start, and partial tension with the 'Aleph serves no models' principle. GROBID as a compose service keeps the model out of Aleph's image but adds an operational component to run and monitor.
 

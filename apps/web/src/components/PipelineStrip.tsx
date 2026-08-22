@@ -70,7 +70,7 @@ export function PipelineStrip({ projectId }: { projectId: string }) {
       })}
       {data.failed > 0 && (
         <span
-          className="ml-1 shrink-0 rounded bg-rose-100 px-1.5 py-0.5 font-medium text-rose-900"
+          className="ml-1 shrink-0 bg-badge-failed-bg px-1.5 py-0.5 font-medium text-badge-failed-fg"
           title="Sources that failed and will not progress without intervention"
           data-testid="pipeline-failed"
         >

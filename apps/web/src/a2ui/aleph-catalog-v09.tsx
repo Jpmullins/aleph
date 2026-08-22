@@ -585,34 +585,196 @@ export const ALEPH_CARD_IMPLS = [
 ];
 
 /**
- * The catalog id the backend's `createSurface.catalogId` references.
+ * The catalog ids the backend's `createSurface.catalogId` references.
  *
- * ONE declaration, deliberately. This constant and `buildAlephCatalog` used to
- * exist twice — once in `A2UISurfaceView.tsx` (functions: `[]`) and once in
- * `SurfaceStreamProvider.tsx` (functions: all 25 basic ones) — under the *same*
- * id. A surface using `formatDate`, `equals` or `openUrl` therefore rendered in
- * a pane and threw `Function not found in catalog 'aleph://v1'` in chat, because
+ * ONE declaration each, in this module and nowhere else. `ALEPH_V09_CATALOG_ID`
+ * and `buildAlephCatalog` used to exist twice — once in `A2UISurfaceView.tsx`
+ * (functions: `[]`) and once in `SurfaceStreamProvider.tsx` (functions: all 25
+ * basic ones) — under the *same* id. A surface using `formatDate`, `equals` or
+ * `openUrl` therefore rendered in a pane and threw
+ * `Function not found in catalog 'aleph://v1'` in chat, because
  * `lib/copilot.tsx` built the chat renderer from the function-less copy. Two
  * catalogs claiming one identity is the same defect class this repo already
  * burned a work package on with three hand-maintained catalog copies.
  *
- * `scripts/check-single-catalog.sh` fails the build if a second declaration or
- * a second `new Catalog(` reappears anywhere under `apps/web/src`.
+ * WS-A3b changes the rule from "one catalog" to "one catalog PER ID". A
+ * renderer holds several named catalogs at once and `createSurface` says which
+ * one it means (`MessageProcessor` looks the id up and throws
+ * `Catalog not found` on a miss), so two plugins may each define a component
+ * called `Chart` provided their catalogs have different ids. What must never
+ * happen again is two catalogs claiming ONE id, which is a silent map
+ * overwrite. `scripts/check-single-catalog.sh` fails the build on a catalog-id
+ * declaration outside this module, a `new Catalog(` outside this module, two
+ * declared ids with the same value, or the plugin-id template losing the part
+ * that makes it unique.
+ */
+export const ALEPH_CORE_CATALOG_ID = "aleph://core@1";
+
+/**
+ * Core under the name it had before the convention existed.
+ *
+ * Kept, and registered as a real second catalog over the same components,
+ * because two producers still stamp it: `apps/copilot-runtime/src/server.ts`
+ * (`defaultCatalogId`) and `aleph_a2ui.components.surfaces`. Renaming an id in
+ * one process and not the other is how every live surface starts answering
+ * `Catalog not found` — and this alias is also the mechanism the `@<major>`
+ * convention promises in general, made concrete: two ids, one contents, both
+ * resolvable, no migration.
  */
 export const ALEPH_V09_CATALOG_ID = "aleph://v1";
 
 /**
- * The one catalog: every Aleph domain impl, every basic-catalog primitive, and
+ * A plugin's catalog id. The MAJOR is in the string on purpose.
+ *
+ * `aleph://plugin/atlas@1` and `aleph://plugin/atlas@2` are different strings,
+ * therefore different catalogs, therefore they coexist in one processor array
+ * — so a surface created before an upgrade keeps painting against the catalog
+ * it named. Drop the `@${major}` and an upgrade becomes a destructive replace
+ * of every live surface, with no error anywhere.
+ */
+export function pluginCatalogId(name: string, major = 1) {
+  return `aleph://plugin/${name}@${major}`;
+}
+
+/** What the server says exists: `GET /v1/projects/{id}/catalogs`. */
+export interface PluginCatalogDescriptor {
+  catalogId: string;
+  plugin?: string | null;
+  major?: number | null;
+}
+
+type AlephImpl = (typeof ALEPH_CARD_IMPLS)[number];
+
+/**
+ * Component implementations a plugin contributes to the browser, by catalog id.
+ *
+ * Empty today, and deliberately present: no plugin can yet ship React code, so
+ * every plugin catalog is core under a plugin-scoped id. That is not a
+ * placeholder — it is the isolation boundary doing its job. A plugin's settings
+ * surface names `aleph://plugin/<name>@<major>`, so disabling the plugin
+ * removes the catalog and the surface stops resolving instead of quietly
+ * painting against core. `PaneRegistry.extend` exists on the server for the
+ * same reason: the next thing that needs this should find a working door rather
+ * than build one.
+ */
+const PLUGIN_IMPLS = new Map<string, AlephImpl[]>();
+
+export function registerPluginComponents(catalogId: string, impls: AlephImpl[]) {
+  const core = new Set(CORE_COMPONENT_NAMES);
+  const shadowed = impls.map((i) => i.name).filter((n) => core.has(n));
+  if (shadowed.length > 0) {
+    // Named on both sides. "duplicate component" would send the author to diff
+    // two catalogs by hand.
+    throw new Error(
+      `${catalogId} defines ${shadowed.join(", ")}, which ${ALEPH_CORE_CATALOG_ID} ` +
+        `already defines. A catalog is a name-to-component map, so the second ` +
+        `registration would replace the first with nothing reporting it.`,
+    );
+  }
+  PLUGIN_IMPLS.set(catalogId, impls);
+}
+
+/** Every component name core can draw. */
+export const CORE_COMPONENT_NAMES: readonly string[] = [
+  ...ALEPH_CARD_IMPLS.map((i) => i.name),
+  ...[...basicCatalog.components.values()].map((i) => i.name),
+];
+
+function coreImpls() {
+  return [...ALEPH_CARD_IMPLS, ...basicCatalog.components.values()];
+}
+
+function coreFunctions() {
+  return [...basicCatalog.functions.values()];
+}
+
+/**
+ * The core catalog: every Aleph domain impl, every basic-catalog primitive, and
  * every basic-catalog *function* — the last of which is the part that was
  * missing in chat. Pure config with no per-surface state, so callers are free to
  * `useMemo` it and hand it to as many throwaway processors as they like.
+ *
+ * `packages/aleph-a2ui/tools/extract_render_catalog.mjs` calls this by name to
+ * derive what the agent is told, so the export is load-bearing beyond the app.
  */
 export function buildAlephCatalog() {
-  return new Catalog(
-    ALEPH_V09_CATALOG_ID,
-    [...ALEPH_CARD_IMPLS, ...basicCatalog.components.values()],
-    [...basicCatalog.functions.values()],
-  );
+  return new Catalog(ALEPH_CORE_CATALOG_ID, coreImpls(), coreFunctions());
+}
+
+/** Core again, under its legacy id. Same components, different name. */
+export function buildAlephLegacyCatalog() {
+  return new Catalog(ALEPH_V09_CATALOG_ID, coreImpls(), coreFunctions());
+}
+
+/**
+ * The ARRAY the renderer holds: core, core's legacy alias, then one catalog per
+ * enabled plugin. `MessageProcessor` takes a list and resolves `createSurface`
+ * against it by id — Aleph was already on that code path and passed a list of
+ * exactly one.
+ *
+ * Refuses two descriptors claiming one id. That is the failure the per-plugin
+ * ids exist to prevent, and it is invisible without a check: `new Catalog` does
+ * not mind, `MessageProcessor.find` takes the first, and the second plugin's
+ * surfaces silently render the first plugin's components.
+ */
+export function buildAlephCatalogs(plugins: readonly PluginCatalogDescriptor[] = []) {
+  const core = buildAlephCatalog();
+  const legacy = buildAlephLegacyCatalog();
+  const claimed = new Map<string, string>([
+    [core.id, "core"],
+    [legacy.id, "core (legacy alias)"],
+  ]);
+  const out = [core, legacy];
+
+  for (const plugin of plugins) {
+    const prior = claimed.get(plugin.catalogId);
+    if (prior !== undefined) {
+      throw new Error(
+        `catalog id ${plugin.catalogId} is claimed by both ${prior} and ` +
+          `${plugin.plugin ?? "an unnamed plugin"}. createSurface resolves an id to ` +
+          `exactly one catalog, so the second would silently win.`,
+      );
+    }
+    claimed.set(plugin.catalogId, plugin.plugin ?? plugin.catalogId);
+    out.push(
+      new Catalog(
+        plugin.catalogId,
+        [...coreImpls(), ...(PLUGIN_IMPLS.get(plugin.catalogId) ?? [])],
+        coreFunctions(),
+      ),
+    );
+  }
+  return out;
+}
+
+/**
+ * The single flat catalog the CHAT renderer accepts.
+ *
+ * `createA2UIMessageRenderer({ catalog })` takes one catalog, so chat is a
+ * merge — and a merge is exactly where the silent overwrite the per-plugin ids
+ * removed comes back. Isolation that holds in panes and fails in chat is not
+ * isolation, so the same rule runs here: when two plugins claim one component
+ * name, NEITHER is merged. Picking a winner by order is the original defect
+ * wearing a policy, and chat drawing plugin A's card against plugin B's data is
+ * worse than chat not drawing it.
+ *
+ * Mirrors `aleph_a2ui.plugin_catalogs.merge_for_chat`, which computes the same
+ * answer server-side and reports the dropped names.
+ */
+export function buildAlephChatCatalog(plugins: readonly PluginCatalogDescriptor[] = []) {
+  const claims = new Map<string, string[]>();
+  for (const plugin of plugins) {
+    for (const impl of PLUGIN_IMPLS.get(plugin.catalogId) ?? []) {
+      claims.set(impl.name, [...(claims.get(impl.name) ?? []), plugin.catalogId]);
+    }
+  }
+  const merged: AlephImpl[] = [];
+  for (const plugin of plugins) {
+    for (const impl of PLUGIN_IMPLS.get(plugin.catalogId) ?? []) {
+      if ((claims.get(impl.name) ?? []).length === 1) merged.push(impl);
+    }
+  }
+  return new Catalog(ALEPH_V09_CATALOG_ID, [...coreImpls(), ...merged], coreFunctions());
 }
 
 /** The concrete component-api type the shared catalog carries (React impls). */

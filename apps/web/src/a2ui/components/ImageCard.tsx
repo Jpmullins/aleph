@@ -19,7 +19,7 @@ export function ImageCard({ component }: RendererProps) {
   if (!isSandboxedAssetSrc(p.src)) {
     return (
       <CardShell title={p.title || "Image"}>
-        <p className="text-xs text-red-700" data-testid="image-card-refused">
+        <p className="text-xs text-bad" data-testid="image-card-refused">
           Refusing to render: image source is not a project asset route.
         </p>
       </CardShell>
@@ -30,7 +30,7 @@ export function ImageCard({ component }: RendererProps) {
       <img
         src={apiUrl(p.src)}
         alt={p.alt ?? p.title ?? "Rendered image"}
-        className="max-h-[60vh] w-full rounded-md border border-line bg-surface object-contain"
+        className="max-h-[60vh] w-full border border-line bg-surface object-contain"
         data-testid="image-card-img"
       />
     </CardShell>

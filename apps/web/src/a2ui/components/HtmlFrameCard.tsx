@@ -23,7 +23,7 @@ export function HtmlFrameCard({ component }: RendererProps) {
   if (!isSandboxedAssetSrc(p.src)) {
     return (
       <CardShell title={p.title || "Interactive"}>
-        <p className="text-xs text-red-700" data-testid="html-frame-refused">
+        <p className="text-xs text-bad" data-testid="html-frame-refused">
           Refusing to render: frame source is not a project asset streaming route.
         </p>
       </CardShell>
@@ -38,7 +38,7 @@ export function HtmlFrameCard({ component }: RendererProps) {
         title={p.title ?? "Interactive artifact"}
         src={apiUrl(p.src)}
         sandbox="allow-scripts"
-        className="h-[60vh] w-full rounded-md border border-line bg-surface"
+        className="h-[60vh] w-full border border-line bg-surface"
         data-testid="html-frame-iframe"
       />
     </div>

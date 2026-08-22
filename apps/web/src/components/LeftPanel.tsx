@@ -90,7 +90,7 @@ export function LeftPanel({
               type="button"
               onClick={() => onSelectSession(s.id)}
               className={
-                "block w-full truncate rounded-md px-2 py-1.5 text-left text-sm " +
+                "block w-full truncate px-2 py-1.5 text-left text-sm " +
                 (s.id === sessionId
                   ? "bg-ink text-ink-inverse"
                   : "text-ink-soft hover:bg-elevated")
@@ -107,7 +107,7 @@ export function LeftPanel({
         <button
           type="button"
           onClick={() => setShowUpload(true)}
-          className="w-full rounded-md border border-line-strong px-2 py-1.5 text-xs font-medium text-ink-soft hover:bg-sunken"
+          className="w-full border border-line-strong px-2 py-1.5 text-xs font-medium text-ink-soft hover:bg-sunken"
         >
           + Upload source
         </button>
@@ -167,7 +167,7 @@ function IconButton({
       type="button"
       title={title}
       onClick={onClick}
-      className="inline-flex items-center justify-center rounded-md px-2 py-1 text-base hover:bg-elevated hover:text-ink"
+      className="inline-flex items-center justify-center px-2 py-1 text-base hover:bg-elevated hover:text-ink"
     >
       {label}
     </button>

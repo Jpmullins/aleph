@@ -76,7 +76,7 @@ export function ContextBar({
         // spec under strict-mode locator resolution.
         aria-label={`Active surface: ${activeSurface}. Activate to cycle.`}
         title="Cycle the right-hand surface"
-        className="inline-flex items-center gap-1.5  border border-line bg-sunken px-2 py-0.5 font-semibold text-ink hover:border-[var(--accent,#f97316)]"
+        className="inline-flex items-center gap-1.5 border border-line bg-sunken px-2 py-0.5 font-semibold text-ink hover:border-accent"
       >
         {activeSurface}
       </button>
@@ -91,7 +91,7 @@ export function ContextBar({
             data-testid="context-open-page"
             onClick={() => setOpenPageId(null)}
             title="Close the open page"
-            className="max-w-[22rem] truncate  px-2 py-0.5 text-ink-soft hover:bg-sunken hover:text-ink"
+            className="max-w-[22rem] truncate px-2 py-0.5 text-ink-soft hover:bg-sunken hover:text-ink"
           >
             {openPageTitle}
           </button>
@@ -103,7 +103,7 @@ export function ContextBar({
       {selection?.text && (
         <span
           data-testid="context-selection"
-          className="max-w-[16rem] truncate  bg-[var(--accent-muted,rgba(249,115,22,0.10))] px-2 py-0.5 text-[var(--accent,#f97316)]"
+          className="max-w-[16rem] truncate bg-accent-muted px-2 py-0.5 text-accent"
           title={selection.text}
         >
           selection: “{selection.text}”
@@ -121,7 +121,7 @@ export function ContextBar({
           type="button"
           onClick={onUpload}
           data-testid="context-upload-source"
-          className="inline-flex items-center gap-1  border border-line-strong px-2 py-0.5 font-medium text-ink-soft hover:border-accent hover:text-accent"
+          className="inline-flex items-center gap-1 border border-line-strong px-2 py-0.5 font-medium text-ink-soft hover:border-accent hover:text-accent"
         >
           <Icons.upload size={13} />
           Source
