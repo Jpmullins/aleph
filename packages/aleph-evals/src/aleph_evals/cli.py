@@ -51,7 +51,27 @@ def main(argv: list[str] | None = None) -> int:
         gate=Gate(args.gate),
         profile_name=args.profile,
     )
-    return write_summary(report, path=str(args.report) if args.report else None)
+    rc = write_summary(report, path=str(args.report) if args.report else None)
+
+    # Evaluating NOTHING is not a pass.
+    #
+    # `python -m aleph_evals` printed `selected_datasets: []` and exited 0 —
+    # the strongest possible green from a run that executed no case against no
+    # code. `packages/aleph-evals/datasets/` holds one directory and no
+    # `manifest.yaml`, so `_discover_specs` found nothing and the runner
+    # reported success at finding nothing.
+    #
+    # A gate that cannot tell "everything passed" from "I did not look" is the
+    # exact failure this repo's acceptance script was rewritten to stop, and it
+    # was still here in the eval runner.
+    if not report.selected_datasets:
+        print(
+            f"\nFAIL: no datasets under {args.datasets_root} matched "
+            f"{args.datasets!r}. Evaluating nothing is not a pass — add a "
+            "manifest.yaml, or point --datasets-root somewhere real.",
+        )
+        return 1
+    return rc
 
 
 if __name__ == "__main__":

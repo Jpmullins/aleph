@@ -524,7 +524,11 @@ def main() -> int:
         "--min-recall",
         type=float,
         default=None,
-        help="exit non-zero below this recall — a gate, only once a baseline is known",
+        help=(
+            "exit non-zero below this recall@1 — a gate, only once a baseline "
+            "is known. @1, not top-k: the top-k rate is 1.00 on the committed "
+            "set whatever retrieval does, so a floor on it cannot fail."
+        ),
     )
     args = parser.parse_args()
 
@@ -545,8 +549,20 @@ def main() -> int:
     for phrasing, (hit, total) in sorted(report.by_phrasing.items()):
         print(f"  {phrasing:<14} {hit / total if total else 0:.2f}  ({hit}/{total})")
 
-    if args.min_recall is not None and report.recall < args.min_recall:
-        print(f"\nFAIL: recall {report.recall:.2f} < required {args.min_recall:.2f}")
+    # The floor gates recall@1, not the top-k hit rate.
+    #
+    # It used to compare `report.recall` — hits anywhere in the returned window.
+    # At the default k that is 1.00 on the committed set whatever retrieval
+    # does, so the gate could not fail. Measured: flipping `or_tsquery` back to
+    # `plainto_tsquery` (AND every term, the defect this repo already fixed
+    # once) moves lexical recall@1 from 0.62 to 0.36 and recall@3 from 0.96 to
+    # 0.47 — while the top-k rate stays 1.00 and the gate stays green.
+    #
+    # @1 is where a single-answer surface lives and where a ranking regression
+    # shows up first.
+    gated = report.recall_at.get(1, report.recall)
+    if args.min_recall is not None and gated < args.min_recall:
+        print(f"\nFAIL: recall@1 {gated:.2f} < required {args.min_recall:.2f}")
         return 1
     return 0
 

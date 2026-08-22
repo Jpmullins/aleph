@@ -130,7 +130,7 @@ def _run_dataset(
     *,
     profile_name: str,
 ) -> RunResult:
-    from aleph_evals.scorers import score
+    from aleph_evals.scorers import SelfGradingFixture, score
 
     cases = _load_cases(spec.fixture_path)
     passed = 0
@@ -139,6 +139,14 @@ def _run_dataset(
     score_total = 0.0
     for case in cases:
         try:
+            # No `actual=`, because there is no executor for this dataset kind.
+            #
+            # That is the honest state and it is now visible. This loop used to
+            # score a fixture that carried its own `actual`, so `pass_rate: 1.0`
+            # meant "the JSON file agrees with itself" — nothing was run, and
+            # the number could not fail for any reason connected to the code.
+            # `score()` refuses such a case, so those datasets now ERROR rather
+            # than pass, and the report says which.
             ok, sc = score(spec.kind, case, profile_name=profile_name)
             if ok:
                 passed += 1
@@ -146,6 +154,8 @@ def _run_dataset(
                 failed += 1
             if sc is not None:
                 score_total += sc
+        except SelfGradingFixture:
+            errored += 1
         except Exception:
             errored += 1
     metrics: dict[str, float] = {

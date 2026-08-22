@@ -22,11 +22,45 @@ _REGISTRY = {
 }
 
 
-def score(kind: str, case: dict[str, Any], *, profile_name: str) -> tuple[bool, float | None]:
+class SelfGradingFixture(RuntimeError):
+    """A case that supplies the answer it is meant to be graded on."""
+
+
+def score(
+    kind: str,
+    case: dict[str, Any],
+    *,
+    profile_name: str,
+    actual: dict[str, Any] | None = None,
+) -> tuple[bool, float | None]:
+    """Grade one case against what the SYSTEM produced.
+
+    ``actual`` is what a run of Aleph returned. It is a separate argument from
+    ``case`` on purpose, and the separation is the whole point of this change.
+
+    Every scorer here read `case["actual"]` — the fixture supplied both the
+    expected answer and the observed one, and `_run_dataset` loaded the fixture
+    and scored it without executing anything at all. So `pass_rate: 1.0` meant
+    "the JSON file agrees with itself". Seven scorers, six datasets, one number
+    that could not fail for any reason connected to the code.
+
+    A fixture carrying its own `actual` is therefore REFUSED rather than scored.
+    Silently ignoring it would leave the old files scoring 0 and looking like a
+    regression; refusing says what is actually wrong, which is that nobody has
+    wired an executor for that dataset yet.
+    """
     scorer = _REGISTRY.get(kind)
     if scorer is None:
         return True, None
-    return scorer(case, profile_name=profile_name)
+    if "actual" in case:
+        msg = (
+            f"the {kind!r} fixture carries its own 'actual'. A scorer reading the "
+            "answer out of the file it is grading measures nothing — pass the "
+            "observed result in as `actual=` from a real run, or delete the key."
+        )
+        raise SelfGradingFixture(msg)
+    merged = {**case, "actual": actual or {}}
+    return scorer(merged, profile_name=profile_name)
 
 
-__all__ = ["score"]
+__all__ = ["SelfGradingFixture", "score"]

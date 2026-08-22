@@ -267,6 +267,31 @@ jobs:
 
       - run: uv run pytest -m integration -q
 
+      # The retrieval number, re-measured, where it can be seen to move.
+      #
+      # Aleph's headline research claim is a measured number and NOTHING ever
+      # re-checked it: `grep -c aleph_evals ci.yml` returned 0. Every quality
+      # claim in RS5/RS6/RS7/RS10 is a claim about this number, and there was no
+      # mechanism that would have caught any of them regressing.
+      #
+      # LEXICAL-ONLY, and deliberately so. CI has no model gateway by design
+      # ("Aleph serves no models"), and the lexical leg needs none — so this
+      # measures the half that can be measured here rather than skipping, which
+      # is how a check stops running. The floor is set against the lexical
+      # baseline, not the hybrid one; the eval prints which mode it ran in, so a
+      # run that quietly lost its dense leg cannot be mistaken for a good one.
+      - name: retrieval eval (lexical leg, with a floor that can fail)
+        run: uv run python -m aleph_evals.retrieval_eval --min-recall 0.55
+
+      # And the dataset runner, which must refuse to report success on nothing.
+      # It printed `selected_datasets: []` and exited 0.
+      - name: the eval runner refuses to pass on an empty selection
+        run: |
+          if uv run python -m aleph_evals --datasets-root /nonexistent; then
+            echo "::error::the eval runner exited 0 having evaluated nothing"
+            exit 1
+          fi
+
   acceptance:
     name: acceptance gate · self-check
     runs-on: ubuntu-latest
