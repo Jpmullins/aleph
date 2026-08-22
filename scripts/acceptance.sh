@@ -392,12 +392,19 @@ run_shell E4 "workspace package count does not grow unchecked" \
 # Claim Spine (part C) uses it, or the code gets deleted.
 run_expected_red_shell E5 "aleph-belief patch contract still has no consumer" \
   "n=\$(grep -rl 'aleph_belief' --include='*.py' apps packages 2>/dev/null | grep -v 'packages/aleph-belief' | wc -l); [ \"\$n\" -ge 1 ]"
-# Blocked for a stated reason, not unfinished. Deleting the wiki services means
-# replacing the ingest->compile pipeline with belief extraction, whose acceptance
-# test ("does it produce good claims") needs a live gateway. See docs/acceptance.md.
-for p in E1 E2 E3; do
-  skip "$p" "blocked: needs a belief extractor beating 0.91 recall@1 (gateway no longer a blocker)"
-done
+# E1, E2 and E3 are GONE, not skipped.
+#
+# They asked when the wiki could be deleted. `docs/decisions.md` D1 (2026-08-21)
+# reverses that decision: the wiki and the RAG over the raw collection are two
+# knowledge plugins and both stay. There is no deletion to unblock, so there is
+# no condition to wait on — and a row that skips forever on a condition nobody
+# intends to meet is indistinguishable from work that is merely late. That is
+# the shape this whole gate exists to remove, so leaving them as permanent
+# skips would have been the gate doing the thing it forbids.
+#
+# What survived from E is measurement, not deletion: whether claim-level
+# retrieval beats chunk-level on the same eval (`docs/plan.md` WS-RS10). That is
+# a number to report, not a gate on a removal.
 
 # ---------------------------------------------------------------------------
 # F — Security

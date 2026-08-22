@@ -165,9 +165,9 @@ The refactor is not done until the replaced thing is gone.
 
 | # | part | check | status |
 |---|---|---|---|
-| E1 | Wiki subsystems removed | `acceptance.sh::wiki_is_gone` — `curator_service`, `index_service`, `alias_service`, `handedit_service`, `citation_verification`, `feedback_service` absent; no importers | ⬜ |
-| E2 | `Capability.PAGE_SELECTION` and the page-selector hop removed | grep + a check that no ModelProfile binding references it | ⬜ |
-| E3 | Dead tables dropped in a migration | `alembic check` clean after dropping `wiki_index`, `wiki_links`, `wiki_sections`, `hand_edit_marks`, `aliases` | ⬜ |
+| ~~E1~~ | ~~Wiki subsystems removed~~ | **Withdrawn** — `decisions.md` D1. There is no deletion to unblock, so the row is removed from the gate rather than left skipping forever on a condition nobody intends to meet | — |
+| ~~E2~~ | ~~`Capability.PAGE_SELECTION` removed~~ | **Withdrawn** with E1 | — |
+| ~~E3~~ | ~~Dead tables dropped~~ | **Withdrawn** with E1 | — |
 | E4 | Package count does not grow | `acceptance.sh` asserts ≤21 workspace packages. Currently 21 — `aleph-kernel`, `aleph-belief` and `aleph-runtime` were added; the reduction comes with E1 | ✅ |
 | E5 | `aleph-belief/patch.py` is wired or deleted | asserts ≥1 importer outside its own tests. Wired by `BeliefService.propose_merges` | ✅ |
 
