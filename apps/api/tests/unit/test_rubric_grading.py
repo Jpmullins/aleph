@@ -270,6 +270,52 @@ async def test_a_configured_rubric_lands_on_state() -> None:
 
 
 @pytest.mark.asyncio
+async def test_the_source_declares_the_channel_it_writes_on_its_own() -> None:
+    """`state_schema = RubricState` on `ProjectRubricMiddleware`, standing alone.
+
+    Rule #7: a LangGraph write to a channel no schema declares is discarded in
+    SILENCE — the hook returns the key, the update vanishes, and every step
+    reports success. `ProjectRubricMiddleware` therefore declares `RubricState`
+    itself, and its docstring gives the reason: "correct on its own rather than
+    correct only while it happens to be listed next to the one that owns the
+    key."
+
+    Every other test in this file drives the whole `build_grading_middleware`
+    list, in which `CostedRubricMiddleware` — a `RubricMiddleware` — declares
+    the same channel. So the sibling's declaration carries the write and the
+    one under test is unobservable: deleting `state_schema` from
+    `ProjectRubricMiddleware` left every other test in this file green, and
+    the integration suite too. (Not "all 33" — this module collects 25. A
+    count in a docstring is a claim like any other, and this one was never
+    true.)
+
+    This is the only drive in which the source is the ONLY middleware, which is
+    the arrangement its own claim is about — and the arrangement anyone reusing
+    it in a graph without the grader would get.
+    """
+    from deepagents import create_deep_agent
+    from langgraph.checkpoint.memory import MemorySaver
+
+    agent = create_deep_agent(
+        model=ScriptedModel(replies=[_answer("here you go")]),
+        tools=[],
+        middleware=[
+            ProjectRubricMiddleware(backend_factory=_backend_factory({RUBRIC_PATH: RUBRIC}))
+        ],
+        checkpointer=MemorySaver(),
+    )
+    config = {"configurable": {"thread_id": "proj:11111111-1111-1111-1111-111111111111:alone"}}
+    await agent.ainvoke({"messages": [{"role": "user", "content": "answer me"}]}, config)
+    state = agent.get_state(config).values
+
+    assert state.get("rubric") == RUBRIC, (
+        "the rubric write was discarded. `ProjectRubricMiddleware` did not "
+        "declare the `rubric` channel, so LangGraph dropped the update without "
+        "raising — the hook ran, returned the key, and nothing kept it."
+    )
+
+
+@pytest.mark.asyncio
 async def test_the_grader_never_sees_a_rubric_when_the_source_runs_late() -> None:
     """Mutation (a), pinned as a test rather than left to a hand edit.
 

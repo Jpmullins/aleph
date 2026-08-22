@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from sqlalchemy import select
@@ -28,6 +29,11 @@ from aleph_runtime.plugin_service import PluginDraft, PluginService
 from aleph_runtime.ui_contributions import UI_CONTRIBUTIONS, UIContribution
 
 ACTOR = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
+
+#: `apps/api/src/aleph_api`, resolved from this file rather than from the
+#: working directory, so the AST check below reads the same source whatever
+#: pytest was invoked from.
+_API_SRC = Path(__file__).resolve().parents[2] / "apps" / "api" / "src" / "aleph_api"
 
 pytestmark = pytest.mark.integration
 
@@ -261,7 +267,12 @@ async def _save(
     params: dict[str, Any],
     *,
     role: str | None = "owner",
-) -> None:
+) -> dict[str, Any]:
+    """Dispatch one `plugin.settings.save` and hand back the handler's result.
+
+    The result is returned rather than discarded because what a save ANSWERS is
+    half of `WS-A4` c6 — see `test_a_save_does_not_branch_on_the_declared_trust`.
+    """
     from aleph_a2ui.action_router import ActionRouter, CardActionRequest
     from aleph_api.a2ui_handlers import build_action_router
     from aleph_db.repos.ledger import LedgerWriter
@@ -278,7 +289,7 @@ async def _save(
 
     router: ActionRouter = build_action_router()
     async with maker() as session:
-        await router.dispatch(
+        outcome = await router.dispatch(
             session=session,
             ledger=LedgerWriter(session),
             principal=principal,
@@ -293,6 +304,7 @@ async def _save(
             ),
         )
         await session.commit()
+    return {"ok": outcome.ok, "result": outcome.result}
 
 
 async def test_a_cleared_field_stays_cleared(
@@ -318,6 +330,167 @@ async def test_a_cleared_field_stays_cleared(
         ).scalar_one()
     assert row.values == {"mode": "thorough"}, (
         f"the cleared endpoint survived the save: {row.values}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# WS-A4 c6, the behavioural half — withdrawn, and this is what withdrawal costs
+# ---------------------------------------------------------------------------
+#
+# The criterion asks for an `authored`-tier save to answer `requires_approval:
+# true` while a `core` save does not. It was not built, deliberately, and the
+# reasoning is written down in `aleph_runtime.ui_contributions` — a numbered
+# decision recording it is PROPOSED, not yet in `docs/decisions.md`, so do not
+# read a citation of one here. The two tests below are what stop that reasoning
+# from being only prose.
+#
+# The decision rests on one fact about who can reach this handler at all —
+# `require_at_least(..., ProjectRole.OWNER)`, so the only actor who can save a
+# plugin's settings is a human project owner, and asking an owner to approve
+# their own change gates nothing. That fact is pinned by
+# `test_an_editor_cannot_change_settings_through_a_card_action` above and by
+# `test_the_agent_cannot_reach_the_settings_save_action` below. If EITHER stops
+# holding, the decision has lost its premise and the approver has to be built.
+
+
+@pytest.mark.parametrize("trust", ["core", "verified", "authored"])
+async def test_a_save_does_not_branch_on_the_declared_trust(
+    trust: str, maker: Callable[[], AsyncSession], committed_project: uuid.UUID
+) -> None:
+    """Every tier saves the same way, and no tier answers with a pending flag.
+
+    Not a restatement of the decision — a bound on how it can be undone. The
+    shape `ui_contributions` refuses is a save that RETURNS
+    `requires_approval: true` and stores the value anyway: a flag with no
+    consumer, which reads as a gate and is not one. That version of the feature
+    is green under every other test in this file, because every other test
+    ignores what the handler returned.
+
+    So: assert against the whole serialised response, not against a key anybody
+    has to remember to look for, and assert the value really landed at each
+    tier. Half-building it turns this red; building the approver properly —
+    a pending store, a route, a screen — also turns it red, which is correct,
+    because that is a change of behaviour and it should have to be declared
+    here.
+    """
+    import json as _json
+
+    from aleph_runtime.ui_contributions import TrustTier
+
+    UI_CONTRIBUTIONS.remove("probe-plugin")
+    UI_CONTRIBUTIONS.register(
+        UIContribution(
+            plugin_id="probe-plugin",
+            title="Probe plugin",
+            config_schema=SCHEMA,
+            trust=cast("TrustTier", trust),
+        )
+    )
+    try:
+        answer = await _save(maker, committed_project, {"field:mode": "thorough"})
+    finally:
+        UI_CONTRIBUTIONS.remove("probe-plugin")
+
+    serialised = _json.dumps(answer, default=str)
+    for word in ("requires_approval", "requiresApproval", "pending_approval"):
+        assert word not in serialised, (
+            f"a {trust!r} save answered with {word!r}. Either it is a flag with "
+            "no consumer — the value is stored regardless, so the flag reads as "
+            "a gate and is not one — or an approver now exists, in which case "
+            "the decision recorded in aleph_runtime.ui_contributions is out of "
+            "date and this test should be replaced by one that drives the "
+            "approval."
+        )
+
+    async with maker() as session:
+        rows = list(
+            (
+                await session.execute(
+                    select(PluginSettings).where(
+                        PluginSettings.project_id == committed_project,
+                        PluginSettings.plugin_id == "probe-plugin",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert [r.values.get("mode") for r in rows] == ["thorough"], (
+        f"a {trust!r} save did not land. Trust is a DISPLAY attribute: if a "
+        "tier now changes what saving DOES, that is the behavioural half of "
+        "WS-A4 c6 arriving, and it needs an approver, a route and a screen "
+        "rather than a branch here."
+    )
+
+
+def test_the_agent_cannot_reach_the_settings_save_action() -> None:
+    """The premise under that decision: no agent tool dispatches a card action
+    it was not written to dispatch.
+
+    `plugin.settings.save` is gated at OWNER, so approval would only ever ask a
+    human owner to approve their own change — UNLESS something non-human can
+    reach it. The one seam by which the agent reaches card actions at all is
+    `copilot_agent._dispatch_card_action_impl`, which self-calls
+    `POST /v1/projects/{id}/cards/actions`.
+
+    Read as an AST rather than as a grep, because the property is not "the
+    string `plugin.settings.save` is absent" — that would still be true of a
+    tool taking `action_kind` as a parameter, which is the version that puts
+    every registered action within the agent's reach at once. What is checked
+    is that every dispatch CALLED BY NAME passes a literal, so the reachable
+    set is decidable, and then that the set excludes this one.
+
+    "Called by name" is the honest limit, and it is stated rather than implied:
+    the walk matches `ast.Name` funcs, so rebinding the function object evades
+    it. Both `_alias = _dispatch_card_action_impl; await _alias("…")` and
+    `await globals()["_dispatch_card_action_impl"]("…")` survive — measured. A
+    wrapper taking `kind` as a parameter and a registry-dict lookup, which are
+    the shapes this would plausibly grow into, are both caught. The first
+    version of this docstring claimed decidability outright; it does not
+    deliver that, and a pinned premise overstating itself is the failure this
+    file exists to prevent.
+
+    Scanned over all of `apps/api/src`, not just `copilot_agent.py`: the seam
+    lives there today, but a tool in a new module would otherwise be invisible
+    to the check that a decision rests on.
+    """
+    import ast
+
+    kinds: list[str] = []
+    dynamic: list[str] = []
+    for path in sorted(_API_SRC.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (isinstance(func, ast.Name) and func.id == "_dispatch_card_action_impl"):
+                continue
+            first = node.args[0] if node.args else None
+            if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                kinds.append(first.value)
+            else:
+                dynamic.append(f"{path.relative_to(_API_SRC)}:{node.lineno}")
+
+    # Anti-vacuity. A rename moves the seam and the walk finds nothing, at
+    # which point every assertion below is trivially satisfied and this test
+    # certifies a file it no longer reads.
+    assert kinds or dynamic, (
+        "no call to `_dispatch_card_action_impl` was found anywhere in apps/api/src. "
+        "The seam has been renamed or removed; re-point this check at the new "
+        "one rather than deleting it — it is the premise the decision in "
+        "aleph_runtime.ui_contributions rests on."
+    )
+    assert not dynamic, (
+        f"`_dispatch_card_action_impl` is called with a non-literal action kind "
+        f"at line(s) {dynamic}. The set of card actions the agent can reach is "
+        "no longer decidable, so `plugin.settings.save` may be among them and "
+        "the trust-is-display decision has lost its premise."
+    )
+    assert "plugin.settings.save" not in kinds, (
+        f"an agent tool dispatches plugin.settings.save (reachable kinds: "
+        f"{sorted(set(kinds))}). Saving a plugin's settings is no longer a "
+        "human-owner-only act, and the approval flow this project declined to "
+        "build is now the thing that would gate it."
     )
 
 

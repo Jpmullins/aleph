@@ -482,10 +482,18 @@ distrusts.** `tests/integration/test_plugin_settings_contract.py`:
   value really lands at every tier.
 - `test_the_agent_cannot_reach_the_settings_save_action` is an AST pass, not a
   grep. The property is not "the string is absent" (still true of a tool that
-  takes `action_kind` as a parameter) but "every dispatch names its action as
+  takes `action_kind` as a parameter) but "every dispatch CALLED BY NAME passes
   a literal, so the reachable set is decidable, and this one is not in it". It
   carries an anti-vacuity assertion so renaming the seam fails rather than
-  passing silently.
+  passing silently, and it scans all of `apps/api/src`, so a tool in a new
+  module is not invisible to it.
+
+  **Its limit, stated rather than implied.** "Called by name" is exact: the
+  walk matches `ast.Name` funcs, so rebinding the function object evades it —
+  `_alias = _dispatch_card_action_impl` and `globals()["…"]` both survive,
+  measured. A wrapper taking `kind` as a parameter and a registry-dict lookup,
+  the two shapes this would plausibly grow into, are caught. The premise of a
+  withdrawal has to say what it does not cover.
 
 **Reopen this if** an agent tool ever dispatches a card action by variable, or
 if `plugin.settings.save` is loosened below OWNER. Either change makes the
