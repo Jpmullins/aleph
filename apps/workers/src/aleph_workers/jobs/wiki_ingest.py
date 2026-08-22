@@ -18,6 +18,7 @@ from aleph_security.agent_token import mint_agent_token, verify_agent_token
 from aleph_security.principal import Principal
 from aleph_wiki.agent.workflow import WikiIngestState, WikiIngestWorkflow
 from aleph_wiki.models import WikiRevision
+from aleph_workers.gateway import gateways
 
 
 async def wiki_ingest_job(
@@ -37,7 +38,7 @@ async def wiki_ingest_job(
 
     maker = ctx["session_maker"]
     asset_store = ctx["asset_store"]
-    litellm = ctx["litellm_client"]
+    litellm = await gateways(ctx).litellm(claims.project_id)
 
     with start_span(
         "worker.wiki_ingest",

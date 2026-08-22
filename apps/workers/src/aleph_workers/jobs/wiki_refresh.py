@@ -44,6 +44,7 @@ from aleph_rks.normalization import normalize_bytes
 from aleph_security.agent_token import mint_agent_token, verify_agent_token
 from aleph_security.principal import Principal
 from aleph_wiki.models import Citation, SourcePage, WikiClaim, WikiPage
+from aleph_workers.gateway import gateways
 
 _log = structlog.get_logger(__name__)
 
@@ -207,7 +208,7 @@ async def wiki_refresh_job(
     pid = UUID(project_id)
     page_uuid = UUID(page_id)
     maker = ctx["session_maker"]
-    litellm = ctx["litellm_client"]
+    litellm = await gateways(ctx).litellm(pid)
     asset_store = ctx["asset_store"]
 
     with start_span(

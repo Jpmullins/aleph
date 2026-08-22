@@ -30,6 +30,7 @@ from aleph_observability.tracing import start_span
 from aleph_research import ResearchLimits, ResearchWorkflow, resolve_bound_tools
 from aleph_security.agent_token import verify_agent_token
 from aleph_security.principal import Principal
+from aleph_workers.gateway import gateways
 
 
 async def _finish_run(
@@ -70,7 +71,7 @@ async def deep_research_job(
     )
     agent_run_id = UUID(agent_run_id_str)
     maker = ctx["session_maker"]
-    litellm = ctx["litellm_client"]
+    litellm = await gateways(ctx).litellm(claims.project_id)
     settings = ctx["settings"]
     scholar = ctx["scholar"]
     asset_store = ctx["asset_store"]

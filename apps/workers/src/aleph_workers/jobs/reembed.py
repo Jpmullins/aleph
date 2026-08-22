@@ -21,14 +21,15 @@ from aleph_db.repos.ledger import LedgerWriter
 from aleph_observability.tracing import current_trace_id, start_span
 from aleph_rks.retrieval import reembed_for_project
 from aleph_security.principal import Principal
+from aleph_workers.gateway import gateways
 
 _log = structlog.get_logger(__name__)
 
 
 async def reembed_job(ctx: dict[str, Any], project_id_str: str) -> dict[str, Any]:
     maker = ctx["session_maker"]
-    litellm = ctx["litellm_client"]
     pid = UUID(project_id_str)
+    litellm = await gateways(ctx).litellm(pid)
     with start_span("worker.reembed", **{"aleph.project_id": project_id_str}):
         async with maker() as session:
             project = (

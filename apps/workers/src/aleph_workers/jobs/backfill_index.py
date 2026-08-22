@@ -28,6 +28,7 @@ from aleph_db.repos.ledger import LedgerWriter
 from aleph_observability.tracing import current_trace_id, start_span
 from aleph_rks.backfill import backfill_unindexed_for_project
 from aleph_security.principal import Principal
+from aleph_workers.gateway import gateways
 
 _log = structlog.get_logger(__name__)
 
@@ -61,9 +62,9 @@ async def _finalize(
 
 async def backfill_index_job(ctx: dict[str, Any], project_id_str: str) -> dict[str, Any]:
     maker = ctx["session_maker"]
-    litellm = ctx["litellm_client"]
     asset_store = ctx["asset_store"]
     pid = UUID(project_id_str)
+    litellm = await gateways(ctx).litellm(pid)
 
     with start_span("worker.backfill_index", **{"aleph.project_id": project_id_str}):
         async with maker() as session:

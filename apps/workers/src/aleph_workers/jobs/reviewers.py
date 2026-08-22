@@ -15,6 +15,7 @@ from aleph_reviewer.editorial import EditorialReviewerWorkflow
 from aleph_reviewer.mechanical import MechanicalReviewerWorkflow
 from aleph_security.agent_token import verify_agent_token
 from aleph_security.principal import Principal
+from aleph_workers.gateway import gateways
 
 
 async def mechanical_review_job(
@@ -109,7 +110,7 @@ async def editorial_review_job(
     )
     project_id = UUID(project_id_str)
     maker = ctx["session_maker"]
-    litellm = ctx["litellm_client"]
+    litellm = await gateways(ctx).litellm(project_id)
 
     async with maker() as session:
         profile = (

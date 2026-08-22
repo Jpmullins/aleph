@@ -15,6 +15,7 @@ from aleph_db.repos import model_profile as profile_repo
 from aleph_models.client import ChatMessage
 from aleph_security.agent_token import verify_agent_token
 from aleph_security.principal import Principal
+from aleph_workers.gateway import gateways
 
 
 async def smoke_llm_job(
@@ -42,7 +43,7 @@ async def smoke_llm_job(
         correlation_id=claims.correlation_id,
     )
 
-    litellm = ctx["litellm_client"]
+    litellm = await gateways(ctx).litellm(project_id)
     maker = ctx["session_maker"]
 
     async with maker() as session:

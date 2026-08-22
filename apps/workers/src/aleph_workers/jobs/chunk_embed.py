@@ -34,6 +34,7 @@ from aleph_rks.indexing import index_normalized_document
 from aleph_rks.models import NormalizedDocument, Source
 from aleph_security.agent_token import verify_agent_token
 from aleph_security.principal import Principal
+from aleph_workers.gateway import gateways
 
 
 async def chunk_embed_job(
@@ -53,7 +54,7 @@ async def chunk_embed_job(
 
     maker = ctx["session_maker"]
     asset_store = ctx["asset_store"]
-    litellm = ctx["litellm_client"]
+    litellm = await gateways(ctx).litellm(claims.project_id)
 
     # AgentRun lifecycle so progress is visible to the UI Activity card.
     # Unique correlation_id per worker run (uq_agent_runs_correlation_id).

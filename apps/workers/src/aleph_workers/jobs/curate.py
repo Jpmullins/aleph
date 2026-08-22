@@ -28,15 +28,16 @@ from aleph_db.repos.ledger import LedgerWriter
 from aleph_observability.tracing import start_span
 from aleph_security.principal import Principal
 from aleph_wiki.curator_service import CuratorService
+from aleph_workers.gateway import gateways
 
 _log = structlog.get_logger(__name__)
 
 
 async def curate_page_job(ctx: dict[str, Any], project_id: str, page_id: str) -> dict[str, Any]:
     maker = ctx["session_maker"]
-    litellm = ctx["litellm_client"]
     pid = UUID(project_id)
     page = UUID(page_id)
+    litellm = await gateways(ctx).litellm(pid)
 
     with start_span(
         "worker.curate_page",

@@ -26,16 +26,28 @@ from aleph_db.models.project import Project
 from aleph_db.repos.ledger import LedgerWriter
 from aleph_models.autoconfigure import autoconfigure_project
 from aleph_observability.tracing import current_trace_id, start_span
+from aleph_workers.gateway import gateways
 
 _log = structlog.get_logger(__name__)
 
 
 async def autoconfigure_profile_job(ctx: dict[str, Any], project_id_str: str) -> dict[str, Any]:
     maker = ctx["session_maker"]
-    settings = ctx["settings"]
-    catalog = ctx["gateway_catalog"]
     http_client = ctx["gateway_http"]
     pid = UUID(project_id_str)
+
+    # WS-MEP-4. ONE resolution, read three ways: the catalog the names come
+    # from, and the base URL and key each candidate is probed against. This
+    # used to be `ctx["gateway_catalog"]` — the boot catalog built from
+    # `LITELLM_BASE_URL` — beside `settings.litellm_base_url`, so a project
+    # with its own gateway was configured from a list its own gateway had never
+    # advertised and probed against a server it does not use. The API route
+    # (`routes/model_profile.py::autoconfigure`) was fixed to resolve once for
+    # exactly this reason; the job creating a project enqueues is the other
+    # caller, and it kept the defect.
+    resolver = gateways(ctx)
+    resolved = await resolver.resolve(pid)
+    catalog = resolver.catalog_for(resolved)
 
     with start_span("worker.autoconfigure_profile", **{"aleph.project_id": project_id_str}):
         async with maker() as session:
@@ -51,8 +63,8 @@ async def autoconfigure_profile_job(ctx: dict[str, Any], project_id_str: str) ->
                     session,
                     project_id=pid,
                     catalog=catalog,
-                    base_url=settings.litellm_base_url,
-                    api_key=settings.insights_litellm_api_key,
+                    base_url=resolved.base_url,
+                    api_key=resolved.api_key,
                     http_client=http_client,
                     probe=True,
                 )

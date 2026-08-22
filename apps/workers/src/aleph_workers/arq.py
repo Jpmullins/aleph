@@ -15,13 +15,13 @@ from aleph_runtime.capabilities import (
     CODE_RUNNER_POOL,
     DB_ENGINE,
     DB_SESSIONS,
-    GATEWAY_CATALOG,
     HTTP_GATEWAY,
-    LITELLM,
+    PRICING,
     REDIS,
     SCHOLAR,
     SETTINGS,
 )
+from aleph_workers.gateway import GATEWAYS_KEY, WorkerGateways
 from aleph_workers.jobs import (
     autoconfigure_profile_job,
     backfill_index_job,
@@ -74,8 +74,7 @@ async def _startup(ctx: dict[str, Any]) -> None:
                 DB_SESSIONS,
                 HTTP_GATEWAY,
                 REDIS,
-                LITELLM,
-                GATEWAY_CATALOG,
+                PRICING,
                 ASSET_STORE,
                 SCHOLAR,
                 ARQ_POOL,
@@ -91,16 +90,27 @@ async def _startup(ctx: dict[str, Any]) -> None:
     ctx["scholar"] = reader.get(SCHOLAR)
     ctx["db_engine"] = reader.get(DB_ENGINE)
     ctx["session_maker"] = reader.get(DB_SESSIONS)
-    ctx["litellm_client"] = reader.get(LITELLM)
     ctx["gateway_http"] = reader.get(HTTP_GATEWAY)
-    # Workers price calls from the same discovered rates the API uses: the
-    # `models` capability runs discovery and refreshes its pricing table in
-    # place before handing it to the LiteLLMClient, so a worker-side ModelCall
-    # is priced rather than recording pricing_source="unknown" — the research
-    # loop is the heaviest spender. The catalog is on ctx so a job that needs
-    # fresh rates can force a refresh instead of opening its own.
-    ctx["gateway_catalog"] = reader.get(GATEWAY_CATALOG)
     ctx["redis"] = reader.get(REDIS)
+    # WS-MEP-4. There is deliberately no `ctx["litellm_client"]` and no
+    # `ctx["gateway_catalog"]` any more: those were ONE client and ONE catalog
+    # built at boot from `LITELLM_BASE_URL`, handed to every job for every
+    # project, so a project's `gateway_endpoints` row reached the settings
+    # screen and none of its background traffic. A job asks this object which
+    # gateway a given project talks to, and gets a client cached per endpoint.
+    #
+    # Workers still price calls from the same discovered rates the API uses:
+    # the `models` capability runs discovery and refreshes this table in place,
+    # so a worker-side ModelCall is priced rather than recording
+    # pricing_source="unknown" — the research loop is the heaviest spender.
+    ctx["pricing"] = reader.get(PRICING)
+    ctx[GATEWAYS_KEY] = WorkerGateways(
+        settings=settings,
+        session_maker=reader.get(DB_SESSIONS),
+        pricing=reader.get(PRICING),
+        http_client=reader.get(HTTP_GATEWAY),
+        redis_client=reader.get(REDIS),
+    )
     ctx["redis_pool"] = reader.get(ARQ_POOL)
     ctx["code_runner_pool"] = reader.get(CODE_RUNNER_POOL)
     ctx["asset_store"] = reader.get(ASSET_STORE)
@@ -117,6 +127,12 @@ async def _shutdown(ctx: dict[str, Any]) -> None:
     when the operator needed the reason. Nothing to tear down is a normal
     outcome here, not an error.
     """
+    resolver = ctx.get(GATEWAYS_KEY)
+    if resolver is not None:
+        # Before the kernel, because the clients it holds were built on the
+        # `http` capability's pool: releasing them after that pool is closed is
+        # the LIFO order this file was rewritten to stop getting wrong.
+        await resolver.aclose()
     kernel = ctx.get("kernel")
     if kernel is None:
         return
