@@ -486,6 +486,33 @@ probe "a bound prop declared unresolvably is noticed" \
   's/sections: CommonSchemas\.\w+/sections: z3.any()/' \
   "./scripts/check-surface-bindings.sh"
 
+# The RUNNER itself. Every other probe here mutates a check's subject; this one
+# mutates the thing that reports on all of them.
+#
+# `run_shell` ran each command in a child `bash -c`, and `pipefail` is a shell
+# option rather than an exported variable — so for the 24 of 33 rows that end in
+# `| tail -1` or `| head -2`, the recorded status was the pager's, which is
+# always 0. Reproduced on the real A8 command against an unreachable database:
+# `5 failed, 5 passed, 5 errors` and `rc=0`, recorded as PASS. A gate that
+# cannot report a failure is not a gate, and this is the one the whole project
+# reads as its scoreboard.
+if grep -q 'set -o pipefail; set -e; \$cmd' scripts/acceptance.sh 2>/dev/null; then
+  RUNNER_RC=$(bash -c 'out="$(bash -c "set -o pipefail; set -e; false | tail -1" 2>&1)"; echo $?')
+  MASKED_RC=$(bash -c 'out="$(bash -c "false | tail -1" 2>&1)"; echo $?')
+  if [ "$RUNNER_RC" = "1" ] && [ "$MASKED_RC" = "0" ]; then
+    printf '  \033[32m%-8s\033[0m %s\n' "can fail" "a piped acceptance command reports its own status"
+    OK=$((OK+1))
+  else
+    printf '  \033[31m%-8s\033[0m %s — guarded=%s unguarded=%s\n' \
+      "CANNOT" "a piped acceptance command reports its own status" "$RUNNER_RC" "$MASKED_RC"
+    BAD=$((BAD+1))
+  fi
+else
+  printf '  \033[31m%-8s\033[0m %s\n' "CANNOT" \
+    "acceptance.sh no longer sets pipefail in the child — 24 rows cannot fail"
+  BAD=$((BAD+1))
+fi
+
 probe "the runtime bridge check notices an any-origin proxy" \
   apps/copilot-runtime/src/server.ts \
   's/^  cors: \{$/  cors: true, \/\/ probe\n  _unused: {/m' \

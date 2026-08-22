@@ -147,7 +147,18 @@ run_shell() {
   local id="$1" desc="$2" cmd="$3"
   part_selected "$id" || return 0
   local out rc
-  out="$(bash -c "$cmd" 2>&1)"; rc=$?
+  # `set -o pipefail` INSIDE the child. It is a shell option, not an exported
+  # environment variable, so this script having it says nothing about the shell
+  # that runs the check — and 24 of the 33 rows below end in `| tail -1` or
+  # `| head -2`, whose exit status is the pager's and is therefore always 0.
+  #
+  # Every one of those rows recorded PASS whatever its command did. Reproduced
+  # on the real A8 command against an unreachable database: `5 failed, 5 passed,
+  # 5 errors` and `rc=0`, recorded as PASS. This is the gate the whole project
+  # reads as its scoreboard.
+  #
+  # `set -e` too, so a `cmd1; cmd2` row cannot pass on cmd2 alone.
+  out="$(bash -c "set -o pipefail; set -e; $cmd" 2>&1)"; rc=$?
   # The LAST line, not the first: a script that prints its verdict at the end
   # would otherwise be reported by whatever warning a library emitted first.
   local last; last="$(printf '%s' "$out" | grep -v '^\s*$' | tail -1)"
