@@ -624,10 +624,17 @@ async def _project_settings_messages(
 async def _logs_messages(session: Any, project_id: UUID, surface_id: str) -> list[dict[str, Any]]:
     """The action ledger, and whether its hash chain still verifies.
 
-    `GET /v1/projects/{id}/ledger/verify` existed with **no caller anywhere** —
-    the append-only hash chain CLAUDE.md lists as a core invariant had no
-    interface at all, so the only way to learn it had diverged was to call the
-    route by hand. It is the first thing this pane says.
+    The append-only hash chain CLAUDE.md lists as a core invariant had no
+    interface in the PRODUCT: `GET /v1/projects/{id}/ledger/verify` was called
+    only by `audit/checks/action-ledger-hashchain.sh`, so the only way a person
+    learned it had diverged was to run the audit script or call the route by
+    hand. It is the first thing this pane says.
+
+    This calls `verify_project_chain` directly rather than fetching that route.
+    A surface producer does not self-fetch — it renders from bound props, and
+    reaching for HTTP here would make a pane's content depend on the API being
+    reachable from inside itself. One implementation, two callers: the route
+    for operators and the audit check, this for the pane.
     """
     from aleph_db.models.ledger import ActionLedgerEvent
     from aleph_db.repos.ledger import verify_project_chain

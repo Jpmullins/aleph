@@ -86,10 +86,10 @@ test("the ledger pane shows the hash-chain verification the route had no caller 
   page,
   request,
 }) => {
-  // `GET /v1/projects/{id}/ledger/verify` existed with zero callers anywhere:
-  // the append-only hash chain CLAUDE.md lists as a core invariant had no
-  // interface at all. This is the consumer for that producer, which is the
-  // house rule this repo names as its dominant defect class.
+  // The append-only hash chain CLAUDE.md lists as a core invariant had no
+  // interface in the product: `GET /v1/projects/{id}/ledger/verify` was called
+  // only by `audit/checks/action-ledger-hashchain.sh`, an operator script. A
+  // person using Aleph could not see it. This is that interface.
   const p = await createProject(request, "ledger pane project");
   try {
     await openWorkspace(page, p.id);

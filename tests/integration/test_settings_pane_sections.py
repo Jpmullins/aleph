@@ -139,10 +139,12 @@ async def test_the_settings_pane_carries_every_section_the_drawer_had(
 async def test_the_logs_pane_reports_the_hash_chain(
     maker: Callable[[], AsyncSession], committed_project: uuid.UUID
 ) -> None:
-    """`GET /v1/projects/{id}/ledger/verify` had no caller anywhere in the app.
+    """The hash chain had no interface in the PRODUCT.
 
-    The chain CLAUDE.md lists as a core invariant had no interface at all: the
-    only way to learn it had diverged was to call the route by hand.
+    `GET /v1/projects/{id}/ledger/verify` was called only by
+    `audit/checks/action-ledger-hashchain.sh` — an operator script — so a person
+    using Aleph had no way to learn the chain CLAUDE.md lists as a core
+    invariant had diverged. This pane is that interface.
     """
     await _seed_project(maker, committed_project)
     async with maker() as session:
