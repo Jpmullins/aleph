@@ -46,8 +46,28 @@ unmutate() { # unmutate FILE
 OK=0; BAD=0
 
 # probe NAME FILE SED_EXPR CHECK_CMD
+#
+# A mutation test has TWO halves and this only ever ran one of them. It applied
+# the mutation and asked whether the check went red — so a check that was
+# ALREADY red reported "can fail" no matter what the mutation did, or whether it
+# applied at all. Two of these were silent no-ops for exactly that reason
+# (`perl -0` needs /m for a `^` anchor), and one covered a sweep that was red on
+# the tree, which made its probe a tautology.
+#
+# So: require GREEN first, then require RED under mutation. A check that is
+# already failing is reported as such and counted as a failure of the
+# self-check, because "I cannot tell you whether this check works" is not a
+# pass.
 probe() {
   local name="$1" file="$2" expr="$3" cmd="$4"
+
+  if ! bash -c "$cmd" >/dev/null 2>&1; then
+    printf '  \033[31m%-8s\033[0m %s — the check is ALREADY red, so this probe proves nothing\n' \
+      "UNTESTED" "$name"
+    BAD=$((BAD+1))
+    return
+  fi
+
   mutate "$file" "$expr"
   if bash -c "$cmd" >/dev/null 2>&1; then
     printf '  \033[31m%-8s\033[0m %s — check stayed GREEN while broken\n' "CANNOT" "$name"
@@ -143,7 +163,7 @@ probe "check-agent-fs-permissions notices an allow ahead of the deny" \
 # own middleware OVERRIDES the parent's guard rather than adding to it.
 probe "check-agent-middleware notices one unguarded subagent" \
   apps/api/src/aleph_api/subagents/analyst.py \
-  's/\n\s+"middleware": \[AlephAgentMiddleware\(\)\],//' \
+  's/\n[^\n]*"middleware": \[AlephAgentMiddleware[^\n]*//' \
   "./scripts/check-agent-middleware.sh"
 
 # check-pane-registry's subject is the CLIENT growing a second copy of the
