@@ -400,3 +400,49 @@ review rather than by the suite:
   name a run owned by project B and put a dispatch row in B's timeline.
   Reachable from a prompt. It is now refused, with the same answer for "no such
   run" so the field cannot be used to probe for ids.
+
+---
+
+## D12 · An unreadable answer is not an abstention — 2026-08-22
+
+**The choice.** When the reranker's reply cannot be understood, retrieval keeps
+fusion order. Only a well-formed, empty `relevant` list empties the result.
+
+**Why it needed deciding.** `parse_scores` returned `[]` for both, and
+`apply_ranking` reads `[]` as "the model judged none of these relevant" — the
+abstention signal, which empties the result deliberately (D10: nothing else in
+Aleph can tell an answerable question from an unanswerable one). So a reranker
+nobody could parse was indistinguishable from a reranker exercising perfect
+judgement, and the destructive reading won by default.
+
+**Measured.** With `gemma-4-e2b` bound to `Capability.RERANK` — a small model
+that frequently answers `{"results": [{"index": 3, "relevance": 0.9}]}` instead
+of the requested shape — the 45-question eval went **nDCG@10 0.970 → 0.133** and
+recall@20 **1.00 → 0.13**. Retrieval was not returning worse answers. It was
+returning nothing, and reporting a high abstention rate while it did. After the
+fix: **0.978**.
+
+**Three states, not two.** `Judgement` now carries a `malformed` reason:
+
+- a well-formed empty list → abstain, empty the result;
+- a list from which every entry had to be dropped → malformed, keep fusion order;
+- no `relevant` key, or not a list, or not JSON at all → malformed, same.
+
+A partially usable list is a judgement: one good entry among rubbish is honoured
+and the rubbish is dropped, because dropping a malformed entry is repair the
+model did not authorise and honouring a good one is not.
+
+**The same rule, one level up.** A reranker may not take down the search it is
+decorating. `search_corpus` now catches any failure of `reranker.rank` and
+returns fused order with the exception's own words on the span. This is not
+hypothetical: the reference gateway answers `POST /v1/rerank` with **500**
+"Unsupported provider: bedrock_mantle" — not the 4xx `RerankUnsupported` was
+written for — so binding the capability turned every corpus search into an
+unhandled `HTTPStatusError`, and `AdaptiveReranker`'s LLM fallback, built for
+exactly this deployment, never ran on it.
+
+**Degraded, always out loud.** Every one of these paths writes the reason to
+`retrieval.rerank.skipped` and to the log. A silent fallback to fused order is
+indistinguishable from a reranker that ran and agreed with fusion, which is the
+confusion the attribute exists to prevent — and it is the same rule the embedder
+already follows: a dead embedder degrades to lexical-only and says so.

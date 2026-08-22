@@ -165,6 +165,17 @@ shape before touching any of it:
 
 Core capability has no `plugin_id` at any layer. It is not refused, it is unnameable.
 
+- **Reranking is wired, and it is a second stage that may never take down the first.**
+  `Capability.RERANK` now has a production caller (`aleph_assistant.retrieval.router.
+  _search_corpus`), a `CAPABILITY_POLICIES` entry (`mode="chat"` — a listwise reranker
+  reorders by asking a chat model, and the old `mode="rerank"` matched nothing on any
+  gateway), and a Settings row. Measure it with
+  `uv run python -m aleph_evals.retrieval_eval --rerank both`, which prints the control
+  and rerank arms side by side. On the committed 45-pair set: **+0.008 nDCG@10, +0.02
+  recall@1** — small because that set is saturated (recall@8 = 1.00) and cannot show the
+  0.05 the workstream asks for. See `docs/decisions.md` D12 for why an unreadable
+  reranker reply is not an abstention; getting that wrong measured **0.970 → 0.133**.
+
 ### A standing constraint
 
 **Reference implementations are read, not depended on.** `deepseek-harness`, `cordis`, `prime-agent`
