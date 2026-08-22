@@ -1570,13 +1570,29 @@ def _gateway_chat_model(settings: Settings, *, purpose: str, capability: Any = N
     """
     from aleph_api.copilot_cost_callback import AgentCostCallbackHandler
     from aleph_core.schemas.model_profile import Capability
+    from aleph_models.limiter import shared_gateway_client
 
     model = _resolve_agent_model(capability or Capability.SYNTHESIS)
+    base_url = _openai_base_url(settings.litellm_base_url)
     return ChatOpenAI(
         model=model,
-        base_url=_openai_base_url(settings.litellm_base_url),
+        base_url=base_url,
         api_key=settings.insights_litellm_api_key,
         temperature=0.2,
+        # The agent's traffic goes through the same metered door as everything
+        # else. WS-MEP-2 built the limiter and left this seam unwired, so the
+        # LARGEST source of concurrent gateway load was the one thing not
+        # bounded by it: one orchestrator plus six subagents, each issuing tool
+        # calls in parallel, against a ceiling that applied to nobody.
+        #
+        # `ChatOpenAI` builds its own HTTP client, which is why the limiter has
+        # to arrive as a client rather than sit inside Aleph's transport code.
+        # `shared_gateway_client` is shared PER ENDPOINT, so all seven models
+        # share one pool and one ceiling — seven private unbounded pools is the
+        # shape WS-MEP-4 warns about.
+        http_async_client=shared_gateway_client(
+            base_url, timeout=settings.aleph_agent_request_timeout_s
+        ),
         # Configuration, not literals. 60s was below the p99 of a tool-heavy
         # turn against a shared gateway.
         timeout=settings.aleph_agent_request_timeout_s,

@@ -320,12 +320,29 @@ class TestTheAgentSeam:
         assert first.is_closed
 
     async def test_the_agents_traffic_is_bounded_by_the_same_ceiling(self) -> None:
+        """The ceiling holds on the client `shared_gateway_client` BUILT.
+
+        This test used to replace `client._transport` with a `LimitedTransport`
+        of its own before making any request — so it exercised its own wiring
+        and would have passed against a helper that returned a plain
+        `httpx.AsyncClient` with no limiter at all. Proven: an adversarial
+        reviewer made `shared_gateway_client` return exactly that, and this test
+        stayed green.
+
+        Now only the INNER transport is swapped, which is the part that has to
+        be a fake because there is no real gateway here. The limiter stays
+        whatever the helper put there, so a helper that forgets to install one
+        fails on `peak_in_flight`.
+        """
         configure_limits(LimiterConfig(max_concurrency=2, queue_timeout_s=5.0))
         fake = FakeGateway(GatewayConfig.well_behaved(latency_s=0.05))
         client = shared_gateway_client(fake.base_url, timeout=5.0)
-        # Same door, different transport: this is what the agent's own client
-        # looks like next to the retrieval path's.
-        client._transport = LimitedTransport(limiter_for(fake.base_url), inner=fake.transport())
+        outer = client._transport
+        assert isinstance(outer, LimitedTransport), (
+            "shared_gateway_client returned a client with no limiter — the whole "
+            "point of the helper"
+        )
+        outer._inner = fake.transport()
         try:
             await asyncio.gather(
                 *(

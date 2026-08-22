@@ -127,3 +127,55 @@ def test_the_authored_write_is_observed(call: dict[str, Any]) -> None:
     """Without the middleware there is no ledger row and no metadata refresh."""
     names = [type(m).__name__ for m in call["middleware"]]
     assert AuthoredSkillsMiddleware.__name__ in names
+
+
+def test_the_agent_model_goes_through_the_metered_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """WS-MEP-2's largest fan-out source was the one thing not metered.
+
+    The limiter, the transport and the per-endpoint client were all built and
+    the seam was left unwired: `grep -rn http_async_client` over the whole repo
+    returned one hit, a docstring inside `limiter.py`. So the ceiling applied to
+    the retrieval path and to autoconfigure, and not to one orchestrator plus
+    six subagents issuing tool calls in parallel — which is the traffic the
+    ceiling exists for.
+
+    Asserted on the built model rather than on a grep, and on the TRANSPORT
+    rather than on the client's identity: a client is easy to pass and easy to
+    pass unlimited.
+    """
+    from aleph_api.copilot_agent import _gateway_chat_model
+    from aleph_api.settings import Settings
+    from aleph_models.limiter import LimitedTransport
+
+    monkeypatch.setenv("ALEPH_CREDENTIAL_MASTER_KEY", "t" * 64)
+    built = _gateway_chat_model(_settings_with_placeholders(Settings), purpose="test.turn")
+
+    client = getattr(built, "http_async_client", None) or getattr(built, "async_client", None)
+    assert client is not None, "the agent model builds its own unmetered HTTP client"
+    assert isinstance(client._transport, LimitedTransport), (
+        "the agent's traffic does not go through the gateway limiter"
+    )
+
+
+def test_every_agent_model_shares_one_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Seven models, one pool, one ceiling.
+
+    `shared_gateway_client` is keyed per ENDPOINT for this reason: the assistant
+    builds an orchestrator plus six subagents, and seven private connection
+    pools each with its own limiter is the same unbounded fan-out with extra
+    steps — the shape WS-MEP-4 warns about.
+    """
+    from aleph_api.copilot_agent import _gateway_chat_model, subagent_model
+    from aleph_api.settings import Settings
+
+    monkeypatch.setenv("ALEPH_CREDENTIAL_MASTER_KEY", "t" * 64)
+    settings = _settings_with_placeholders(Settings)
+    orchestrator = _gateway_chat_model(settings, purpose="test.turn")
+    subagent = subagent_model(settings, "retriever")
+
+    def _client(model: Any) -> Any:
+        return getattr(model, "http_async_client", None) or getattr(model, "async_client", None)
+
+    assert _client(orchestrator) is _client(subagent)
