@@ -1568,7 +1568,7 @@ belongs in `docs/decisions.md` either way.
 - More than five files in the repo start the application under test
   <br>`grep -rl 'TestClient\|ASGITransport' --include='*.py' apps packages tests | wc -l >= 12. FAILS TODAY: 5.`
 - The composition root's live probes run in CI, not only under a script CI never calls
-  <br>`uv run pytest -m integration tests/integration/test_capability_probes.py -q passes and the test asserts len(ready) == 10 against the names parsed from apps/api/aleph.toml. FAILS TODAY: no such test; aleph-runtime has zero tests over 783 LOC.`
+  <br>`uv run pytest -m integration tests/integration/test_capability_probes.py -q passes and the test asserts the composition root's capability NAMES equal the ten parsed from apps/api/aleph.toml — and a self_check.sh probe rewriting one probe body to problem("forced") makes the boot raise. Same for apps/workers/aleph.toml. There is no `ready` list and there cannot be one: a failed probe aborts the boot (Part 4 item 17), so `len(ready) == 10` had no subject. FAILS TODAY: no such test; aleph-runtime has zero tests over 783 LOC.`
 - No route answers 500 on a well-formed request for a real project
   <br>`uv run pytest -m integration tests/integration/test_route_smoke.py -q — the test enumerates app.routes at runtime, so a newly added router is covered without editing the test.`
 - The whole integration job stays green in CI against the pgvector service
@@ -1736,7 +1736,7 @@ belongs in `docs/decisions.md` either way.
 **Criteria:**
 
 - The signing key and the credential-encryption key are different settings
-  <br>`grep -rn 'aleph_agent_token_secret' apps/api/src/aleph_api/routes/ packages/aleph-research/src | wc -l == 0 (no route or tool derives an encryption key from the token secret). FAILS TODAY: 3 sites do (scholar.py:204, connector_credentials.py:47, tools.py:89 via master_secret_bytes).`
+  <br>`grep -rn 'aleph_agent_token_secret' apps packages --include=*.py | grep -c 'encode("utf-8")' == 0 (0 today, against 26 legitimate SIGNING uses of the setting), plus test_cipher_construction_sites.py green. The property is that no ENCRYPTION KEY is derived from the signing secret, not that the setting is unmentioned — the original scope reaches 0 only by deleting agent-token minting. FAILS TODAY: 3 sites do (scholar.py:204, connector_credentials.py:47, tools.py:89 via master_secret_bytes).`
 - The key derivation exists exactly once
   <br>`uv run pytest packages/aleph-connectors/tests/test_key_derivation_is_single.py -q` passes — it asserts over the CODE (one derivation, no padding) rather than over the text of the repository. **CORRECTED 2026-08-22:** the original greps count prose. All three `ljust(32` hits are docstrings describing the removed defect — one of them is this criterion quoted verbatim inside the very test that enforces it — and two of the three `sha256(.*master` hits are the same. As written it can only be satisfied by deleting the explanations of why the rule exists.`
 - Rotating the token secret does not destroy credentials
@@ -1800,7 +1800,7 @@ belongs in `docs/decisions.md` either way.
 - Unpriced spend is a number, not an anecdote
   <br>`aleph_model_call_cost_total carries a pricing_source label with gateway/static/unknown values, so the unpriced share is one query. Backlog E4 becomes answerable. FAILS TODAY.`
 - The API is instrumented like a request path, not like an afterthought
-  <br>`grep -rn 'start_span' apps/api/src --include='*.py' | wc -l >= 15. FAILS TODAY: 2, against 27 in the legacy wiki package.`
+  <br>`grep -c 'with start_span(' over apps/api/src is >= 8, and every request-path stage in aleph_observability.metrics.STAGES has at least one call site. Call sites, not prose: the bare-name count is 17, of which 4 are imports and 5 are comment text, so a docstring mentioning start_span moves it. FAILS TODAY: 2, against 27 in the legacy wiki package.`
 - One id joins the log line, the span and the response
   <br>`an integration test asserting the response's x-request-id equals the request_id bound in the log record and equals the aleph.request_id attribute on the root span. FAILS TODAY on all three counts (P2 fixes the first two).`
 - Metrics are not published unauthenticated
@@ -1847,6 +1847,15 @@ belongs in `docs/decisions.md` either way.
 > `oidc` mode. OIDC is removed (`decisions.md` D6), so there is no mode in which
 > these streams lack a credential. `WS-D3` survives — see below, it was never
 > really an OIDC problem.
+>
+> **One criterion is salvaged, because it was never about OIDC.** The original
+> c4 asked that every SSE consumer go through one builder rather than
+> constructing `EventSource` inline. Two direct constructions remain
+> (`apps/web/src/a2ui/SurfaceStreamProvider.tsx:184`, `apps/web/src/hooks/useWikiLiveSignals.ts:74`),
+> and no sweep checks it. That is a transport-shape criterion that outlives the
+> auth mode it was written under: **`grep -rn 'new EventSource(' apps/web/src |
+> wc -l` returns 1, the shared builder.** Tracked here rather than silently
+> dropped with the workstream.
 
 #### ~~WS-D4 original~~ · SSE that can carry a credential — the four streams and the iframe asset route
 
@@ -2667,10 +2676,13 @@ get a deterministic 401 without a database; they now assert the invariant that
 actually matters — an unauthenticated request must never return 2xx — which is
 what pinned the original vulnerability and still does.
 
-**Verification:** `grep -rn 'access_scope' apps packages --include='*.py'`
-returns 0 · `select count(*) from information_schema.columns where
+**Verification:** `grep -rn 'access_scope' apps packages --include='*.py' | grep -v alembic/versions`
+returns 0 (31 unfiltered, every one of them in an immutable migration that must keep naming the
+column it dropped, so the unfiltered form is red forever) · `select count(*) from information_schema.columns where
 column_name='access_scope'` returns 0 · `alembic check` reports no drift ·
-779 unit + 36 integration passing · all five sweeps green.
+1,776 unit + 362 integration passing · all 24 sweeps green. (779/36/five were the counts when
+this was written; the suite has roughly doubled twice since, so a stale absolute number here
+reads as a shrinking test base.)
 
 ### And one open question worth taking seriously
 
