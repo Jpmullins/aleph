@@ -227,6 +227,22 @@ probe "check-acceptance-claims notices a cited test that does not exist" \
   's/packages\/aleph-core\/tests\/test_rrf.py/packages\/aleph-core\/tests\/test_no_such_thing.py/' \
   "./scripts/check-acceptance-claims.sh"
 
+# The two citation shapes that run as an ERROR rather than as a pass or a fail.
+# Both were live in docs/plan.md WS-D2 and both survived the sweep above: the
+# first because the plan is allowed to name a file that does not exist yet, the
+# second because a node id with an empty path part was never tokenized at all.
+# A criterion written either way is not unmet, it is unmeasurable, and a reader
+# scanning for red sees neither.
+probe "check-acceptance-claims notices a real test cited under the wrong directory" \
+  docs/plan.md \
+  's|apps/api/tests/unit/test_agent_cost_callback\.py::test_no_usage_writes_an_unpriced_row|tests/unit/test_agent_cost_callback.py::test_no_usage_writes_an_unpriced_row|' \
+  "./scripts/check-acceptance-claims.sh"
+
+probe "check-acceptance-claims notices a bare ::test_id no file defines" \
+  docs/plan.md \
+  's|apps/api/tests/unit/test_agent_cost_callback\.py::test_no_usage_writes_an_unpriced_row_rather_than_nothing|::test_no_usage_writes_unknown_row|' \
+  "./scripts/check-acceptance-claims.sh"
+
 # The mutation that matters is not "delete the rule" — it is "widen the allow",
 # which is how this gate silently reopens.
 #

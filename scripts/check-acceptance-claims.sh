@@ -146,6 +146,71 @@ if PLAN.is_file():
                 )
             plan_ids.append(token)
 
+# Two shapes the rule above cannot see, both found in WS-D2 by the third audit.
+# Each runs as an ERROR — pytest exit 4, or exit 2 — rather than as a pass or a
+# fail, so a criterion written this way is not merely unmet: it is unmeasurable,
+# and a reader scanning for red sees neither.
+#
+# (a) A citation whose PATH is wrong while a file of that basename exists
+#     elsewhere and defines the name. `tests/integration/test_agent_cost_
+#     attribution.py::test_run_id_is_populated` was cited for a whole
+#     workstream; the real file is `apps/api/tests/unit/` and pytest exits 4.
+#     The rule above skips it precisely because the named path is absent, which
+#     is the state a plan is allowed to be in — but not when the test is
+#     sitting right there under another directory.
+#
+# (b) A BARE `::name` with no path at all. The token pattern requires a path
+#     prefix, so these were never tokenized; `::test_no_usage_writes_unknown_
+#     row` survived the same sweep that caught three of its siblings.
+# `test_`-prefixed only. A bare `::name` is also how this file's own prose
+# refers to the SHAPE, and matching that would make the sweep fire on the
+# sentence describing it — the exact defect being swept for.
+BARE_ID = re.compile(r"^::(test_[A-Za-z0-9_]+)$")
+_defs: dict[str, list[str]] = {}
+for _py in pathlib.Path(".").rglob("test_*.py"):
+    if any(part in {".venv", "node_modules", "__pycache__", ".git"} for part in _py.parts):
+        continue
+    _defs.setdefault(_py.name, []).append(str(_py))
+
+def _defines(path: str, name: str) -> bool:
+    try:
+        return f"def {name}(" in pathlib.Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+if PLAN.is_file():
+    _plan_text = PLAN.read_text(encoding="utf-8")
+    for span in CODE_SPAN.findall(_plan_text):
+        for token in TOKEN.findall(span):
+            if "::" not in token:
+                continue
+            path_part, _, name = token.partition("::")
+            target = pathlib.Path(path_part)
+            if target.is_file():
+                continue  # rule 1 above already judged it
+            elsewhere = [
+                other
+                for other in _defs.get(target.name, [])
+                if _defines(other, name)
+            ]
+            if elsewhere:
+                problems.append(
+                    f"docs/plan.md: cites {token}, which does not exist — but "
+                    f"{elsewhere[0]} does and defines {name}. pytest exits 4 on "
+                    "the cited path, so the criterion is neither met nor unmet"
+                )
+    for span in CODE_SPAN.findall(_plan_text):
+        bare = BARE_ID.match(span.strip())
+        if not bare:
+            continue
+        name = bare.group(1)
+        if not any(_defines(f, name) for files in _defs.values() for f in files):
+            problems.append(
+                f"docs/plan.md: cites a bare ::{name} with no path, and no test "
+                "file in the tree defines it — a node id with an empty path part "
+                "is skipped by the rule above, so nothing was checking it"
+            )
+
 if problems:
     print("✗ rows citing something that is not there:", file=sys.stderr)
     for problem in problems:
