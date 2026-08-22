@@ -278,13 +278,6 @@ probe "check-acceptance-claims notices a stale test count" \
 # boot, so if the fixture yields at all then every probe passed. The thing that
 # can fail is a probe body reporting a problem, driven through the real
 # composition root.
-if [ $NEEDS_SERVICES -eq 1 ]; then
-  probe "a capability that reports a problem stops the boot" \
-    packages/aleph-runtime/src/aleph_runtime/capabilities.py \
-    's/        return ok\("connection round-tripped"\)/        return problem("forced")/' \
-    "uv run python scripts/_acceptance/kernel_boot.py"
-fi
-
 # The floor, not the mechanism. E12 runs the coverage command; E12a is the row
 # that notices the four thresholds being lowered, which is the one move that
 # turns a red build green.
@@ -447,8 +440,25 @@ if (echo > "/dev/tcp/$_PG_HOST/$_PG_PORT") >/dev/null 2>&1; then
     packages/aleph-db/src/aleph_db/repos/agent_runs.py \
     's/        run\.status = "failed"/        pass/' \
     "uv run pytest tests/integration/test_agent_run_reaper.py::test_a_run_running_past_the_deadline_is_failed -q -p no:randomly"
+
+  # WS-P1 c4's real half. Its old wording — "test_capability_probes.py asserts
+  # len(ready) == 10" — cannot fail and never could: a failed probe UNWINDS the
+  # boot, so if the fixture yields at all then every probe passed. What CAN
+  # fail is a probe body reporting a problem, driven through the real
+  # composition root.
+  #
+  # In here, not beside the sweep probes, and the reason is the bug this
+  # replaces: it first landed guarded by `[ $NEEDS_SERVICES -eq 1 ]`.
+  # NEEDS_SERVICES is set in acceptance.sh and never exported, and this file
+  # runs as a separate process under `set -u` — so that line aborted the whole
+  # script with "unbound variable" and every probe after it silently never ran.
+  # This block already probes a real port and exports the URLs the boot needs.
+  probe "a capability that reports a problem stops the boot" \
+    packages/aleph-runtime/src/aleph_runtime/capabilities.py \
+    's/        return ok\("connection round-tripped"\)/        return problem("forced")/' \
+    "uv run python scripts/_acceptance/kernel_boot.py"
 else
-  printf '  \033[90m%-8s\033[0m 3 database-backed mutations (needs postgres)\n' "skip"
+  printf '  \033[90m%-8s\033[0m 4 database-backed mutations (needs postgres)\n' "skip"
 fi
 
 # H1's subject is a database row, not a source file, so it needs its own
