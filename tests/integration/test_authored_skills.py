@@ -440,3 +440,69 @@ async def test_the_async_path_is_used_so_nothing_blocks_the_event_loop(store: An
     # And the loop really was running, so "not the loop thread" means something.
     assert threading.get_ident() == loop_thread
     assert asyncio.get_running_loop() is not None
+
+
+# ---------------------------------------------------------------------------
+# The production namespace function, driven directly.
+#
+# `authored_namespace` had ZERO test coverage — its only mention anywhere in
+# tests was a comment. The criterion it serves was checked by a test that built
+# its OWN composite with `namespace=lambda *_a: namespace`, so it proved
+# langgraph's store isolates two namespaces (a property of the library) and
+# said nothing about Aleph's binding.
+#
+# Measured: making the production function return one constant namespace for
+# every project left that test green. Its own docstring names the stake — "one
+# project's authored skill appearing in another project's agent … is a
+# cross-tenant prompt injection with a durable store behind it."
+
+
+def _with_thread(thread_id: str | None) -> Any:
+    """Run `authored_namespace` under a config carrying `thread_id`.
+
+    Patches `current_config`, the one seam it reads, rather than standing up a
+    graph — the property under test is the mapping from thread id to namespace.
+    """
+    from aleph_api import chat_runs
+    from aleph_api.authored_skills import authored_namespace
+
+    original = chat_runs.current_config
+    chat_runs.current_config = lambda: (  # type: ignore[assignment]
+        None if thread_id is None else {"configurable": {"thread_id": thread_id}}
+    )
+    try:
+        return authored_namespace()
+    finally:
+        chat_runs.current_config = original  # type: ignore[assignment]
+
+
+def test_two_projects_get_two_authored_namespaces() -> None:
+    """The criterion, against the function production actually binds."""
+    a, b = uuid.uuid4(), uuid.uuid4()
+    ns_a = _with_thread(f"proj:{a}:t1")
+    ns_b = _with_thread(f"proj:{b}:t1")
+
+    assert ns_a == (str(a), "skills")
+    assert ns_b == (str(b), "skills")
+    assert ns_a != ns_b, (
+        "both projects resolved to the same authored-skill namespace, so one "
+        "project's agent reads another's instructions — a cross-tenant prompt "
+        "injection with a durable store behind it"
+    )
+
+
+def test_the_same_project_is_stable_across_threads() -> None:
+    """Scoping is by PROJECT, not by conversation — a skill outlives its thread."""
+    p = uuid.uuid4()
+    assert _with_thread(f"proj:{p}:t1") == _with_thread(f"proj:{p}:t2")
+
+
+@pytest.mark.parametrize("thread_id", [None, "no-prefix", "proj:not-a-uuid:t1"])
+def test_an_unresolvable_project_gets_the_shared_bucket_not_a_guess(thread_id: str | None) -> None:
+    """An unscoped caller must not land in some real project's namespace.
+
+    `("shared", "skills")` is deliberately not the shape of a project id, so a
+    caller that cannot be resolved collects with other unresolved callers
+    rather than silently joining a tenant.
+    """
+    assert _with_thread(thread_id) == ("shared", "skills")

@@ -605,7 +605,7 @@ belongs in `docs/decisions.md` either way.
 **Criteria:**
 
 - The acceptance gate runs on every push
-  <br>``grep -c 'acceptance.sh' .github/workflows/ci.yml` returns ≥ 1. Today it returns 0.`
+  <br>``grep -cE '^\s*run:.*acceptance\.sh' .github/workflows/ci.yml` returns ≥ 1 — an anchored `run:` line, not a mention. **CORRECTED 2026-08-23:** the bare form returns 2 and one of the two hits is the PROSE COMMENT at ci.yml:362 describing this very repair, so deleting line 441 — the only real invocation of the gate anywhere in CI — left the criterion green. Measured. Today the anchored form returns 1.
 - The gate can prove it is able to fail
   <br>``./scripts/acceptance.sh --self-check` exits 0 and its output contains the self-check block; CI runs it with the same flag.`
 - No acceptance row claims a test does something the test does not do
@@ -1698,7 +1698,7 @@ belongs in `docs/decisions.md` either way.
 - Zero checks currently name a nonexistent file
   <br>`./scripts/acceptance.sh --quick reports missing=0. FAILS TODAY: 20 tests/e2e references across acceptance.sh (grep -c 'tests/e2e' scripts/acceptance.sh = 20) resolve to nothing.`
 - The gate runs in CI
-  <br>`grep -c 'acceptance.sh' .github/workflows/ci.yml >= 2. FAILS TODAY: 0.`
+  <br>`grep -cE '^\s*run:.*acceptance\.sh' .github/workflows/ci.yml >= 1. FAILS TODAY: 0. Anchored to a `run:` line for the reason given at K0 c1 — the unanchored count includes the comment that documents the fix, so it survives deleting the invocation.
 - The self-check proves the five CI sweeps can fail, not just the kernel
   <br>`./scripts/acceptance.sh --self-check prints >= 11 'can fail' lines including one per sweep by name. FAILS TODAY: 6 probes, none of which touch a sweep.`
 - Skips are real, not an artifact of a hardcoded port
