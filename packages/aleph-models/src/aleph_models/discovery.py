@@ -125,7 +125,7 @@ class DiscoveredModel:
         Aleph's traffic is prompt-heavy — wiki pages into a selector, chunks
         into an extractor — so ranking on output rate alone would misorder
         models for the light capabilities. 3:1 approximates observed usage and
-        only ever decides *ties in tier*, never correctness.
+        only ever decides TIES among models that already fit, never correctness.
         """
         i = self.input_per_token or Decimal("0")
         o = self.output_per_token or Decimal("0")
@@ -380,22 +380,31 @@ async def probe_model(
 
 @dataclass(frozen=True)
 class CapabilityPolicy:
-    """What a capability *requires*, and which way to lean when choosing.
+    """What a capability *requires*. Requirements filter; capability orders.
 
     Requirements are hard filters derived from gateway metadata — a model
     without ``supports_vision`` cannot serve the vision capability, whatever
-    it costs. Tier only orders the survivors.
+    it costs.
+
+    **There is no cheapest option, deliberately.** A ``tier`` field used to
+    select the CHEAPEST survivor for reranking, extraction, classification,
+    page selection and embedding, and it produced exactly what asking for the
+    cheapest thing produces: `gemma-4-e2b`, a two-billion-parameter model, bound
+    to the job of judging which of forty passages answer a question. Measured
+    against eight questions this corpus cannot answer, it said "relevant" to
+    three of them — 0.62 where the bar is 0.80. `gemma-4-31b` and
+    `claude-haiku-4-5` both scored 1.00.
+
+    Price is not a capability signal and must not be used as one. It orders
+    ties among models that already satisfy the job, and nothing else.
     """
 
     mode: str
-    #: "heavy" prefers the most capable survivor, "light" the cheapest.
-    tier: str
     needs_vision: bool = False
     needs_function_calling: bool = False
     #: Minimum context window. Page selection loads the whole wiki index into
-    #: one prompt, so an 8k model is disqualified regardless of price — this is
-    #: the filter that stops "cheapest" from selecting a model that cannot do
-    #: the job.
+    #: one prompt, and the reranker holds a whole window of passages, so a small
+    #: model is disqualified regardless of what it costs.
     min_input_tokens: int = 0
 
 
@@ -404,17 +413,15 @@ class CapabilityPolicy:
 #: nothing here.
 CAPABILITY_POLICIES: dict[Capability, CapabilityPolicy] = {
     Capability.SYNTHESIS: CapabilityPolicy(
-        mode="chat", tier="heavy", needs_function_calling=True, min_input_tokens=100_000
+        mode="chat", needs_function_calling=True, min_input_tokens=100_000
     ),
-    Capability.JUDGE: CapabilityPolicy(mode="chat", tier="heavy", min_input_tokens=100_000),
-    Capability.CODE: CapabilityPolicy(mode="chat", tier="heavy", needs_function_calling=True),
-    Capability.VISION: CapabilityPolicy(mode="chat", tier="heavy", needs_vision=True),
-    Capability.PAGE_SELECTION: CapabilityPolicy(
-        mode="chat", tier="light", min_input_tokens=100_000
-    ),
-    Capability.EXTRACTION: CapabilityPolicy(mode="chat", tier="light", needs_function_calling=True),
-    Capability.CLASSIFICATION: CapabilityPolicy(mode="chat", tier="light"),
-    Capability.EMBEDDING: CapabilityPolicy(mode="embedding", tier="light"),
+    Capability.JUDGE: CapabilityPolicy(mode="chat", min_input_tokens=100_000),
+    Capability.CODE: CapabilityPolicy(mode="chat", needs_function_calling=True),
+    Capability.VISION: CapabilityPolicy(mode="chat", needs_vision=True),
+    Capability.PAGE_SELECTION: CapabilityPolicy(mode="chat", min_input_tokens=100_000),
+    Capability.EXTRACTION: CapabilityPolicy(mode="chat", needs_function_calling=True),
+    Capability.CLASSIFICATION: CapabilityPolicy(mode="chat"),
+    Capability.EMBEDDING: CapabilityPolicy(mode="embedding"),
     # Restored 2026-08-22, with its consumer. `ListwiseLlmReranker` reorders a
     # window of retrieved chunks, and it does that by asking a CHAT model —
     # there is no separate reranker endpoint involved. The policy that used to
@@ -422,12 +429,16 @@ CAPABILITY_POLICIES: dict[Capability, CapabilityPolicy] = {
     # has been pointed at, so the capability was permanently unbound even
     # before the consumer went missing.
     #
-    # `tier="light"` because the judgement is "which of these forty passages
-    # answer this question", not synthesis, and it runs on the latency path of
-    # every assistant search. `min_input_tokens` is 32k so a forty-chunk window
-    # fits: a model that cannot hold the window would silently rerank a
-    # truncated one.
-    Capability.RERANK: CapabilityPolicy(mode="chat", tier="light", min_input_tokens=32_000),
+    # `min_input_tokens` is 32k so a forty-chunk window fits: a model that
+    # cannot hold the window would silently rerank a truncated one.
+    #
+    # It used to carry `tier="light"` — cheapest — on the reasoning that "which
+    # of these forty passages answer this question" is not synthesis and runs
+    # on the latency path of every search. Both halves of that are true and the
+    # conclusion was still wrong: cheapest bought `gemma-4-e2b`, which answers
+    # that question badly (0.62 abstention against a bar of 0.80). Cheap and
+    # fast are not the same axis, and neither is a capability.
+    Capability.RERANK: CapabilityPolicy(mode="chat", min_input_tokens=32_000),
 }
 
 #: **History, kept because the rule it produced is still load-bearing.**
@@ -452,7 +463,7 @@ def candidates_for(
 ) -> list[DiscoveredModel]:
     """Models that satisfy `policy`, best first.
 
-    Ranking uses capability signals before cost. Within a tier the ordering is
+    Ranking uses capability signals before cost. The ordering is
     total and deterministic — model id breaks every remaining tie — so the same
     gateway always yields the same defaults.
     """
@@ -473,24 +484,28 @@ def candidates_for(
     ok.sort(key=lambda m: not m.is_priced)
 
     # Model id breaks every remaining tie, so the same gateway always yields
-    # the same defaults. Heavy prefers the LAST id, which on every version
-    # scheme in practice ("...opus-4.6" vs "...opus-4.7") means the newer
-    # model; light prefers the first. Both passes rely on `sort` being stable.
-    ok.sort(key=lambda m: m.id, reverse=policy.tier == "heavy")
-    if policy.tier == "heavy":
-        # Reasoning first, then larger context, then more expensive — cost is a
-        # weak proxy for capability, so it only ever breaks ties the explicit
-        # signals leave open.
-        ok.sort(
-            key=lambda m: (
-                not m.supports_reasoning,
-                -(m.max_input_tokens or 0),
-                -m.blended_cost,
-            )
+    # the same defaults. The LAST id wins, which on every version scheme in
+    # practice ("...opus-4.6" vs "...opus-4.7") means the newer model. This
+    # pass relies on `sort` being stable.
+    ok.sort(key=lambda m: m.id, reverse=True)
+
+    # ONE ordering, for every capability: reasoning, then a larger context,
+    # then more expensive. Cost is last and it is a weak PROXY for capability,
+    # never a goal — it breaks ties the explicit signals leave open.
+    #
+    # There is no cheapest branch any more. The one that used to be here chose
+    # `gemma-4-e2b` for reranking at $0.0000002/token, and a two-billion-
+    # parameter model cannot judge relevance: 0.62 abstention against a bar of
+    # 0.80, saying "relevant" to three of eight questions this corpus cannot
+    # answer. Choosing by price selects on the axis least correlated with
+    # doing the job.
+    ok.sort(
+        key=lambda m: (
+            not m.supports_reasoning,
+            -(m.max_input_tokens or 0),
+            -m.blended_cost,
         )
-        ok.sort(key=lambda m: not m.is_priced)
-    else:
-        ok.sort(key=lambda m: (m.blended_cost, -(m.max_input_tokens or 0)))
+    )
     ok.sort(key=lambda m: not m.is_priced)
     return ok
 

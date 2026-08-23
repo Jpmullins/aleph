@@ -294,21 +294,40 @@ class TestListsButFailsOnInvocation:
         )
 
     async def test_the_unreachable_model_is_never_bound_by_default(self) -> None:
-        """It lists as a priced, tool-capable Sonnet — a plausible default."""
+        """A model that lists fine and 400s on invocation must not be bound.
+
+        The model probed out is whichever one the selector WOULD choose, read
+        from the blind pass rather than hardcoded. Naming a specific id here
+        made the test vacuous the moment the ordering changed: it named the
+        Sonnet, and when `tier` was removed the Sonnet stopped being anybody's
+        default, so probing changed nothing and the guard below — correctly —
+        fired. A fixture that only exercises the mechanism while a particular
+        model happens to sort first is not exercising the mechanism.
+        """
         fake = FakeGateway(GatewayConfig.well_behaved())
         async with fake.client() as http:
             models = await discover_models(
                 base_url=fake.base_url, api_key=fake.api_key, client=http
             )
         bound_blind = select_default_bindings(models)
-        bound_probed = select_default_bindings(
-            models, unreachable=frozenset({"bedrock-claude-sonnet-4-6"})
-        )
+        would_bind = bound_blind["synthesis"]["model"]
+
+        bound_probed = select_default_bindings(models, unreachable=frozenset({would_bind}))
         chosen = {b["model"] for b in bound_probed.values()}
-        assert "bedrock-claude-sonnet-4-6" not in chosen
+        assert would_bind not in chosen, f"{would_bind} failed its probe and was bound anyway"
         assert bound_blind != bound_probed, (
             "if probing changes nothing, the fixture cannot detect an unprobed binding"
         )
+
+        # And the one this gateway really does refuse on invocation is not
+        # bound either — the case `test_probe_returns_the_gateways_own_words`
+        # measures from the other end.
+        assert "bedrock-claude-sonnet-4-6" not in {
+            b["model"]
+            for b in select_default_bindings(
+                models, unreachable=frozenset({"bedrock-claude-sonnet-4-6"})
+            ).values()
+        }
 
 
 class TestEmbeddingMode:

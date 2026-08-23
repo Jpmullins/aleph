@@ -163,8 +163,8 @@ def test_the_parsers_report_nothing_rather_than_guessing_when_the_lists_are_gone
 def test_the_policy_parser_reads_enum_attribute_keys() -> None:
     source = """
 CAPABILITY_POLICIES: dict[Capability, CapabilityPolicy] = {
-    Capability.SYNTHESIS: CapabilityPolicy(mode="chat", tier="heavy"),
-    Capability.EMBEDDING: CapabilityPolicy(mode="embedding", tier="light"),
+    Capability.SYNTHESIS: CapabilityPolicy(mode="chat"),
+    Capability.EMBEDDING: CapabilityPolicy(mode="embedding"),
 }
 """
     members = {"SYNTHESIS": "synthesis", "EMBEDDING": "embedding", "RERANK": "rerank"}
