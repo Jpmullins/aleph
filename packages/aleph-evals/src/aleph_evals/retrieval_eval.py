@@ -348,34 +348,108 @@ def _zero_vector() -> list[float]:
 EMBED_BATCH = 64
 
 
+#: Wall-clock ceiling for the WHOLE embedding phase, across every batch and
+#: every retry.
+#:
+#: Measured 2026-08-22, and it is a regression I introduced. Adding a retry to
+#: `_embed_one_batch` without a total budget multiplied the worst case rather
+#: than bounding it: 4 attempts x a 600s per-request timeout is 40 minutes for
+#: ONE batch, and a 400-question set is seven of them. The run I was watching
+#: sat for 2h50m against an established gateway socket having burned 1.6
+#: SECONDS of CPU — indistinguishable, from the outside, from a slow eval.
+#:
+#: A measurement harness that can hang for hours is a harness nobody runs. It
+#: is better to fail at twenty minutes naming the batch than to keep a terminal
+#: open overnight.
+EMBED_DEADLINE_S = 1_200.0
+
+
 def _gateway_embed(model: str, texts: list[str]) -> list[list[float]]:
-    """Embed via the configured gateway, in batches.
+    """Embed via the configured gateway, in batches, under one wall-clock budget.
 
     Raises on any failure — the caller decides whether to degrade, so a broken
     embedder can never be mistaken for a legitimately lexical run.
     """
+    import time
+
     out: list[list[float]] = []
-    for start in range(0, len(texts), EMBED_BATCH):
+    started = time.monotonic()
+    batches = range(0, len(texts), EMBED_BATCH)
+    for n, start in enumerate(batches, 1):
+        spent = time.monotonic() - started
+        if spent > EMBED_DEADLINE_S:
+            msg = (
+                f"embedding gave up after {spent:.0f}s at batch {n} of {len(batches)} "
+                f"({len(out)} of {len(texts)} texts embedded). The budget is "
+                f"EMBED_DEADLINE_S={EMBED_DEADLINE_S:.0f}s. A partial corpus is not "
+                "reported as a result: recall over a set that was never fully indexed "
+                "is a number about the harness, not about retrieval."
+            )
+            raise RuntimeError(msg)
         out.extend(_embed_one_batch(model, texts[start : start + EMBED_BATCH]))
     return out
 
 
+#: Attempts per embedding batch, and the base of the backoff in seconds.
+#:
+#: A 400-question set is ~7 batches and a real corpus is hundreds. Measured
+#: 2026-08-22: the gateway resets the connection mid-batch often enough that a
+#: single-attempt run of the 400-question set failed twice in a row with
+#: `ConnectionResetError: [Errno 54]`, losing the whole measurement each time.
+#: Production embedding goes through `LiteLLMClient`, which retries with
+#: backoff; this path is raw `urllib` and had none, so the eval was strictly
+#: less robust than the thing it measures. That is backwards for a harness
+#: whose job is to produce a number nobody has to re-run by hand.
+EMBED_ATTEMPTS = 4
+EMBED_BACKOFF_S = 1.5
+EMBED_TIMEOUT_S = 120.0
+
+
 def _embed_one_batch(model: str, texts: list[str]) -> list[list[float]]:
     import json
+    import time
+    import urllib.error
     import urllib.request
 
     base = os.environ["LITELLM_BASE_URL"].rstrip("/")
-    req = urllib.request.Request(
-        f"{base}/v1/embeddings",
-        data=json.dumps({"model": model, "input": texts}).encode(),
-        headers={
-            "Authorization": f"Bearer {os.environ['INSIGHTS_LITELLM_API_KEY']}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=600) as resp:
-        body = json.loads(resp.read())
+    body: dict[str, Any] | None = None
+    for attempt in range(1, EMBED_ATTEMPTS + 1):
+        # Rebuilt per attempt: a Request carries its unread body, so retrying
+        # the same object sends an empty payload on the second try.
+        req = urllib.request.Request(
+            f"{base}/v1/embeddings",
+            data=json.dumps({"model": model, "input": texts}).encode(),
+            headers={
+                "Authorization": f"Bearer {os.environ['INSIGHTS_LITELLM_API_KEY']}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            # 120s, not 600s. Embedding 64 short texts takes seconds; a
+            # request still open after two minutes is not slow, it is
+            # stuck, and a 600s ceiling meant a single stuck batch looked
+            # like progress for ten minutes at a time.
+            with urllib.request.urlopen(req, timeout=EMBED_TIMEOUT_S) as resp:
+                body = json.loads(resp.read())
+            break
+        except (ConnectionResetError, TimeoutError, urllib.error.URLError) as exc:
+            # A 4xx is the operator's problem and retrying it just wastes the
+            # gateway's time; only transport faults and 5xx are worth another go.
+            status = getattr(exc, "code", None)
+            if status is not None and 400 <= status < 500:
+                raise
+            if attempt == EMBED_ATTEMPTS:
+                msg = (
+                    f"embedding batch failed {EMBED_ATTEMPTS}x against {base}: {exc!r}. "
+                    "The measurement is abandoned rather than completed with a gap — "
+                    "a partial corpus would report a recall number for a set that was "
+                    "never fully indexed."
+                )
+                raise RuntimeError(msg) from exc
+            time.sleep(EMBED_BACKOFF_S * attempt)
+    # The loop either breaks with a body or raises; this narrows the type.
+    assert body is not None
     vectors = [row["embedding"] for row in sorted(body["data"], key=lambda r: r["index"])]
     bad = next((len(v) for v in vectors if len(v) != EMBEDDING_DIM), None)
     if bad is not None:
