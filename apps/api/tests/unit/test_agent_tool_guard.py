@@ -110,11 +110,20 @@ def test_describe_tool_failure_survives_an_exception_with_no_message() -> None:
 
 
 async def test_every_registered_tool_is_wrapped() -> None:
-    """Enumerate the REAL orchestrator tools and make each one raise.
+    """Every tool the orchestrator carries survives raising, by NAME.
 
-    A test over a hand-written stub proves the middleware works. This proves it
-    is on the path the actual tools take — which is the half that silently stops
-    being true when someone adds a tool.
+    What this does and does not prove, because the docstring used to overstate
+    it. It drives `AlephAgentMiddleware` over a synthetic handler once per
+    entry in `_ORCHESTRATOR_TOOLS`, passing each tool's name — so it catches a
+    tool whose name the middleware mishandles, and it catches the list going
+    empty. It does NOT build a graph and does NOT prove the middleware is
+    mounted: removing `AlephAgentMiddleware` from `create_deep_agent` entirely
+    leaves this green (measured 2026-08-23).
+
+    The "is it actually wired" half belongs to `check-agent-middleware.sh`,
+    which AST-walks the `create_deep_agent(middleware=[...])` call and does go
+    red, and to `test_every_subagent_spec_really_carries_the_guard` below,
+    which asserts an INSTANCE on each built subagent spec.
     """
     from aleph_api.copilot_agent import _ORCHESTRATOR_TOOLS
 
