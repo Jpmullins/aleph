@@ -28,6 +28,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from aleph_api.agent_middleware import AlephAgentMiddleware
 from aleph_api.chat_runs import (
     RUN_ID_KEY,
+    SUBAGENT_MARKER,
+    SUBAGENT_MARKER_KEY,
+    SUBAGENT_NAME_KEY,
     TOOL_FAILED,
     TOOL_FINISHED,
     TOOL_STARTED,
@@ -60,16 +63,32 @@ class _Runtime:
 
 
 def _request(name: str, run_id: uuid.UUID, *, subagent: str | None = None) -> Any:
+    """A tool request shaped the way deepagents really shapes one.
+
+    `subagent` goes into `metadata["lc_agent_name"]` and sets the
+    `configurable` marker, because that is what a delegated run actually
+    carries — `create_sub_agent` passes `name=` to `create_agent`, langchain
+    stamps it into metadata, and deepagents adds only
+    `ls_agent_type: "subagent"` to configurable.
+
+    It used to write `configurable["subagent"] = subagent`, a key NOTHING in
+    production sets. So the test supplied the value it then asserted, and
+    `test_subagent_attribution` passed for years over a field that was
+    "orchestrator" on all 302 real runs. A fixture that injects the answer
+    cannot detect its absence.
+    """
     from langchain.agents.middleware.types import ToolCallRequest
 
     configurable: dict[str, Any] = {RUN_ID_KEY: str(run_id)}
+    config: dict[str, Any] = {"configurable": configurable}
     if subagent is not None:
-        configurable["subagent"] = subagent
+        configurable[SUBAGENT_MARKER_KEY] = SUBAGENT_MARKER
+        config["metadata"] = {SUBAGENT_NAME_KEY: subagent}
     return ToolCallRequest(
         tool_call={"name": name, "args": {"query": "rag"}, "id": f"c-{name}", "type": "tool_call"},
         tool=None,
         state={},
-        runtime=_Runtime({"configurable": configurable}),
+        runtime=_Runtime(config),
     )
 
 

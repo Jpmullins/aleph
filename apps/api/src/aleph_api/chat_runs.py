@@ -265,21 +265,63 @@ def run_id_from_config(config: object) -> UUID | None:
     return None
 
 
+#: Where deepagents actually puts the subagent's name.
+#:
+#: `metadata`, and this is the one place in this module where that is right.
+#: The run id travels in `configurable` and reading it from `metadata` is the
+#: mistake that kept `model_calls.agent_run_id` NULL — but the subagent NAME
+#: goes the other way. `create_sub_agent` builds each subagent with
+#: `create_agent(name=spec["name"])`, and langchain stamps that as
+#: `metadata["lc_agent_name"]`; the only thing deepagents adds to
+#: `configurable` when it delegates is `ls_agent_type: "subagent"`, which says
+#: THAT a subagent is running and not WHICH.
+#:
+#: Measured 2026-08-22 by driving a real delegation against a scripted gateway
+#: and printing what `get_config()` returns inside the subagent's own tool:
+#:
+#:   configurable: {"ls_agent_type": "subagent", "checkpoint_ns": "tools:…"}
+#:   metadata:     {"lc_agent_name": "digger", "langgraph_node": "tools"}
+#:   run_name:     None          tags: []
+#:
+#: `run_name` and `tags` — the two channels this function used to read — are
+#: empty on the real path. Every subagent event ever written was therefore
+#: attributed to "orchestrator": 302 assistant runs, 175 tool events, one
+#: distinct value. The Inspector's per-subagent view was showing a constant.
+SUBAGENT_NAME_KEY = "lc_agent_name"
+
+#: What deepagents puts in `configurable` to mark a delegated run.
+SUBAGENT_MARKER_KEY = "ls_agent_type"
+SUBAGENT_MARKER = "subagent"
+
+
 def subagent_from_config(config: object) -> str:
     """Which agent is running: a subagent's name, or "orchestrator".
 
-    deepagents names the subagent in the config's `run_name` / tags when it
-    delegates. Falling back to "orchestrator" rather than to empty means the
-    Inspector can always attribute work to *something*, and a distinct-count
-    assertion over this field is a real check rather than a count of nulls.
+    Falling back to "orchestrator" rather than to empty means the Inspector can
+    always attribute work to *something*, and a distinct-count assertion over
+    this field is a real check rather than a count of nulls — but that fallback
+    is also what let this go unnoticed, because "everything is the
+    orchestrator" is a perfectly plausible-looking answer.
     """
     if not isinstance(config, dict):
         return "orchestrator"
+
+    metadata = config.get("metadata")
+    if isinstance(metadata, dict):
+        named = metadata.get(SUBAGENT_NAME_KEY)
+        if isinstance(named, str) and named:
+            return named
+
+    # The explicit channel, kept because Aleph's own call sites may set it and
+    # because a caller that knows the name should not have to go through
+    # langchain's metadata to say so.
     configurable = config.get("configurable") or {}
-    for key in ("subagent", "subagent_name"):
-        value = configurable.get(key) if isinstance(configurable, dict) else None
-        if isinstance(value, str) and value:
-            return value
+    if isinstance(configurable, dict):
+        for key in ("subagent", "subagent_name"):
+            value = configurable.get(key)
+            if isinstance(value, str) and value:
+                return value
+
     name = config.get("run_name")
     if isinstance(name, str) and name:
         return name
@@ -288,6 +330,11 @@ def subagent_from_config(config: object) -> str:
         for tag in tags:
             if isinstance(tag, str) and tag.startswith("subagent:"):
                 return tag.split(":", 1)[1]
+
+    # Marked as a subagent but unnamed: say so rather than calling it the
+    # orchestrator, which is a different and wrong claim.
+    if isinstance(configurable, dict) and configurable.get(SUBAGENT_MARKER_KEY) == SUBAGENT_MARKER:
+        return "subagent"
     return "orchestrator"
 
 
