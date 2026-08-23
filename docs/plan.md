@@ -96,7 +96,7 @@ the notion of done.
 | 4 | The agent authors a skill in thread A; thread B sees it after an API restart | impossible — the skills backend is read-only |
 | 5 | `select count(*) from model_calls where pricing_source='unknown' or agent_run_id is null` = 0 | **80** (67 unpriced, 13 more with null run id) |
 | 6 | `select count(*) from agent_runs where status='running' and started_at < now() - interval '1 hour'` = 0 | **45** |
-| 7 | p95 first-token latency on `POST /copilotkit` under a stated ceiling, measured with the full middleware stack | **no number exists** |
+| 7 | p95 first-token latency on `POST /copilotkit` under a stated ceiling, measured with the full middleware stack | **MEASURED 2026-08-22, and the CEILING is what is missing now.** `ALEPH_ACCEPTANCE_DRIVE_AGENT=1 … agent_turn_probe.py --samples 10` against the live stack and a real gateway: **p50 1.41s, p95 2.62s, n=10, 0 failures**, `claude-opus-5`, and **1 upstream chat completion per turn, identical across all ten**. The probe says out loud that a p95 over 10 samples is the slowest sample and not a percentile — raise `--samples` before quoting it. There is still no stated ceiling, and inventing one to make this row green would be the defect this plan exists to catch: the number is now available for a person to set one against. Was: *no number exists.* |
 | 8 | Zero dead code by construction — the dead-code sweeps and the drift ratchet all exit 0, and `git ls-files apps/web/src \| wc -l` has gone **down** | 60 files, several unreachable |
 
 Number 7 deserves emphasis. This plan puts a per-request graph factory, an LLM
