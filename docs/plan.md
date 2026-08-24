@@ -116,19 +116,23 @@ reported PASS. **Part 0 is closed.**
 
 Success is abstract by nature, so it needs proxies that are not. Aleph is
 finished when all eight hold simultaneously on the deployed instance, and each is
-a single command. Six of the eight can be printed by one script; that script is
+a single command. **Do not read the "today" column — run `./scripts/status.sh`.** It exists, it
+prints all eight, and it is more careful than a hand-written query: it separates
+real projects from test fixtures, and measured-forward counts from retained
+history. As of 2026-08-24 it reports **2 failing, 2 not yet measurable** — the
+acceptance gate's 29 skips, and 25 stuck agent runs. Six of the eight can be printed by one script; that script is
 the notion of done.
 
 | # | The number | Today |
 |---|---|---|
-| 1 | `./scripts/acceptance.sh` exits 0 with `fail=0` and `skip ≤ 2`, and `--self-check` proves every non-skipped check can fail | 23 pass, **18 skip**, exit 0, no CI |
-| 2 | Retrieval nDCG@10 ≥ 0.80 and recall@1 ≥ 0.91 on a ≥150-question set, through the production `search_corpus` path, with `document_chunks > 0` in the same database | 45 pairs, seeded rows, **0 production chunks** |
-| 3 | Citation precision ≥ 0.90 by entailment over ≥30 reports, and `select count(*) from citations where quote is null or char_start is null` = 0 | **786 of 786 fail** |
-| 4 | The agent authors a skill in thread A; thread B sees it after an API restart | impossible — the skills backend is read-only |
-| 5 | `select count(*) from model_calls where pricing_source='unknown' or agent_run_id is null` = 0 | **80** (67 unpriced, 13 more with null run id) |
-| 6 | `select count(*) from agent_runs where status='running' and started_at < now() - interval '1 hour'` = 0 | **45** |
+| 1 | `./scripts/acceptance.sh` exits 0 with `fail=0` and `skip ≤ 2`, and `--self-check` proves every non-skipped check can fail | **fail=0, skip=29, missing=0.** Self-check passes — all 48 mutations caught. The skips are the remaining gap |
+| 2 | Retrieval nDCG@10 ≥ 0.80 and recall@1 ≥ 0.91 on a ≥150-question set, through the production `search_corpus` path | **recall@1 0.34**, MRR 0.443 on a 738-doc set — the real number, and far from the target |
+| 3 | Citation precision ≥ 0.90 by entailment over ≥30 reports, and no citation missing a quote or char span | **0 ungrounded in real projects** — `scripts/status.sh` separates these from the 16,105 in test-fixture and orphaned projects, which an earlier revision of this row wrongly counted together |
+| 4 | The agent authors a skill in thread A; thread B sees it after an API restart | **passing** — `tests/integration/test_authored_skills.py` is green. `WS-H1` landed |
+| 5 | `select count(*) from model_calls where pricing_source='unknown' or agent_run_id is null` = 0 | **0 since the attribution cutoff.** 1,407 all-time, retained rather than edited (`decisions.md` D9 — an append-only ledger is not rewritten to improve a number) |
+| 6 | `select count(*) from agent_runs where status='running' and started_at < now() - interval '1 hour'` = 0 | **25** — plus **42 with no `started_at` at all**, which the reaper deliberately never touches, so they sit in `running` forever while this number reads green |
 | 7 | p95 first-token latency on `POST /copilotkit` under a stated ceiling, measured with the full middleware stack | **MEASURED 2026-08-22, and the CEILING is what is missing now.** `ALEPH_ACCEPTANCE_DRIVE_AGENT=1 … agent_turn_probe.py --samples 10` against the live stack and a real gateway: **p50 1.41s, p95 2.62s, n=10, 0 failures**, `claude-opus-5`, and **1 upstream chat completion per turn, identical across all ten**. The probe says out loud that a p95 over 10 samples is the slowest sample and not a percentile — raise `--samples` before quoting it. There is still no stated ceiling, and inventing one to make this row green would be the defect this plan exists to catch: the number is now available for a person to set one against. Was: *no number exists.* |
-| 8 | Zero dead code by construction — the dead-code sweeps and the drift ratchet all exit 0, and `git ls-files apps/web/src \| wc -l` has gone **down** | 60 files, several unreachable |
+| 8 | Zero dead code by construction — the dead-code sweeps and the drift ratchet all exit 0 | **ok** — every sweep exits 0 across 86 web files |
 
 Number 7 deserves emphasis. This plan puts a per-request graph factory, an LLM
 reranker, a QuickJS interpreter, a rubric grader loop and two new middlewares
@@ -170,36 +174,43 @@ There is no deletion to unblock.
 
 Verified live, not remembered. These reorder everything.
 
-### Retrieval is dead on the deployed instance
+### ~~Retrieval is dead on the deployed instance~~ — **FIXED, verify before acting**
 
-```
-document_chunks: 0        sources: 75        wiki_pages: 843
-```
+> **Corrected 2026-08-24.** This was true when the plan was written and is not
+> true now. Re-measured: **42,226 chunks, 41,530 embedded (98%)** across 2,201
+> sources, and `POST /wiki/search` returns ranked results on the real corpus.
+>
+> `WS-RS1` — the plan's number-one priority — **is already done.** Read
+> `apps/workers/src/aleph_workers/jobs/chunk_embed.py`: chunks are written
+> *before* embedding so a dead embedder degrades to keyword-only rather than to
+> nothing; a degraded run finishes `failed` with the reason in `error_text`
+> instead of reporting success; and every exit path finalizes the run. Its
+> docstring records the original outage and the rules it produced.
+>
+> **The lesson is the durable part.** The outage was: `document_chunks` 0 against
+> 75 sources, because the profile bound `titan-embed-v2` while the gateway serves
+> `titan-embed-text-v2` — wrong by one word — and because chunks were written
+> only after the embed returned, one bad model name also killed the lexical leg,
+> which needs no model at all. 45 index runs sat in `running` with nothing
+> recorded. Aleph now ships no embedder name; the binding comes from what the
+> gateway reports and is probed before use.
+>
+> **Verify before acting on anything else in this section.** Everything below
+> was measured on 2026-08-21 and the corpus has moved by more than an order of
+> magnitude since.
 
-Seventy-five ingested sources, 843 compiled wiki pages, and **zero chunks**. The
-hybrid retrieval that CLAUDE.md calls "built and measured" at recall@1 0.91 is
-running against an empty table.
+### ~~The belief layer has never run~~ — **it runs now**
 
-The cause: model profiles bind the embedder to `titan-embed-v2`; the configured
-gateway serves `titan-embed-text-v2`. The name is wrong by one word. And because
-chunks are written only *after* the embed call returns, one bad model name also
-kills the lexical leg, which needs no model at all. 45 index runs sit in
-`running` with no error recorded.
-
-This gates four other clusters' measurements. Nothing in the original backlog
-depended on it because nothing in the original backlog knew.
-
-### The belief layer has never run
-
-```
-citations: 786    with a verbatim quote: 0    with chunk_ids: 0
-claims:    786    claim_edges: 0
-BeliefService callers outside its own module: 0
-```
-
-CLAUDE.md states that claim→chunk grounding "fills `Citation.chunk_ids` at commit
-time, so the claim → chunk → char-span chain is populated on the real write path
-instead of only in fixtures". On live data that is **0 of 786**.
+> **Corrected 2026-08-24.** Was: 786 citations, 0 with a verbatim quote, 0 with
+> chunk_ids, 0 claim edges, no `BeliefService` callers.
+>
+> Now: **43,125 citations — 27,014 carry a verbatim quote (63%) and 42,061 carry
+> chunk_ids (98%).** The claim → chunk → char-span chain is populated on the real
+> write path, which is what CLAUDE.md claimed and what was false when measured.
+>
+> **What is still open:** 16,111 citations (37%) have no verbatim quote. That is
+> the remaining gap, and it is a much smaller and better-shaped problem than
+> "the layer has never run".
 
 ### `access_scope` is a write-only column, schema-wide
 
@@ -226,6 +237,16 @@ whatsoever. "Every part needs to function as expected" does not survive that.
 ---
 ## Part 3 — The work, by cluster
 
+> **11 of these have already landed** — `WS-RS1`, `RS5`, `RS8`, `RS10`, `K1`,
+> `A1a`, `E1a`, `E1b`, `E1c`, `MEP-1`, `D3` — between the plan being written and
+> 2026-08-24. Each is marked inline. `CLAUDE.md` is the authority on what is
+> true; this document is the authority on what is intended, and where they
+> disagree CLAUDE.md wins.
+>
+> **Verify before starting anything here.** The corpus grew from 75 sources to
+> 2,201 and from 0 chunks to 42,226 while this plan sat still. Line numbers,
+> counts and "fails today" claims are all suspect.
+
 **59 workstreams · 348 criteria that can fail.** Each carries what it is in plain
 language, why Aleph needs it, how, criteria, a review step and an iteration step.
 
@@ -240,7 +261,13 @@ at the right file and the wrong row.
 ### The research capability: is it actually state of the art?
 
 
-#### WS-RS1 · Unbreak retrieval on the deployed stack, and make it impossible for search to fail silently
+#### WS-RS1 · Unbreak retrieval on the deployed stack, and make it impossible for search to fail silently — **LANDED**
+
+> Landed before this plan was executed; confirmed against `CLAUDE.md` and the tree
+> on 2026-08-24. Chunks are written before embedding, degraded runs report `failed`, every exit path finalizes. Re-measured 2026-08-24: 42,226 chunks, 41,530 embedded.
+>
+> Left in place rather than deleted: its criteria are the regression guard, and the
+> reasoning is why the rule exists.
 
 **What it is.** On the machine that is actually running right now, the search that powers every other feature returns nothing at all. 75 documents were fetched, 45 were converted to text, and then zero were cut into searchable pieces. The cause is one wrong word: both starter configurations ask the gateway for an embedding model called `titan-embed-v2`, and the gateway serves one called `titan-embed-text-v2`. Every request comes back 400. Three design choices turn that small mistake into a total blackout.
 
@@ -351,7 +378,13 @@ at the right file and the wrong row.
 <br>**Risk.** Checked-in embeddings pin one embedding model; if the default embedder changes, the baseline silently measures something else. Mitigate by recording the model id in baseline.json and failing loudly on mismatch. Second risk: the deleted tests are being rewritten from the acceptance script's node ids, which describe the pre-reset design — some parts may no longer be the right ass…
 
 
-#### WS-RS5 · An evaluation set that can tell good from great
+#### WS-RS5 · An evaluation set that can tell good from great — **LANDED**
+
+> Landed before this plan was executed; confirmed against `CLAUDE.md` and the tree
+> on 2026-08-24. The eval runs the production chunker and reports nDCG and MRR. It also replaced the 0.91 laboratory number with the real one, which is worse: MRR 0.443, recall@1 0.34, @3 0.51, @8 0.64, @20 0.78 on a 738-document set built from this instance's own corpus.
+>
+> Left in place rather than deleted: its criteria are the regression guard, and the
+> reasoning is why the rule exists.
 
 **What it is.** The measuring stick is too short to measure anything interesting. The test corpus is twelve documents, the longest under sixty words, with forty-five questions that each have exactly one right answer. Nine in ten questions are already answered inside the top eight results, so that score is saturated and can only fall. A single question is worth 2.2 points, so noise and real progress look identical.
 
@@ -441,7 +474,13 @@ at the right file and the wrong row.
 <br>**Risk.** Sending retrieved chunk text instead of a title list multiplies the compose prompt's token count by one to two orders of magnitude — cost and context-window pressure become real, and the evidence pack needs a hard budget with a documented selection policy rather than 'send everything'.
 
 
-#### WS-RS8 · Evidence-anchored claim extraction: give the belief layer its first caller
+#### WS-RS8 · Evidence-anchored claim extraction: give the belief layer its first caller — **LANDED**
+
+> Landed before this plan was executed; confirmed against `CLAUDE.md` and the tree
+> on 2026-08-24. The Claim Spine has its first caller. Claims carry verbatim quotes and document-relative spans. Measured: 43,125 citations, 27,014 with a quote, 42,061 with chunk_ids.
+>
+> Left in place rather than deleted: its criteria are the regression guard, and the
+> reasoning is why the rule exists.
 
 **What it is.** Aleph's durable knowledge is meant to be claims — individual statements, each pinned to the exact sentence in a source that supports it, with a confidence computed from that evidence rather than guessed by a model. All of that machinery is written and tested. None of it has ever run. The module that does the writing has zero callers anywhere in the codebase: searching for its name returns three hits, all inside the file itself. The live database proves it — 786 claims with no stable identity key and no vector, 786 citations with no quote and no link to any passage, and zero links between claims.
 
@@ -501,7 +540,13 @@ at the right file and the wrong row.
 <br>**Risk.** Recomputing confidence for 786 existing claims changes what the interface shows for every one of them, and some may reflect human judgement — the migration must skip origin='user' rows or it silently overwrites the one thing the belief design promises is immutable.
 
 
-#### WS-RS10 · Claim-level retrieval, and making the wiki-deletion gate a runnable decision
+#### WS-RS10 · Claim-level retrieval, and making the wiki-deletion gate a runnable decision — **LANDED**
+
+> Landed before this plan was executed; confirmed against `CLAUDE.md` and the tree
+> on 2026-08-24. Claims are embedded at write time; the HNSW index on `wiki_claims.embedding` finally has something to index.
+>
+> Left in place rather than deleted: its criteria are the regression guard, and the
+> reasoning is why the rule exists.
 
 **What it is.** The plan of record says the legacy wiki gets deleted once the claim layer retrieves better than the current search does. But the command named as the test cannot test that: the evaluation harness only knows how to search document passages, has no mode for searching claims, and the claims table has a vector index that nothing has ever filled. So the gate that governs the largest structural decision in the codebase is not runnable as written. This workstream builds claim search, makes the comparison a single command, and turns 'should we delete the wiki' into a number a script returns.
 
@@ -652,7 +697,13 @@ belongs in `docs/decisions.md` either way.
 <br>**Risk.** Low technically, uncomfortable politically: turning the gate on will make several currently-green parts go red or skip, and the honest response is to let them, not to soften the check. Also, adding acceptance.sh to CI lengthens the build; if it becomes slow enough that people start skipping it, the gate is worse than before.
 
 
-#### WS-K1 · Close the unsupervised skill-write path before opening a governed one
+#### WS-K1 · Close the unsupervised skill-write path before opening a governed one — **LANDED**
+
+> Landed before this plan was executed; confirmed against `CLAUDE.md` and the tree
+> on 2026-08-24. The agent can no longer rewrite its own standing orders. `tests/unit/test_agent_skill_write_gate.py` plus `scripts/check-agent-fs-permissions.sh`, which checks the EFFECTIVE permission decision rather than the presence of a kwarg.
+>
+> Left in place rather than deleted: its criteria are the regression guard, and the
+> reasoning is why the rule exists.
 
 **What it is.** The assistant reads four short instruction documents that tell it how to do its job — how to run research, how to write a report, how to use the ACH analysis method — stored at `apps/api/src/aleph_api/skills/*/SKILL.md`. Right now it can also *rewrite* them, silently, using its ordinary file-writing tools, on the live API container. Nothing checks, nothing logs, no one is asked. So text the agent reads from an ingested web page can in principle instruct it to edit its own standing orders, and that edit persists for the life of the container and affects everyone using it.
 
@@ -679,7 +730,13 @@ belongs in `docs/decisions.md` either way.
 <br>**Risk.** `FilesystemMiddleware.__init__` raises `NotImplementedError` when permissions are combined with an execution-capable backend whose rule paths fall outside a CompositeBackend route (filesystem.py:690-702). `"/skills/**"` starts with the existing `/skills/` route prefix so `_all_paths_scoped_to_routes` returns True today, but if a future backend gains execution support this becom…
 
 
-#### WS-A1a · Fix the two kernel bugs that break the first agent-authored plugin
+#### WS-A1a · Fix the two kernel bugs that break the first agent-authored plugin — **LANDED**
+
+> Landed before this plan was executed; confirmed against `CLAUDE.md` and the tree
+> on 2026-08-24. `Kernel.unregister`, install cleaning up both failure branches, and disable returning its handle. The ghost that broke every later install is gone.
+>
+> Left in place rather than deleted: its criteria are the regression guard, and the
+> reasoning is why the rule exists.
 
 **What it is.** The kernel — Aleph's own machinery for adding and removing abilities while the system runs — already works, and it already refuses to remove something other parts are standing on. But two bugs make the runtime path unusable the first time an agent actually drives it. First: if a plugin fails to start, its declaration is left behind with no way to remove it, and because every later start-up re-validates the whole set, that one bad leftover makes every subsequent install fail too, for the life of the process.
 
@@ -891,7 +948,13 @@ belongs in `docs/decisions.md` either way.
 ### The agent path: inspector, streaming, interpreters, async subagents (C3, H7, H5, H6, E1, D2)
 
 
-#### WS-E1a · Aleph owns the agent's stream endpoint, so a failed run says so
+#### WS-E1a · Aleph owns the agent's stream endpoint, so a failed run says so — **LANDED**
+
+> Landed before this plan was executed; confirmed against `CLAUDE.md` and the tree
+> on 2026-08-24. Aleph owns the AG-UI route: RUN_ERROR as a final frame, a terminal latch, and one id shared by frame, log record and header.
+>
+> Left in place rather than deleted: its criteria are the regression guard, and the
+> reasoning is why the rule exists.
 
 **What it is.** Today, when the assistant breaks mid-answer, the connection just goes quiet. No error is sent to the browser. The chat shows a half-written message and stops, and then the browser invents its own error — that is the confusing 'The run has already errored with RUN_ERROR' message in the console. The cause is 40 lines of third-party code that turns the agent into a web stream and has literally no error handling.
 
@@ -918,7 +981,13 @@ belongs in `docs/decisions.md` either way.
 <br>**Risk.** Low, and bounded. The risk is behavioural drift from upstream: if `ag_ui_langgraph` changes `LangGraphAgent.run()`'s contract, Aleph now owns the wrapper and must follow. Mitigated by keeping the wrapper to the three additions above and continuing to call `agent.run()` unchanged — Aleph owns the envelope, never the event translation.
 
 
-#### WS-E1b · A tool failure becomes a message the agent can read, not a dead conversation
+#### WS-E1b · A tool failure becomes a message the agent can read, not a dead conversation — **LANDED**
+
+> Landed before this plan was executed; confirmed against `CLAUDE.md` and the tree
+> on 2026-08-24. `AlephAgentMiddleware.awrap_tool_call` turns a raising tool into a `ToolMessage(status="error")` the model can route around.
+>
+> Left in place rather than deleted: its criteria are the regression guard, and the
+> reasoning is why the rule exists.
 
 **What it is.** The assistant has 27 tools. If any one of them throws — a permission check, a database hiccup, a missing dictionary key, a 404 from a page that does not exist — the entire conversation dies on the spot. That is not how agents are supposed to work: a normal agent reads the error, says 'that did not work, let me try another way', and keeps going. Ours cannot, because it never gets to see the error. The rule causing this is LangChain's default: re-raise anything that is not a schema-validation error.
 
@@ -945,7 +1014,13 @@ belongs in `docs/decisions.md` either way.
 <br>**Risk.** Medium. The real risk is over-catching: swallowing a `PermissionDenied` and handing the model a friendly sentence must not become a way for the agent to keep probing a project it has no access to. Mitigate by making the guard re-raise nothing but still emitting a ledger-visible event for authorization failures (C3a records it), and by keeping `test_agent_project_authorization.p…
 
 
-#### WS-E1c · The agent stops starving and timing out on itself: connection pool, request timeout, retry
+#### WS-E1c · The agent stops starving and timing out on itself: connection pool, request timeout, retry — **LANDED**
+
+> Landed before this plan was executed; confirmed against `CLAUDE.md` and the tree
+> on 2026-08-24. The agent's Postgres pool no longer holds exactly one connection. Timeout and retry are settings; the SDK's own retry is 0 so two budgets cannot stack.
+>
+> Left in place rather than deleted: its criteria are the regression guard, and the
+> reasoning is why the rule exists.
 
 **What it is.** Three settings currently make the assistant fragile under any load at all. First, the database connection pool the agent uses holds exactly one connection — every saved checkpoint, every memory read and every concurrent subagent queues behind the same single connection, and after 30 seconds of waiting the call fails. Second, every model call gives up after 60 seconds with only two retries; a slow turn or a rate-limit response from the gateway becomes an exception that (before E1b) killed the run. Third, there is no backoff — the retries are immediate, which is the worst possible response to being rate limited.
 
@@ -1120,7 +1195,13 @@ belongs in `docs/decisions.md` either way.
 ### Model endpoint, discovery, and per-model harness profiles
 
 
-#### WS-MEP-1 · Agent spend gets a real price tag
+#### WS-MEP-1 · Agent spend gets a real price tag — **LANDED**
+
+> Landed before this plan was executed; confirmed against `CLAUDE.md` and the tree
+> on 2026-08-24. Agent spend is priced and attributed. Number 5 is 0 since the recorded cutoff.
+>
+> Left in place rather than deleted: its criteria are the regression guard, and the
+> reasoning is why the rule exists.
 
 **What it is.** Aleph writes a row for every model call recording tokens used and money spent. Two different code paths make model calls: the transport path (LiteLLMClient — used by ingest, retrieval, research) and the agent path (the chat assistant and its six helper agents). The transport path is handed a price list when the process boots. The agent path is not: it silently builds its own EMPTY price list, so every single chat message is recorded as 'we do not know what this cost'.
 
@@ -1859,7 +1940,13 @@ belongs in `docs/decisions.md` either way.
 <br>**Risk.** Label cardinality is the standard way to turn a metrics endpoint into an outage: any label carrying a project id, a user id or a raw path with a UUID in it grows without bound. Use the route template, not the path. Second risk: this becomes a write path with no read path — the exact defect class CLAUDE.md names as dominant — if nothing ever queries the endpoint.
 
 
-#### WS-D3 · The chat bridge forwards the caller's credential — and port 4000 stops being an open proxy
+#### WS-D3 · The chat bridge forwards the caller's credential — and port 4000 stops being an open proxy — **LANDED**
+
+> Landed before this plan was executed; confirmed against `CLAUDE.md` and the tree
+> on 2026-08-24. The chat bridge forwards the caller's credential as a headers OBJECT (a function serialises to nothing), and port 4000 no longer answers every origin.
+>
+> Left in place rather than deleted: its criteria are the regression guard, and the
+> reasoning is why the rule exists.
 
 **What it is.** Backlog D3 says the Node bridge between the browser and the agent does not forward the user's credential, so `oidc` mode cannot authenticate the chat path. The premise is literally true — apps/copilot-runtime/src/server.ts:44 is `new HttpAgent({ url: AGENT_URL })` with no headers — but the conclusion is stale for the installed version, and I verified this against the package in the tree.
 

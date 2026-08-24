@@ -498,6 +498,27 @@ run_shell E4 "workspace package count does not grow unchecked" \
 # Claim Spine (part C) uses it, or the code gets deleted.
 run_expected_red_shell E5 "aleph-belief patch contract still has no consumer" \
   "n=\$(grep -rl 'aleph_belief' --include='*.py' apps packages 2>/dev/null | grep -v 'packages/aleph-belief' | wc -l); [ \"\$n\" -ge 1 ]"
+# P4a — browser chat, the one path no other check covers.
+#
+# `agent_turn_probe.py` (row H2) drives a chat turn over HTTP and gets 10/10
+# with a 1.41s first token, so the API path works. This is the BROWSER path,
+# and it is broken: `chat-streams-response.spec.ts` sends a message and no
+# `copilot-assistant-message` element ever appears — 120s timeout, reproducible,
+# and the captured page shows the assistant dock rendered with neither the
+# user's message nor a reply in it.
+#
+# Expected-red rather than excluded, because the copilot-runtime container
+# reports HEALTHY while this is broken: its healthcheck probes `/health`, the
+# one route that is not the product. A defect a health probe cannot see is
+# exactly what this file exists to keep visible, and this row goes PASS by
+# itself the day the chat works.
+if [ -n "${ALEPH_WEB_BASE_URL:-}" ] && part_selected P4a; then
+  run_expected_red_shell P4a "browser chat renders no assistant reply (API path is fine — see H2)" \
+    "pnpm -C tests/playwright exec playwright test specs/chat-streams-response.spec.ts --reporter=line 2>&1 | tail -3"
+elif [ -z "${ALEPH_WEB_BASE_URL:-}" ]; then
+  skip P4a "set ALEPH_WEB_BASE_URL / ALEPH_API_BASE_URL to drive the browser"
+fi
+
 # E1, E2 and E3 are GONE, not skipped.
 #
 # They asked when the wiki could be deleted. `docs/decisions.md` D1 (2026-08-21)

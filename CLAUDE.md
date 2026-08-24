@@ -46,7 +46,9 @@ which supersedes the old decision that the wiki was being deleted.
   `titan-embed-v2` and the gateway serves `titan-embed-text-v2`. Chunks were written only *after* the
   embed returned, so one wrong word also killed the lexical leg — which needs no model at all — and
   45 index jobs sat in `running` with no error recorded anywhere. Measured after the repair:
-  **3,451 chunks, all embedded, 0 normalized documents without chunks, 0 stuck runs.** Aleph now
+  **3,451 chunks, all embedded, 0 normalized documents without chunks, 0 stuck runs.**
+  Re-measured 2026-08-24 after further ingest: **42,226 chunks, 41,530 embedded (98%)** across
+  2,201 sources, and `POST /wiki/search` returns ranked results on the real corpus. Aleph now
   ships no embedder name; the binding is chosen by autoconfigure from what the gateway reports and
   probed before use. `WS-RS1`, landed.
   **The 0.91 laboratory number is gone, and the real one is worse.** `WS-RS5` landed: the eval now
@@ -366,6 +368,22 @@ These are genuine design commitments with no automated enforcement. Do not descr
 
 Verified against the tree as merged. Fix or delete; do not build on top of. Entries move to *Fixed*
 below only with a test that would have caught them.
+
+- **Browser chat renders no assistant reply, and the container says healthy.**
+  `tests/playwright/specs/chat-streams-response.spec.ts` sends a message and no
+  `copilot-assistant-message` element ever appears — 120s timeout, reproducible across
+  runs. The captured page shows the assistant dock rendered, with neither the user's
+  message nor a reply inside it. **The API path is fine**: acceptance row H2 drives ten
+  real chat turns over HTTP, 10/10 ok, first token p50 1.41s, one upstream completion
+  per turn. So this is the browser path specifically, which is the only path a user has.
+  Meanwhile `aleph-copilot-runtime` reports **healthy** the entire time, because its
+  healthcheck is `fetch('/health')` — the one route that is not the product; the bridge
+  answers 404 on `/api/copilotkit`, the route it advertises in its own startup log.
+  Carried as acceptance row **P4a**, expected-red, so it is visible and turns PASS by
+  itself when fixed. Not root-caused: the port and origin configuration are correct
+  (web on 5273, origins allow 5273, runtime published on 4100, and the served bundle
+  does resolve `VITE_COPILOT_RUNTIME_URL` to 4100), so the fault is inside the bridge
+  or the CopilotKit client rather than in the wiring.
 
 - **`normalize_job` is not idempotent, and the health number reads the wreckage as
   lost documents.** It builds `NormalizedDocument(...)` unconditionally
