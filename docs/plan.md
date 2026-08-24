@@ -11,6 +11,37 @@ reading are in Part 4.
 
 ---
 
+## How to read this document
+
+**"FAILS TODAY", "Today it returns N" and "Fails today on X" are DATED. They
+record the state on 2026-08-21, when the criterion was written — not the state
+now.** There are ~175 of them and most are false today: they are the evidence
+that the criterion was worth writing, and they are kept for that reason. Read
+them as *"this is what was broken and why this check exists"*, never as
+*"this is broken"*.
+
+**Where a marker has been checked and found false, the criterion says so
+inline** with the measured value and a date. Absence of such a note means
+nobody has re-measured it, not that the marker still holds.
+
+For the current state, in order of how much you should trust it:
+
+1. `./scripts/acceptance.sh` and `./scripts/status.sh` — run them, they take
+   minutes and they measure rather than assert.
+2. Audit reports, which grade every criterion by running its command. Four
+   passes so far; UNMET fell 121 → 54 → 38 → 13.
+3. This document's prose, which is the least current of the three and is
+   corrected as it is found wrong.
+
+**And a criterion is not evidence just because it is green.** Roughly twenty
+have been found that could not go red at all — a grep matching the sentence
+that documents the fix, a SQL predicate returning NULL against its own schema,
+a node id `pytest` exits 4 on, a test supplying the value it then asserts. When
+a check looks green, the useful question is not "does it pass" but "what would
+make it fail, and has anyone seen that happen".
+
+---
+
 ## Part 0 — Stop. The instrument is lying.
 
 Before any of the work below begins, one job: repair the gate. This is the completeness
@@ -600,7 +631,7 @@ belongs in `docs/decisions.md` either way.
 
 **Why.** CLAUDE.md's opening paragraph exists because the previous version of that file asserted invariants that were false in code, and that is stated as the single reason a broken retrieval path survived seven work packages. The same failure is now present in the document CLAUDE.md points at as the source of truth. Every other workstream in this plan adds criteria to `acceptance.sh`; if the gate can lie and does not run, none of those criteria are worth anything.
 
-**How.** Three parts, all small. (1) Correct `docs/acceptance.md` rows that overstate: A1 says "49 tests" and the suite is 142 passed / 1 skipped (I ran it: `./.venv/bin/python -m pytest packages/aleph-kernel/tests -q` → `142 passed, 1 skipped in 0.33s`); D2 and D3 get check text that matches what `test_skills.py` actually asserts, or get demoted from ✅ to the real state; D4 claims an integration test asserting "parent/child/budget rows" and `test_spawn_ledger.py` is thirteen pure in-memory unit tests with no database. (2) Add an `acceptance` job to `.github/workflows/ci.yml` running `./scripts/acceptance.sh` against the same Postgres+Redis services the existing `python-integration` job already declares (ci.yml:99-120), plus `--self-check` (which runs `scripts/_acceptance/self_check.sh` and proves the checks can go red).
+**How.** Three parts, all small. (1) Correct `docs/acceptance.md` rows that overstate: A1 says "49 tests" and the suite is 142 passed / 1 skipped — **both numbers are now history: the doc says 165 and the suite is 165 passed / 1 skipped, and `check-acceptance-claims.sh` COUNTS it since 2026-08-22, so the row can no longer drift silently** (I ran it: `./.venv/bin/python -m pytest packages/aleph-kernel/tests -q` → `142 passed, 1 skipped in 0.33s`); D2 and D3 get check text that matches what `test_skills.py` actually asserts, or get demoted from ✅ to the real state; D4 claims an integration test asserting "parent/child/budget rows" and `test_spawn_ledger.py` is thirteen pure in-memory unit tests with no database. (2) Add an `acceptance` job to `.github/workflows/ci.yml` running `./scripts/acceptance.sh` against the same Postgres+Redis services the existing `python-integration` job already declares (ci.yml:99-120), plus `--self-check` (which runs `scripts/_acceptance/self_check.sh` and proves the checks can go red).
 
 **Criteria:**
 
@@ -613,7 +644,7 @@ belongs in `docs/decisions.md` either way.
 - Every doc CLAUDE.md cites as authoritative exists
   <br>``for f in docs/architecture.md docs/acceptance.md docs/belief-engine.md docs/decisions.md docs/operations.md; do test -f $f || exit 1; done` exits 0. Fails today on `docs/decisions.md`.`
 - The kernel test count in the docs matches reality
-  <br>``uv run pytest packages/aleph-kernel/tests -q` tail line count matches the number quoted in `docs/acceptance.md` row A1. Today: doc says 49, actual is 142 passed / 1 skipped.`
+  <br>``uv run pytest packages/aleph-kernel/tests -q` tail line count matches the number quoted in `docs/acceptance.md` row A1. Today (2026-08-21): doc says 49, actual is 142 passed / 1 skipped.`
 
 **Review.** Mutation on the gate itself, which is the only honest way to check a gate. Break one real thing per check and confirm the corresponding row goes red: delete `blast_radius`'s call in `scripts/_acceptance/kernel_boot.py:75` and confirm A2 fails; rename a component in `catalog.json` without regenerating and confirm `check-catalog-generated.sh` fails;
 <br>**Iterate.** v2 makes a SKIP expensive rather than free: the gate records how many parts were skipped on `main` and fails the build if that number grows, so "unrunnable here" stops being a place features go to hide. v3 adds a per-check timestamp of the last time each check was observed to FAIL — a check nobody has ever seen fail is the thing CLAUDE.md warns about, and the gate should be able to name its own untested checks.
@@ -669,7 +700,7 @@ belongs in `docs/decisions.md` either way.
 - The agent surface is importable from the package root
   <br>``uv run python -c "from aleph_kernel import AgentPluginAPI, CapabilityView, InstallOutcome"` exits 0. FAILS TODAY.`
 - The suite grows and stays green under strict typing
-  <br>``uv run pytest packages/aleph-kernel/tests -q` reports ≥ 148 passed (today: 142 passed, 1 skipped) and `uv run pyright` reports 0 errors.`
+  <br>``uv run pytest packages/aleph-kernel/tests -q` reports ≥ 165 passed. **VERIFIED 2026-08-23: 165 passed, 1 skipped.** The original read '≥ 148 passed (today: 142)', written when the suite was 142 and `uv run pyright` reports 0 errors.`
 
 **Review.** Mutation, four passes, each restoring after. (a) Remove the `unregister` call from `install`'s except branch → criterion 1 red. (b) Return `plugin_id=None` from `disable` again → criterion 3 red. (c) Let `unregister` accept an ACTIVE capability → criterion 4's second test red. (d) Move the `protected` check below the `_mounted.pop` → criterion 4's first test red.
 <br>**Iterate.** v2 adds `Kernel.quarantine(plugin_id)`: a plugin that fails `check_health` twice moves to a FAILED-and-unregistered state with the reason retained, and `inspect()` reports it — so the agent can see its own graveyard instead of reinstalling the same broken thing in a loop.
@@ -781,7 +812,7 @@ belongs in `docs/decisions.md` either way.
 - The agent knows every input control exists
   <br>`A Node assertion over `apps/copilot-runtime/src/catalog.generated.ts` that its component set is a superset of `{TextField, CheckBox, ChoicePicker, Slider, DateTimeInput}`. Today the file parses to 19 components and the intersection with that set is empty — I measured it. FAILS TODAY.`
 - The agent-facing list and the renderable list do not disagree
-  <br>`A new `scripts/check-agent-catalog-covers-renderer.sh` asserting the renderable set minus the agent-facing set is empty. Today: 39 renderable versus 19 agent-facing, a gap of 20.`
+  <br>`A new `scripts/check-agent-catalog-covers-renderer.sh` asserting the renderable set minus the agent-facing set is empty. **VERIFIED 2026-08-23: 41 shown, 41 renderable, gap 0 — the sweep passes.** Was, on 2026-08-21: 39 renderable versus 19 agent-facing, a gap of 20.`
 - A generated settings surface validates
   <br>``uv run pytest packages/aleph-a2ui/tests/test_settings_card.py::test_every_emitted_component_is_in_the_catalog -q` — runs `settings_components` over a schema exercising every supported field type and calls `validate_component` on each result. FAILS TODAY: five component types are rejected.`
 - The save action has a registered handler
