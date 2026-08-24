@@ -2062,11 +2062,21 @@ def _gateway_chat_model(settings: Settings, *, purpose: str, capability: Any = N
     # no scope in force gets the boot settings, which is what it always got.
     endpoint = _active_endpoint(settings)
     base_url = endpoint.base_url
+    # `temperature` is passed ONLY when configured. Some models reject it
+    # outright — `claude-opus-4-7` via Bedrock 400s with "`temperature` is
+    # deprecated for this model" — and because that arrives inside the retry
+    # middleware it surfaced as `AgentModelUnavailable`, which names the model
+    # rather than the parameter. Aleph ships no model list and cannot know which
+    # models accept it, so the asymmetry decides: sending it can break a model,
+    # omitting it cannot. See `Settings.aleph_agent_temperature`.
+    optional: dict[str, Any] = {}
+    if settings.aleph_agent_temperature is not None:
+        optional["temperature"] = settings.aleph_agent_temperature
     return ChatOpenAI(
         model=model,
         base_url=base_url,
         api_key=endpoint.api_key,
-        temperature=0.2,
+        **optional,
         # The agent's traffic goes through the same metered door as everything
         # else. WS-MEP-2 built the limiter and left this seam unwired, so the
         # LARGEST source of concurrent gateway load was the one thing not
@@ -2702,16 +2712,33 @@ def build_assistant_deep_agent(
                 # Inert when the project has no rubric: no rubric file, no grader
                 # call, one model call, byte-identical answer.
                 *build_grading_middleware(settings=settings, backend_factory=_memory_backend),
-                CopilotKitMiddleware(),
                 # WS-H5: the QuickJS scratchpad, and the prompt that tells the model
-                # to cover a list rather than sample it. LAST, and that is load
-                # bearing twice over. Middleware earlier in the list is OUTER, so
-                # only the last entry sees the final `request.tools` — which is what
-                # the interpreter filters `PTC_ALLOWLIST` against, and an unmatched
-                # name exposes nothing rather than erroring. And being inside
-                # `AlephAgentMiddleware` (first, therefore outermost) is what turns a
-                # throwing `eval` into a ToolMessage instead of the end of the turn.
+                # to cover a list rather than sample it.
+                #
+                # It sits BEFORE `CopilotKitMiddleware`, and that ordering is a bug
+                # fix, not a preference. It used to be last — innermost — on the
+                # reasoning that only the last entry sees the final `request.tools`
+                # to filter `PTC_ALLOWLIST` against. But innermost also means it sees
+                # what CopilotKit merged in, and CopilotKit contributes FRONTEND
+                # tools as plain dicts (`copilotkit_lg_middleware.py`,
+                # `request.override(tools=merged_tools)`). `langchain_quickjs`'s
+                # `filter_tools_for_ptc` does `t.name` on every tool, so a dict
+                # raises `AttributeError: 'dict' object has no attribute 'name'` —
+                # before any allowlist matching happens. The old comment's claim that
+                # "an unmatched name exposes nothing rather than erroring" is true
+                # only for tools that HAVE a name.
+                #
+                # That killed every chat turn: the middleware retried three times and
+                # surfaced as `AgentModelUnavailable`, which names the model rather
+                # than the middleware that actually failed.
+                #
+                # Frontend tools must never be PTC-exposed anyway — they execute in
+                # the browser, not in QuickJS — so seeing them was never the point.
+                # Still inside `AlephAgentMiddleware` (first, therefore outermost),
+                # which is what turns a throwing `eval` into a ToolMessage rather
+                # than the end of the turn.
                 *build_interpreter_middleware(tools=list(_ORCHESTRATOR_TOOLS)),
+                CopilotKitMiddleware(),
             ],
             backend=_memory_backend,
             store=store,

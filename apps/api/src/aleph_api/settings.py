@@ -66,6 +66,19 @@ class Settings(BaseSettings):
     # Aleph runs single-user. The OIDC mode was removed — see
     # docs/decisions.md D6. Kept as a literal so an old .env that still
     # sets ALEPH_AUTH_MODE=local keeps working.
+    # Sampling temperature for the agent path, or None to OMIT the parameter.
+    #
+    # Omitting is the default because sending it is a HARD FAILURE on models that
+    # have deprecated it — `claude-opus-4-7` via Bedrock returns
+    # 400 "`temperature` is deprecated for this model", which surfaced as
+    # `AgentModelUnavailable` and killed every chat turn. Omitting it costs
+    # nothing: the model uses its own default.
+    #
+    # Aleph ships no model list, so it cannot know which models accept it. The
+    # asymmetry decides the default: sending it can break a model, omitting it
+    # cannot. Set ALEPH_AGENT_TEMPERATURE to opt back in.
+    aleph_agent_temperature: float | None = None
+
     aleph_auth_mode: Literal["local"] = "local"
 
     # Local-mode dev principal. Fixed identity that the auth middleware
