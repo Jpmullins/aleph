@@ -128,7 +128,7 @@ services:
       start_interval: 1s
 
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     <<: *managed
     command: ["redis-server", "--appendonly", "yes"]
     # Both networks: the queue is the one thing code-runner is allowed to see.
@@ -157,7 +157,7 @@ services:
   # CONSUMES them. The isolation is that agent tokens and privileged queues live
   # on the platform Redis, which code-runner cannot reach at all.
   runner-redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     <<: *managed
     command: ["redis-server", "--save", ""]
     networks: [aleph, runner]
@@ -438,7 +438,7 @@ services:
   # --- tracing (opt-in: --profile tracing) -----------------------------------
 
   clickhouse:
-    image: clickhouse/clickhouse-server:24.8-alpine
+    image: clickhouse/clickhouse-server:26.7-alpine
     profiles: [tracing]
     <<: *managed
     networks: [aleph]
@@ -577,7 +577,7 @@ services:
       start_interval: 3s
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.111.0
+    image: otel/opentelemetry-collector-contrib:0.159.0
     profiles: [tracing]
     <<: *managed
     networks: [aleph]
