@@ -172,11 +172,25 @@ def _settings_with_placeholders(cls: type) -> Any:
 def test_interpreter_tool_is_registered(production_kwargs: dict[str, Any]) -> None:
     """The interpreter is on the graph the assistant actually runs, and last.
 
-    Two assertions because they fail differently. Ordering: middleware earlier
-    in the list is OUTER, so the last entry is the one that sees the request the
-    model will receive — and `request.tools` is what the interpreter filters the
-    PTC allowlist against. Placed ahead of `CopilotKitMiddleware` it would
-    install bridges for a toolset that later middleware then changes.
+    Two assertions because they fail differently.
+
+    ORDERING — and this assertion was INVERTED on 2026-08-24. It used to require
+    the interpreter LAST, reasoning that the last entry sees the request the
+    model will receive and `request.tools` is what the PTC allowlist is filtered
+    against. That reasoning is sound and the conclusion was still wrong: last
+    also means innermost, so the interpreter saw what `CopilotKitMiddleware`
+    merged in — and CopilotKit contributes FRONTEND tools as plain dicts.
+    `langchain_quickjs`'s `filter_tools_for_ptc` does `t.name` on every tool, so
+    a dict raised `AttributeError: 'dict' object has no attribute 'name'` before
+    any allowlist matching happened, and every chat turn died with
+    `AgentModelUnavailable` after three retries.
+
+    Frontend tools must never be PTC-exposed — they execute in the browser, not
+    in QuickJS — so seeing them was never the point. The interpreter must sit
+    BEFORE `CopilotKitMiddleware` and AFTER `AlephAgentMiddleware`: the first
+    keeps dicts out of the PTC filter, the second keeps a throwing `eval` from
+    ending the turn.
+
     Registration: the middleware contributes its `eval` tool to the compiled
     tool node, and that is what "the agent has a scratchpad" means.
     """
@@ -199,9 +213,21 @@ def test_interpreter_tool_is_registered(production_kwargs: dict[str, Any]) -> No
         (i for i, m in enumerate(middleware) if isinstance(m, CopilotKitMiddleware)), None
     )
     assert copilotkit_at is not None, f"CopilotKitMiddleware disappeared from {kinds}"
-    assert copilotkit_at < interpreter_at, (
-        f"middleware order is {kinds}; the interpreter must come last so it filters "
-        "the final tool list"
+    assert interpreter_at < copilotkit_at, (
+        f"middleware order is {kinds}; the interpreter must come BEFORE "
+        "CopilotKitMiddleware. After it, the PTC filter sees CopilotKit's "
+        "frontend tools — which are plain dicts — and dies on `t.name` before "
+        "matching anything, killing every chat turn."
+    )
+    aleph_at = next(
+        (i for i, m in enumerate(middleware) if type(m).__name__ == "AlephAgentMiddleware"),
+        None,
+    )
+    assert aleph_at is not None, f"AlephAgentMiddleware disappeared from {kinds}"
+    assert aleph_at < interpreter_at, (
+        f"middleware order is {kinds}; the interpreter must sit INSIDE "
+        "AlephAgentMiddleware, which is what turns a throwing `eval` into a "
+        "ToolMessage rather than the end of the turn."
     )
 
     # Compile the graph from the production kwargs and read the tool node.

@@ -2063,15 +2063,20 @@ def _gateway_chat_model(settings: Settings, *, purpose: str, capability: Any = N
     endpoint = _active_endpoint(settings)
     base_url = endpoint.base_url
     # `temperature` is passed ONLY when configured. Some models reject it
-    # outright — `claude-opus-4-7` via Bedrock 400s with "`temperature` is
-    # deprecated for this model" — and because that arrives inside the retry
+    # outright — one Bedrock-served Anthropic model 400s with "`temperature`
+    # is deprecated for this model" — and because that arrives inside the retry
     # middleware it surfaced as `AgentModelUnavailable`, which names the model
     # rather than the parameter. Aleph ships no model list and cannot know which
     # models accept it, so the asymmetry decides: sending it can break a model,
     # omitting it cannot. See `Settings.aleph_agent_temperature`.
+    # `getattr` rather than attribute access: several tests build Settings as a
+    # SimpleNamespace carrying only the fields they exercise, and an optional
+    # knob should not force every one of them to be updated. Absent behaves the
+    # same as unset — omit the parameter.
     optional: dict[str, Any] = {}
-    if settings.aleph_agent_temperature is not None:
-        optional["temperature"] = settings.aleph_agent_temperature
+    temperature = getattr(settings, "aleph_agent_temperature", None)
+    if temperature is not None:
+        optional["temperature"] = temperature
     return ChatOpenAI(
         model=model,
         base_url=base_url,
