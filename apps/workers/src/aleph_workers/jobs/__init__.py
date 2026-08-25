@@ -7,6 +7,7 @@ from aleph_workers.jobs.bootstrap import bootstrap_project_job
 from aleph_workers.jobs.builder import builder_job
 from aleph_workers.jobs.chunk_embed import chunk_embed_job
 from aleph_workers.jobs.curate import curate_page_job
+from aleph_workers.jobs.delegation import delegated_subagent_job
 from aleph_workers.jobs.normalize import normalize_job
 from aleph_workers.jobs.reembed import reembed_job
 from aleph_workers.jobs.render_code import render_code_artifact_job
@@ -28,6 +29,7 @@ __all__ = [
     "chunk_embed_job",
     "curate_page_job",
     "deep_research_job",
+    "delegated_subagent_job",
     "editorial_review_job",
     "mechanical_review_job",
     "normalize_job",
