@@ -493,27 +493,41 @@ fi
 # either direction.
 run_shell E4 "workspace package count does not grow unchecked" \
   "n=\$(git ls-files 'packages/*/pyproject.toml' | wc -l | tr -d ' '); echo \"\$n packages\"; [ \"\$n\" -le 21 ]"
-# Deliberately red: the patch contract shipped before its consumer, which is
-# the exact defect class this refactor exists to remove. It goes green when the
-# Claim Spine (part C) uses it, or the code gets deleted.
-run_expected_red_shell E5 "aleph-belief patch contract still has no consumer" \
+# WAS deliberately red: the patch contract shipped before its consumer, which is
+# the exact defect class this refactor exists to remove. It is GREEN as of
+# 2026-08-24 — four consumers outside the package (aleph_hypotheses.confidence,
+# aleph_wiki.belief_service, aleph_wiki.claim_search, and a wiki test).
+#
+# Promoted from run_expected_red_shell to run_shell, which is the part that
+# matters: an expected-red row that regresses records RED, and RED does not
+# fail the gate. Leaving a FIXED defect on the red path means the gate prints
+# "nothing regressed" the day it regresses.
+run_shell E5 "the aleph-belief patch contract has a consumer" \
   "n=\$(grep -rl 'aleph_belief' --include='*.py' apps packages 2>/dev/null | grep -v 'packages/aleph-belief' | wc -l); [ \"\$n\" -ge 1 ]"
 # P4a — browser chat, the one path no other check covers.
 #
-# `agent_turn_probe.py` (row H2) drives a chat turn over HTTP and gets 10/10
-# with a 1.41s first token, so the API path works. This is the BROWSER path,
-# and it is broken: `chat-streams-response.spec.ts` sends a message and no
-# `copilot-assistant-message` element ever appears — 120s timeout, reproducible,
-# and the captured page shows the assistant dock rendered with neither the
-# user's message nor a reply in it.
+# `agent_turn_probe.py` (row H2) drives a chat turn over HTTP, so it proves the
+# API path. This is the BROWSER path: browser -> copilot-runtime bridge ->
+# AG-UI endpoint -> agent -> gateway, which no unit test stands in for.
 #
-# Expected-red rather than excluded, because the copilot-runtime container
-# reports HEALTHY while this is broken: its healthcheck probes `/health`, the
-# one route that is not the product. A defect a health probe cannot see is
-# exactly what this file exists to keep visible, and this row goes PASS by
-# itself the day the chat works.
+# It was expected-red and it is GREEN as of 2026-08-24, 4 runs, ~1.2s. The
+# repair was three separate faults, none of which was in the wiring everyone
+# looked at: the interpreter middleware sat AFTER CopilotKitMiddleware and so
+# saw CopilotKit's frontend tools as plain dicts and called `.name` on them;
+# CORS sat inside ErrorMiddleware so every 500 reached the browser with no
+# Access-Control-Allow-Origin; and the provider forwarded no credential.
+#
+# It is a run_shell now, not expected-red, so a regression FAILS. The reason
+# this row exists at all still holds: copilot-runtime reported HEALTHY through
+# the entire outage, because its healthcheck probes `/health` — the one route
+# that is not the product. A green container is not a working product, and this
+# row is the difference.
+#
+# Mutation-tested rather than assumed (stop copilot-runtime -> the spec fails;
+# start it -> it passes), because a 1.2s pass on a path that used to take a
+# 120s timeout is exactly the shape of a check that stopped checking.
 if [ -n "${ALEPH_WEB_BASE_URL:-}" ] && part_selected P4a; then
-  run_expected_red_shell P4a "browser chat renders no assistant reply (API path is fine — see H2)" \
+  run_shell P4a "browser chat streams back a non-empty assistant reply" \
     "pnpm -C tests/playwright exec playwright test specs/chat-streams-response.spec.ts --reporter=line 2>&1 | tail -3"
 elif [ -z "${ALEPH_WEB_BASE_URL:-}" ]; then
   skip P4a "set ALEPH_WEB_BASE_URL / ALEPH_API_BASE_URL to drive the browser"
@@ -562,7 +576,11 @@ fi
 # self-check. A sweep with no consumer is the defect class CLAUDE.md names as
 # dominant, and it is worse in a sweep than in product code: the sweep is what
 # was supposed to catch that class.
-run_expected_red_shell F6 "4 of 6 Dockerfiles still run as root" \
+#
+# GREEN as of 2026-08-24 (all 6 built images declare a non-root USER, 15
+# services pass every section), so it is a run_shell now and a regression is a
+# FAILURE rather than a logged known-defect. See the E5 note above.
+run_shell F6 "every built image declares a non-root USER" \
   "./scripts/check-compose-hardening.sh"
 # F4 checks where the port is published and whether the origin list is shared.
 # F5 BOOTS the bridge and checks what it does on the wire — a source grep for

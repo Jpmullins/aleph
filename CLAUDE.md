@@ -369,22 +369,6 @@ These are genuine design commitments with no automated enforcement. Do not descr
 Verified against the tree as merged. Fix or delete; do not build on top of. Entries move to *Fixed*
 below only with a test that would have caught them.
 
-- **Browser chat renders no assistant reply, and the container says healthy.**
-  `tests/playwright/specs/chat-streams-response.spec.ts` sends a message and no
-  `copilot-assistant-message` element ever appears — 120s timeout, reproducible across
-  runs. The captured page shows the assistant dock rendered, with neither the user's
-  message nor a reply inside it. **The API path is fine**: acceptance row H2 drives ten
-  real chat turns over HTTP, 10/10 ok, first token p50 1.41s, one upstream completion
-  per turn. So this is the browser path specifically, which is the only path a user has.
-  Meanwhile `aleph-copilot-runtime` reports **healthy** the entire time, because its
-  healthcheck is `fetch('/health')` — the one route that is not the product; the bridge
-  answers 404 on `/api/copilotkit`, the route it advertises in its own startup log.
-  Carried as acceptance row **P4a**, expected-red, so it is visible and turns PASS by
-  itself when fixed. Not root-caused: the port and origin configuration are correct
-  (web on 5273, origins allow 5273, runtime published on 4100, and the served bundle
-  does resolve `VITE_COPILOT_RUNTIME_URL` to 4100), so the fault is inside the bridge
-  or the CopilotKit client rather than in the wiring.
-
 - **`normalize_job` is not idempotent, and the health number reads the wreckage as
   lost documents.** It builds `NormalizedDocument(...)` unconditionally
   (`jobs/normalize.py:168`) — no upsert, no uniqueness on `source_version_id` — so
@@ -410,6 +394,30 @@ below only with a test that would have caught them.
   reporting no failures. `scripts/acceptance.sh` — which counts skips separately and can verify its
   own checks fail (`--self-check`) — is the gate to trust.
 ### Fixed, with the test that pins each
+
+**2026-08-24 (the browser path, and three fixed defects that had stopped being guarded)**
+
+- **Browser chat renders an assistant reply.** The only path a user actually has was dead — the
+  spec timed out at 120s with the assistant dock rendered and neither the user's message nor a
+  reply inside it, while `aleph-copilot-runtime` reported **healthy** throughout, because its
+  healthcheck probes `/health`, the one route that is not the product. Three independent faults,
+  none of them in the port/origin wiring that was inspected repeatedly and was correct the whole
+  time: the interpreter middleware sat AFTER `CopilotKitMiddleware`, so it saw CopilotKit's
+  frontend tools as plain dicts and `filter_tools_for_ptc` called `.name` on them; CORS sat inside
+  `ErrorMiddleware`, so every 500 reached the browser with no `Access-Control-Allow-Origin` and
+  presented as a network error rather than the 500 it was; and `CopilotKitProvider` was mounted
+  with no `headers`, so there was no credential to forward. Green at ~1.2s, 4 runs.
+  → acceptance **P4a**, now a hard-fail row.
+- **Three FIXED defects were still on the expected-red path, where a regression does not fail the
+  gate.** `run_expected_red_shell` records RED, and RED is reported as "known defects under test"
+  rather than as a failure — correct while the defect stands, and silent cover the moment it is
+  fixed. E5 (the belief patch contract now has four consumers), F6 (6 of 6 images run non-root),
+  and P4a were all green and all unguarded. Promoted to `run_shell`. The gap is structural, not a
+  one-off: fixing an expected-red row and leaving it expected-red is the default outcome, since
+  the row goes green on its own and nothing prompts the change.
+- **P4a was mutation-tested, not assumed.** A 1.2s pass on a path that used to take a 120s timeout
+  is the shape of a check that stopped checking. Stopping `copilot-runtime` fails the spec and
+  starting it passes, so the check is measuring the bridge rather than a cached page.
 
 **2026-08-22, later (batch 8 — the gate stopped over-reporting, and PDFs stopped being flat)**
 
