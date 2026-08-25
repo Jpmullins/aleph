@@ -392,7 +392,9 @@ def _project_id_from_thread_id(thread_id: object) -> UUID | None:
     return None
 
 
-async def _authorized(project_id: UUID | None) -> UUID | None:
+async def _authorized(
+    project_id: UUID | None, *, at_least: ProjectRole = ProjectRole.VIEWER
+) -> UUID | None:
     """Return ``project_id`` only if the request's principal may act on it.
 
     Fails closed: an unbound principal raises rather than being treated as
@@ -426,7 +428,13 @@ async def _authorized(project_id: UUID | None) -> UUID | None:
         # cached None into the denial.
         principal.cache_role(project_id, member.role if member is not None else None)
 
-    require_project_access(project_id, at_least=ProjectRole.VIEWER)
+    # `at_least` defaults to VIEWER because most tools read. It is a PARAMETER
+    # because two of them do not: `author_plugin` stores agent-written code that
+    # the process will execute, and `disable_plugin` can remove capability other
+    # things stand on. Their HTTP equivalents require OWNER
+    # (routes/plugins.py), and an agent tool that is more permissive than the
+    # route it mirrors moves the check rather than making it.
+    require_project_access(project_id, at_least=at_least)
     return project_id
 
 
@@ -2238,7 +2246,9 @@ async def author_plugin(
     The plugin is recorded in the database, so it is still there after a restart
     and the background workers can load it too.
     """
-    project_id = await _authorized(await _project_id_from_config(config))
+    project_id = await _authorized(
+        await _project_id_from_config(config), at_least=ProjectRole.OWNER
+    )
     if project_id is None:
         return "No project in scope; cannot install a plugin."
 
@@ -2283,7 +2293,9 @@ async def disable_plugin(plugin_id: str, config: RunnableConfig, force: bool = F
     there; it can never reach core capability, because core capability has no
     id to pass here.
     """
-    project_id = await _authorized(await _project_id_from_config(config))
+    project_id = await _authorized(
+        await _project_id_from_config(config), at_least=ProjectRole.OWNER
+    )
     if project_id is None:
         return "No project in scope."
 

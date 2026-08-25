@@ -425,6 +425,16 @@ below only with a test that would have caught them.
 
 **2026-08-24, later (the AST gate admitted almost everything it exists to refuse)**
 
+- **The agent's door to `author_plugin` was the permissive one.** Both HTTP routes require OWNER;
+  both agent tools gated through `_authorized`, which hardcoded VIEWER — so the same two operations
+  answered differently depending on which door they came through, and the model used the open one.
+  `_authorized` takes `at_least` now, defaulting to VIEWER because most tools read. Not currently
+  exploitable (single user, every membership is `owner`), and it was one half of the
+  injection-to-RCE path above, which is why it is fixed rather than filed. The existing pinning test
+  read only `routes/plugins.py`, so the tool path was invisible to it — the gap was not that either
+  check was wrong, it was that nothing compared them.
+  → `apps/api/tests/unit/test_plugin_tool_authorization.py`.
+
 - **CRITICAL, and reproduced through the real HTTP route: agent-authored code executed at install
   time inside the API process.** `check_source` walked `tree.body` and `continue`d past
   `FunctionDef`, `AsyncFunctionDef` and `ClassDef` without looking inside them. That is right for a
