@@ -182,3 +182,129 @@ def test_a_top_level_assignment_into_something_that_exists_is_refused() -> None:
     # gate that refused these would be refusing ordinary typed modules, and the
     # pair is what shows the rule is about the target rather than the value.
     assert is_definition_only("import json\nX = 1\nY = None\n")
+
+
+class TestDefinitionTimeExecution:
+    """The gate admitted every import-time side effect except the one shape its
+    own test used.
+
+    `check_source` walked `tree.body` and `continue`d past FunctionDef,
+    AsyncFunctionDef and ClassDef without looking inside them. That is correct
+    for a function BODY — it runs when called, which is the whole basis of the
+    gate — and wrong for everything else about a definition: decorators are
+    applied, defaults are evaluated, bases are resolved, and a class body is
+    executed statement by statement, all at import time.
+
+    Verified live through the real HTTP route before the fix: POST
+    /v1/projects/{id}/plugins with a class body calling `os.makedirs` returned
+    201, and the directory existed inside the API container. That falsifies the
+    module docstring's "loading is not running" and CLAUDE.md's "source with an
+    import-time side effect leaves no row".
+
+    Each case below is a DIFFERENT execution mechanism, not a restatement:
+    class-body statement, positional default, keyword-only default, decorator
+    argument, base-class expression, metaclass keyword. A single fix that
+    happened to cover one of them would leave the others admitted, which is
+    exactly how the gate reached this state.
+    """
+
+    def test_a_class_body_statement_is_checked(self) -> None:
+        src = "import os\nclass C:\n    m = os.makedirs('/tmp/x', exist_ok=True)\n"
+        assert check_source(src), "a class body executes when the class is created"
+
+    def test_a_nested_class_body_is_checked(self) -> None:
+        src = "import os\nclass A:\n    class B:\n        m = os.makedirs('/tmp/x')\n"
+        assert check_source(src), "recursion has to reach all the way down"
+
+    def test_control_flow_in_a_class_body_is_checked(self) -> None:
+        src = "class C:\n    for i in range(3):\n        pass\n"
+        assert check_source(src)
+
+    def test_a_forbidden_import_inside_a_class_body_is_caught(self) -> None:
+        """Otherwise `_FORBIDDEN_IMPORTS` is cosmetic: indent it and it is gone."""
+        assert check_source("class C:\n    import subprocess\n")
+
+    def test_a_positional_default_is_checked(self) -> None:
+        src = "import os\ndef f(x=os.makedirs('/tmp/x')):\n    pass\n"
+        assert check_source(src), "defaults are evaluated once, at def time"
+
+    def test_a_keyword_only_default_is_checked(self) -> None:
+        src = "import os\ndef f(*, x=os.makedirs('/tmp/x')):\n    pass\n"
+        assert check_source(src), "kw_defaults is a separate list from defaults"
+
+    def test_an_async_default_is_checked(self) -> None:
+        src = "import os\nasync def f(x=os.makedirs('/tmp/x')):\n    pass\n"
+        assert check_source(src)
+
+    def test_a_decorator_argument_is_checked(self) -> None:
+        src = (
+            "import os\n"
+            "def d(*a, **k):\n"
+            "    return lambda f: f\n"
+            "@d(os.makedirs('/tmp/x'))\n"
+            "def g():\n"
+            "    pass\n"
+        )
+        assert check_source(src), "a decorator's arguments are evaluated at def time"
+
+    def test_a_base_class_expression_is_checked(self) -> None:
+        src = "def b():\n    return object\nclass C(b()):\n    pass\n"
+        assert check_source(src), "bases are resolved when the class is created"
+
+    def test_a_class_keyword_is_checked(self) -> None:
+        src = "import os\nclass C(metaclass=type(os.makedirs('/tmp/x'))):\n    pass\n"
+        assert check_source(src)
+
+
+class TestOrdinaryCodeStillLoads:
+    """The other half. A gate that refuses everything is not a stricter gate,
+    it is an unusable one — and the pressure to widen it again would land on
+    whichever case someone hit first, not on the one that matters.
+
+    These are the idioms the old comment named as the reason for skipping
+    definitions wholesale. They still pass, which is what makes the narrower
+    rule an improvement rather than a trade.
+    """
+
+    def test_a_bare_decorator_is_fine(self) -> None:
+        src = "from dataclasses import dataclass\n\n\n@dataclass\nclass C:\n    x: int = 0\n"
+        assert not check_source(src)
+
+    def test_a_decorator_call_with_constant_arguments_is_fine(self) -> None:
+        """`@lru_cache(maxsize=128)` builds a wrapper; 128 does nothing."""
+        src = "from functools import lru_cache\n\n\n@lru_cache(maxsize=128)\ndef f():\n    return 1\n"
+        assert not check_source(src)
+
+    def test_field_default_factory_is_fine(self) -> None:
+        src = (
+            "from dataclasses import dataclass, field\n\n\n"
+            "@dataclass\nclass C:\n    y: list[int] = field(default_factory=list)\n"
+        )
+        assert not check_source(src)
+
+    def test_a_class_with_constants_and_methods_is_fine(self) -> None:
+        src = "class C:\n    '''doc.'''\n\n    NAME = 'c'\n\n    def m(self):\n        return 1\n"
+        assert not check_source(src)
+
+    def test_protocol_and_metaclass_by_name_are_fine(self) -> None:
+        src = (
+            "from abc import ABCMeta\nfrom typing import Protocol\n\n\n"
+            "class P(Protocol):\n    pass\n\n\nclass Q(metaclass=ABCMeta):\n    pass\n"
+        )
+        assert not check_source(src)
+
+    def test_an_enum_is_fine(self) -> None:
+        src = "from enum import StrEnum, auto\n\n\nclass E(StrEnum):\n    A = auto()\n"
+        assert not check_source(src)
+
+    def test_literal_and_allowed_call_defaults_are_fine(self) -> None:
+        assert not check_source("def f(a=1, b=(), c=dict(), *, d=frozenset()):\n    return a\n")
+
+    def test_a_function_body_is_still_not_walked(self) -> None:
+        """The premise of the whole gate: a body runs when called, not on import."""
+        src = "import os\n\n\ndef f():\n    os.makedirs('/tmp/x')\n    return 1\n"
+        assert not check_source(src)
+
+    def test_a_method_body_is_still_not_walked(self) -> None:
+        src = "import os\n\n\nclass C:\n    def m(self):\n        os.makedirs('/tmp/x')\n"
+        assert not check_source(src)

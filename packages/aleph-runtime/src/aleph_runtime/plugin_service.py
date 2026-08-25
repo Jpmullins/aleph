@@ -34,6 +34,7 @@ from aleph_core.errors import ValidationFailed
 from aleph_core.ids import uuid7
 from aleph_db.models.plugin import Plugin
 from aleph_kernel.skills import (
+    SkillRejected,
     skill_capability,
     skill_capability_name,
     skill_from_source,
@@ -165,7 +166,27 @@ class PluginService:
         payload nobody checked, sitting in the database, waiting for the next
         boot to execute it.
         """
-        skill = skill_from_source(draft.name, draft.instructions, draft.code)
+        try:
+            skill = skill_from_source(draft.name, draft.instructions, draft.code)
+        except SkillRejected as exc:
+            # A refusal is an answer, not a crash. `SkillRejected` had no HTTP
+            # mapping, so the one route the product's central loop depends on
+            # answered 500 "An unexpected error occurred" — and an agent that
+            # authors a plugin for itself then cannot tell "your code was
+            # refused, here is which line" from "the server is broken". It
+            # cannot fix what it cannot read, so it retries the same source.
+            #
+            # Every violation is carried, not just the first, because the gate
+            # already computes them all for exactly this reason.
+            raise ValidationFailed(
+                str(exc),
+                detail={
+                    "plugin": exc.skill,
+                    "violations": [
+                        {"line": v.line, "reason": v.reason} for v in exc.violations
+                    ],
+                },
+            ) from exc
         _refuse_catalog_collision(draft)
 
         row = Plugin(

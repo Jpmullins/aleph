@@ -395,6 +395,33 @@ below only with a test that would have caught them.
   own checks fail (`--self-check`) — is the gate to trust.
 ### Fixed, with the test that pins each
 
+**2026-08-24, later (the AST gate admitted almost everything it exists to refuse)**
+
+- **CRITICAL, and reproduced through the real HTTP route: agent-authored code executed at install
+  time inside the API process.** `check_source` walked `tree.body` and `continue`d past
+  `FunctionDef`, `AsyncFunctionDef` and `ClassDef` without looking inside them. That is right for a
+  function BODY — it runs when called, which is the entire basis of the gate — and wrong for
+  everything else about a definition. Six distinct mechanisms were admitted: a class-body
+  statement, a positional default, a keyword-only default, a decorator argument, a base-class
+  expression and a `metaclass=` keyword. `class _Probe: marker = os.makedirs("/tmp/x")` returned
+  **201** and the directory existed in the container. `class C: import subprocess` made
+  `_FORBIDDEN_IMPORTS` cosmetic — indent it and it was gone.
+  **The gate refused exactly one shape: the one its own test used**
+  (`test_plugin_durability.py`, a bare top-level `open(...)`). That is the failure mode this file
+  keeps naming — a check whose coverage is the shape of its single test — and it falsified
+  `ast_gate.py`'s own "loading is not running" and this file's "source with an import-time side
+  effect leaves no row".
+  Decorators are still allowed and their ARGUMENTS are now checked, so `@lru_cache(maxsize=128)`
+  passes and `@d(os.makedirs(...))` does not — which is the distinction the old comment argued for
+  and could not express while skipping the node. → 19 tests in
+  `packages/aleph-kernel/tests/test_ast_gate.py`, ten refusals and nine admissions, because a gate
+  that refuses everything is not stricter, it is unusable.
+- **A refusal was a 500.** `SkillRejected` had no HTTP mapping, so the one route the product's
+  central loop depends on answered `"An unexpected error occurred"`. An agent authoring a plugin
+  for itself could not tell "refused, line 3" from "the server is broken", so it cannot fix what it
+  cannot read and retries the same source. Now a 422 carrying every violation with its line.
+  Verified live: malicious → 422 naming the line, no side effect, no row; legitimate → 201.
+
 **2026-08-24 (the browser path, and three fixed defects that had stopped being guarded)**
 
 - **Browser chat renders an assistant reply.** The only path a user actually has was dead — the

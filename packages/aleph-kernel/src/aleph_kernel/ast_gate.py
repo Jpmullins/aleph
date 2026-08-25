@@ -122,20 +122,64 @@ def _check_value_expression(value: ast.AST, line: int) -> list[GateViolation]:
     return violations
 
 
-def check_source(source: str, *, filename: str = "<skill>") -> list[GateViolation]:
-    """Return every reason ``source`` may not be loaded. Empty means admissible.
+def _check_definition_header(
+    node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef,
+    violations: list[GateViolation],
+) -> None:
+    """Check the parts of a `def`/`class` that run when it is DEFINED.
 
-    Reports all violations rather than the first, so an author fixes a module in
-    one pass instead of discovering problems one rejection at a time.
+    A function body runs when it is called, which is the whole basis of this
+    gate. Its header does not: decorators are applied, default arguments are
+    evaluated, and base classes are resolved at import time, in that order,
+    before the module finishes loading.
+
+    The gate used to `continue` past these nodes entirely, and its docstring
+    argued the case for decorators specifically — that `@dataclass` and
+    `@lru_cache(...)` only build a wrapper. True of those two, and the
+    conclusion did not follow: `@d(os.makedirs("/tmp/x"))` builds a wrapper too,
+    after making the directory.
+
+    So decorators are still permitted, and their ARGUMENTS are checked.
+    `@lru_cache(maxsize=128)` passes because 128 does nothing. That distinction
+    is what the old comment wanted and could not express while skipping the node.
     """
-    try:
-        tree = ast.parse(source, filename=filename)
-    except SyntaxError as exc:
-        return [GateViolation(exc.lineno or 0, f"syntax error: {exc.msg}")]
+    line = getattr(node, "lineno", 0)
 
-    violations: list[GateViolation] = []
+    for decorator in node.decorator_list:
+        # A bare `@dataclass` or `@app.route` names something already imported;
+        # naming it is not doing anything. A CALL's arguments are evaluated
+        # right here, so they are held to the same rule as any other top-level
+        # expression.
+        if isinstance(decorator, ast.Call):
+            for arg in [*decorator.args, *(kw.value for kw in decorator.keywords)]:
+                violations.extend(_check_value_expression(arg, line))
+        elif not isinstance(decorator, ast.Name | ast.Attribute):
+            violations.extend(_check_value_expression(decorator, line))
 
-    for node in tree.body:
+    if isinstance(node, ast.ClassDef):
+        # `class C(build_base())` resolves its bases at class creation.
+        for base in node.bases:
+            violations.extend(_check_value_expression(base, line))
+        for keyword in node.keywords:
+            violations.extend(_check_value_expression(keyword.value, line))
+        return
+
+    # `def f(x=os.makedirs("/tmp/x"))` evaluates that default once, at def time.
+    args = node.args
+    defaults: list[ast.expr] = [*args.defaults, *[d for d in args.kw_defaults if d is not None]]
+    for default in defaults:
+        violations.extend(_check_value_expression(default, line))
+
+
+def _check_statements(body: list[ast.stmt], violations: list[GateViolation]) -> None:
+    """Apply the definition-only rule to a run of statements.
+
+    Called for a module's top level and, recursively, for a CLASS body — which
+    is not a special case but the same case: a class body is executed
+    statement by statement when the class is created, exactly like a module's
+    top level when it is imported.
+    """
+    for node in body:
         line = getattr(node, "lineno", 0)
 
         if isinstance(node, ast.Import | ast.ImportFrom):
@@ -152,12 +196,18 @@ def check_source(source: str, *, filename: str = "<skill>") -> list[GateViolatio
                     )
             continue
 
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef | ast.Pass):
-            # Decorators do run at definition time, but every ordinary one
-            # (@dataclass, @property, @lru_cache(...)) only builds a wrapper.
-            # A decorator that reaches out is indistinguishable from one that
-            # does not at this level, so the gate does not pretend to tell them
-            # apart — that is what capability mediation is for.
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            _check_definition_header(node, violations)
+            continue
+
+        if isinstance(node, ast.ClassDef):
+            _check_definition_header(node, violations)
+            # The body runs at class creation. Recursing is what stops
+            # `class C: m = os.makedirs("/tmp/x")` — which the gate admitted.
+            _check_statements(node.body, violations)
+            continue
+
+        if isinstance(node, ast.Pass):
             continue
 
         if isinstance(node, ast.Assign | ast.AnnAssign | ast.AugAssign):
@@ -195,6 +245,20 @@ def check_source(source: str, *, filename: str = "<skill>") -> list[GateViolatio
             GateViolation(line, f"top-level {type(node).__name__} is not a definition")
         )
 
+
+def check_source(source: str, *, filename: str = "<skill>") -> list[GateViolation]:
+    """Return every reason ``source`` may not be loaded. Empty means admissible.
+
+    Reports all violations rather than the first, so an author fixes a module in
+    one pass instead of discovering problems one rejection at a time.
+    """
+    try:
+        tree = ast.parse(source, filename=filename)
+    except SyntaxError as exc:
+        return [GateViolation(exc.lineno or 0, f"syntax error: {exc.msg}")]
+
+    violations: list[GateViolation] = []
+    _check_statements(tree.body, violations)
     return violations
 
 
