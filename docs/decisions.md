@@ -674,3 +674,108 @@ a rollback can proceed, and restores `hypothesis_versions`' append-only trigger
 AND its function with them — a version table whose immutability guard is missing
 looks fine and silently permits the edit the guard exists to refuse. The rows are
 gone either way.
+
+## D17 · Aleph hosts the Agent Protocol; deepagents supplies the delegation — 2026-08-25
+
+**Supersedes** the agent-layer section of the plugin-architecture design published
+2026-08-25, which was built on two claims that are false. Both came from a
+research subagent's report that I did not check against the docs.
+
+### What was claimed, and what is true
+
+**Claim 1: "deepagents' async subagents are remote-only; Aleph does not run
+LangGraph Platform, so they do not fit."**
+
+False. `AsyncSubAgent.url` is **optional**. Omitted, the SDK uses **ASGI
+transport — in-process**, which the docs call "the recommended default… zero
+network latency… no additional auth configuration." The remote case is the
+opt-in one.
+
+ASGI transport does require the process to *be* an Agent Protocol server, which
+Aleph is not. But that is not the end of it, because the docs also say async
+subagents "communicate with **any server that implements the Agent Protocol**…
+or self-host any Agent Protocol-compatible server."
+
+**And the surface is five routes.** `AsyncSubAgentMiddleware` calls exactly five
+SDK methods — `threads.create`, `threads.get`, `runs.create`, `runs.get`,
+`runs.cancel` — which resolve to:
+
+```
+POST /threads
+GET  /threads/{thread_id}
+POST /threads/{thread_id}/runs
+GET  /threads/{thread_id}/runs/{run_id}
+POST /threads/{thread_id}/runs/{run_id}/cancel
+```
+
+**So Aleph hosts those five routes on the queue and the `agent_runs` table it
+already has, and points `AsyncSubAgent(url=<its own base url>)` at itself.**
+
+What that buys, none of which Aleph then writes: the five supervisor tools
+(`start_async_task`, `check_async_task`, `update_async_task`,
+`cancel_async_task`, `list_async_tasks`); the dedicated `async_tasks` state
+channel, which exists specifically so task ids **survive context compaction**
+when they would be lost from tool messages; the system-prompt rules that stop the
+supervisor polling immediately after launch and treating history statuses as
+current; and `update`'s interrupt-multitask semantics for mid-flight steering.
+
+The previous design said "Aleph builds it, copying the shape." That was
+reimplementing a middleware Aleph can simply use. `docs/decisions.md` D11 —
+"a long job returns a ticket" — is unchanged and is exactly what this is; only
+the conclusion that Aleph must hand-roll the ticket surface is withdrawn.
+
+**Claim 2: "deepagents freezes its subagent roster at construction, so Aleph must
+own the `task` tool."**
+
+The frozen-roster fact is true and the conclusion does not follow, because
+**dynamic subagents are not about adding subagents at runtime.** They are about
+*dispatching configured subagents from interpreter code*: with subagents and
+interpreter middleware both present, the interpreter exposes a built-in `task()`
+global taking `{description, subagentType, responseSchema}`, and the agent writes
+JavaScript that fans work out with `Promise.all`, routes by classification, or
+runs adversarial verification — deterministically, instead of one model-chosen
+tool call at a time. It is on by default when both are present.
+
+Aleph already runs `CodeInterpreterMiddleware`. It gets this by changing one
+argument.
+
+### The one that is genuinely Aleph's decision
+
+`interpreter.py` sets `subagents=False`, and the reason recorded there is
+correct: `task()` from inside the REPL starts a model loop, dispatched with no
+parent-level approval because the `eval` was approved once — PTC bypasses
+`interrupt_on`. That is the same hazard `PTC_ALLOWLIST` exists for.
+
+**The answer is the same shape as the answer already in the file: an allowlist.**
+`subagents=True` with a `SUBAGENT_PTC_ALLOWLIST` of subagents that are safe to
+dispatch without a per-call gate — read-and-analyse roles — and a
+`SUBAGENT_WITHHELD` mapping recording why each of the others is not there. A
+subagent that writes, spends, or installs is not dispatchable from the REPL; one
+that reads and reports is. Blanket `False` bought safety by giving up the
+feature; the allowlist keeps both, and is falsifiable the same way the tool one is.
+
+### Three further mechanisms the earlier design either missed or hand-rolled
+
+- **Runtime tool registration is supported.** `wrap_model_call` adds tools to the
+  request and `wrap_tool_call` executes them — the documented path for "tools
+  discovered at runtime (e.g. from an MCP server, or a remote registry)." That is
+  exactly how a plugin contributes an agent tool, and it needs no fork.
+- **Runtime context propagates to subagents automatically.** "When you invoke a
+  parent agent with runtime context, that context automatically propagates to all
+  subagents." So the plugin resolver reaches a subagent's tools through
+  `ToolRuntime.context` rather than through a global.
+- **Harness and provider profiles are the right home for model quirks.**
+  `register_provider_profile(..., ProviderProfile(init_kwargs=...))` and
+  `init_kwargs_factory` are where per-model construction kwargs belong — which is
+  where the `temperature` workaround for `claude-opus-4-7` should live rather than
+  as a learned drop inside `LiteLLMClient`. The client-side fix stays as the
+  backstop for models nobody has profiled; the profile is the declaration.
+  `HarnessProfile.extra_middleware` also accepts a **callable**, so a plugin can
+  contribute middleware lazily.
+
+### What this does not change
+
+The core inversion stands: the kernel is a loader, everything above it is a
+plugin, and the core depends on nothing above it. What changes is the agent
+layer — Aleph writes an Agent Protocol host and an allowlist, not a delegation
+framework.
