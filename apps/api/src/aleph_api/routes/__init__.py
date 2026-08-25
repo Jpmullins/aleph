@@ -1,6 +1,7 @@
 """API routes."""
 
 from aleph_api.routes import (
+    agent_protocol,
     agent_tokens,
     aliases,
     artifacts,
@@ -26,6 +27,7 @@ from aleph_api.routes import (
 )
 
 __all__ = [
+    "agent_protocol",
     "agent_tokens",
     "aliases",
     "artifacts",

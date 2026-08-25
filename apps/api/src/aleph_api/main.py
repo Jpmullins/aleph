@@ -18,6 +18,7 @@ from aleph_api.middleware.request_id import RequestIDMiddleware
 from aleph_api.routes import (
     agent_actions,
     agent_events,
+    agent_protocol,
     agent_tokens,
     aliases,
     artifacts,
@@ -149,6 +150,7 @@ def create_app() -> FastAPI:
     # its cipher, its resolver and its probe had no caller anywhere.
     app.include_router(gateway_endpoints.router)
     app.include_router(model_profile.router)
+    app.include_router(agent_protocol.router)
     app.include_router(agent_tokens.router)
     app.include_router(smoketest.router)
     # Inc 1

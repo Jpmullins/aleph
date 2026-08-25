@@ -226,8 +226,6 @@ async def test_retrieval_attributed_to_caller(caller, monkeypatch) -> None:
     assert seen["principal"].user_id != copilot_agent._DEV_USER_UUID
 
 
-
-
 @pytest.mark.asyncio
 async def test_an_unauthenticated_caller_gets_no_substitute(monkeypatch) -> None:
     """No principal in context is a refusal, never a fabricated stand-in.
