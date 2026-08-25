@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 from uuid import UUID, uuid4
 
 import httpx
@@ -50,6 +50,12 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 Role = Literal["system", "user", "assistant", "tool"]
+
+
+#: How much of a gateway error body survives into the exception message.
+#: Bounded because a gateway that echoes the offending payload would otherwise
+#: put an entire prompt into a log line.
+_ERROR_BODY_CHARS = 2000
 
 
 class ChatMessage(BaseModel):
@@ -827,6 +833,48 @@ class LiteLLMClient:
     # ---- internals ---------------------------------------------------------
 
     async def _post_with_retry(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """POST, retrying transport/429/5xx, and learning what the model refuses.
+
+        The learning half exists because a gateway is the authority on what its
+        models accept and Aleph is not. Measured on this instance:
+        `claude-opus-4-7` reaches Bedrock, which answers
+        400 with "temperature is deprecated for this model". 1,072 model
+        profiles bind that model and 15 call sites pass a hardcoded
+        `temperature`, so every one of those combinations was a hard failure —
+        `assistant.compose` among them, which is why the retrieval debug route
+        returned 500.
+
+        Fixing the 15 call sites would be the wrong shape: the next model to
+        drop a sampling knob would break them all again, and the knowledge
+        belongs where the gateway's answer arrives. So the parameter is dropped
+        and the call retried ONCE, and the pairing is remembered per process so
+        it costs one wasted request per model rather than one per call.
+
+        Only pure sampling knobs are droppable (`_DROPPABLE_PARAMS`). They
+        change how random the answer is, not what was asked for, so removing
+        one cannot silently alter the contract of the request the caller made.
+        """
+        model = str(payload.get("model", ""))
+        payload = _without_known_unsupported(self._base_url, model, payload)
+        try:
+            return await self._post_once(path, payload)
+        except httpx.HTTPStatusError as exc:
+            param = _unsupported_param(exc, payload)
+            if param is None:
+                raise
+            _remember_unsupported(self._base_url, model, param)
+            _log.warning(
+                "gateway.param_unsupported",
+                model=model,
+                param=param,
+                path=path,
+                impact=(
+                    "dropped and retried; every later call for this model in this process omits it"
+                ),
+            )
+            return await self._post_once(path, {k: v for k, v in payload.items() if k != param})
+
+    async def _post_once(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
@@ -843,7 +891,7 @@ class LiteLLMClient:
                 async with self._limiter.slot(purpose=path):
                     resp = await self._http.post(url, json=payload, headers=headers, timeout=120.0)
                     if resp.status_code >= 400:
-                        resp.raise_for_status()
+                        _raise_with_gateway_reason(resp, url)
                     return resp.json()
         # gateway_retry().reraise=True guarantees we raise instead of falling through.
         msg = "gateway retry exhausted"
@@ -896,3 +944,102 @@ class LiteLLMClient:
             )
             await session.commit()
             return call.id
+
+
+def _raise_with_gateway_reason(resp: httpx.Response, url: str) -> NoReturn:
+    """Raise like `raise_for_status()`, but keep the reason the gateway gave.
+
+    `resp.raise_for_status()` builds its message from the status code and the
+    URL alone and drops the response BODY, which on an OpenAI-compatible
+    gateway is the only place the actual cause appears: an unsupported
+    parameter, a context-window overflow, a model the virtual key may not
+    reach. Measured on this instance, a `400 Bad Request` from
+    `assistant.compose` produced a full traceback in which no line said what was
+    wrong with the request, and reproducing it by hand was the only way to find
+    out.
+
+    The exception TYPE and its `response` are unchanged, because
+    `aleph_models.retry._is_retryable` decides on `exc.response.status_code` and
+    a different type here would silently stop 429s and 5xxs from being retried.
+
+    The body is truncated: a gateway that echoes the offending payload back
+    would otherwise put an entire prompt into a log line.
+    """
+    detail = ""
+    try:
+        body = resp.text
+    except Exception:  # pragma: no cover - a body that cannot be decoded
+        body = ""
+    if body.strip():
+        detail = f" — gateway said: {body.strip()[:_ERROR_BODY_CHARS]}"
+    msg = f"{resp.status_code} {resp.reason_phrase} from {url}{detail}"
+    raise httpx.HTTPStatusError(msg, request=resp.request, response=resp)
+
+
+#: Parameters safe to drop when a gateway says the model refuses them.
+#:
+#: Every one is a pure sampling knob: it changes how random the answer is, not
+#: what was asked for. Dropping `messages`, `model` or `response_format` could
+#: silently change the contract of the request, so a gateway naming one of
+#: those is re-raised rather than worked around.
+_DROPPABLE_PARAMS: frozenset[str] = frozenset(
+    {"temperature", "top_p", "top_k", "frequency_penalty", "presence_penalty", "seed"}
+)
+
+#: Phrases a gateway uses to say "this model will not take that parameter".
+_UNSUPPORTED_PHRASES: tuple[str, ...] = (
+    "is deprecated for this model",
+    "unsupported parameter",
+    "unsupported value",
+    "does not support",
+    "is not supported",
+)
+
+#: (base_url, model) -> parameters that model has refused, learned at runtime.
+#:
+#: Process-local and deliberately not persisted: it describes what a gateway
+#: did a moment ago, and a gateway that is reconfigured should be re-learned
+#: rather than believed from a cache written last week.
+_UNSUPPORTED_SEEN: dict[tuple[str, str], set[str]] = {}
+
+
+def reset_unsupported_params() -> None:
+    """Forget what has been learned. For tests, and for a gateway swap."""
+    _UNSUPPORTED_SEEN.clear()
+
+
+def _remember_unsupported(base_url: str, model: str, param: str) -> None:
+    _UNSUPPORTED_SEEN.setdefault((base_url, model), set()).add(param)
+
+
+def _without_known_unsupported(
+    base_url: str, model: str, payload: dict[str, Any]
+) -> dict[str, Any]:
+    known = _UNSUPPORTED_SEEN.get((base_url, model))
+    if not known:
+        return payload
+    return {k: v for k, v in payload.items() if k not in known}
+
+
+def _unsupported_param(exc: httpx.HTTPStatusError, payload: dict[str, Any]) -> str | None:
+    """Which droppable parameter this error blames, or None.
+
+    Three conditions, all required, because a wrong guess here silently changes
+    what was asked: the status is 400, the body reads like an unsupported
+    parameter complaint, and the name it quotes is BOTH droppable and actually
+    present in the request that was sent. That last check is what stops a
+    stray word in an error message from removing something real.
+    """
+    if exc.response.status_code != 400:
+        return None
+    try:
+        body = exc.response.text
+    except Exception:  # pragma: no cover - undecodable body
+        return None
+    lowered = body.lower()
+    if not any(phrase in lowered for phrase in _UNSUPPORTED_PHRASES):
+        return None
+    for name in _DROPPABLE_PARAMS:
+        if name in payload and name in lowered:
+            return name
+    return None

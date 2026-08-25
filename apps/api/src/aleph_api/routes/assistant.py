@@ -233,6 +233,11 @@ async def retrieval_debug(
     router_obj = WikiFirstRetrievalRouter(
         session_maker=request.app.state.session_maker,
         litellm=await litellm_for_project(request, session, project_id),
+        # Debug-only route: an HTTP request, not a turn, so there is no agent
+        # run for these calls to belong to and `agent_run_id=None` below is
+        # correct rather than a gap. Saying so in the PURPOSE is what keeps
+        # status number 5 meaningful — see the note in the router's __init__.
+        purpose_prefix="diagnostic",
     )
     result = await router_obj.retrieve(
         principal=principal,

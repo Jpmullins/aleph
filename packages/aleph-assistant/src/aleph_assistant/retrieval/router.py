@@ -186,10 +186,27 @@ class WikiFirstRetrievalRouter:
         *,
         session_maker: async_sessionmaker[AsyncSession],
         litellm: LiteLLMClient,
+        purpose_prefix: str = "assistant",
     ) -> None:
         self._maker = session_maker
         self._litellm = litellm
         self._degraded: Degradation | None = None
+        # What the CALLER is, not what this class is.
+        #
+        # `status_numbers.py` number 5 counts a model call as unattributed when
+        # `agent_run_id IS NULL AND purpose LIKE 'assistant%'`, on the stated
+        # reasoning that "the prefix is the honest discriminator — `purpose` is
+        # what the call site declares itself to be". That was not true of this
+        # class: the ROUTER wrote the purpose, so a real agent turn and the
+        # debug-only `/assistant/retrieve` route emitted the identical string.
+        #
+        # The debug route has no turn to belong to and never will — requiring
+        # one would mean minting a fake run so a number could go green, which
+        # is the shape of thing that file exists to stop. So it declares itself
+        # `diagnostic` and the discriminator starts discriminating: an
+        # unattributed `assistant.*` row now really does mean the agent path
+        # lost its run id, which is the defect worth being told about.
+        self._purpose_prefix = purpose_prefix
 
     async def retrieve(
         self,
@@ -404,7 +421,7 @@ class WikiFirstRetrievalRouter:
                 agent_run_id=agent_run_id,
                 profile_bindings=profile_bindings,
                 input=[query],
-                purpose="assistant.corpus_search.query_embed",
+                purpose=f"{self._purpose_prefix}.corpus_search.query_embed",
             )
             if embedded.embeddings:
                 query_vector = embedded.embeddings[0]
@@ -515,7 +532,7 @@ class WikiFirstRetrievalRouter:
             response_format={"type": "json_object"},
             temperature=0.0,
             max_tokens=1024,
-            purpose="assistant.page_selection",
+            purpose=f"{self._purpose_prefix}.page_selection",
         )
         content = (resp.choices[0].message.content or "").strip() if resp.choices else ""
         parsed = _safe_json(content)
@@ -699,7 +716,7 @@ class WikiFirstRetrievalRouter:
             response_format={"type": "json_object"},
             temperature=0.2,
             max_tokens=2048,
-            purpose="assistant.compose",
+            purpose=f"{self._purpose_prefix}.compose",
         )
         content = (resp.choices[0].message.content or "").strip() if resp.choices else ""
         parsed = _safe_json(content)
@@ -770,7 +787,7 @@ class WikiFirstRetrievalRouter:
                 agent_run_id=agent_run_id,
                 profile_bindings=profile_bindings,
                 input=[req.query_within_source],
-                purpose="assistant.descent.query_embed",
+                purpose=f"{self._purpose_prefix}.descent.query_embed",
             )
             if not embed_resp.embeddings:
                 continue
