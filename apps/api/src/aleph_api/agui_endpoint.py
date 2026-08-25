@@ -60,7 +60,9 @@ from ag_ui.encoder import EventEncoder
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 
+from aleph_api.delegation import set_turn_scope
 from aleph_api.middleware.agent_scope import thread_project_id
+from aleph_security.request_context import current_principal
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
@@ -179,6 +181,20 @@ def add_aleph_agui_endpoint(
         # before this handler runs — `test_thread_parsers_agree` pins the two
         # together. Selecting a profile, not granting access.
         project_id = thread_project_id(getattr(input_data, "thread_id", None))
+
+        # Bind this turn's delegation credential scope, before the graph runs.
+        #
+        # `AsyncSubAgentMiddleware` builds its HTTP client when the supervisor
+        # first calls `start_async_task`, and reads the spec's headers at that
+        # moment. The compiled graph is cached across users
+        # (`agent_resolution_signature` keys on endpoint/bindings/key, not on the
+        # caller), so the credential CANNOT live on the graph — a delegation
+        # would otherwise be attributed to whoever happened to build it. Setting
+        # it here, per request, is what makes the ledger name the right person.
+        # `docs/decisions.md` D17.
+        _principal = current_principal()
+        if project_id is not None and _principal is not None:
+            set_turn_scope(project_id=project_id, user_id=_principal.user_id)
 
         chat_run = None
         if recorder is not None:

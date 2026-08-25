@@ -60,6 +60,15 @@ class Settings(BaseSettings):
     otel_exporter_otlp_endpoint: str
 
     # LiteLLM gateway (single LLM transport)
+    #: Where this API reaches ITSELF, for the Agent Protocol loopback.
+    #:
+    #: The supervisor's delegation tools are HTTP clients pointed at Aleph's own
+    #: `/v1/agent-protocol` routes (`docs/decisions.md` D17), so the process needs
+    #: a URL for itself. Defaulted rather than required because every deployment
+    #: that has not enabled delegation would otherwise fail to boot over a
+    #: setting it does not use; the worker's equivalent is
+    #: `aleph_api_internal_url` in its own settings.
+    aleph_api_internal_url: str = "http://127.0.0.1:8000"
     litellm_base_url: str
     insights_litellm_api_key: str
 

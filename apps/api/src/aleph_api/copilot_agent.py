@@ -2415,6 +2415,7 @@ def build_assistant_deep_agent(
         AuthoredSkillsMiddleware,
         authored_namespace,
     )
+    from aleph_api.delegation import async_subagent_specs
     from aleph_api.interpreter import build_interpreter_middleware
     from aleph_api.rubric import build_grading_middleware
     from aleph_api.subagents.researcher import build_researcher_subagent
@@ -2519,6 +2520,20 @@ def build_assistant_deep_agent(
                 build_wiki_builder_subagent(settings=settings),
                 build_viz_builder_subagent(settings=settings),
                 build_reviewer_subagent(settings=settings),
+                # The SAME five, again, as ASYNC specs — and that is deliberate,
+                # not duplication. The sync entries give the supervisor `task`,
+                # which BLOCKS until the subagent finishes; the async ones mount
+                # `AsyncSubAgentMiddleware` and give it `start_async_task`, which
+                # returns a ticket so the conversation continues. Both are the
+                # right answer to different questions ("read this and tell me"
+                # versus "go research this while we talk"), and deepagents
+                # demultiplexes them on the presence of `graph_id`.
+                #
+                # `docs/decisions.md` D17. The async ones are Mappings whose
+                # headers resolve per turn, because this graph is cached across
+                # users and a baked credential would attribute every delegation
+                # to whoever built it.
+                *async_subagent_specs(settings),
             ],
             # Bundled SKILL.md skills (progressive disclosure): the orchestrator
             # sees each skill's name + description at startup and reads the full
