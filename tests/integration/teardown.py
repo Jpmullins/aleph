@@ -20,6 +20,24 @@ from collections.abc import Callable, Sequence
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+#: ROWS WITH A NULL `project_id` ARE NOT ORPHANS.
+#:
+#: `ModelProfile` templates are the one documented exception to "every row
+#: carries a project_id" (CLAUDE.md). They carry NULL, and a cleanup written as
+#: `WHERE NOT EXISTS (SELECT 1 FROM projects WHERE id = x.project_id)` deletes
+#: them, because NULL is not in `projects`.
+#:
+#: That is not hypothetical. A one-off orphan sweep on 2026-08-25 removed both
+#: templates (`aleph-dev`, `aleph-production`) and every integration test that
+#: boots the app went red with `ProbeFailed: probe for 'models' failed: default
+#: model profile 'aleph-dev' is not seeded`. The capability probe caught it
+#: immediately, which is what probes are for — but nothing stopped the delete.
+#:
+#: The teardown below is safe from this by construction: every statement is
+#: `WHERE project_id = :pid` against a real uuid4, and NULL never equals it.
+#: Any FUTURE cleanup must scope the same way, or explicitly exclude
+#: `project_id IS NULL`.
+
 #: Tables a teardown must NOT delete from, and why. Each is load-bearing.
 #:
 #: The first five carry an append-only trigger, so a DELETE RAISES. A fixture

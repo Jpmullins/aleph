@@ -192,3 +192,38 @@ async def test_teardown_actually_removes_what_a_test_writes(
     # deletion is asserted by `test_every_project_scoped_table_is_torn_down_or_exempt`
     # covering `plugins` — proven directly here instead:
     assert "plugins" in teardown_targets(await project_scoped_tables(engine))
+
+
+async def test_a_null_project_id_row_is_not_reachable_by_the_teardown(engine: AsyncEngine) -> None:
+    """`ModelProfile` templates carry NULL and must survive every teardown.
+
+    They are the one documented exception to "every row carries a project_id".
+    A cleanup phrased as "delete rows whose project no longer exists" removes
+    them, because NULL is not in `projects` — which is exactly what happened on
+    2026-08-25, taking out `aleph-dev` and `aleph-production` and turning every
+    app-booting integration test red with `ProbeFailed: probe for 'models'`.
+
+    The teardown is safe by construction — `WHERE project_id = :pid` against a
+    uuid4 never matches NULL — and this asserts the property rather than trusting
+    it, because the next cleanup will be written by someone who has not read the
+    comment.
+    """
+    async with engine.connect() as conn:
+        templates = (
+            await conn.execute(
+                text("select count(*) from model_profiles where is_template and project_id is null")
+            )
+        ).scalar_one()
+    assert templates >= 1, (
+        "no NULL-project template rows present; the models capability probe will fail at boot"
+    )
+
+    probe_id = uuid.uuid4()
+    async with engine.connect() as conn:
+        would_match = (
+            await conn.execute(
+                text("select count(*) from model_profiles where project_id = :pid"),
+                {"pid": probe_id},
+            )
+        ).scalar_one()
+    assert would_match == 0, "a scoped teardown must never reach a NULL-project row"
