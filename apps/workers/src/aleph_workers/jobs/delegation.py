@@ -32,6 +32,7 @@ can never read.
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Any
 from uuid import UUID
 
@@ -43,6 +44,8 @@ from aleph_db.repos.agent_runs import SYSTEM_ACTOR
 from aleph_db.repos.background_tasks import STATUS_FAILED, STATUS_SUCCEEDED
 from aleph_security.agent_token import verify_agent_token
 from aleph_security.principal import Principal
+from aleph_security.request_context import bind_principal, reset_principal
+from aleph_workers.gateway import gateways
 from aleph_workers.jobs.background import _converge
 
 _log = structlog.get_logger(__name__)
@@ -202,17 +205,94 @@ async def _run_subagent(
     """
     from deepagents import create_deep_agent
 
+    from aleph_api.copilot_agent import (
+        bind_runtime,
+        bindings_for_project,
+        endpoint_for_project,
+        use_agent_bindings,
+        use_agent_endpoint,
+    )
     from aleph_api.subagents import build_subagent
 
-    settings = ctx["settings"]
-    spec = build_subagent(name, settings=settings)
-    agent = create_deep_agent(
-        model=spec["model"],
-        system_prompt=spec.get("system_prompt", ""),
-        tools=list(spec.get("tools") or []),
-        middleware=list(spec.get("middleware") or []),
+    # The API's Settings, not the worker's.
+    #
+    # `build_subagent` and `_gateway_chat_model` are API code and read API
+    # settings — `aleph_agent_request_timeout_s` among them, which is what the
+    # third end-to-end attempt failed on. `WorkerSettings` is a different class
+    # with a different field set; passing it produces an AttributeError deep
+    # inside a subagent builder, which is a confusing place to learn that two
+    # settings objects are not interchangeable.
+    #
+    # Both are pydantic-settings over the SAME environment (compose shares one
+    # env block between api and workers), so constructing the API's here reads
+    # the same values the API would. Cached per process because construction
+    # validates every field.
+    settings = _api_settings()
+
+    # `bindings_for_project` reads `copilot_agent._runtime["session_maker"]`, a
+    # MODULE-LEVEL dict the API populates in its lifespan. This is a different
+    # process, so it is empty here and the lookup silently returns the boot
+    # bindings — which are also empty, so every capability resolves to nothing.
+    #
+    # The first end-to-end delegation failed with `NoModelBound: 'synthesis'` on
+    # a project whose profile binds synthesis, and the second failed the same way
+    # after I established the ContextVars but not this. Both are the same shape:
+    # process-local state the worker has to establish for itself, and neither is
+    # visible from reading the call site.
+    maker = ctx["session_maker"]
+    #
+    # The client is the PROJECT's, resolved through `WorkerGateways`, not one
+    # built from `LITELLM_BASE_URL`. WS-MEP-4 removed the boot-time
+    # `ctx["litellm_client"]` precisely because one client for every project
+    # meant a project's own `gateway_endpoints` row reached the settings screen
+    # and none of its background traffic. A delegation is background traffic.
+    project_id = principal.project_id
+    litellm = await gateways(ctx).litellm(project_id) if project_id else None
+    bind_runtime(
+        session_maker=maker,
+        settings=settings,
+        litellm=litellm,
     )
-    result = await agent.ainvoke({"messages": messages})
+
+    # INSIDE the project's binding and endpoint context, and this is not
+    # optional. `_gateway_chat_model` resolves a capability to a model from
+    # `_active_bindings()` / `_active_endpoint()`, which are ContextVars the API
+    # enters before it builds a graph. Building a subagent outside them resolves
+    # against nothing, and the first end-to-end delegation failed with exactly
+    # that: `NoModelBound: no model is bound for capability 'synthesis'` on a
+    # project whose profile binds it. The worker is a different process; it has
+    # to establish the same context the API does.
+    bindings = dict(await bindings_for_project(project_id) or {})
+    endpoint = await endpoint_for_project(project_id, settings=settings)
+
+    # The subagent's tools resolve their project from the graph config and their
+    # caller from the principal ContextVar — both established by the HTTP request
+    # in the API. There is no request here, so both are established explicitly.
+    #
+    # Without the principal, `_authorized` fails closed and every tool answers
+    # "no project scope on this run"; the delegation then SUCCEEDS while doing
+    # nothing, which is the failure shape that looks like it worked. The first
+    # green end-to-end run did exactly that and the transcript is what showed it.
+    token = bind_principal(principal)
+    try:
+        with use_agent_bindings(bindings), use_agent_endpoint(endpoint):
+            spec = build_subagent(name, settings=settings)
+            agent = create_deep_agent(
+                model=spec["model"],
+                system_prompt=spec.get("system_prompt", ""),
+                tools=list(spec.get("tools") or []),
+                middleware=list(spec.get("middleware") or []),
+            )
+            result = await agent.ainvoke(
+                {"messages": messages},
+                # `_project_id_from_config` reads `projectId` from `configurable`;
+                # the API normally supplies it through a project-prefixed thread
+                # id, which a delegated run has no equivalent of.
+                config={"configurable": {"projectId": str(project_id)}},
+            )
+    finally:
+        reset_principal(token)
+
     out: list[dict[str, Any]] = []
     for m in result.get("messages", []):
         role = getattr(m, "type", None) or getattr(m, "role", "assistant")
@@ -225,3 +305,16 @@ async def _run_subagent(
                 }
             )
     return out
+
+
+@lru_cache(maxsize=1)
+def _api_settings() -> Any:
+    """The API's Settings, constructed from this process's environment.
+
+    Raises if the worker's environment is missing something the API requires —
+    which converges the delegation to a stated failure rather than a subagent
+    that half-builds and dies somewhere less legible.
+    """
+    from aleph_api.settings import Settings
+
+    return Settings()  # pyright: ignore[reportCallIssue] - fields come from env
