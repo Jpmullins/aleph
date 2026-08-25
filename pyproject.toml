@@ -24,7 +24,6 @@ members = [
     "packages/aleph-a2ui",
     "packages/aleph-notes",
     "packages/aleph-reviewer",
-    "packages/aleph-hypotheses",
     "packages/aleph-artifacts",
     "packages/aleph-belief",
     "packages/aleph-kernel",
@@ -47,7 +46,6 @@ aleph-research = { workspace = true }
 aleph-a2ui = { workspace = true }
 aleph-notes = { workspace = true }
 aleph-reviewer = { workspace = true }
-aleph-hypotheses = { workspace = true }
 aleph-artifacts = { workspace = true }
 aleph-belief = { workspace = true }
 aleph-kernel = { workspace = true }
@@ -95,7 +93,6 @@ src = [
     "packages/aleph-a2ui/src",
     "packages/aleph-notes/src",
     "packages/aleph-reviewer/src",
-    "packages/aleph-hypotheses/src",
     "packages/aleph-artifacts/src",
     "packages/aleph-belief/src",
     "packages/aleph-kernel/src",
@@ -157,7 +154,6 @@ include = [
     "packages/aleph-a2ui/src",
     "packages/aleph-notes/src",
     "packages/aleph-reviewer/src",
-    "packages/aleph-hypotheses/src",
     "packages/aleph-artifacts/src",
     "packages/aleph-belief/src",
     "packages/aleph-kernel/src",

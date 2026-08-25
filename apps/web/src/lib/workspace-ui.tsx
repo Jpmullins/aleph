@@ -20,7 +20,7 @@ import { api } from "@/lib/api";
 /**
  * What surfaces exist — served by the API, not compiled in here.
  *
- * This was a hardcoded object listing Wiki, Library, Notes, Hypotheses, Briefs.
+ * This was a hardcoded object listing Wiki, Library, Notes, Briefs.
  * Making it a registry instead of a union fixed the TYPE and left the CONTENTS
  * exactly as wrong: those five are the research plugin suite, and a client that
  * knows their names cannot render a workbench whose abilities arrive at runtime.

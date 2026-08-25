@@ -226,41 +226,6 @@ async def test_retrieval_attributed_to_caller(caller, monkeypatch) -> None:
     assert seen["principal"].user_id != copilot_agent._DEV_USER_UUID
 
 
-@pytest.mark.asyncio
-async def test_hypothesis_write_is_attributed_to_caller(caller, monkeypatch) -> None:
-    """The ledger row a hypothesis write emits names the caller too.
-
-    Same constant, second call site: `_create_hypothesis_impl` passes the
-    principal straight into `create_hypothesis`, whose `ActionLedgerEvent`
-    carries `actor_id=principal.user_id`.
-    """
-    import aleph_hypotheses.hypothesis_service as hyp
-
-    project_id = uuid.uuid4()
-    seen: dict[str, object] = {}
-
-    class _Row:
-        id = uuid.uuid4()
-        title = "H"
-        short_id = "H1"
-        confidence = "initial"
-
-    async def fake_create(_session, **kwargs: object) -> _Row:
-        seen.update(kwargs)
-        return _Row()
-
-    monkeypatch.setattr(hyp, "create_hypothesis", fake_create)
-    _bind_member(monkeypatch, _FakeSessionMaker())
-
-    out = await copilot_agent._create_hypothesis_impl(
-        "H",
-        "statement",
-        {"configurable": {"project_id": str(project_id)}},
-    )
-
-    assert out.startswith("Created hypothesis"), out
-    assert seen["principal"] is caller
-    assert seen["principal"].user_id != copilot_agent._DEV_USER_UUID
 
 
 @pytest.mark.asyncio

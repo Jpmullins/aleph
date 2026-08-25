@@ -132,7 +132,7 @@ export function CopilotChatSurface({ projectId, threadId }: Props) {
     description:
       "Switch the analyst's right-hand panel to one of the surface tabs: " +
       `${paneTitles.join(", ")}. Call this when your answer is best explored ` +
-      "in a specific panel (e.g. open Hypotheses to show the ACH matrix, or " +
+      "in a specific panel (e.g. open Wiki to show a page, or " +
       "Library to show ingested sources and built artifacts).",
     // z.string(), not z.enum: the valid set is whatever is loaded, and a
     // compiled-in enum would refuse a surface a plugin just added.

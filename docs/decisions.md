@@ -626,3 +626,51 @@ load — but it was scoped by a wrong idea of what was being stored.
 `SOURCE_KINDS` docstring in `aleph_db/models/plugin.py`, both of which assert the
 fused model.
 
+## D16 · Analysis of Competing Hypotheses is deleted — 2026-08-25
+
+**The choice.** `aleph-hypotheses` is removed: three tables, a service, a REST
+router, an A2UI surface and card, a pane, three agent tools, a card action, a
+dedicated subagent, and the `ach` skill document that told the model to drive
+them. 19 workspace packages, down from 20.
+
+**Why.** The owner's assessment: *"it doesn't do anything."* The measurement
+agrees — the pane rendered, the tools existed, and nothing used them. It is the
+same defect class this project keeps finding, one layer up: a whole feature
+written correctly and read by nobody.
+
+**What moved instead of dying, and this is the part that mattered.** The package
+held two unrelated things. The ACH half was dead. The other half —
+`next_confidence_from_evidence` and `weight_for_tier`, the state machine that
+decides a claim's confidence from its evidence — is called by
+`aleph_wiki.BeliefService` on **every claim write**. Deleting the package
+wholesale would have taken the wiki's confidence engine with it.
+
+It now lives in `aleph_belief.confidence`, beside `aleph_belief.trust`, because
+that is what it reads: `weight_for_tier` turns a `TrustTier` into the number the
+machine scores on, so the lattice and the machine that scores it were one subject
+split across two packages.
+
+**`aleph-core` was the obvious home and is the wrong one.** It is the declared
+leaf — it imports nothing — and the state machine imports `TrustTier`. The
+alphabet (the six confidence *values*) stays in `aleph-core` where the A2UI
+catalog and the HTML compiler can name it without pulling in the lattice; the
+*transitions* live in `aleph-belief`. That split already existed and was
+documented; this decision only corrects which package owns the second half.
+
+**The subagent went with it.** `analyst`'s entire toolset was the three
+hypothesis tools, so a subagent that could do nothing would have remained. Five
+subagents now, not six.
+
+**The skill went too.** The bundled `ach` skill document is an instruction document — the
+kind of thing D15 says belongs in the skill store rather than the plugin table —
+but its payload was "call `create_hypothesis`, then open the Hypotheses tab". A
+skill instructing the model to call tools that no longer exist is worse than no
+skill. Analysis of Competing Hypotheses is a real analytic method and could
+return as a pure reasoning skill that needs no tables; that would be a new skill,
+not this one.
+
+**Irreversible in practice.** The migration recreates the tables on downgrade so
+a rollback can proceed, and restores `hypothesis_versions`' append-only trigger
+AND its function with them — a version table whose immutability guard is missing
+looks fine and silently permits the edit the guard exists to refuse. The rows are
+gone either way.

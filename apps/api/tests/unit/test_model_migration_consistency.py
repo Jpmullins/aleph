@@ -65,7 +65,6 @@ def _orm_metadata():
         "aleph_rks.models",
         "aleph_wiki.models",
         "aleph_artifacts.models",
-        "aleph_hypotheses.models",
         "aleph_notes.models",
         "aleph_reviewer.models",
         "aleph_connectors.models",

@@ -87,14 +87,6 @@ class FindingCardProps:
 
 
 @dataclass
-class HypothesisCardProps:
-    hypothesis_id: UUID
-    title: str
-    confidence: str = "initial"
-    evidence_count: int = 0
-
-
-@dataclass
 class FormCardProps:
     form_id: str
     title: str
@@ -215,20 +207,6 @@ def finding_card(p: FindingCardProps, *, card_id: str | None = None) -> dict[str
             "open_action": "open",
             "approve_action": "approve",
             "reject_action": "reject",
-        },
-    )
-
-
-def hypothesis_card(p: HypothesisCardProps, *, card_id: str | None = None) -> dict[str, Any]:
-    return _card(
-        "HypothesisCard",
-        card_id=card_id,
-        props={
-            "hypothesis_id": str(p.hypothesis_id),
-            "title": p.title,
-            "confidence": p.confidence,
-            "evidence_count": p.evidence_count,
-            "open_action": "open",
         },
     )
 

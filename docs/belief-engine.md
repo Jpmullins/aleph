@@ -72,7 +72,7 @@ CREATE INDEX ix_citations_source ON citations (source_id);
 ```
 
 `stance ∈ {supports, contradicts, contextualizes}` and `weight` are chosen to match
-`aleph_hypotheses.confidence.EvidenceRow` **exactly**, so the existing confidence engine consumes
+`aleph_belief.confidence.EvidenceRow` **exactly**, so the existing confidence engine consumes
 citations with zero adaptation.
 
 `locator_hash` with a unique constraint makes re-derivation a **union rather than a clobber** — merging
@@ -100,7 +100,7 @@ walk instead of a citation lookup.
 
 ## Confidence
 
-Not new work. `packages/aleph-hypotheses/src/aleph_hypotheses/confidence.py` already computes
+Not new work. `packages/aleph-belief/src/aleph_belief/confidence.py` already computes
 `net = Σ weight·sign(stance)` → `well_supported | weakly_supported | contested | refuted` as a pure,
 tested function with zero LLM calls. `html_compiler.py` already renders per-claim cards with CSS
 classes matching those exact strings. **The two were built to fit each other and never connected.**

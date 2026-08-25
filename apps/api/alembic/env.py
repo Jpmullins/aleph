@@ -47,10 +47,9 @@ try:
     import aleph_notes.models  # noqa: F401
 except ImportError:
     pass
-# Inc 5: reviewer + hypotheses + agent memory.
+# Inc 5: reviewer + agent memory.
 try:
     import aleph_core.agent_memory
-    import aleph_hypotheses.models  # noqa: F401
     import aleph_reviewer.models  # noqa: F401
 except ImportError:
     pass

@@ -387,7 +387,7 @@ async def retract_source(
             unsupported = claim.id in impact.unsupported
             # `status` carries the retraction; `confidence` is never written
             # here. Confidence is DERIVED from the evidence by
-            # `aleph_hypotheses.confidence.next_confidence_from_evidence`, and
+            # `aleph_belief.confidence.next_confidence_from_evidence`, and
             # "retracted" is not one of its states — writing it here would put a
             # value in the column that the state machine can never produce, so
             # the next recompute would silently erase it. What the claim is now

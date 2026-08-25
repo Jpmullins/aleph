@@ -263,7 +263,7 @@ probe "check-acceptance-rows notices prose citing a row that does not exist" \
 # because this sweep resolved paths and node ids and never counted anything.
 probe "check-acceptance-claims notices a stale test count" \
   docs/acceptance.md \
-  's/— 165 passed, 1 skipped/— 142 passed, 1 skipped/m' \
+  's/— 184 passed, 1 skipped/— 142 passed, 1 skipped/m' \
   "./scripts/check-acceptance-claims.sh"
 
 # ---------------------------------------------------------------------------
@@ -324,7 +324,7 @@ probe "check-page-lock notices a shared lock masquerading as an exclusive one" \
 # The subagent half is the one that goes wrong silently: a spec declaring its
 # own middleware OVERRIDES the parent's guard rather than adding to it.
 probe "check-agent-middleware notices one unguarded subagent" \
-  apps/api/src/aleph_api/subagents/analyst.py \
+  apps/api/src/aleph_api/subagents/reviewer.py \
   's/\n[^\n]*"middleware": \[AlephAgentMiddleware[^\n]*//' \
   "./scripts/check-agent-middleware.sh"
 

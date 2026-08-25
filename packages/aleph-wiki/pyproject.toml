@@ -16,7 +16,6 @@ dependencies = [
     "aleph-models",
     "aleph-observability",
     "aleph-rks",
-    "aleph-hypotheses",
     "aleph-belief",
     "aleph-security",
 ]

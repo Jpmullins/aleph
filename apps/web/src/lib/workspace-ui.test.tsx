@@ -139,9 +139,9 @@ describe("the pane model", () => {
 
   it("setActiveSurface opens or focuses the pane instead of swapping a slot", () => {
     const ui = mountWorkspace();
-    act(() => ui().setActiveSurface("Hypotheses"));
-    expect(ui().panes.map((p) => p.kind)).toContain("hypotheses");
-    expect(ui().activeSurface).toBe("hypotheses");
+    act(() => ui().setActiveSurface("Notes"));
+    expect(ui().panes.map((p) => p.kind)).toContain("notes");
+    expect(ui().activeSurface).toBe("notes");
   });
 
   it("closing the last pane leaves the stage empty rather than re-naming one", () => {

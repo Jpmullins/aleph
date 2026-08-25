@@ -18,7 +18,7 @@ ALEPH_V09_CATALOG_ID = "aleph://v1"
 #
 # Each right-panel tab is rendered through the upstream `@a2ui` v0_9
 # `MessageProcessor` + `<A2uiSurface>` against the shared catalog (`aleph://v1`).
-# The four canonical tabs (Wiki/Library/Notes/Hypotheses) are DATA-BOUND (see
+# The canonical tabs (Wiki/Library/Notes/Briefs) are DATA-BOUND (see
 # the builders below); `BriefsSurface` (agent-composed, WP-4d) still rides the
 # single-component `_surface_messages` shell with an inline `children` card list
 # (the frontend `adapt` helper forwards it to `component.children`).
@@ -41,7 +41,7 @@ def _surface_messages(
     The single surface component MUST carry `id="root"`: the upstream
     `@a2ui/react` `<A2uiSurface>` renders exactly the component whose id is
     `"root"` (`DeferredChild id="root"`), falling back to `[Loading root...]`
-    when no such component exists. (`hypothesis_cards_v09` satisfies this via
+    when no such component exists. (A data-bound surface satisfies this via
     its root `Column`; these single-component surfaces satisfy it by naming the
     surface view itself `root`.) `surface_id` remains the surface-level id used
     by `createSurface`/`updateComponents` and as the React key.
@@ -60,12 +60,12 @@ def _surface_messages(
 # ---------------------------------------------------------------------------
 # Data-bound canonical tab builders (WP-4 sub-spec (a)).
 #
-# Each of the four canonical tabs (Wiki / Library / Notes / Hypotheses) is now
+# Each of the canonical tabs (Wiki / Library / Notes / Briefs) is now
 # SERVER-BUILT and DATA-BOUND: the builder loads its rows (in the route layer,
 # which owns the session), then emits a `full_surface` — `createSurface` +
 # `updateComponents` (structure, once) + a root `updateDataModel` (the typed
 # data model). The single surface component carries its data as `{"path": ...}`
-# BINDINGS into that model (the `hypothesis_cards_v09` exemplar pattern), so the
+# BINDINGS into that model, so the
 # React view renders ONLY from bound props (zero client fetch) and a mutation
 # patches in place via a per-path `updateDataModel` delta (`diff_data_model`) —
 # never a full re-render. The self-fetching react-query views are gone. The
@@ -170,30 +170,6 @@ def notes_surface_v09(
         catalog_id=catalog_id,
         components=[component],
         data_model={"notes": notes},
-    )
-
-
-def hypotheses_surface_v09(
-    *,
-    items: list[dict[str, Any]],
-    ach: dict[str, Any] | None = None,
-    surface_id: str = "hypotheses",
-    catalog_id: str = ALEPH_V09_CATALOG_ID,
-) -> list[dict[str, Any]]:
-    """Data-bound Hypotheses tab. Data model: ``{items: [...], ach: {...} |
-    null}``. `items` is the tracked-hypothesis list; `ach` is the ACH matrix
-    (null when there is no evidence yet)."""
-    component = {
-        "id": "root",
-        "component": "HypothesesSurface",
-        "items": {"path": "/items"},
-        "ach": {"path": "/ach"},
-    }
-    return full_surface(
-        surface_id=surface_id,
-        catalog_id=catalog_id,
-        components=[component],
-        data_model={"items": items, "ach": ach},
     )
 
 

@@ -51,7 +51,7 @@ layer had:
   fixture below is a substring scan over the source. That is the point of the
   injection seam, but it means nothing here says a *real* extractor produces
   quotes that ground — only that the machinery around one behaves.
-* Confidence thresholds themselves belong to `aleph_hypotheses.confidence` and
+* Confidence thresholds themselves belong to `aleph_belief.confidence` and
   are unit-tested there. What is pinned here is that the *stored column* tracks
   them.
 """
@@ -599,7 +599,7 @@ async def test_confidence_rises_with_supporting_evidence(
 ) -> None:
     """No evidence → under_investigation; evidence accumulates the state upward.
 
-    The thresholds themselves live in `aleph_hypotheses.confidence` and are
+    The thresholds themselves live in `aleph_belief.confidence` and are
     unit-tested there. What is pinned here is that the value stored on the row
     tracks them, computed in the same transaction as the citation write, so the
     column can never disagree with the evidence it summarises.

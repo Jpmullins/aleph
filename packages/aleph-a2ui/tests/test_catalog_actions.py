@@ -37,7 +37,7 @@ def test_new_actions_are_registered_in_catalog() -> None:
 
 
 def test_focus_tab_accepts_valid_tab_rejects_unknown() -> None:
-    _valid("focus_tab", {"tab": "Hypotheses"})
+    _valid("focus_tab", {"tab": "Briefs"})
     _invalid("focus_tab", {"tab": "NotATab"})
     _invalid("focus_tab", {})
 

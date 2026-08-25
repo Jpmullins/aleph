@@ -135,7 +135,7 @@ async def test_an_authored_skill_survives_the_thread(store: Any) -> None:
 async def test_one_source_is_not_enough(store: Any) -> None:
     """The specific mistake the "two sources, not one" correction exists to catch.
 
-    Listing `/skills` returns the bundled four and NEVER the store's, however
+    Listing `/skills` returns the bundled three and NEVER the store's, however
     the route is configured — skills are listed per source path. Without this
     test, dropping `/skills/authored` from `skills=` is invisible: the agent
     simply never mentions the skill it just wrote, and that reads like the model
@@ -188,7 +188,6 @@ async def test_the_bundled_skills_stay_read_only() -> None:
 
     rules = _agent_filesystem_permissions()
     for path in (
-        "/skills/ach/SKILL.md",
         "/skills/research/SKILL.md",
         "/skills/wiki-style/SKILL.md",
         "/skills/report-authoring/SKILL.md",
@@ -197,7 +196,7 @@ async def test_the_bundled_skills_stay_read_only() -> None:
 
 
 async def test_traversal_out_of_the_authored_route_is_rejected_upstream() -> None:
-    """`/skills/authored/../ach/SKILL.md` — and where the defence actually is.
+    """`/skills/authored/../research/SKILL.md` — and where the defence actually is.
 
     Not in Aleph's rules. Measured: `_check_fs_permission` returns **allow** for
     that path, because the glob matcher does not normalise `..` and the string
@@ -216,7 +215,7 @@ async def test_traversal_out_of_the_authored_route_is_rejected_upstream() -> Non
 
     from aleph_api.copilot_agent import _agent_filesystem_permissions
 
-    traversal = "/skills/authored/../ach/SKILL.md"
+    traversal = "/skills/authored/../research/SKILL.md"
     # Stated out loud so nobody "fixes" the rules believing this was covered.
     assert _check_fs_permission(_agent_filesystem_permissions(), "write", traversal) == "allow"
     with pytest.raises(ValueError, match=r"\.\."):
@@ -259,10 +258,10 @@ async def test_a_write_outside_the_authored_route_is_not_ledgered_as_authorship(
     """A recorded authorship for something that is not a skill is false evidence.
 
     `skill_name_from_path` used to slice a fixed prefix length off any path,
-    so `/skills/ach/SKILL.md` produced the skill name `.md` — plausible enough
+    so `/skills/research/SKILL.md` produced the skill name `.md` — plausible enough
     to sit in the ledger unnoticed.
     """
-    assert not is_authored_path("/skills/ach/SKILL.md")
+    assert not is_authored_path("/skills/research/SKILL.md")
     assert skill_name_from_path("/skills/ach/SKILL.md") is None
     assert not is_authored_path("/memories/notes.md")
 
@@ -371,7 +370,7 @@ async def test_the_authoring_session_sees_its_own_skill(store: Any) -> None:
     # The bundled skills are still there. A refresh that REPLACED the list with
     # only the authored source would satisfy the line above and silently remove
     # every skill the container ships.
-    assert {"ach", "research"} <= names, names
+    assert {"wiki-style", "research"} <= names, names
     # And the tool's own message survives, or the model never sees the write
     # succeed.
     assert [str(m.content) for m in update["messages"]] == ["ok"]

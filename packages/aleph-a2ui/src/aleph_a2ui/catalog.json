@@ -106,7 +106,7 @@
         "additionalProperties": false
       },
       "agent": {
-        "description": "An approve/reject gate for a consequential action (an agent_action build/connector change, a synthesis proposal, a review finding). Render this when a tool result asks you to surface an approval — the analyst clicks Approve/Reject and the ActionRouter executes. `target_id` + `target_kind` come from the tool result; do not fabricate them.",
+        "description": "An approve/reject gate for a consequential action (an agent_action build/connector change, a synthesis proposal, a review finding). Render this when a tool result asks you to surface an approval \u2014 the analyst clicks Approve/Reject and the ActionRouter executes. `target_id` + `target_kind` come from the tool result; do not fabricate them.",
         "props": {
           "type": "object",
           "properties": {
@@ -569,7 +569,7 @@
         "additionalProperties": false
       },
       "agent": {
-        "description": "A revision diff for a wiki page (from_revision_id → to_revision_id). Render when showing what changed between two wiki revisions. Supply `from_body_md`/`to_body_md` to render a real line diff.",
+        "description": "A revision diff for a wiki page (from_revision_id \u2192 to_revision_id). Render when showing what changed between two wiki revisions. Supply `from_body_md`/`to_body_md` to render a real line diff.",
         "props": {
           "type": "object",
           "properties": {
@@ -939,135 +939,6 @@
           "props"
         ],
         "additionalProperties": false
-      }
-    },
-    "HypothesesSurface": {
-      "schema": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string"
-          },
-          "id": {
-            "type": "string"
-          },
-          "props": {
-            "type": "object",
-            "properties": {
-              "ach": {
-                "type": [
-                  "object",
-                  "null"
-                ]
-              },
-              "items": {
-                "type": "array"
-              }
-            },
-            "required": [],
-            "additionalProperties": true
-          },
-          "data_bindings": {
-            "type": "object"
-          },
-          "children": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          }
-        },
-        "required": [
-          "type",
-          "id",
-          "props"
-        ],
-        "additionalProperties": false
-      }
-    },
-    "HypothesisCard": {
-      "schema": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string"
-          },
-          "id": {
-            "type": "string"
-          },
-          "props": {
-            "type": "object",
-            "properties": {
-              "hypothesis_id": {
-                "type": "string",
-                "format": "uuid"
-              },
-              "title": {
-                "type": "string"
-              },
-              "confidence": {
-                "enum": [
-                  "under_investigation",
-                  "weakly_supported",
-                  "well_supported",
-                  "contested",
-                  "refuted",
-                  "abandoned"
-                ]
-              },
-              "evidence_count": {
-                "type": "integer"
-              },
-              "open_action": {
-                "const": "open"
-              }
-            },
-            "required": [
-              "hypothesis_id",
-              "title"
-            ],
-            "additionalProperties": true
-          },
-          "data_bindings": {
-            "type": "object"
-          },
-          "children": {
-            "type": "array",
-            "items": {
-              "type": "object"
-            }
-          }
-        },
-        "required": [
-          "type",
-          "id",
-          "props"
-        ],
-        "additionalProperties": false
-      },
-      "agent": {
-        "description": "A research hypothesis with its current confidence and evidence count.",
-        "props": {
-          "type": "object",
-          "properties": {
-            "hypothesis_id": {
-              "type": "string"
-            },
-            "title": {
-              "type": "string"
-            },
-            "confidence": {
-              "type": "string"
-            },
-            "evidence_count": {
-              "type": "number"
-            }
-          },
-          "required": [
-            "hypothesis_id",
-            "title"
-          ]
-        }
       }
     },
     "ImageCard": {
@@ -1655,12 +1526,12 @@
     "Icon": "A named icon (`name`).",
     "Image": "An image. `url` is the source.",
     "List": "A list of child components (ids in `children`).",
-    "Modal": "A dialog: `trigger` is the id of the component that opens it, `content` the id of what it shows. Both must be defined as separate components — a Modal holds ids, never inline children.",
+    "Modal": "A dialog: `trigger` is the id of the component that opens it, `content` the id of what it shows. Both must be defined as separate components \u2014 a Modal holds ids, never inline children.",
     "Row": "A horizontal arrangement of child components (ids in `children`).",
-    "Slider": "A bounded numeric input. `max` is REQUIRED — without a ceiling there is no track to drag along. Use a TextField with `variant: number` for an unbounded number.",
+    "Slider": "A bounded numeric input. `max` is REQUIRED \u2014 without a ceiling there is no track to drag along. Use a TextField with `variant: number` for an unbounded number.",
     "Tabs": "A tabbed container; each entry in `tabs` names a title and a content id.",
     "Text": "A run of text. `text` is the string; `variant` sets heading/body style.",
-    "TextField": "A text input with a `label`. `variant` picks the kind: `shortText`, `longText` (multi-line), `number`, or `obscured` (a secret — note that anything typed here travels in the action context and is recorded, so never ask for a credential this way). `value` binds to the data model.",
+    "TextField": "A text input with a `label`. `variant` picks the kind: `shortText`, `longText` (multi-line), `number`, or `obscured` (a secret \u2014 note that anything typed here travels in the action context and is recorded, so never ask for a credential this way). `value` binds to the data model.",
     "Video": "A video player for a `url`."
   },
   "actions": {
@@ -1706,23 +1577,6 @@
         },
         "required": [
           "title"
-        ]
-      }
-    },
-    "create_hypothesis": {
-      "params": {
-        "type": "object",
-        "properties": {
-          "title": {
-            "type": "string"
-          },
-          "statement": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "title",
-          "statement"
         ]
       }
     },
@@ -1809,7 +1663,6 @@
               "Wiki",
               "Library",
               "Notes",
-              "Hypotheses",
               "Briefs"
             ]
           }

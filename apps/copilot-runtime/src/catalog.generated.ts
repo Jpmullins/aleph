@@ -1233,69 +1233,6 @@ export const ALEPH_A2UI_CATALOG = {
         "src"
       ]
     },
-    "HypothesesSurface": {
-      "description": "Server-built. Aleph's own code composes this from live project state; do not emit one yourself. Listed here so you can read and reason about a surface you were given.",
-      "type": "object",
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/ComponentId"
-        },
-        "component": {
-          "const": "HypothesesSurface"
-        },
-        "items": {
-          "$ref": "#/$defs/DynamicValue"
-        },
-        "ach": {
-          "$ref": "#/$defs/DynamicValue"
-        }
-      },
-      "required": [
-        "id",
-        "component"
-      ]
-    },
-    "HypothesisCard": {
-      "description": "A research hypothesis with its current confidence and evidence count.",
-      "type": "object",
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/ComponentId"
-        },
-        "component": {
-          "const": "HypothesisCard"
-        },
-        "hypothesis_id": {
-          "$ref": "#/$defs/DynamicString"
-        },
-        "title": {
-          "$ref": "#/$defs/DynamicString"
-        },
-        "confidence": {
-          "$ref": "#/$defs/DynamicString",
-          "enum": [
-            "under_investigation",
-            "weakly_supported",
-            "well_supported",
-            "contested",
-            "refuted",
-            "abandoned"
-          ]
-        },
-        "evidence_count": {
-          "$ref": "#/$defs/DynamicNumber"
-        },
-        "open_action": {
-          "$ref": "#/$defs/Action"
-        }
-      },
-      "required": [
-        "id",
-        "component",
-        "hypothesis_id",
-        "title"
-      ]
-    },
     "Icon": {
       "description": "A named icon (`name`).",
       "type": "object",

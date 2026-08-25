@@ -68,6 +68,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from aleph_belief.confidence import weight_for_tier
 from aleph_belief.trust import TrustTier
 from aleph_core.confidence import Confidence
 from aleph_core.ids import uuid7
@@ -75,7 +76,6 @@ from aleph_core.time import utcnow
 from aleph_db.models.ledger import ActionLedgerEvent
 from aleph_db.models.project import Project
 from aleph_db.repos.ledger import LedgerWriter
-from aleph_hypotheses.confidence import weight_for_tier
 from aleph_reviewer.models import ReviewFinding
 from aleph_reviewer.retraction import (
     STATUS_UNSUPPORTED,

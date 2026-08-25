@@ -74,8 +74,8 @@ your own replies to the analyst conversational and concise.
 ## How you work
 
 **Plan first for multi-step work.** When a request needs more than one step \
-(e.g. research a topic *and* turn it into a report, or analyze hypotheses \
-*then* review a page), use the `write_todos` tool to lay out a short plan, then \
+(e.g. research a topic *and* turn it into a report, or ingest a source *then* \
+review the page it produced), use the `write_todos` tool to lay out a short plan, then \
 work the plan, updating it as you go. For a single simple step, skip the plan \
 and just do it.
 
@@ -90,18 +90,15 @@ background; lands a draft wiki page plus an approval proposal in the Briefs tab.
 - `wiki_builder` — ingest a source URL/document, or promote an analyst note to \
 a draft wiki page.
 - `viz_builder` — quick charts, and full reports/decks/exports.
-- `analyst` — hypotheses and Analysis of Competing Hypotheses (enumerate, \
-weigh evidence, score consistency).
 - `reviewer` — review/critique a wiki page (contradiction / weak-source / \
 coverage-gap checks).
 
 When a subagent returns a render instruction (a SourceCard, ChartCard, \
-HypothesisCard, ApprovalCard, …), render it exactly as instructed. For \
+ApprovalCard, …), render it exactly as instructed. For \
 background work (research), tell the analyst what you kicked off and where the \
 result will appear. Confirm consequential or destructive intent with the \
-analyst before delegating it (e.g. creating a hypothesis, building an artifact, \
-toggling a connector) — those paths are approval-gated and return an \
-ApprovalCard you must render.
+analyst before delegating it (e.g. building an artifact, toggling a connector) \
+— those paths are approval-gated and return an ApprovalCard you must render.
 
 **Consult your skills when relevant.** You have SKILL.md skills (research, ach, \
 report-authoring, wiki-style). Their names and descriptions are listed for you; \
@@ -118,13 +115,11 @@ hand-composed A2UI primitives when one fits:
 - a **TableCard** for a taxonomy, comparison, or any row/column data (e.g. \
 "the kinds of distillation" → a table of Kind / Category / Description);
 - a **ChartCard** for quantitative data (or delegate to viz_builder's make_chart);
-- a **HypothesisCard**/matrix for competing hypotheses, a **ClaimCard** for a \
-single cited assertion.
+- a **ClaimCard** for a single cited assertion.
 Emit the card via your render_a2ui tool using the exact component name above. \
-Prefer the analyst's current context — the page or \
-hypothesis they are viewing, provided to you — when it is relevant. When work \
-lands in a specific tab (Briefs, Library, Hypotheses), point the analyst \
-there.
+Prefer the analyst's current context — the page they are viewing, provided to \
+you — when it is relevant. When work lands in a specific pane (Briefs, Library), \
+point the analyst there.
 
 ## Driving the workspace (eyes + hands)
 
@@ -225,16 +220,14 @@ def _acting_principal(project_id: UUID) -> Principal:
     unbound principal raises rather than being substituted for.
 
     This replaces `_dev_principal`, which fabricated a `Principal` around
-    `_DEV_USER_UUID` at three call sites: the retrieval router and both
-    hypothesis writers.
+    `_DEV_USER_UUID` at its call sites, the retrieval router among them.
 
     Be precise about what that changed, because the plan's phrasing overstates
     it. `ModelCall` has no actor column and `LiteLLMClient.chat/.embed` open
     with `del principal`, so the router's principal reaches no cost row today —
     threading the real one fixes the *interface* the router is handed and makes
-    the fix hold when a cost row does carry an actor. The rows that change now
-    are the hypothesis writers': `create_hypothesis` and `add_evidence` write
-    `ActionLedgerEvent.actor_id = principal.user_id`, and that was a user id
+    the fix hold when a cost row does carry an actor. Writers that ledger an
+    `ActionLedgerEvent.actor_id = principal.user_id` were recording a user id
     absent from `users`. See the note on `_DEV_USER_UUID`.
     """
     return require_project_access(project_id)
@@ -450,7 +443,7 @@ async def _project_id_from_config(config: RunnableConfig | None) -> UUID | None:
 
     **Every one of those channels is client-supplied.** This function used to
     return whatever the client named, and its ~8 call sites — the agent's wiki,
-    notes, hypotheses, artifact and synthesis tools — then operated on that
+    notes, artifact and synthesis tools — then operated on that
     project. Combined with `/copilotkit` sitting on the auth middleware's
     exemption list, that was an unauthenticated read/write primitive against any
     project in the database.
@@ -1017,147 +1010,6 @@ async def _read_wiki_impl(query: str, config: RunnableConfig) -> str:
     coverage = getattr(result, "coverage_judgment", "ok")
     body = getattr(result, "composed_body_md", "") or "(the composer returned no body)"
     return f"{body}\n\n_(coverage: {coverage})_"
-
-
-async def _list_hypotheses_impl(config: RunnableConfig) -> str:
-    """Shared body: list the project's hypotheses with their confidence.
-
-    Reused by the `analyst` subagent's tool (DRY). Reads the lifespan-bound
-    session_maker + project scope, never the DB credentials directly.
-    """
-    from aleph_hypotheses.hypothesis_service import list_hypotheses
-
-    session_maker = _runtime.get("session_maker")
-    project_id = await _project_id_from_config(config)
-    if session_maker is None or project_id is None:
-        return "Hypotheses are unavailable (no project scope on this run)."
-    async with session_maker() as session:  # type: AsyncSession
-        rows = await list_hypotheses(session, project_id=project_id)
-    if not rows:
-        return "No hypotheses recorded yet for this project."
-    lines = [
-        f"- [{h.short_id}] {h.title} — confidence {getattr(h, 'confidence', 'initial')}"
-        for h in rows
-    ]
-    return "Hypotheses:\n" + "\n".join(lines)
-
-
-async def _create_hypothesis_impl(title: str, statement: str, config: RunnableConfig) -> str:
-    """Shared body: create a hypothesis (writes an Action Ledger event, rule #4).
-
-    Reused by the `analyst` subagent's tool (DRY).
-    """
-    from aleph_db.repos.ledger import LedgerWriter
-    from aleph_hypotheses.hypothesis_service import create_hypothesis
-
-    session_maker = _runtime.get("session_maker")
-    project_id = await _project_id_from_config(config)
-    if session_maker is None or project_id is None:
-        return "Creating a hypothesis is unavailable (no project scope on this run)."
-    principal = _acting_principal(project_id)
-    try:
-        async with session_maker() as session:  # type: AsyncSession
-            ledger = LedgerWriter(session)
-            h = await create_hypothesis(
-                session,
-                ledger=ledger,
-                principal=principal,
-                project_id=project_id,
-                title=title,
-                statement=statement,
-            )
-            # Capture everything we need as plain values BEFORE commit expires
-            # the ORM attributes on `h` (no `h.<attr>` access after the block).
-            conf = getattr(h, "confidence", "initial")
-            hyp_id = str(h.id)
-            hyp_title = h.title
-            hyp_short_id = h.short_id
-            await session.commit()
-    except Exception as exc:
-        return f"Could not create hypothesis: {exc}"
-    return (
-        f"Created hypothesis [{hyp_short_id}] '{hyp_title}'.\n"
-        f"Render a HypothesisCard with hypothesis_id={hyp_id}, "
-        f"title='{hyp_title}', confidence='{conf}', evidence_count=0."
-    )
-
-
-async def _add_hypothesis_evidence_impl(
-    hypothesis_id: str,
-    stance: str,
-    evidence_kind: str,
-    target_id: str,
-    config: RunnableConfig,
-    note: str = "",
-    weight: float = 1.0,
-) -> str:
-    """Shared body: attach evidence to a hypothesis (writes a ledger event, rule #4).
-
-    Reused by the `analyst` subagent's tool (DRY).
-    """
-    from sqlalchemy import func, select
-
-    from aleph_db.repos.ledger import LedgerWriter
-    from aleph_hypotheses.hypothesis_service import add_evidence, get_hypothesis
-    from aleph_hypotheses.models import HypothesisEvidence
-
-    session_maker = _runtime.get("session_maker")
-    project_id = await _project_id_from_config(config)
-    if session_maker is None or project_id is None:
-        return "Adding evidence is unavailable (no project scope on this run)."
-    principal = _acting_principal(project_id)
-    try:
-        hyp_uuid = UUID(hypothesis_id)
-        tgt_uuid = UUID(target_id)
-    except ValueError:
-        return "hypothesis_id and target_id must be valid UUIDs."
-    try:
-        async with session_maker() as session:  # type: AsyncSession
-            ledger = LedgerWriter(session)
-            await add_evidence(
-                session,
-                ledger=ledger,
-                principal=principal,
-                hypothesis_id=hyp_uuid,
-                stance=stance,
-                evidence_kind=evidence_kind,
-                target_id=tgt_uuid,
-                weight=weight,
-                note=note,
-            )
-            # Read the (flushed, in-transaction) hypothesis + evidence count
-            # BEFORE commit, and capture everything as plain values so no
-            # expired ORM attribute is touched after the block closes.
-            h = await get_hypothesis(session, project_id=project_id, hypothesis_id=hyp_uuid)
-            evidence_count = (
-                await session.execute(
-                    select(func.count())
-                    .select_from(HypothesisEvidence)
-                    .where(HypothesisEvidence.hypothesis_id == hyp_uuid)
-                )
-            ).scalar_one()
-            if h is None:
-                hyp_short_id = hyp_title = hyp_id = None
-                conf = "initial"
-            else:
-                hyp_short_id = h.short_id
-                hyp_title = h.title
-                hyp_id = str(h.id)
-                conf = getattr(h, "confidence", "initial")
-            await session.commit()
-    except Exception as exc:
-        return f"Could not add evidence: {exc}"
-    if hyp_id is None:
-        return (
-            f"Recorded {stance} evidence, but could not re-load hypothesis "
-            f"{hypothesis_id} to report its updated state."
-        )
-    return (
-        f"Recorded {stance} evidence on [{hyp_short_id}] '{hyp_title}' "
-        f"(confidence now '{conf}').\n"
-        f"Re-render the HypothesisCard with hypothesis_id={hyp_id}, "
-        f"title='{hyp_title}', confidence='{conf}', evidence_count={evidence_count}."
-    )
 
 
 async def _start_research_impl(query: str, config: RunnableConfig, depth: str = "shallow") -> str:
@@ -2565,7 +2417,6 @@ def build_assistant_deep_agent(
     )
     from aleph_api.interpreter import build_interpreter_middleware
     from aleph_api.rubric import build_grading_middleware
-    from aleph_api.subagents.analyst import build_analyst_subagent
     from aleph_api.subagents.researcher import build_researcher_subagent
     from aleph_api.subagents.retriever import build_retriever_subagent
     from aleph_api.subagents.reviewer import build_reviewer_subagent
@@ -2667,7 +2518,6 @@ def build_assistant_deep_agent(
                 build_researcher_subagent(settings=settings),
                 build_wiki_builder_subagent(settings=settings),
                 build_viz_builder_subagent(settings=settings),
-                build_analyst_subagent(settings=settings),
                 build_reviewer_subagent(settings=settings),
             ],
             # Bundled SKILL.md skills (progressive disclosure): the orchestrator

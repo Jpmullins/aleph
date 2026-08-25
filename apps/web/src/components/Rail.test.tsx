@@ -1,7 +1,7 @@
 /**
  * The rail renders whatever the SERVER says this project can open.
  *
- * It used to compile in five names — Wiki, Library, Notes, Hypotheses, Briefs —
+ * It used to compile in four names — Wiki, Library, Notes, Briefs —
  * which is the research plugin suite, not a workbench. Install something
  * unrelated to papers and it had nowhere to appear; remove the research suite
  * and the rail still advertised it. `GET /v1/projects/{id}/panes` is now the

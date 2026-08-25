@@ -19,8 +19,6 @@ export const COMPONENT_NAMES = [
   "GroundingSurface",
   "HtmlDocCard",
   "HtmlFrameCard",
-  "HypothesesSurface",
-  "HypothesisCard",
   "ImageCard",
   "NoteEditorCard",
   "NotesSurface",
@@ -37,7 +35,6 @@ export type ComponentName = (typeof COMPONENT_NAMES)[number];
 export const ACTION_NAMES = [
   "approve",
   "compose_dossier",
-  "create_hypothesis",
   "create_note",
   "edit_note",
   "feedback",

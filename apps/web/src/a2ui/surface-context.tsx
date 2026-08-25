@@ -21,9 +21,7 @@ import { FindingCard } from "./components/FindingCard";
 import { FormCard } from "./components/FormCard";
 import { HtmlDocCard } from "./components/HtmlDocCard";
 import { HtmlFrameCard } from "./components/HtmlFrameCard";
-import { HypothesesSurface } from "./components/HypothesesSurface";
 import { ImageCard } from "./components/ImageCard";
-import { HypothesisCard } from "./components/HypothesisCard";
 import { NoteEditorCard } from "./components/NoteEditorCard";
 import { NotesSurface } from "./components/NotesSurface";
 import { SourceCard } from "./components/SourceCard";
@@ -34,7 +32,7 @@ import { WikiSurface } from "./components/WikiSurface";
 import type { A2UIComponent, ComponentName } from "./catalog";
 
 // Context — components need projectId to fetch live data (dataset rows,
-// chart specs, hypothesis evidence, etc.) and to POST feedback. The
+// chart specs, claim evidence, etc.) and to POST feedback. The
 // right panel sets this for the entire surface tree.
 interface SurfaceCtx {
   projectId: string;
@@ -100,7 +98,6 @@ const CARD_VIEWS: Record<ComponentName, ComponentType<ChildRenderProps>> = {
   WikiSurface,
   ArtifactsSurface,
   NotesSurface,
-  HypothesesSurface,
   BriefsSurface,
   GroundingSurface,
   InspectorSurface,
@@ -114,7 +111,6 @@ const CARD_VIEWS: Record<ComponentName, ComponentType<ChildRenderProps>> = {
   TableCard,
   ApprovalCard,
   FindingCard,
-  HypothesisCard,
   FormCard,
   DiffCard,
   WikiPageCard,

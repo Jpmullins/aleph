@@ -492,7 +492,7 @@ fi
 # read 21 when 20 were real. A husk must not be able to move this number in
 # either direction.
 run_shell E4 "workspace package count does not grow unchecked" \
-  "n=\$(git ls-files 'packages/*/pyproject.toml' | wc -l | tr -d ' '); echo \"\$n packages\"; [ \"\$n\" -le 21 ]"
+  "n=\$(git ls-files 'packages/*/pyproject.toml' | wc -l | tr -d ' '); echo \"\$n packages\"; [ \"\$n\" -le 20 ]"
 # WAS deliberately red: the patch contract shipped before its consumer, which is
 # the exact defect class this refactor exists to remove. It is GREEN as of
 # 2026-08-24 — four consumers outside the package (aleph_hypotheses.confidence,

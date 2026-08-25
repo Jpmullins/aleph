@@ -265,7 +265,7 @@ class Citation(Base):
     """One anchored piece of evidence for one claim.
 
     ``stance`` and ``weight`` are named to match
-    ``aleph_hypotheses.confidence.EvidenceRow`` exactly, so the existing pure,
+    ``aleph_belief.confidence.EvidenceRow`` exactly, so the existing pure,
     tested confidence engine consumes citations with no adaptation layer.
 
     ``locator_hash`` makes re-derivation a union rather than a clobber: running

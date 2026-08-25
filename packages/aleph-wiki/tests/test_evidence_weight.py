@@ -23,8 +23,8 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+from aleph_belief.confidence import weight_for_tier
 from aleph_belief.trust import TrustTier
-from aleph_hypotheses.confidence import weight_for_tier
 from aleph_wiki.belief_service import EvidenceDraft
 
 
@@ -41,7 +41,7 @@ def test_the_default_clears_the_bar_well_supported_requires() -> None:
     moving either one alone fails here instead of silently making the state
     unreachable again.
     """
-    from aleph_hypotheses.confidence import HIGH_TIER_WEIGHT
+    from aleph_belief.confidence import HIGH_TIER_WEIGHT
 
     draft = EvidenceDraft(source_id=uuid4(), quote="q", source_text="q")
     assert draft.weight >= HIGH_TIER_WEIGHT

@@ -18,7 +18,6 @@ members = [
     "aleph-core",
     "aleph-db",
     "aleph-evals",
-    "aleph-hypotheses",
     "aleph-kernel",
     "aleph-models",
     "aleph-notes",
@@ -147,7 +146,6 @@ dependencies = [
     { name = "aleph-core" },
     { name = "aleph-db" },
     { name = "aleph-evals" },
-    { name = "aleph-hypotheses" },
     { name = "aleph-models" },
     { name = "aleph-notes" },
     { name = "aleph-observability" },
@@ -189,7 +187,6 @@ requires-dist = [
     { name = "aleph-core", editable = "packages/aleph-core" },
     { name = "aleph-db", editable = "packages/aleph-db" },
     { name = "aleph-evals", editable = "packages/aleph-evals" },
-    { name = "aleph-hypotheses", editable = "packages/aleph-hypotheses" },
     { name = "aleph-models", editable = "packages/aleph-models" },
     { name = "aleph-notes", editable = "packages/aleph-notes" },
     { name = "aleph-observability", editable = "packages/aleph-observability" },
@@ -411,27 +408,6 @@ requires-dist = [
     { name = "httpx", specifier = "==0.28.1" },
     { name = "pydantic", specifier = "==2.13.4" },
     { name = "pyyaml", specifier = "==6.0.3" },
-    { name = "sqlalchemy", extras = ["asyncio"], specifier = "==2.0.50" },
-]
-
-[[package]]
-name = "aleph-hypotheses"
-version = "0.1.0"
-source = { editable = "packages/aleph-hypotheses" }
-dependencies = [
-    { name = "aleph-belief" },
-    { name = "aleph-core" },
-    { name = "aleph-db" },
-    { name = "pydantic" },
-    { name = "sqlalchemy", extra = ["asyncio"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aleph-belief", editable = "packages/aleph-belief" },
-    { name = "aleph-core", editable = "packages/aleph-core" },
-    { name = "aleph-db", editable = "packages/aleph-db" },
-    { name = "pydantic", specifier = "==2.13.4" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = "==2.0.50" },
 ]
 
@@ -745,7 +721,6 @@ dependencies = [
     { name = "aleph-belief" },
     { name = "aleph-core" },
     { name = "aleph-db" },
-    { name = "aleph-hypotheses" },
     { name = "aleph-models" },
     { name = "aleph-observability" },
     { name = "aleph-rks" },
@@ -761,7 +736,6 @@ requires-dist = [
     { name = "aleph-belief", editable = "packages/aleph-belief" },
     { name = "aleph-core", editable = "packages/aleph-core" },
     { name = "aleph-db", editable = "packages/aleph-db" },
-    { name = "aleph-hypotheses", editable = "packages/aleph-hypotheses" },
     { name = "aleph-models", editable = "packages/aleph-models" },
     { name = "aleph-observability", editable = "packages/aleph-observability" },
     { name = "aleph-rks", editable = "packages/aleph-rks" },

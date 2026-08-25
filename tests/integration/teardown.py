@@ -40,12 +40,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 #: Tables a teardown must NOT delete from, and why. Each is load-bearing.
 #:
-#: The first five carry an append-only trigger, so a DELETE RAISES. A fixture
+#: The first four carry an append-only trigger, so a DELETE RAISES. A fixture
 #: could bypass one with `session_replication_role` — `aleph` is a superuser in
 #: the compose stack — and must not: switching off a core invariant to tidy up
 #: is how the invariant stops being one.
 #:
-#: The last four are PARENTS of those append-only tables. Their children cannot
+#: The last three are PARENTS of those append-only tables. Their children cannot
 #: be removed, so removing the parent would strand a row that is permanent by
 #: design and can no longer be interpreted. Keeping them is the cost of having
 #: an append-only history at all.
@@ -58,12 +58,10 @@ _TEARDOWN_EXEMPT: dict[str, str] = {
     "action_ledger_events": "append-only trigger (ledger_no_delete)",
     "wiki_revisions": "append-only trigger (wiki_revisions_no_delete)",
     "artifact_versions": "append-only trigger (artifact_versions_no_delete)",
-    "hypothesis_versions": "append-only trigger (hypothesis_versions_no_delete)",
     "interactive_card_versions": "append-only trigger (card_versions_no_delete)",
     "ledger_chain_heads": "the ledger's head pointer; goes with the ledger",
     "wiki_pages": "parent of the undeletable wiki_revisions",
     "artifacts": "parent of the undeletable artifact_versions",
-    "hypotheses": "parent of the undeletable hypothesis_versions",
     "interactive_cards": "parent of the undeletable interactive_card_versions",
 }
 

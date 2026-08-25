@@ -36,19 +36,19 @@ from confidence_vocabulary import (
 )
 from sweep_subject import MissingSubject
 
+from aleph_belief.confidence import (
+    HIGH_TIER_WEIGHT,
+    TIER_WEIGHTS,
+    EvidenceRow,
+    next_confidence_from_evidence,
+    weight_for_tier,
+)
 from aleph_belief.trust import TrustTier
 from aleph_core.confidence import (
     CONFIDENCE_VALUES,
     LEGACY_CONFIDENCE,
     Confidence,
     canonical_confidence,
-)
-from aleph_hypotheses.confidence import (
-    HIGH_TIER_WEIGHT,
-    TIER_WEIGHTS,
-    EvidenceRow,
-    next_confidence_from_evidence,
-    weight_for_tier,
 )
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]

@@ -14,7 +14,6 @@ from aleph_a2ui.components.surfaces import (
     ALEPH_V09_CATALOG_ID,
     artifacts_surface_v09,
     briefs_surface_v09,
-    hypotheses_surface_v09,
     notes_surface_v09,
     wiki_surface_v09,
 )
@@ -190,17 +189,6 @@ def test_notes_surface_v09_binds_notes() -> None:
     )
     assert comp["notes"] == {"path": "/notes"}
     assert model["notes"][0]["id"] == "n1"
-
-
-def test_hypotheses_surface_v09_binds_items_and_ach() -> None:
-    comp, model = _assert_bound_surface(
-        hypotheses_surface_v09(items=[{"id": "h1"}], ach=None),
-        surface_id="hypotheses",
-        component="HypothesesSurface",
-    )
-    assert comp["items"] == {"path": "/items"}
-    assert comp["ach"] == {"path": "/ach"}
-    assert model == {"items": [{"id": "h1"}], "ach": None}
 
 
 def test_briefs_surface_v09_carries_approval_children() -> None:

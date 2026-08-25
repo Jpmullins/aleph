@@ -41,7 +41,7 @@ from aleph_api.copilot_agent import _SKILLS_DIR
 #: so a test cannot pass against a rule production does not have.
 DENY_SKILL_WRITES = FilesystemPermission(operations=["write"], paths=["/skills/**"], mode="deny")
 
-BUNDLED = ("ach", "report-authoring", "research", "wiki-style")
+BUNDLED = ("report-authoring", "research", "wiki-style")
 
 
 def _sha256(path: pathlib.Path) -> str:
@@ -175,7 +175,7 @@ async def test_a_new_host_skill_cannot_be_created() -> None:
     """A deny on existing files is not the property; a deny on the PATH is.
 
     Creating `/skills/agent-authored/SKILL.md` writes a file that was not there
-    to overwrite, so a check that only compares hashes of the bundled four would
+    to overwrite, so a check that only compares hashes of the bundled three would
     pass while the agent grew a fifth.
     """
     intruder = _SKILLS_DIR / "agent-authored"

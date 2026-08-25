@@ -1,7 +1,7 @@
 """What surfaces exist — declared on the server, rendered by whoever asks.
 
 The rail used to be a five-element constant in the web app: Wiki, Library,
-Notes, Hypotheses, Briefs. That is the research plugin suite compiled into the
+Notes and Briefs. That is the research plugin suite compiled into the
 chrome, and it makes the workbench a research tool wearing general-purpose
 clothes. Install an ability that has nothing to do with papers and it has
 nowhere to appear; remove the research suite and the front end still advertises
@@ -62,7 +62,6 @@ _CORE: tuple[PaneKind, ...] = (
     PaneKind(id="library", title="Library", icon="library"),
     PaneKind(id="artifacts", title="Artifacts", icon="artifacts"),
     PaneKind(id="notes", title="Notes", icon="notes"),
-    PaneKind(id="hypotheses", title="Hypotheses", icon="hypotheses"),
     PaneKind(id="briefs", title="Briefs", icon="briefs"),
     PaneKind(
         id="grounding",

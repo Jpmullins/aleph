@@ -1,7 +1,7 @@
 """Unit tests for the Wave 3 subagent wiring (delegation surface).
 
 These run under `pytest -m "not integration"` — no compose stack, no LLM. They
-build each of the six purpose-built subagents and assert the deepagents
+build each of the five purpose-built subagents and assert the deepagents
 `SubAgent` dict is shaped correctly and that each subagent's model carries the
 per-subagent cost-attribution callback (rule #5: every subagent LLM call writes
 a `ModelCall` + `CostLedgerEvent` tagged `assistant.subagent.<name>`).
@@ -42,7 +42,6 @@ def settings() -> Settings:
 
 
 def _builders() -> dict[str, Any]:
-    from aleph_api.subagents.analyst import build_analyst_subagent
     from aleph_api.subagents.researcher import build_researcher_subagent
     from aleph_api.subagents.retriever import build_retriever_subagent
     from aleph_api.subagents.reviewer import build_reviewer_subagent
@@ -54,7 +53,6 @@ def _builders() -> dict[str, Any]:
         "researcher": build_researcher_subagent,
         "wiki_builder": build_wiki_builder_subagent,
         "viz_builder": build_viz_builder_subagent,
-        "analyst": build_analyst_subagent,
         "reviewer": build_reviewer_subagent,
     }
 
@@ -68,7 +66,7 @@ def _purpose_of(model: ChatOpenAI) -> str | None:
 
 @pytest.mark.parametrize(
     "name",
-    ["retriever", "researcher", "wiki_builder", "viz_builder", "analyst", "reviewer"],
+    ["retriever", "researcher", "wiki_builder", "viz_builder", "reviewer"],
 )
 def test_subagent_builds_with_required_shape(settings: Settings, name: str) -> None:
     sub = _builders()[name](settings=settings)
@@ -82,7 +80,7 @@ def test_subagent_builds_with_required_shape(settings: Settings, name: str) -> N
 
 @pytest.mark.parametrize(
     "name",
-    ["retriever", "researcher", "wiki_builder", "viz_builder", "analyst", "reviewer"],
+    ["retriever", "researcher", "wiki_builder", "viz_builder", "reviewer"],
 )
 def test_subagent_model_is_cost_tagged(settings: Settings, name: str) -> None:
     # Rule #5: the subagent's model writes cost rows tagged per-subagent.
@@ -140,12 +138,12 @@ def test_subagent_model_points_at_the_resolved_endpoint_not_the_boot_setting(
 
 
 def test_every_subagent_follows_the_resolved_endpoint(settings: Settings) -> None:
-    """All six, not just the one the previous test happens to name.
+    """All five, not just the one the previous test happens to name.
 
     The endpoint travels by ContextVar for the same reason the bindings do:
     `subagents/*.py` take no endpoint argument. A builder that constructed its
     model outside the scope would be the failure this covers, and it would show
-    up on exactly one of the six.
+    up on exactly one of the five.
     """
     from aleph_api.copilot_agent import AgentEndpoint, use_agent_endpoint
 
@@ -172,14 +170,13 @@ def test_leaving_the_scope_restores_the_boot_endpoint(settings: Settings) -> Non
     assert str(after.openai_api_base).startswith(settings.litellm_base_url.rstrip("/"))
 
 
-def test_all_six_subagent_names_are_distinct() -> None:
+def test_all_five_subagent_names_are_distinct() -> None:
     builders = _builders()
     assert set(builders) == {
         "retriever",
         "researcher",
         "wiki_builder",
         "viz_builder",
-        "analyst",
         "reviewer",
     }
 

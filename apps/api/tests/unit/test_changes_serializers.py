@@ -118,7 +118,6 @@ def test_domain_ledger_kinds_map_to_changed_signals() -> None:
     changed = [s for s in sigs if s["kind"] == "changed"]
     assert [s["domain"] for s in changed] == [
         "notes",
-        "hypotheses",
         "briefs",
         "artifacts",
         "wiki",

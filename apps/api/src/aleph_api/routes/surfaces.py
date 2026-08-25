@@ -31,7 +31,6 @@ from aleph_a2ui.components.surfaces import (
     artifacts_surface_v09,
     briefs_surface_v09,
     grounding_surface_v09,
-    hypotheses_surface_v09,
     inspector_surface_v09,
     notes_surface_v09,
     settings_surface_v09,
@@ -977,8 +976,6 @@ async def _build_tab_messages(
         return await _library_messages(session, project_id, sid)
     if tab_lc == "notes":
         return await _notes_messages(session, project_id, sid)
-    if tab_lc == "hypotheses":
-        return await _hypotheses_messages(session, project_id, sid)
     if tab_lc == "briefs":
         return await _briefs_messages(session, project_id)
     if tab_lc == "grounding":
@@ -1299,7 +1296,7 @@ async def stream_surface(
     * an `updateComponents` message *iff* the structural component list changed
       (the processor updates existing ids in place, adds only new ones); and
     * one `updateDataModel` per minimal `diff_data_model` patch, so a bound prop
-      change (e.g. a hypothesis's confidence) re-renders only that prop.
+      change (e.g. a claim's confidence) re-renders only that prop.
 
     **Reconnect.** The browser `EventSource` reconnects to the same URL (same
     `?cid=`) carrying `Last-Event-ID`. If that id is still within this
@@ -1416,22 +1413,6 @@ async def stream_surface(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-
-
-async def _hypotheses_messages(
-    session: Any, project_id: UUID, surface_id: str
-) -> list[dict[str, Any]]:
-    """Data-bound Hypotheses tab: the tracked-hypothesis list + the ACH matrix,
-    loaded through the existing hypotheses routes (same queries the REST list /
-    `/hypotheses/ach` endpoints use) and bound into the surface data model."""
-    from aleph_api.routes.hypotheses import get_ach_matrix, get_hypotheses
-
-    items = [h.model_dump(mode="json") for h in await get_hypotheses(project_id, session)]
-    ach_out = (await get_ach_matrix(project_id, session)).model_dump(mode="json")
-    # ACH is only meaningful once there is evidence; expose null otherwise so the
-    # view renders its empty state rather than an empty grid.
-    ach: dict[str, Any] | None = ach_out if ach_out.get("targets") else None
-    return hypotheses_surface_v09(items=items, ach=ach, surface_id=surface_id)
 
 
 async def _library_messages(

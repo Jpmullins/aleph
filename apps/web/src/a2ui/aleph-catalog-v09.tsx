@@ -8,7 +8,7 @@
  * renders it from a server surface.
  *
  * ---------------------------------------------------------------------------
- * PROVEN PATTERN (Wave 4 Task 1 spike — verified end-to-end with HypothesisCard)
+ * PROVEN PATTERN (verified end-to-end against a data-bound surface)
  * ---------------------------------------------------------------------------
  *
  * 1. Component API (name + zod schema). Props use `CommonSchemas.*`
@@ -84,8 +84,6 @@ import { FormCard as FormCardView } from "./components/FormCard";
 import { HtmlDocCard as HtmlDocCardView } from "./components/HtmlDocCard";
 import { HtmlFrameCard as HtmlFrameCardView } from "./components/HtmlFrameCard";
 import { ImageCard as ImageCardView } from "./components/ImageCard";
-import { HypothesesSurface as HypothesesSurfaceView } from "./components/HypothesesSurface";
-import { HypothesisCard as HypothesisCardView } from "./components/HypothesisCard";
 import { NoteEditorCard as NoteEditorCardView } from "./components/NoteEditorCard";
 import { NotesSurface as NotesSurfaceView } from "./components/NotesSurface";
 import { SettingsSurface as SettingsSurfaceView } from "./components/SettingsSurface";
@@ -151,10 +149,9 @@ export function adapt(
         }),
       onSuccess: (out) => {
         // Mirror the right panel: refresh the live surfaces (Briefs/Artifacts/
-        // Hypotheses/Wiki/Notes) so the executed action is reflected there.
+        // Wiki/Notes) so the executed action is reflected there.
         qc.invalidateQueries({ queryKey: ["surface", projectId] });
         qc.invalidateQueries({ queryKey: ["artifacts", projectId] });
-        qc.invalidateQueries({ queryKey: ["hypotheses", projectId] });
         // `open` actions resolve to a workspace location — actually go there.
         const nav = out?.result?.navigate;
         // No client-side validation of the name: the server produced this
@@ -214,21 +211,6 @@ export function adapt(
 // ---------------------------------------------------------------------------
 // Cards
 // ---------------------------------------------------------------------------
-
-export const HypothesisCardApi = {
-  name: "HypothesisCard",
-  schema: z3.object({
-    hypothesis_id: CommonSchemas.DynamicString,
-    title: CommonSchemas.DynamicString,
-    confidence: CommonSchemas.DynamicString.optional(),
-    evidence_count: CommonSchemas.DynamicNumber.optional(),
-    open_action: CommonSchemas.Action.optional(),
-  }),
-};
-export const HypothesisCardImpl = createComponentImplementation(
-  HypothesisCardApi,
-  adapt("HypothesisCard", HypothesisCardView, "h"),
-);
 
 export const ClaimCardApi = {
   name: "ClaimCard",
@@ -531,18 +513,6 @@ export const NotesSurfaceImpl = createComponentImplementation(
   adapt("NotesSurface", NotesSurfaceView, "notes"),
 );
 
-export const HypothesesSurfaceApi = {
-  name: "HypothesesSurface",
-  schema: z3.object({
-    items: CommonSchemas.DynamicValue.optional(),
-    ach: CommonSchemas.DynamicValue.optional(),
-  }),
-};
-export const HypothesesSurfaceImpl = createComponentImplementation(
-  HypothesesSurfaceApi,
-  adapt("HypothesesSurface", HypothesesSurfaceView, "hypotheses"),
-);
-
 export const BriefsSurfaceApi = {
   name: "BriefsSurface",
   schema: z3.object({
@@ -642,7 +612,6 @@ export const SettingsSurfaceImpl = createComponentImplementation(
  */
 export const ALEPH_CARD_IMPLS = [
   // cards
-  HypothesisCardImpl,
   ClaimCardImpl,
   SourceCardImpl,
   ArtifactCardImpl,
@@ -662,7 +631,6 @@ export const ALEPH_CARD_IMPLS = [
   WikiSurfaceImpl,
   ArtifactsSurfaceImpl,
   NotesSurfaceImpl,
-  HypothesesSurfaceImpl,
   BriefsSurfaceImpl,
   GroundingSurfaceImpl,
   InspectorSurfaceImpl,

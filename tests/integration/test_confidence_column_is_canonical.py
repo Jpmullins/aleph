@@ -12,9 +12,10 @@ a writer reintroduces a spelling the migration removed, which is the recurrence
 the write-path guard (`aleph_core.confidence.canonical_confidence`, called at
 both `WikiClaim` insert sites) exists to prevent.
 
-`hypotheses.confidence` is checked too: it is written only by
-`next_confidence_from_evidence`, so a non-member there means something bypassed
-the state machine.
+`hypotheses.confidence` used to be checked here too. That table is gone
+(`docs/decisions.md` D16); the state machine that wrote it survives as
+`aleph_belief.confidence.next_confidence_from_evidence` and now has exactly one
+column to write — `wiki_claims.confidence`, checked above.
 """
 
 from __future__ import annotations
@@ -36,16 +37,6 @@ async def test_no_wiki_claim_carries_a_word_outside_the_vocabulary(session: Asyn
         f"wiki_claims.confidence holds {sorted(stray)}, which no reader recognises. "
         f"Canonical: {list(CONFIDENCE_VALUES)}. A writer is bypassing "
         f"aleph_core.confidence.canonical_confidence, or a migration was skipped."
-    )
-
-
-async def test_no_hypothesis_carries_a_word_outside_the_vocabulary(session: AsyncSession) -> None:
-    rows = (await session.execute(text("SELECT DISTINCT confidence FROM hypotheses"))).all()
-    found = {row[0] for row in rows}
-    stray = found - set(CONFIDENCE_VALUES)
-    assert not stray, (
-        f"hypotheses.confidence holds {sorted(stray)} — only "
-        f"next_confidence_from_evidence should ever write this column"
     )
 
 

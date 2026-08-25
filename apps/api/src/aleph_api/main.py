@@ -34,7 +34,6 @@ from aleph_api.routes import (
     gateway_endpoints,
     handedits,
     health,
-    hypotheses,
     ledger,
     me,
     metrics,
@@ -174,7 +173,6 @@ def create_app() -> FastAPI:
     app.include_router(changes.router)
     # Inc 5
     app.include_router(reviews.router)
-    app.include_router(hypotheses.router)
     # Inc 7
     app.include_router(artifacts.router)
     app.include_router(viz.router)

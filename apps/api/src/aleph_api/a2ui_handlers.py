@@ -772,8 +772,6 @@ async def _open(
     elif target_kind in ("wiki_page", "source_page"):
         nav["tab"] = "Wiki"
         nav["page_id"] = str(target_id)
-    elif target_kind == "hypothesis":
-        nav["tab"] = "Hypotheses"
     elif target_kind in ("artifact", "artifact_version"):
         nav["tab"] = "Library"
     elif target_kind == "note":
@@ -1176,36 +1174,6 @@ async def _submit_form(*, request: CardActionRequest, **_: Any) -> dict[str, Any
     }
 
 
-async def _create_hypothesis(
-    *,
-    session: AsyncSession,
-    ledger: LedgerWriter,
-    principal: Principal,
-    project_id: UUID,
-    request: CardActionRequest,
-    **_: Any,
-) -> dict[str, Any]:
-    """Route the Hypotheses tab's "+ New" through the existing hypothesis
-    service (WP-4: surface mutations flow through the ledger-audited router
-    instead of a component `useMutation`)."""
-    from aleph_hypotheses.hypothesis_service import create_hypothesis
-
-    title = str(request.params["title"]).strip()
-    statement = str(request.params["statement"]).strip()
-    if not title or not statement:
-        msg = "create_hypothesis requires non-empty title and statement"
-        raise ValidationFailed(msg)
-    h = await create_hypothesis(
-        session,
-        ledger=ledger,
-        principal=principal,
-        project_id=project_id,
-        title=title,
-        statement=statement,
-    )
-    return {"hypothesis_id": str(h.id), "short_id": h.short_id}
-
-
 async def _create_note(
     *,
     session: AsyncSession,
@@ -1594,7 +1562,6 @@ def build_action_router() -> ActionRouter:
     r.register("unpin", _unpin)
     r.register("navigate_wiki", _navigate_wiki)
     r.register("submit_form", _submit_form)
-    r.register("create_hypothesis", _create_hypothesis)
     r.register("create_note", _create_note)
     r.register("feedback", _feedback)
     r.register("edit_note", _edit_note)

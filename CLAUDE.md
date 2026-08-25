@@ -171,7 +171,7 @@ fixture, 3,312 of them pointing at deleted projects. Aleph has never had a real 
 
 Also true, and the reason "everything is a plugin" is still aspirational: **no domain package is a
 capability.** `aleph.toml` mounts seven infrastructure capabilities plus `scholar`, `realtime` and
-`agent_store`. The wiki, the RAG, research, belief, reviewer, hypotheses, artifacts, notes and
+`agent_store`. The wiki, the RAG, research, belief, reviewer, artifacts, notes and
 connectors are ordinary imports.
 
 The mechanism below is accurate and is what the corrected object will run on:
@@ -296,12 +296,11 @@ packages/
   aleph-models        LiteLLMClient, gateway discovery + hints, pricing, ModelProfile resolver
   aleph-scholar       Crossref/OpenAlex/Consensus, DOI verification. Pure HTTP, ZERO LLM calls.
   aleph-rks           Raw Knowledge Store — sources, normalization, chunks, embeddings, hybrid retrieval
-  aleph-belief        web of belief — patch contract, trust lattice, deterministic reconciliation
+  aleph-belief        web of belief — patch contract, trust lattice, reconciliation, claim confidence
   aleph-research      deep-research loop (plan→search→ingest→reflect→compose)
   aleph-connectors    typed connector plugins + encrypted ConnectorCredential
   aleph-assistant     chat orchestration + retrieval
   aleph-reviewer      verification passes
-  aleph-hypotheses    analyst hypotheses + the derived-confidence engine
   aleph-artifacts     builder agent, rendered assets, exporters
   aleph-a2ui          A2UI catalog (`catalog.json`) + Python SDK glue
   aleph-notes         analyst notes
@@ -309,7 +308,10 @@ packages/
   aleph-wiki          the wiki knowledge plugin — pages, schema, lint, hubs; hosts the Claim Spine write path
 ```
 
-20 workspace packages. `docs/acceptance.md` E4 asserts the count does not grow. There is no
+19 workspace packages, down from 20: `aleph-hypotheses` is deleted (`docs/decisions.md` D16 —
+Analysis of Competing Hypotheses did nothing; its claim-confidence state machine moved to
+`aleph_belief.confidence`, beside the trust lattice it scores). `docs/acceptance.md` E4 asserts the
+count does not grow. There is no
 reduction coming: `docs/decisions.md` D1 reversed the wiki deletion, and both knowledge plugins
 stay.
 

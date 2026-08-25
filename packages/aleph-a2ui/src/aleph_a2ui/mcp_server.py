@@ -33,7 +33,6 @@ from aleph_a2ui.catalog import CATALOG, catalog_schema_json
 from aleph_a2ui.components.surfaces import (
     artifacts_surface_v09,
     briefs_surface_v09,
-    hypotheses_surface_v09,
     notes_surface_v09,
     wiki_surface_v09,
 )
@@ -50,7 +49,6 @@ _SURFACE_BUILDERS: dict[str, Any] = {
     "wiki": lambda: wiki_surface_v09(pages=[], open_page=None),
     "artifacts": lambda: artifacts_surface_v09(sources=[], artifacts=[]),
     "notes": lambda: notes_surface_v09(notes=[]),
-    "hypotheses": lambda: hypotheses_surface_v09(items=[], ach=None),
     "briefs": briefs_surface_v09,
 }
 

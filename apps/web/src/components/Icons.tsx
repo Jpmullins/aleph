@@ -59,14 +59,6 @@ export const Icons = {
       <path d="M9 12.5h7M9 16h5" />
     </Svg>
   ),
-  /** Hypotheses — a balance, for weighing evidence. */
-  hypotheses: (p: IconProps = {}) => (
-    <Svg {...p}>
-      <path d="M12 4v16M7 20h10" />
-      <path d="M4.5 8h15" />
-      <path d="M4.5 8L2 13.5h5zM19.5 8L17 13.5h5z" />
-    </Svg>
-  ),
   /** Briefs — a pinned card. */
   briefs: (p: IconProps = {}) => (
     <Svg {...p}>

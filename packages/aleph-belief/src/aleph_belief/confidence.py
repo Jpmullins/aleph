@@ -1,4 +1,4 @@
-"""Confidence-state machine for hypotheses and claims.
+"""Confidence-state machine for claims.
 
 States:
   under_investigation → weakly_supported → well_supported
@@ -8,8 +8,17 @@ States:
 The alphabet lives in :mod:`aleph_core.confidence` — the leaf — so the A2UI
 catalog, the HTML compiler and the ``wiki_claims.confidence`` column can all
 name the same six values without depending on this package. This module owns the
-*transitions*; it no longer owns the words. ``Confidence`` is re-exported here
-because every existing caller imports it from this module.
+*transitions*; it does not own the words. ``Confidence`` is re-exported because
+callers want both halves from one import.
+
+It lives HERE, beside :mod:`aleph_belief.trust`, because that is what it reads.
+:func:`weight_for_tier` turns a ``TrustTier`` into the number the machine scores
+on, so the state machine and the lattice it scores are one subject and were two
+packages. It used to live in ``aleph-hypotheses``, whose other half — Analysis of
+Competing Hypotheses — was deleted 2026-08-25 for doing nothing; this was the
+load-bearing part and it moved rather than going with it. ``aleph-core`` was the
+obvious home and is the wrong one: it is the leaf and cannot import
+``TrustTier``.
 
 Transitions are driven by aggregated evidence:
   net_support = sum(weight * sign(stance)) where stance ∈ {supports: +1,

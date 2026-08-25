@@ -2,7 +2,7 @@
 
 How confident the system is in a claim used to be written down in three
 vocabularies that did not agree. The derived engine
-(``aleph_hypotheses.confidence.next_confidence_from_evidence``) emitted six
+(``aleph_belief.confidence.next_confidence_from_evidence``) emitted six
 underscore-spelled words. The A2UI catalog permitted six *different* words, two
 of them hyphen-spelled. The HTML compiler mapped some of each and had no styling
 for three of the engine's states. And 806 of the 850 claims in the live database
@@ -14,11 +14,11 @@ component reads it is not a knowledge layer, so this module is the single
 definition. It lives in ``aleph-core`` — the leaf — because every package that
 renders, stores or derives a confidence has to be able to import it without
 inverting the dependency DAG: ``aleph-a2ui`` (the catalog and the card builders)
-and ``aleph-wiki`` (the column and the HTML compiler) cannot depend on
-``aleph-hypotheses``, where the state machine lives.
+and ``aleph-wiki`` (the column and the HTML compiler) must be able to name a
+confidence without pulling in the trust lattice the state machine scores on.
 
-The **values** are the state machine's, unchanged. ``aleph_hypotheses`` still
-owns the transitions; it just no longer owns the alphabet.
+The **values** are the state machine's, unchanged. ``aleph_belief.confidence``
+owns the transitions; it does not own the alphabet.
 
 Enforced by ``scripts/check-confidence-vocabulary.sh``, which diffs this enum
 against the catalog, the web renderer and the HTML compiler.

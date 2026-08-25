@@ -174,26 +174,6 @@
   wired: true
   notes: "POST /notes/{id}/promote → 202; a new draft/synthesis wiki page + a pending synthesis-proposal appear."
 
-- id: hypotheses-create
-  intent: "A user can create a hypothesis via the Hypotheses surface and see it listed."
-  evidence:
-    - apps/web/src/a2ui/components/HypothesesSurface.tsx
-    - apps/api/src/aleph_api/routes/hypotheses.py
-  check_type: dataflow
-  status: unverified
-  wired: true
-  notes: "POST /hypotheses {title, statement} → 201; appears in GET /hypotheses."
-
-- id: hypotheses-ach-matrix
-  intent: "The Hypotheses surface renders an ACH (Analysis of Competing Hypotheses) matrix."
-  evidence:
-    - apps/web/src/a2ui/components/HypothesisMatrix.tsx
-    - apps/api/src/aleph_api/routes/hypotheses.py
-  check_type: http
-  status: unverified
-  wired: true
-  notes: "GET /hypotheses/ach returns {hypotheses, targets, cells, fewest_disconfirming_id} arrays."
-
 - id: briefs-pending-proposals
   intent: "The Briefs surface renders pending synthesis proposals as approval cards."
   evidence:

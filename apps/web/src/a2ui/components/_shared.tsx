@@ -64,7 +64,7 @@ const PILL_CLASS: Record<PillTone, string> = {
   bad: "bg-badge-failed-bg text-badge-failed-fg",
   // `inactive` and `neutral` currently render identically, which is a real gap
   // rather than a tidy-up: `confidenceTone` maps `abandoned` to `inactive` and
-  // `under_investigation` to `neutral`, so a hypothesis somebody GAVE UP ON
+  // `under_investigation` to `neutral`, so a claim somebody GAVE UP ON
   // looks exactly like one nobody has assessed. That is the same defect
   // `confidence.ts`'s own docstring records for the four-literal switch. It
   // needs a sixth badge pair in tokens.css, which is a palette decision, not a
@@ -153,7 +153,6 @@ export type FeedbackTargetKind =
   | "source"
   | "chart"
   | "finding"
-  | "hypothesis"
   | "assistant_message"
   | "wiki_page";
 

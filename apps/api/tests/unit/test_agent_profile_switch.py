@@ -11,7 +11,7 @@ because it teaches the user to trust a false report.
 These tests drive the real resolution path: `assistant_agent_resolver` ->
 `resolve_agent` -> `agent_resolution_signature` -> `BoundedGraphCache` ->
 `build_assistant_deep_agent` -> `use_agent_bindings` -> all seven
-`_gateway_chat_model` calls (the orchestrator and the six subagents, which build
+`_gateway_chat_model` calls (the orchestrator and the five subagents, which build
 their own models from their own modules). Only two things are substituted: the
 bindings loader, which stands in for one indexed SELECT, and
 `deepagents.create_deep_agent`, captured so the built models can be read back —
@@ -97,7 +97,7 @@ def _loader(profiles: dict[UUID | None, dict[str, Any] | None]) -> Any:
 
 
 def _model_names(agent: Any) -> list[str]:
-    """Every model the graph was built with: the orchestrator's, then the six."""
+    """Every model the graph was built with: the orchestrator's, then the five."""
     kwargs = agent.graph.aleph_captured
     names = [kwargs["model"].model_name]
     names.extend(sub["model"].model_name for sub in kwargs["subagents"])
@@ -178,7 +178,7 @@ async def test_every_subagent_comes_from_the_same_profile(
     )
 
     names = _model_names(await resolve(project))
-    assert len(names) == 7, f"expected orchestrator + six subagents, got {names}"
+    assert len(names) == 6, f"expected orchestrator + five subagents, got {names}"
     assert set(names) == {"alpha-model", "alpha-judge", "alpha-code"}
 
 

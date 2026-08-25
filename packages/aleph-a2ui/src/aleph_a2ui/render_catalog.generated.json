@@ -1164,59 +1164,6 @@
         "src"
       ]
     },
-    "HypothesesSurface": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/ComponentId"
-        },
-        "component": {
-          "const": "HypothesesSurface"
-        },
-        "items": {
-          "$ref": "#/$defs/DynamicValue"
-        },
-        "ach": {
-          "$ref": "#/$defs/DynamicValue"
-        }
-      },
-      "required": [
-        "id",
-        "component"
-      ]
-    },
-    "HypothesisCard": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/ComponentId"
-        },
-        "component": {
-          "const": "HypothesisCard"
-        },
-        "hypothesis_id": {
-          "$ref": "#/$defs/DynamicString"
-        },
-        "title": {
-          "$ref": "#/$defs/DynamicString"
-        },
-        "confidence": {
-          "$ref": "#/$defs/DynamicString"
-        },
-        "evidence_count": {
-          "$ref": "#/$defs/DynamicNumber"
-        },
-        "open_action": {
-          "$ref": "#/$defs/Action"
-        }
-      },
-      "required": [
-        "id",
-        "component",
-        "hypothesis_id",
-        "title"
-      ]
-    },
     "Icon": {
       "type": "object",
       "properties": {

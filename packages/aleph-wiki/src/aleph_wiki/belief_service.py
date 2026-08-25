@@ -10,7 +10,7 @@ correction — so the knowledge layer could not accumulate.
 
 **Confidence is derived, never asserted.** It is recomputed from the evidence in
 the same transaction as any citation write, by
-``aleph_hypotheses.confidence.next_confidence_from_evidence`` — a pure, tested
+``aleph_belief.confidence.next_confidence_from_evidence`` — a pure, tested
 function with no LLM call. A model is never asked how confident it is.
 
 **A human's claim is immutable to agents.** ``origin='user'`` is enforced in the
@@ -31,6 +31,11 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
+from aleph_belief.confidence import (
+    EvidenceRow,
+    next_confidence_from_evidence,
+    weight_for_tier,
+)
 from aleph_belief.patch import BeliefPatch
 from aleph_belief.reconcile import Candidate, ClaimRef, propose_with_stats
 from aleph_belief.trust import TrustTier
@@ -39,11 +44,6 @@ from aleph_core.errors import PermissionDenied
 from aleph_core.grounding import ground
 from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
-from aleph_hypotheses.confidence import (
-    EvidenceRow,
-    next_confidence_from_evidence,
-    weight_for_tier,
-)
 from aleph_observability.tracing import current_trace_id, start_span
 from aleph_rks.models import Source
 from aleph_wiki.models import Citation, ClaimEdge, WikiClaim

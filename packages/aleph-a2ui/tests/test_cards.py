@@ -14,7 +14,6 @@ from aleph_a2ui.components.cards import (
     ApprovalCardProps,
     ClaimCardProps,
     DiffCardProps,
-    HypothesisCardProps,
     SourceCardProps,
     TableCardProps,
     approval_card,
@@ -82,12 +81,6 @@ def test_auto_ids_are_unique_per_call() -> None:
     a = claim_card(ClaimCardProps(claim_id=uuid4(), text="a"))
     b = claim_card(ClaimCardProps(claim_id=uuid4(), text="b"))
     assert a["id"] != b["id"]
-
-
-def test_hypothesis_props_dataclass_defaults() -> None:
-    p = HypothesisCardProps(hypothesis_id=uuid4(), title="H")
-    assert p.confidence == "initial"
-    assert p.evidence_count == 0
 
 
 def test_source_card_carries_bound_normalized_preview() -> None:
