@@ -154,9 +154,12 @@ shape before touching any of it:
 
 1. **Author** — `POST /v1/projects/{id}/plugins`, or the agent's `author_plugin` tool. The AST gate
    runs BEFORE anything is stored, so source with an import-time side effect leaves no row.
-2. **Durable** — `plugins` table, `aleph_runtime.plugin_service`. Survives a restart; the workers
-   reconstitute from it. A plugin that fails to mount is recorded `failed` with its reason rather
-   than blocking every other plugin, which is the failure `Kernel.unregister` exists for.
+2. **Stored, NOT durable.** `plugins` table, `aleph_runtime.plugin_service`. This entry said
+   "survives a restart; the workers reconstitute from it" and **that is false** — see Known broken.
+   `PluginService.reconstitute` is correct, tested, and has **zero production callers**; the row
+   survives and the mount does not. A plugin that fails to mount is recorded `failed` with its
+   reason rather than blocking every other plugin, which is the failure `Kernel.unregister` exists
+   for — though `unregister` has no production caller either.
 3. **Reachable** — `aleph_kernel.agent_api.AgentPluginAPI`, five agent tools and five routes.
    `preview_removal` and the refusal read the same graph, so a refusal is always predictable.
    `author_plugin` and `disable_plugin` are withheld from the interpreter loop
@@ -368,6 +371,31 @@ These are genuine design commitments with no automated enforcement. Do not descr
 
 Verified against the tree as merged. Fix or delete; do not build on top of. Entries move to *Fixed*
 below only with a test that would have caught them.
+
+- **A plugin does not survive a restart, and the row still says `installed`.**
+  `PluginService.reconstitute` is written, tested and has **zero production callers**
+  (`grep -rn reconstitute apps packages scripts` outside tests returns only its own
+  definition and its log line). `lifespan.py` mounts the boot manifest and nothing
+  else; the arq worker builds its own kernel the same way. Measured: install
+  `restart-probe-b` → addressable; `docker restart aleph-api-1` → addressable is
+  `[]` while the row still reads `installed`. The A7 acceptance test passes only
+  because it calls `reconstitute` itself and then boots a fresh kernel, so it proves
+  the function works and not that anything calls it.
+
+  **The fix is not "call it at boot", and that is the part worth knowing.** A
+  capability key is `skill.{name}` (`skills.py:160`) with no project in it, while
+  the kernel is one process-wide instance. Measured on this instance: **3,117
+  installed rows across 2,849 projects, 18 distinct names, and 12 of those names are
+  used by more than one project.** Reconstituting every project into one kernel
+  collides on the second row of each shared name and the process fails to boot — a
+  worse failure than the one being fixed. Same root cause as the live 500 on
+  reinstall-after-disable: `'skill.x' is already registered`.
+
+  So this needs a decision before a fix: project-scope the capability key, give each
+  project its own kernel, or mount lazily per project and accept that two projects
+  cannot hold the same plugin name at once. `Kernel.unregister` and `Kernel.replace`
+  are also unreferenced outside tests, which is why a disable-then-reinstall 500s.
+  Do not "just wire up reconstitute" — it will not boot.
 
 - **`normalize_job` is not idempotent, and the health number reads the wreckage as
   lost documents.** It builds `NormalizedDocument(...)` unconditionally
