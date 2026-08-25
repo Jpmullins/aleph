@@ -19,10 +19,10 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aleph_core.errors import ValidationFailed
 from aleph_db.models.plugin import Plugin
 from aleph_db.repos.ledger import LedgerWriter
 from aleph_kernel.kernel import Kernel
-from aleph_kernel.skills import SkillRejected
 from aleph_runtime.plugin_service import PLUGIN_INSTALLED, PluginDraft, PluginService
 
 pytestmark = pytest.mark.integration
@@ -43,15 +43,29 @@ def summarise(items):
     return f"{len(items)} sources"
 """
 
-#: Source with a top-level side effect. The AST gate forbids a call at module
-#: level outside a 16-name allowlist, and `open(...)` is the shape that matters:
-#: loading a skill must not be able to touch the filesystem.
-GATED = """\
-open("/etc/passwd").read()
-
-def helper():
-    return 1
-"""
+#: Sources with an import-time side effect, one per EXECUTION MECHANISM.
+#:
+#: This was a single constant holding the bare-call shape, and the gate was
+#: found to refuse that one shape and admit every other: a class body, a
+#: default argument, a decorator argument, a base-class expression. The gate's
+#: coverage had become the shape of this example, so a probe posting
+#: `class _P: m = os.makedirs(...)` to the real route got 201 and the directory
+#: appeared inside the API container.
+#:
+#: Parametrised here rather than only in the kernel's unit tests because this is
+#: the test that asserts the ORDERING — refused before anything is stored — and
+#: an ordering that holds for one shape and not the others is not the property
+#: anybody wanted.
+GATED_SOURCES: dict[str, str] = {
+    "bare-call": 'open("/etc/passwd").read()\n\ndef helper():\n    return 1\n',
+    "class-body": 'import os\n\n\nclass _P:\n    m = os.makedirs("/tmp/x")\n',
+    "default-arg": 'import os\n\n\ndef helper(x=os.makedirs("/tmp/x")):\n    return x\n',
+    "decorator-arg": (
+        "import os\n\n\ndef d(*a, **k):\n    return lambda f: f\n\n\n"
+        '@d(os.makedirs("/tmp/x"))\ndef helper():\n    return 1\n'
+    ),
+    "class-base": ("def base():\n    return object\n\n\nclass _P(base()):\n    pass\n"),
+}
 
 
 def _instructions(name: str) -> str:
@@ -169,14 +183,21 @@ async def test_a_rollback_leaves_no_row_and_no_event(
     assert [r.name for r in rows if r.name == "rolled-back"] == []
 
 
+@pytest.mark.parametrize("shape", sorted(GATED_SOURCES))
 async def test_a_gated_plugin_leaves_no_row(
-    maker: Callable[[], AsyncSession], committed_project: uuid.UUID
+    shape: str, maker: Callable[[], AsyncSession], committed_project: uuid.UUID
 ) -> None:
     """Source with an import-time side effect is refused BEFORE anything is stored.
 
     The ordering is the point. A row written ahead of the gate would be an
     ungated payload sitting in the database waiting for the next boot to execute
     it — the gate is what makes storing agent-authored code safe at all.
+
+    `ValidationFailed`, not `SkillRejected`: the kernel still raises the latter
+    and `PluginService` translates it, because a refusal that reached HTTP as a
+    bare kernel error had no status mapping and surfaced as 500 "An unexpected
+    error occurred" — leaving an agent that authors plugins unable to tell a
+    refusal from a broken server, and so unable to fix its own code.
     """
     async with maker() as session:
         before = len(
@@ -190,13 +211,18 @@ async def test_a_gated_plugin_leaves_no_row(
                 .all()
             )
         )
-        with pytest.raises(SkillRejected):
+        with pytest.raises(ValidationFailed) as caught:
             await PluginService(session).install(
                 project_id=committed_project,
                 actor_id=ACTOR,
-                draft=_draft(name="dangerous", code=GATED),
+                draft=_draft(name="dangerous", code=GATED_SOURCES[shape]),
                 ledger=LedgerWriter(session),
             )
+        # The author has to be able to act on this. An error that says only
+        # "rejected" sends the agent back to retry the same source.
+        violations = caught.value.detail["violations"]
+        assert violations, "a refusal must carry the reasons the gate computed"
+        assert all(v["reason"] for v in violations)
         await session.rollback()
 
     async with maker() as session:
@@ -248,7 +274,7 @@ async def test_one_bad_plugin_does_not_stop_the_others_from_mounting(
                 major_version=1,
                 source_kind="skill",
                 instructions="---\nname: broken-one\n---\nbody",
-                code=GATED,
+                code=GATED_SOURCES["bare-call"],
                 provides=["skill.broken-one"],
                 requires=[],
                 config_schema={},

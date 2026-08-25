@@ -182,9 +182,7 @@ class PluginService:
                 str(exc),
                 detail={
                     "plugin": exc.skill,
-                    "violations": [
-                        {"line": v.line, "reason": v.reason} for v in exc.violations
-                    ],
+                    "violations": [{"line": v.line, "reason": v.reason} for v in exc.violations],
                 },
             ) from exc
         _refuse_catalog_collision(draft)

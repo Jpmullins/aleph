@@ -272,7 +272,9 @@ class TestOrdinaryCodeStillLoads:
 
     def test_a_decorator_call_with_constant_arguments_is_fine(self) -> None:
         """`@lru_cache(maxsize=128)` builds a wrapper; 128 does nothing."""
-        src = "from functools import lru_cache\n\n\n@lru_cache(maxsize=128)\ndef f():\n    return 1\n"
+        src = (
+            "from functools import lru_cache\n\n\n@lru_cache(maxsize=128)\ndef f():\n    return 1\n"
+        )
         assert not check_source(src)
 
     def test_field_default_factory_is_fine(self) -> None:
