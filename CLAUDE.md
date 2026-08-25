@@ -425,6 +425,17 @@ below only with a test that would have caught them.
 
 **2026-08-24, later (the AST gate admitted almost everything it exists to refuse)**
 
+- **Six of the eight numbers hold, and two of the three that were failing were fixed rather than
+  reinterpreted.** Number 1, the acceptance gate — the one this file says to read first — is
+  `f0/s2/m0` and green. Number 6 went 23 → 0: the reaper works, and the last run only looked stuck
+  because it crossed the one-hour threshold *after* the most recent API boot, which is the one
+  moment the reaper runs. Number 7 is measured for the first time: **20/20 turns ok, first token
+  p50 0.12s, p95 0.13s, exactly one upstream chat completion per turn.** Number 5's cutoff moved
+  (a fifth time, `docs/attribution-cutoff.txt`) because its DISCRIMINATOR was wrong, not because
+  the number was inconvenient — and only after measuring forward: 143 model calls since the new
+  timestamp, zero unpriced and zero unattributed. An empty window would have proved nothing.
+  Still unmeasured: retrieval nDCG@10, which needs a generated dataset.
+
 - **The agent's door to `author_plugin` was the permissive one.** Both HTTP routes require OWNER;
   both agent tools gated through `_authorized`, which hardcoded VIEWER — so the same two operations
   answered differently depending on which door they came through, and the model used the open one.

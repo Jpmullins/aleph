@@ -1,4 +1,4 @@
-2026-08-22T14:00:00Z
+2026-08-25T00:39:00Z
 
 # The moment the deployed stack started recording model calls with BOTH a price
 # and a run to attribute them to.
@@ -52,3 +52,32 @@
 #
 # A cutoff in the FUTURE makes the number unfalsifiable, so
 # `scripts/_acceptance/status_numbers.py` refuses to report green on one.
+#
+# A FIFTH (2026-08-25 00:39), and this one was a measurement bug rather than a
+# missing record: the discriminator could not tell the agent path from a
+# diagnostic one.
+#
+# `uncosted_model_calls` counts `agent_run_id IS NULL AND purpose LIKE
+# 'assistant%'`, on the reasoning stated above that "the prefix is the honest
+# discriminator — `purpose` is what the call site declares itself to be". It was
+# not the call site. `WikiFirstRetrievalRouter` wrote the purpose itself, so a
+# real agent turn and the debug-only `/retrieval/debug` route emitted identical
+# strings. Ten rows on this instance were counted as agent-path attribution
+# defects that did not exist, while the agent path was in fact 13/13 attributed
+# over the same window. The router takes a `purpose_prefix` now and the debug
+# route declares itself `diagnostic`, which has no turn to belong to and never
+# will — requiring one would mean minting a fake run so a number could go green.
+#
+# The other seven rows in that count were never real spend either: four are
+# `zebra-mini`/`zebra-LARGE`, synthetic model names from an audit probe, which
+# have no price because they do not exist; three are `assistant.turn.failed`
+# against a model this gateway does not serve, recorded with 0 input tokens,
+# 0 completion tokens and $0 — a call that failed before consuming anything.
+#
+# Moved rather than backfilled, per D9, and moved only after measuring forward
+# rather than assuming: 143 model calls were recorded between this timestamp and
+# the run that checked it, and ZERO of them are unpriced or unattributed. An
+# empty window would have proved nothing; a busy clean one is the evidence.
+#
+# `uncosted_model_calls_legacy` still prints the all-time figure beside it, so
+# what this timestamp forgives stays visible on the same screen.
