@@ -30,7 +30,6 @@ import uuid
 from collections.abc import AsyncIterator, Callable
 
 import pytest
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -40,68 +39,9 @@ from sqlalchemy.ext.asyncio import (
 
 DEFAULT_URL = "postgresql+asyncpg://aleph:aleph@localhost:5432/aleph"
 
-#: How a committed integration fixture is torn down, in delete order. Each entry
-#: is a statement scoped to one project id — named explicitly rather than
-#: reflected, because a truncate-everything teardown is a data-loss bug waiting
-#: for the first person who points DATABASE_URL at the running compose Postgres,
-#: which is the documented way to run these.
-_TEARDOWN_SQL = (
-    # The wiki tables, in FK order, and they were ALL missing.
-    #
-    # `DELETE FROM projects` ran while every wiki row for that project stayed
-    # behind, orphaned — pointing at a project id that no longer resolves. That
-    # is not merely untidy: `test_stub_pages_are_not_drafts` counts
-    # `is_stub AND status='draft'` across the whole database as a canary for the
-    # deployed instance, and it went red on 20 rows titled "Gamma" left by a
-    # concurrency fixture whose project had been deleted three hours earlier.
-    # The invariant it guards is real and the code upholds it; the rows were
-    # rubbish this teardown should never have left.
-    "DELETE FROM citations WHERE project_id = :pid",
-    "DELETE FROM claim_edges WHERE project_id = :pid",
-    "DELETE FROM wiki_claims WHERE project_id = :pid",
-    "DELETE FROM wiki_sections WHERE project_id = :pid",
-    "DELETE FROM wiki_links WHERE project_id = :pid",
-    "DELETE FROM wiki_index WHERE project_id = :pid",
-    "DELETE FROM synthesis_proposals WHERE project_id = :pid",
-    "DELETE FROM wiki_schemas WHERE project_id = :pid",
-    # `wiki_pages` and `wiki_revisions` are deliberately NOT deleted.
-    #
-    # `wiki_revisions` is append-only, enforced by a database trigger
-    # (`wiki_revisions_immutable`) — the same protection the action ledger has,
-    # and for the same reason. A DELETE raises. `wiki_pages` cannot go either:
-    # revisions carry a FK back to their page, so removing the page would
-    # violate it.
-    #
-    # So a test that commits a revision leaves a permanent page row behind, and
-    # that is a property of the design rather than a leak to plug. A fixture
-    # that switched the trigger off to tidy up would be trading an invariant for
-    # a clean table, which is how the invariant stops being one.
-    #
-    # The consequence lands on any check that counts wiki_pages globally: see
-    # `test_stub_pages_are_not_drafts`, which scopes to LIVE projects for
-    # exactly this reason.
-    "DELETE FROM document_chunks WHERE project_id = :pid",
-    "DELETE FROM retrieval_index_records WHERE project_id = :pid",
-    "DELETE FROM normalized_documents WHERE project_id = :pid",
-    "DELETE FROM source_versions WHERE source_id IN"
-    " (SELECT id FROM sources WHERE project_id = :pid)",
-    "DELETE FROM source_assets WHERE project_id = :pid",
-    "DELETE FROM sources WHERE project_id = :pid",
-    "DELETE FROM agent_events WHERE agent_run_id IN"
-    " (SELECT id FROM agent_runs WHERE project_id = :pid)",
-    "DELETE FROM model_calls WHERE project_id = :pid",
-    "DELETE FROM cost_ledger_events WHERE project_id = :pid",
-    "DELETE FROM gateway_endpoints WHERE project_id = :pid",
-    "DELETE FROM agent_runs WHERE project_id = :pid",
-    # `action_ledger_events` and its head are deliberately NOT deleted. The
-    # table carries an append-only trigger, and `aleph` is a superuser in the
-    # compose stack — so a teardown *could* bypass it with
-    # `session_replication_role`. It must not: a fixture that switches off a
-    # core invariant to tidy up is how the invariant stops being one. The rows
-    # are scoped to a throwaway project id and interfere with nothing.
-    "DELETE FROM model_profiles WHERE project_id = :pid",
-    "DELETE FROM projects WHERE id = :pid",
-)
+# The teardown lives in a module, not here, so its completeness can be tested.
+# See tests/integration/teardown.py and test_teardown_is_complete.py.
+from tests.integration.teardown import teardown_project  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -150,10 +90,7 @@ async def second_project(
     """
     project_id = uuid.uuid4()
     yield project_id
-    async with maker() as s:
-        for statement in _TEARDOWN_SQL:
-            await s.execute(text(statement), {"pid": project_id})
-        await s.commit()
+    await teardown_project(engine, maker, project_id)
 
 
 @pytest.fixture
@@ -167,7 +104,4 @@ async def committed_project(
     """
     project_id = uuid.uuid4()
     yield project_id
-    async with maker() as s:
-        for statement in _TEARDOWN_SQL:
-            await s.execute(text(statement), {"pid": project_id})
-        await s.commit()
+    await teardown_project(engine, maker, project_id)

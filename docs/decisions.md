@@ -541,3 +541,88 @@ places a reader would otherwise read it as a measured zero.
 **Reopen this if** a pipeline stage ever learns a real dependency — a composer
 that cites a CLAIM rather than a chunk would be one. The writer is already
 there; only the caller is missing, deliberately.
+
+## D15 · A plugin is a capability. A skill is a document. They were fused, and the fused half was dead — 2026-08-25
+
+**The choice.** `plugins.source_kind` loses the `"skill"` value. A durable plugin
+is a **kernel capability**: code with a `setup`, an inverse, a live `probe`, and
+accurate `provides`/`requires`. An agent-authored **skill** is an instruction
+document and stays where it already works — the deepagents `StoreBackend` at
+`/skills/authored/` (`copilot_agent.py:2627`, sourced at :2681). Aleph does not
+build a second skill system, and `WS-H1` already built the first one.
+
+**Why it needed deciding.** It did not need deciding. The plan had it right and
+the implementation collapsed it, so this record exists to say so and to stop the
+collapse being re-derived.
+
+`WS-A2`/`WS-A7` is the kernel surface: an agent authors a capability, previews
+what turning it off would break, turns it off. `WS-H1` is a separate workstream
+whose own words are *"a short instruction document, optionally with helper
+code"*, delivered through the deepagents skill backend. Two mechanisms, kept
+apart — the same split the reference harnesses make between a skill catalog and
+model-written runtime code (D2: read, not depended on).
+
+What shipped was one `plugins` table with `source_kind ∈ ("skill", "capability")`
+holding `instructions` **and** `code`. That dragged instruction documents into
+the plugin table and created a second skill mechanism next to the working one.
+
+**Measured — the fused half is dead code, not merely redundant.**
+
+`source_kind` is written to the row (`plugin_service.py:195`) and into the
+append-only ledger (:219). The model's own docstring claims the column exists
+because *"they differ in what reconstitution does with them"*. **Nothing branches
+on it.** `install` calls `skill_from_source(...)` unconditionally
+(`plugin_service.py:156`) and so does `reconstitute` (:270). There is no
+capability path. Every "plugin" Aleph can author is a skill.
+
+Every reader of a plugin row's `instructions`:
+
+| site | what it does |
+|---|---|
+| `routes/plugins.py:206` | writes it |
+| `skills.py:220,227` | the capability's own probe — non-empty, and named helpers exist |
+| `plugin_service.py:100` | first line → a description string for the settings card |
+| `plugin_service.py:270` | `reconstitute`, which has **no production callers** |
+
+**Nothing puts a plugin's instructions in front of a model.** The instructions
+the assistant actually reads come from the deepagents store. So the table carried
+durability, mounting, a `PluginId`, blast-radius machinery and a restart story
+for prose that no model ever sees.
+
+**And the count that made it visible.** 3,313 installed rows, **18 distinct
+names**, every one an integration-test fixture (`literature-review`,
+`good-one`, `broken-one`, `thing`, `plain-thing`). 3,312 of the 3,313 point at
+projects that no longer exist. The single survivor was a probe row from an audit
+an hour earlier. **Aleph has never had a real plugin.**
+
+**What this decision does NOT say.** The kernel is not the problem and is not
+being changed. Core capabilities from `aleph.toml` and agent-authored ones share
+one registry; core ones simply have no `PluginId`, so deactivating them is
+unexpressible rather than refused. That is the composability model working. The
+divergence is entirely in the durable authoring path, which persisted the
+kernel's existing *skill* constructor instead of a capability.
+
+**The correction.**
+
+1. `source_kind` is `"capability"` only. Dropping `"skill"` deletes a branch with
+   no live reader rather than migrating anything.
+2. Agent-authored skills stay in the deepagents store. `author_plugin` stops
+   accepting an instruction document as the payload.
+3. The domain suites become real capabilities — the thing "everything is a
+   plugin" was always supposed to mean. Today **no** domain package is one:
+   `aleph.toml` mounts seven infrastructure capabilities plus `scholar`,
+   `realtime` and `agent_store`, and the wiki, the RAG, research, belief,
+   reviewer, hypotheses, artifacts, notes and connectors are ordinary imports.
+4. Reconstitution stops being blocked on prose. Capabilities are what needs
+   mounting; a document does not.
+
+**Cost of having got it wrong.** A security gate was designed, audited and
+hardened around agent-authored code executed in-process, when the objects it was
+protecting were instruction documents nothing read. The gate work stands — it was
+a real hole and `exec()` in the API process is still how a capability's helpers
+load — but it was scoped by a wrong idea of what was being stored.
+
+**Supersedes.** The plugin-cluster description in `CLAUDE.md` and the
+`SOURCE_KINDS` docstring in `aleph_db/models/plugin.py`, both of which assert the
+fused model.
+

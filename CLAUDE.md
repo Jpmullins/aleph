@@ -18,8 +18,15 @@ The product thesis: an agent that **authors plugins for itself and activates or 
 needed**, on a kernel whose composability model makes that safe — with guardrails preventing it from
 removing load-bearing capability. The kernel is the product.
 
+**A plugin is a capability, not a document** (`docs/decisions.md` D15). It is code with a `setup`, an
+inverse, a mandatory live `probe`, and accurate `provides`/`requires` — a node the kernel graph can
+hold, boot in order, and revert. An instruction document is a **skill**, and skills already work
+through the deepagents store; Aleph does not own that mechanism and is not rebuilding it. The two
+were fused once and the fused half was dead code.
+
 The existing research capability — ingest, scholarship, a belief layer, the research loop — ships as
-the **first plugin suite**, not as the thing itself.
+the **first plugin suite**, not as the thing itself. It is not one yet: as of 2026-08-25 no domain
+package is a capability.
 
 Within that suite, the durable knowledge layer is a **web of belief**: claims are first-class,
 evidence-anchored, and revised as sources are added, contradicted, or retracted. Prose (HTML
@@ -149,11 +156,30 @@ comprehensively and correctly. `docs/decisions.md` D1 records why.
 
 ### The plugin cluster, end to end
 
-As of 2026-08-22 the thing CLAUDE.md opens by describing actually works, and it is worth knowing the
-shape before touching any of it:
+**Read `docs/decisions.md` D15 before touching any of this.** This section described a cluster that
+works, and the mechanism works while the OBJECT it carries was the wrong one. A plugin is a kernel
+**capability** — code with a setup, an inverse, a live probe and accurate `provides`/`requires`. A
+**skill** is an instruction document, and Aleph already has a working skill system it did not build:
+the deepagents `StoreBackend` at `/skills/authored/` (`copilot_agent.py:2627`, sourced at :2681).
+
+What shipped fused them. `plugins.source_kind ∈ ("skill", "capability")` dragged instruction
+documents into the plugin table, and **the `skill` half is dead**: `source_kind` is written to the
+row and to the ledger and **branched on nowhere** — `install` and `reconstitute` both call
+`skill_from_source` unconditionally — and **nothing puts a plugin's `instructions` in front of a
+model.** Measured 2026-08-25: 3,313 installed rows, 18 distinct names, every one an integration-test
+fixture, 3,312 of them pointing at deleted projects. Aleph has never had a real plugin.
+
+Also true, and the reason "everything is a plugin" is still aspirational: **no domain package is a
+capability.** `aleph.toml` mounts seven infrastructure capabilities plus `scholar`, `realtime` and
+`agent_store`. The wiki, the RAG, research, belief, reviewer, hypotheses, artifacts, notes and
+connectors are ordinary imports.
+
+The mechanism below is accurate and is what the corrected object will run on:
 
 1. **Author** — `POST /v1/projects/{id}/plugins`, or the agent's `author_plugin` tool. The AST gate
-   runs BEFORE anything is stored, so source with an import-time side effect leaves no row.
+   runs BEFORE anything is stored, so source with an import-time side effect leaves no row. The gate
+   walks definition-time code too — decorator arguments, default arguments, class bases and class
+   bodies — since it previously refused only the one shape its own test used.
 2. **Stored, NOT durable.** `plugins` table, `aleph_runtime.plugin_service`. This entry said
    "survives a restart; the workers reconstitute from it" and **that is false** — see Known broken.
    `PluginService.reconstitute` is correct, tested, and has **zero production callers**; the row
@@ -173,7 +199,10 @@ shape before touching any of it:
    AND the append-only ledger, so a credential there is plaintext forever. Credentials go through
    `ConnectorCredential`.
 
-Core capability has no `plugin_id` at any layer. It is not refused, it is unnameable.
+Core capability has no `plugin_id` at any layer. It is not refused, it is unnameable. **The kernel
+is not what went wrong** — core and agent-authored capabilities already share one registry, which is
+the composability model working. The divergence is entirely in the durable authoring path, which
+persisted the kernel's existing *skill* constructor instead of a capability.
 
 - **Reranking is wired, and it is a second stage that may never take down the first.**
   `Capability.RERANK` now has a production caller (`aleph_assistant.retrieval.router.

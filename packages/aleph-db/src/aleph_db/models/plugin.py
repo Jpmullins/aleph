@@ -29,12 +29,23 @@ from aleph_db.base import Base, CommonColumns
 
 #: What the row carries the body of.
 #:
-#: `skill` is an instruction document with optional helper code — what
-#: `aleph_kernel.skills.skill_from_source` builds. `capability` is a plugin that
-#: provides a named capability to the kernel graph. They differ in what
-#: reconstitution does with them, which is why the column exists rather than
-#: being inferred from whether `code` is null.
-SOURCE_KINDS = ("skill", "capability")
+#: `capability` ONLY. This tuple read `("skill", "capability")` and the docstring
+#: claimed the two "differ in what reconstitution does with them, which is why
+#: the column exists". Nothing branched on it: `PluginService.install` and
+#: `PluginService.reconstitute` both called `skill_from_source` unconditionally,
+#: so every plugin Aleph could author was a skill and the `capability` value was
+#: aspirational.
+#:
+#: Worse than redundant — the `skill` half was dead. Nothing ever put a plugin
+#: row's `instructions` in front of a model; the instructions the assistant
+#: reads come from the deepagents `StoreBackend` at `/skills/authored/`, a
+#: separate and working mechanism. So the table carried durability, mounting, a
+#: PluginId and a restart story for prose no model saw.
+#:
+#: A plugin is a kernel capability: code with a setup, an inverse, a live probe
+#: and accurate provides/requires. An instruction document is a skill and does
+#: not belong here. See `docs/decisions.md` D15.
+SOURCE_KINDS = ("capability",)
 
 #: Lifecycle. `installed` is durable-but-not-running: the row exists and the
 #: next boot will mount it. `disabled` is deliberate — the agent turned it off
