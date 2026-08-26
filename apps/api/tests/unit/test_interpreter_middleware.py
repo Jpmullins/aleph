@@ -516,8 +516,11 @@ async def test_interpreter_cannot_reach_the_host() -> None:
     QuickJS has no host bindings of its own; everything the script can reach
     Aleph gave it. So the assertion is in two halves: nothing that could touch
     the filesystem, the network or the process exists, and the `tools` namespace
-    contains exactly the allowlist and nothing else — no `task` (subagent
-    dispatch, which would put unbounded fan-out back), and no mutating tool.
+    contains exactly the allowlist and nothing else — no mutating tool.
+
+    `task` is checked separately and is EXPECTED to be present: it is installed
+    as a top-level global rather than under `tools`, and dynamic subagents are
+    deliberately on. See the note at that assertion.
     """
     _quickjs()
 
@@ -554,13 +557,26 @@ async def test_interpreter_cannot_reach_the_host() -> None:
     for withheld in PTC_WITHHELD:
         assert _camel(withheld) not in namespace, f"{withheld} is reachable from a loop"
 
-    # `task` is installed as a top-level function, not under `tools`, so it has
-    # to be probed for by name. `subagents=True` (the upstream default) puts it
-    # there: subagent dispatch from inside the loop is a model loop per item,
-    # which is the unbounded fan-out this workstream exists to remove, dispatched
-    # with no parent approval because the one `eval` was approved.
+    # `task` IS present, and this assertion is inverted from what it was.
+    #
+    # It read `assert "undefined" in dispatch` on the argument that subagent
+    # dispatch from inside the loop is a model loop per item, dispatched with no
+    # parent approval because the one `eval` was approved. The second half of
+    # that is true and unchanged. The first half — "unbounded" — was not: the
+    # eval is capped at `INTERPRETER_TIMEOUT_S`, and a subagent loop costs
+    # seconds, so the wall clock bounds the fan-out more tightly than the
+    # PTC-call cap sitting beside it.
+    #
+    # What the old assertion cost was the feature the interpreter exists for:
+    # fanning one read across many items and synthesising in code. It forbade
+    # exactly that while still permitting the loop-over-tools case that is only
+    # marginally cheaper. `docs/decisions.md` D17.
+    #
+    # This is the LIVE proof that dynamic subagents are on — it probes the actual
+    # QuickJS global rather than reading the constructor argument, so it stays
+    # true if upstream changes how `subagents=True` is honoured.
     dispatch = (await _run_script("typeof globalThis.task;", fixture)).text
-    assert "undefined" in dispatch, f"task() is callable from inside the REPL: {dispatch}"
+    assert "function" in dispatch, f"task() is not callable from the REPL: {dispatch}"
 
     escaped_eval = (await _run_script('typeof globalThis["eval_tool"];', fixture)).text
     assert "undefined" in escaped_eval

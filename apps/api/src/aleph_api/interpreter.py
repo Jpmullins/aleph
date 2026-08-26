@@ -59,10 +59,32 @@ here rather than worked around at the call site.**
 **Read-only, deliberately.** PTC also bypasses `interrupt_on` / human-in-the-loop
 approval — one approved `eval` can drive a hundred tool calls with no further
 gate. So the allowlist below is read-only tools only, and `PTC_WITHHELD` records
-why each of the others is not there. `subagents=False` for the same reason and
-one more: `task()` from inside the REPL dispatches a subagent, and a subagent is
-its own model loop — allowing it would put the unbounded, non-deterministic
-fan-out back inside the mechanism built to remove it.
+why each of the others is not there.
+
+**`subagents=True` since 2026-08-26, and the reasoning changed rather than the
+risk.** This read `False`, on the argument that `task()` from inside the REPL
+dispatches a subagent, a subagent is its own model loop, and allowing it would
+put unbounded non-deterministic fan-out back inside the mechanism built to
+remove it. Two things about that were wrong.
+
+First, it gave up the feature the mechanism exists for. Fanning one read across
+forty pages and synthesising the results is the highest-value shape the
+interpreter enables — it is the pattern the upstream docs lead with — and
+`subagents=False` forbids exactly it while permitting the loop-over-tools case
+that is only marginally cheaper.
+
+Second, the fan-out is NOT unbounded. This eval is capped at
+`INTERPRETER_TIMEOUT_S` wall clock, `INTERPRETER_MAX_PTC_CALLS` tool calls and
+`INTERPRETER_MEMORY_LIMIT_BYTES`. A subagent loop costs seconds, so the 60s
+ceiling is the operative bound on how many can be dispatched — a tighter one, in
+practice, than the tool-call cap it sits beside.
+
+**What is genuinely given up, stated plainly: there is no per-dispatch HITL
+approval.** `task()` runs inside an already-approved `eval`, and upstream says so
+in a warning block. `subagents` is a BOOL — there is no per-subagent allowlist
+parameter to reach for, so `SUBAGENT_DISPATCHABLE` below is not a gate. It is a
+pinned inventory: the set is asserted by a test, so adding a sixth subagent is a
+decision somebody makes rather than a capability that appears.
 """
 
 from __future__ import annotations
@@ -87,6 +109,7 @@ __all__ = [
     "INTERPRETER_TOOL_NAME",
     "PTC_ALLOWLIST",
     "PTC_WITHHELD",
+    "SUBAGENT_DISPATCHABLE",
     "FanOutPolicyMiddleware",
     "build_interpreter_middleware",
     "guarded_ptc_tools",
@@ -155,6 +178,26 @@ PTC_ALLOWLIST: Final[tuple[str, ...]] = (
 #: orchestrator carries appears in exactly one of these two, so adding a tool
 #: without deciding whether a loop may call it fails a test rather than quietly
 #: defaulting either way.
+#: Every subagent `task()` can reach from inside the REPL.
+#:
+#: NOT A GATE, and calling it one would be a lie: `CodeInterpreterMiddleware`
+#: takes `subagents` as a BOOL, so the reachable set is "whatever the
+#: orchestrator was built with" and there is no parameter that narrows it.
+#:
+#: It is a PINNED INVENTORY. `test_repl_dispatchable_subagents_are_pinned`
+#: asserts this equals the orchestrator's roster, so adding a sixth subagent
+#: fails a test rather than silently becoming REPL-dispatchable — which matters
+#: because a dispatch from here carries no per-dispatch HITL approval, and the
+#: next subagent somebody adds may be one that spends or writes far more freely
+#: than these five.
+SUBAGENT_DISPATCHABLE: Final[tuple[str, ...]] = (
+    "retriever",
+    "researcher",
+    "wiki_builder",
+    "viz_builder",
+    "reviewer",
+)
+
 PTC_WITHHELD: Final[dict[str, str]] = {
     "set_connector_enabled": (
         "mutates project configuration; PTC bypasses interrupt_on, so one "
@@ -363,11 +406,11 @@ def build_interpreter_middleware(
     exposed: list[str | BaseTool] = list(guarded_ptc_tools(tools))
     interpreter: AgentMiddleware[Any, Any, Any] = CodeInterpreterMiddleware(
         tool_name=INTERPRETER_TOOL_NAME,
-        # One eval call = one gateway request, regardless of how many items the
-        # loop touches. `subagents=True` would undo that: `task()` from inside
-        # the REPL starts a subagent, which is a model loop of its own, dispatched
-        # with no parent-level approval because the eval was approved once.
-        subagents=False,
+        # `task()` from the REPL, so the agent can fan one read across many
+        # items and synthesise in code. See the module docstring for what this
+        # gives up (per-dispatch HITL) and what bounds it (the eval's own
+        # timeout, which a subagent loop reaches long before the PTC cap).
+        subagents=True,
         ptc=exposed,
         # "turn", not the default "thread". `thread` serialises the whole QuickJS
         # heap into the checkpoint between turns — up to `memory_limit` bytes per
