@@ -471,6 +471,12 @@ light.
   runs as root. It renders in a scratch directory with `.env.example` copied to `.env`, so it is
   hermetic and additionally proves the shipped example is sufficient to render the stack. Exit 0
   pass · 1 fail · **2 could not run** (no docker) — "could not measure" is never reported as "fine".
+- `check-compose-images-pinned.sh` — asserts every service that BUILDS also pins an `image:` tag,
+  read from the same rendered config. Without a tag compose derives one from the project directory,
+  so `docker compose build` writes a tag a later `up` may not be running: the rebuild reports
+  success and the old container keeps serving. Measured — `workers` had no `image:` key and a stale
+  image answered `function 'delegated_subagent_job' not found` through three rebuilds, each of which
+  said "Built". Acceptance row F6a.
 
   **It is red today, on the last section only.** Four of the five Dockerfiles this stack builds
   declare no `USER`: `apps/api`, `apps/workers`, `apps/copilot-runtime` and `apps/web/Dockerfile.dev`

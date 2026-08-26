@@ -238,6 +238,7 @@ green.
 | F4 | The runtime bridge is not an any-origin, any-host proxy | `acceptance.sh` F4 — `scripts/_acceptance/runtime_bridge_probe.mjs` | ✅ |
 | F5 | The bridge refuses an unlisted origin and forwards the caller's credential | `scripts/_acceptance/runtime_bridge_probe.mjs`, run as `acceptance.sh` F5 — needs node; skipped, not passed, when node is absent | ✅ |
 | F6 | Every built image declares a non-root `USER` | `acceptance.sh` F6 — `scripts/check-compose-hardening.sh`, over the RENDERED compose config rather than the source file, so a hardening section an override drops is still caught. Was red (4 of 6 Dockerfiles ran as root); green 2026-08-24 at 6/6 images and 15 services, and promoted from expected-red to a hard-fail row so a regression fails the gate | ✅ |
+| F6a | Every building compose service pins an `image:` tag | `acceptance.sh` F6a — `scripts/check-compose-images-pinned.sh`, over the RENDERED config. Without a tag compose derives one from the project directory, so `build` writes a tag a later `up` may not be running: a stale `workers` image answered `function 'delegated_subagent_job' not found` through three rebuilds that each reported success | ✅ |
 | F8 | Dispatch redacts before writing the append-only tables | `acceptance.sh` F8 — `tests/integration/test_action_params_are_redacted.py`; a settings value reaches `card_actions` AND the ledger, so a credential there is plaintext forever | ✅ |
 
 **F1 blocks any deployment.** Every HTTP route is correctly gated; the agent

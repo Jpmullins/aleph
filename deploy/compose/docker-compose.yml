@@ -240,6 +240,13 @@ services:
     build:
       context: ../..
       dockerfile: apps/workers/Dockerfile
+    # Pinned, like `api` above. Without an explicit tag compose derives one
+    # from the project directory, so `docker compose build` and a later
+    # `up` could disagree about which image is current — a stale worker
+    # image reported `function 'delegated_subagent_job' not found` through
+    # three rebuilds before this was noticed, because the build was writing
+    # a tag nothing was running.
+    image: aleph-workers:local
     networks: [aleph]
     <<: [*app-env, *model-access, *managed]
     depends_on:
@@ -287,6 +294,7 @@ services:
     build:
       context: ../..
       dockerfile: apps/code-runner/Dockerfile
+    image: aleph-code-runner:local
     # `runner` ONLY. No aleph network, so agent-written code cannot reach the
     # API, the database, the model endpoint or the internet — only the queue.
     networks: [runner]
@@ -322,6 +330,7 @@ services:
     build:
       context: ../..
       dockerfile: apps/copilot-runtime/Dockerfile
+    image: aleph-copilot-runtime:local
     networks: [aleph]
     <<: *managed
     environment:
@@ -370,6 +379,7 @@ services:
       # a production bundle bakes VITE_API_BASE_URL at BUILD time and every edit
       # would need a rebuild. See deploy/README.md § Serving the built UI.
       dockerfile: apps/web/Dockerfile.dev
+    image: aleph-web:local
     networks: [aleph]
     <<: *managed
     environment:

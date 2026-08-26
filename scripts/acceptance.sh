@@ -582,6 +582,13 @@ fi
 # FAILURE rather than a logged known-defect. See the E5 note above.
 run_shell F6 "every built image declares a non-root USER" \
   "./scripts/check-compose-hardening.sh"
+
+# F6a — a rebuild that writes a tag nothing runs looks like a successful
+# rebuild and serves the old code. `workers` had no `image:` key and a stale
+# image answered `function 'delegated_subagent_job' not found` through three
+# rebuilds, each of which reported success.
+run_shell F6a "every building compose service pins an image tag" \
+  "./scripts/check-compose-images-pinned.sh"
 # F4 checks where the port is published and whether the origin list is shared.
 # F5 BOOTS the bridge and checks what it does on the wire — a source grep for
 # `cors:` passes against a config that does not do what it says.
