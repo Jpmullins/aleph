@@ -454,6 +454,35 @@ below only with a test that would have caught them.
   own checks fail (`--self-check`) — is the gate to trust.
 ### Fixed, with the test that pins each
 
+**2026-08-26 (delegation: Aleph hosts the Agent Protocol, and `task()` fans out)**
+
+- **Async delegation works, and Aleph did not write a delegation framework.** `docs/decisions.md`
+  D17 corrects two claims I published from a subagent's report without checking:
+  `AsyncSubAgent.url` is OPTIONAL (omitted → in-process ASGI, the documented default), and the
+  middleware talks to *"any server that implements the Agent Protocol"*. The surface it uses is
+  **five routes** — `threads.create/get`, `runs.create/get/cancel`. Aleph hosts them on the arq
+  queue and `agent_runs` table it already had, so it gets the five supervisor tools, the
+  `async_tasks` state channel that survives context compaction, and the prompt rules against
+  self-polling, for free. → `routes/agent_protocol.py`, acceptance-tested by driving the REAL
+  `langgraph_sdk` client over ASGI, because a test against my reading of a library proves only
+  that I read it consistently twice.
+- **Running it caught four bugs 1,910 green unit tests could not.** All the same shape:
+  process-local state the API establishes per request and the worker must establish for itself —
+  the binding/endpoint ContextVars, `copilot_agent._runtime`'s module-level session maker, the API
+  `Settings` class (not `WorkerSettings`), and the principal ContextVar. **The fourth reported
+  `success`**: without a principal, every tool declines and the delegation completes having done
+  nothing. A status check passes; only the transcript shows it.
+- **`task()` from the REPL is on** (`subagents=True`). Verified live, not inferred: the model
+  authored `await Promise.all(topics.map(t => task({description, subagent_type: "retriever"})))`
+  and six retriever subagents ran in one turn, all attributed and priced. The old `subagents=False`
+  argued the fan-out was unbounded; it is bounded by the eval's own 60s wall clock, which a
+  subagent loop reaches long before the 128-call PTC cap. What IS given up is per-dispatch HITL
+  approval, and that is stated rather than papered over — `SUBAGENT_DISPATCHABLE` is a pinned
+  inventory, **not a gate**, because the upstream parameter is a bool and no allowlist exists.
+- **Four compose services built a tag nothing was running.** `workers` had no `image:` key, so a
+  stale image answered `function 'delegated_subagent_job' not found` through three rebuilds that
+  each reported "Built". → `scripts/check-compose-images-pinned.sh`, acceptance F6a.
+
 **2026-08-24, later (the AST gate admitted almost everything it exists to refuse)**
 
 - **Six of the eight numbers hold, and two of the three that were failing were fixed rather than
