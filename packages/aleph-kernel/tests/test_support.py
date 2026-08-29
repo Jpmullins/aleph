@@ -26,7 +26,6 @@ def spec(
     *,
     provides: tuple[str, ...] = (),
     requires: tuple[str, ...] = (),
-    protected: bool = False,
 ) -> CapabilitySpec:
     return CapabilitySpec(
         name=name,
@@ -34,7 +33,6 @@ def spec(
         probe=_pass,
         provides=frozenset(provides),
         requires=frozenset(requires),
-        protected=protected,
     )
 
 
@@ -102,17 +100,48 @@ def test_a_leaf_is_safe_to_retire() -> None:
     assert "affects nothing else" in radius.describe()
 
 
-def test_protected_collateral_is_called_out_separately() -> None:
-    """Breaking your own plugin is a choice; breaking the kernel's footing is not."""
+def test_a_pinned_key_losing_its_provider_is_called_out_separately() -> None:
+    """Breaking your own plugin is a choice; taking away what the deployment
+    declared it exists to serve is not.
+
+    A PIN, not a flag on the capability. `protected = true` was a capability
+    asserting its own importance, which is the wrong level — the same capability
+    is load-bearing in one deployment and optional in another, and nothing on it
+    can know which. The operator names the keys in the boot manifest.
+    """
     g = graph(
         spec("db", provides=("db",)),
-        spec("ledger", requires=("db",), protected=True),
+        spec("ledger", requires=("db",)),
         spec("scratch", requires=("db",)),
     )
-    radius = dependent_closure(g, "db")
+    radius = dependent_closure(g, "db", pins=frozenset({"db"}))
     assert radius.collateral == {"ledger", "scratch"}
-    assert radius.protected_collateral == {"ledger"}
-    assert "protected among them: ledger" in radius.describe()
+    assert radius.pinned_collateral == {"db"}
+    assert "pinned key(s) unprovided: db" in radius.describe()
+
+
+def test_with_no_pins_the_same_retirement_is_merely_collateral() -> None:
+    """Empty pins is a legitimate configuration, not a misconfiguration: a
+    scratch deployment lets an operator retire anything, which the old flag
+    could never express because it lived on the capability."""
+    g = graph(
+        spec("db", provides=("db",)),
+        spec("ledger", requires=("db",)),
+    )
+    radius = dependent_closure(g, "db")
+    assert radius.collateral == {"ledger"}
+    assert radius.pinned_collateral == frozenset()
+
+
+def test_a_pin_still_provided_by_something_surviving_is_not_violated() -> None:
+    """The pin is about the KEY remaining available, not about one provider
+    surviving. Retiring a redundant provider is safe and must read as safe."""
+    g = graph(
+        spec("primary", provides=("cache",)),
+        spec("secondary", provides=("cache2",)),
+    )
+    radius = dependent_closure(g, "secondary", pins=frozenset({"cache"}))
+    assert radius.pinned_collateral == frozenset()
 
 
 def test_blast_radius_does_not_mutate_the_graph() -> None:

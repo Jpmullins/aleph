@@ -49,6 +49,9 @@ class CapabilityView:
 
     name: str
     state: str
+    #: True for capability an agent cannot name — i.e. anything mounted from the
+    #: boot manifest, which gets no `PluginId`. Derived from that fact rather
+    #: than from a flag a capability set about itself.
     protected: bool
     provides: tuple[str, ...]
     requires: tuple[str, ...]
@@ -80,12 +83,17 @@ class AgentPluginAPI:
         for name in sorted(self._kernel._mounted):
             mounted = self._kernel._mounted[name]
             radius = self._kernel.blast_radius(name)
-            addressable = mounted.plugin_id is not None and not mounted.spec.protected
+            # `plugin_id is not None` is the WHOLE test now. `register_core`
+            # assigns none, so manifest capability has no id an agent could
+            # pass — it is unnameable rather than refused, which is what the
+            # docstring above always claimed and what `protected` merely
+            # restated beside it.
+            addressable = mounted.plugin_id is not None
             views.append(
                 CapabilityView(
                     name=name,
                     state=mounted.state.value,
-                    protected=mounted.spec.protected,
+                    protected=mounted.plugin_id is None,
                     provides=tuple(sorted(mounted.spec.provides)),
                     requires=tuple(sorted(mounted.spec.requires)),
                     plugin_id=str(mounted.plugin_id) if addressable else None,
@@ -173,7 +181,7 @@ class AgentPluginAPI:
         report: dict[str, str] = {}
         for name in sorted(self._kernel._mounted):
             mounted = self._kernel._mounted[name]
-            if mounted.plugin_id is None or mounted.spec.protected:
+            if mounted.plugin_id is None:
                 continue
             if mounted.state is not State.ACTIVE:
                 report[name] = f"not active ({mounted.state.value})"

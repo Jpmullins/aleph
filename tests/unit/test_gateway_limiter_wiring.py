@@ -46,8 +46,22 @@ def test_both_processes_mount_the_limiter() -> None:
             f"{path} does not mount the gateway limiter; every outbound call from that "
             f"process would be unbounded while the other process is metered"
         )
-        assert entry.get("protected") is True, (
-            f"{path} mounts the limiter unprotected — an agent could deactivate the "
+        # `protected = true` is gone (`docs/decisions.md` D18) and the property
+        # it was reaching for is now held twice over, both stronger.
+        #
+        # Being IN this file is the first: everything the manifest mounts goes
+        # through `register_core`, which assigns no `PluginId`, so there is no
+        # value an agent could pass to `deactivate`. Unnameable, not refused —
+        # which is what the flag restated rather than enforced.
+        #
+        # The PIN is the second, and it survives a future where the limiter is
+        # mounted as a plugin rather than from here: retiring the sole provider
+        # of a pinned key is refused, and `force` does not override it.
+        import tomllib
+
+        raw = tomllib.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+        assert GATEWAY_LIMITER in raw.get("pins", []), (
+            f"{path} does not pin {GATEWAY_LIMITER!r} — an agent could retire the "
             f"ceiling that stops it fanning out"
         )
 

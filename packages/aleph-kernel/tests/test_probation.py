@@ -54,7 +54,7 @@ def protected_core(name: str = "ledger"):
         return ok()
 
     return CapabilitySpec(
-        name=name, setup=setup, probe=probe, provides=frozenset({name}), protected=True
+        name=name, setup=setup, probe=probe, provides=frozenset({name})
     )
 
 
@@ -125,7 +125,6 @@ async def test_core_capability_is_not_reprobed_by_the_agent() -> None:
             setup=setup,
             probe=probe,
             provides=frozenset({"ledger"}),
-            protected=True,
         )
     )
     await kernel.boot()

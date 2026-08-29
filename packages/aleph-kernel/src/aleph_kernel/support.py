@@ -74,23 +74,40 @@ class BlastRadius:
 
     target: str
     collateral: frozenset[str]
-    protected_collateral: frozenset[str]
+    #: Pinned KEYS that would lose their provider.
+    #:
+    #: This was `protected_collateral` — capabilities carrying a flag they set
+    #: about themselves. A pin is the opposite: the OPERATOR naming a key this
+    #: deployment exists to serve, in the boot manifest. It says something about
+    #: the deployment rather than about the capability, which is the level the
+    #: claim belongs at — a database is load-bearing in an Aleph that serves
+    #: requests and not in one running purely as a plugin host, and no flag on
+    #: the capability can know which it is in.
+    pinned_collateral: frozenset[str]
 
     @property
     def is_safe(self) -> bool:
-        """True when nothing else stops and nothing protected is touched."""
-        return not self.collateral and not self.protected_collateral
+        """True when nothing else stops and no pinned key loses its provider."""
+        return not self.collateral and not self.pinned_collateral
 
     def describe(self) -> str:
         if self.is_safe:
             return f"retiring {self.target!r} affects nothing else"
         parts = [f"retiring {self.target!r} would also stop: {', '.join(sorted(self.collateral))}"]
-        if self.protected_collateral:
-            parts.append(f"protected among them: {', '.join(sorted(self.protected_collateral))}")
+        if self.pinned_collateral:
+            parts.append(
+                f"and would leave these pinned key(s) unprovided: "
+                f"{', '.join(sorted(self.pinned_collateral))}"
+            )
         return "; ".join(parts)
 
 
-def dependent_closure(specs: Mapping[str, CapabilitySpec], target: str) -> BlastRadius:
+def dependent_closure(
+    specs: Mapping[str, CapabilitySpec],
+    target: str,
+    *,
+    pins: frozenset[str] = frozenset(),
+) -> BlastRadius:
     """Compute the blast radius of retiring ``target``, without touching anything.
 
     Transitive by construction: the fixed point drops a capability whose
@@ -104,11 +121,21 @@ def dependent_closure(specs: Mapping[str, CapabilitySpec], target: str) -> Blast
     before = support_set(specs)
     after = support_set(specs, retired=[target])
     collateral = (before - after) - {target}
-    protected = frozenset(n for n in collateral if specs[n].protected)
+
+    # A pin is violated when NOTHING still standing provides it. The target
+    # itself counts as leaving, so a capability that is the sole provider of a
+    # pinned key cannot be retired even though its collateral may be empty —
+    # which is the case a capability-level flag could not express.
+    surviving = after - {target}
+    still_provided: set[str] = set()
+    for name in surviving:
+        still_provided |= specs[name].provides
+    pinned = frozenset(key for key in pins if key not in still_provided)
+
     return BlastRadius(
         target=target,
         collateral=frozenset(collateral),
-        protected_collateral=protected,
+        pinned_collateral=pinned,
     )
 
 

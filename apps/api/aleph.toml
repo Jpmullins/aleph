@@ -1,5 +1,4 @@
-# The boot manifest: the ONLY source of core capability, and the only place
-# `protected = true` can be set.
+# The boot manifest: the ONLY source of core capability, and of pins.
 #
 # There is deliberately no directory-scan fallback. A scan means a file landing
 # on disk becomes a booted capability, which hands anything that can write a
@@ -8,40 +7,54 @@
 # Nothing listed here receives a PluginId, so no argument value an agent can
 # construct names it. Deactivating core capability is unexpressible, not refused.
 
+# What this deployment exists to serve.
+#
+# A pin is the OPERATOR's statement, replacing the old `protected = true` flag a
+# capability set about itself — the wrong level, because the same capability is
+# load-bearing here and optional in a deployment that runs Aleph purely as a
+# plugin host. `docs/decisions.md` D18.
+#
+# Retiring the sole provider of a pinned key is refused, and `force` does not
+# override it. Note this catches what the flag could not: a plugin nothing
+# depends on yet still cannot take a pinned key away.
+pins = [
+  "settings",
+  "db.sessions",
+  "litellm",
+  "asset_store",
+  # The ceiling on gateway fan-out. Pinned rather than merely unnameable:
+  # two defences, and the pin is the one that survives a future in which the
+  # limiter is mounted as a plugin rather than from this file.
+  "gateway.limiter",
+]
+
 [[capability]]
 name = "observability"
 factory = "aleph_runtime.capabilities:observability"
-protected = true
 
 [[capability]]
 name = "database"
 factory = "aleph_runtime.capabilities:database"
-protected = true
 
 [[capability]]
 name = "http"
 factory = "aleph_runtime.capabilities:http_clients"
-protected = true
 
 [[capability]]
 name = "redis"
 factory = "aleph_runtime.capabilities:redis_client"
-protected = true
 
 [[capability]]
 name = "gateway_limiter"
 factory = "aleph_runtime.capabilities:gateway_limiter"
-protected = true
 
 [[capability]]
 name = "models"
 factory = "aleph_runtime.capabilities:models"
-protected = true
 
 [[capability]]
 name = "assets"
 factory = "aleph_runtime.capabilities:assets"
-protected = true
 
 # Research capabilities. Not protected: the research suite is a plugin suite,
 # and an operator may legitimately run Aleph without it.

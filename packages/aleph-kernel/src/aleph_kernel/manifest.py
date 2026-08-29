@@ -54,8 +54,32 @@ class ManifestEntry:
 
     name: str
     factory: str
-    protected: bool = False
     config: dict[str, Any] | None = None
+
+
+def load_pins(path: Path) -> frozenset[str]:
+    """The keys this deployment exists to serve, from `pins = [...]`.
+
+    A pin is the OPERATOR's statement, not a capability's. `protected = true`
+    was a flag a capability set about itself, which is the wrong level: a
+    database is load-bearing in an Aleph that serves requests and not in one
+    running purely as a plugin host, and nothing on the capability can know
+    which deployment it is in.
+
+    Absent means no pins, and that is a legitimate configuration rather than a
+    misconfiguration — an Aleph with nothing pinned lets an operator retire
+    anything, which is exactly what a scratch deployment wants.
+    """
+    import tomllib
+
+    if not path.exists():
+        return frozenset()
+    raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    pins = raw.get("pins", [])
+    if not isinstance(pins, list) or not all(isinstance(k, str) for k in pins):
+        msg = f"{path}: `pins` must be a list of capability keys"
+        raise ManifestError(msg)
+    return frozenset(pins)
 
 
 def load_manifest(path: Path) -> tuple[ManifestEntry, ...]:
@@ -96,7 +120,6 @@ def load_manifest(path: Path) -> tuple[ManifestEntry, ...]:
             ManifestEntry(
                 name=name,
                 factory=factory,
-                protected=bool(row.get("protected", False)),
                 config=row.get("config"),
             )
         )
@@ -136,8 +159,4 @@ def mount_manifest(kernel: Kernel, entries: tuple[ManifestEntry, ...], **kwargs:
                 f"{spec.name!r}; the manifest is the authority on what is mounted"
             )
             raise ManifestError(msg)
-        if entry.protected and not spec.protected:
-            from dataclasses import replace
-
-            spec = replace(spec, protected=True)
         kernel.register_core(spec)

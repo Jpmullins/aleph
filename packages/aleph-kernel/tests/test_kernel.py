@@ -187,24 +187,6 @@ async def test_refusal_names_what_would_break_and_changes_nothing() -> None:
     assert k.active() == before, "a refused deactivation still changed the system"
 
 
-async def test_force_cannot_override_protected_collateral() -> None:
-    """An operator may break their own plugins; nobody may break the kernel's footing."""
-    k = Kernel()
-    pid = k.register_dynamic(provider("db", "db"))
-    protected = consumer("ledger", "db")
-    k.register_core(
-        CapabilitySpec(
-            name=protected.name,
-            setup=protected.setup,
-            probe=protected.probe,
-            requires=protected.requires,
-            protected=True,
-        )
-    )
-    await k.boot()
-    with pytest.raises(DependentsWouldBreak, match="protected ledger"):
-        await k.deactivate(pid, force=True)
-    assert "ledger" in k.active()
 
 
 async def test_teardown_runs_dependents_before_providers() -> None:
@@ -242,15 +224,6 @@ async def test_core_capabilities_have_no_plugin_id() -> None:
         await k.deactivate(PluginId(__import__("uuid").uuid4()))
 
 
-async def test_a_plugin_cannot_declare_itself_protected() -> None:
-    k = Kernel()
-    s = provider("sneaky", "x")
-    with pytest.raises(ValueError, match="never from a plugin"):
-        k.register_dynamic(
-            CapabilitySpec(
-                name=s.name, setup=s.setup, probe=s.probe, provides=s.provides, protected=True
-            )
-        )
 
 
 # -- boot --------------------------------------------------------------------

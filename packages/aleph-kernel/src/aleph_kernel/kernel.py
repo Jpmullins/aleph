@@ -27,7 +27,7 @@ from uuid import UUID
 
 from aleph_kernel.context import ROOT_REALM, Context, Store
 from aleph_kernel.effects import EffectScope
-from aleph_kernel.errors import DependentsWouldBreak, ProbeFailed, ProtectedCapability
+from aleph_kernel.errors import DependentsWouldBreak, ProbeFailed
 from aleph_kernel.ids import uuid7
 from aleph_kernel.spec import ProbeResult, problem
 from aleph_kernel.support import BlastRadius, dependent_closure, topological_order
@@ -76,11 +76,27 @@ class Kernel:
     #: reports.
     DEFAULT_PROBE_TIMEOUT_S = 30.0
 
-    def __init__(self, *, probe_timeout_s: float = DEFAULT_PROBE_TIMEOUT_S) -> None:
+    def __init__(
+        self,
+        *,
+        probe_timeout_s: float = DEFAULT_PROBE_TIMEOUT_S,
+        pins: frozenset[str] = frozenset(),
+    ) -> None:
         self._store = Store()
         self._mounted: dict[str, _Mounted] = {}
         self._lock = asyncio.Lock()
         self._probe_timeout_s = probe_timeout_s
+        #: Keys this DEPLOYMENT exists to serve, from the boot manifest.
+        #:
+        #: Replaces `CapabilitySpec.protected`. A pin is the operator saying
+        #: "requests here need a database"; the old flag was a capability
+        #: asserting its own importance, which is the wrong level — the same
+        #: capability is load-bearing in one deployment and optional in another.
+        #:
+        #: Empty is a legitimate configuration: an Aleph with nothing pinned
+        #: lets an operator retire anything, which is what a scratch deployment
+        #: wants and what the flag could never express.
+        self._pins = frozenset(pins)
 
     # -- registration --------------------------------------------------------
 
@@ -91,16 +107,14 @@ class Kernel:
     def register_dynamic(self, spec: CapabilitySpec) -> PluginId:
         """Mount an agent-authored capability and mint its handle.
 
-        Refuses a spec claiming ``protected``: that flag is settable only by the
-        manifest loader, and a plugin asserting it about itself is exactly the
-        privilege escalation the flag exists to prevent.
+        There is no self-declared privilege to refuse any more. `protected` is
+        gone: a capability could assert its own importance, which is the wrong
+        level, and the guardrail it was reaching for now comes from two places
+        that a plugin cannot touch — this method assigns a `PluginId` while
+        `register_core` does not (so manifest capability is unnameable rather
+        than refused), and PINS are declared by the operator in the boot
+        manifest.
         """
-        if spec.protected:
-            msg = (
-                f"{spec.name!r} declared itself protected; that flag comes from the "
-                f"boot manifest, never from a plugin"
-            )
-            raise ValueError(msg)
         self._register(spec)
         pid = PluginId(uuid7())
         self._mounted[spec.name].plugin_id = pid
@@ -147,8 +161,6 @@ class Kernel:
         if mounted is None:
             msg = f"{name!r} is not registered"
             raise KeyError(msg)
-        if mounted.spec.protected:
-            raise ProtectedCapability(name)
         if mounted.state is State.ACTIVE:
             msg = (
                 f"{name!r} is active; deactivate it first so its effects unwind "
@@ -188,9 +200,14 @@ class Kernel:
         found, _ = self._store.get(ROOT_REALM, key)
         return found
 
+    @property
+    def pins(self) -> frozenset[str]:
+        """The keys this deployment declared it exists to serve."""
+        return self._pins
+
     def blast_radius(self, name: str) -> BlastRadius:
         """What retiring ``name`` would take with it. Pure; changes nothing."""
-        return dependent_closure(self._specs(), name)
+        return dependent_closure(self._specs(), name, pins=self._pins)
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -325,8 +342,6 @@ class Kernel:
         async with self._lock:
             name = self._name_for(plugin_id)
             mounted = self._mounted[name]
-            if mounted.spec.protected:  # pragma: no cover - unreachable via PluginId
-                raise ProtectedCapability(name)
 
             previous = mounted.spec
             lost = previous.provides - spec.provides
@@ -336,7 +351,7 @@ class Kernel:
                     raise DependentsWouldBreak(
                         name,
                         tuple(sorted(radius.collateral)),
-                        tuple(sorted(radius.protected_collateral)),
+                        tuple(sorted(radius.pinned_collateral)),
                     )
 
             await self._teardown(name)
@@ -386,22 +401,25 @@ class Kernel:
         """Retire a dynamically registered capability.
 
         Computes the blast radius first and refuses when anything else would
-        stop. `force` still refuses if the collateral includes a protected
-        capability — an operator may accept breaking their own plugins; nobody
-        may take down the kernel's own footing.
+        stop. `force` still refuses when a PINNED key would be left unprovided —
+        an operator may accept breaking their own plugins; nobody may take away
+        the thing the deployment declared it exists to serve.
+
+        There is no protected-capability check any more, and none is needed:
+        `register_core` assigns no `PluginId`, so a manifest capability cannot be
+        named by this method's only argument. It was never refused; it was
+        unexpressible, and now that is the whole mechanism rather than a flag
+        beside it.
         """
         async with self._lock:
             name = self._name_for(plugin_id)
-            mounted = self._mounted[name]
-            if mounted.spec.protected:  # pragma: no cover - unreachable via PluginId
-                raise ProtectedCapability(name)
 
             radius = self.blast_radius(name)
-            if radius.protected_collateral:
+            if radius.pinned_collateral:
                 raise DependentsWouldBreak(
                     name,
                     tuple(sorted(radius.collateral)),
-                    tuple(sorted(radius.protected_collateral)),
+                    tuple(sorted(radius.pinned_collateral)),
                 )
             if radius.collateral and not force:
                 raise DependentsWouldBreak(name, tuple(sorted(radius.collateral)), ())

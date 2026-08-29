@@ -1,4 +1,4 @@
-"""The boot manifest — the only source of `protected`."""
+"""The boot manifest — where core capability and pins come from."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ GOOD = """
 [[capability]]
 name = "db"
 factory = "aleph_kernel.testing:provider"
-protected = true
 
 [[capability]]
 name = "reports"
@@ -32,8 +31,6 @@ def write(tmp_path: Path, body: str) -> Path:
 async def test_a_manifest_parses(tmp_path: Path) -> None:
     entries = load_manifest(write(tmp_path, GOOD))
     assert [e.name for e in entries] == ["db", "reports"]
-    assert entries[0].protected is True
-    assert entries[1].protected is False
 
 
 async def test_loading_does_not_import_anything(tmp_path: Path) -> None:

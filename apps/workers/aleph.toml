@@ -2,52 +2,64 @@
 # `aleph-runtime` with the API and differs in what it mounts — the API does not
 # enqueue jobs, and the worker has no HTTP surface or realtime listener.
 
+# What this deployment exists to serve.
+#
+# A pin is the OPERATOR's statement, replacing the old `protected = true` flag a
+# capability set about itself — the wrong level, because the same capability is
+# load-bearing here and optional in a deployment that runs Aleph purely as a
+# plugin host. `docs/decisions.md` D18.
+#
+# Retiring the sole provider of a pinned key is refused, and `force` does not
+# override it. Note this catches what the flag could not: a plugin nothing
+# depends on yet still cannot take a pinned key away.
+pins = [
+  "settings",
+  "db.sessions",
+  "litellm",
+  "asset_store",
+  # The ceiling on gateway fan-out. Pinned rather than merely unnameable:
+  # two defences, and the pin is the one that survives a future in which the
+  # limiter is mounted as a plugin rather than from this file.
+  "gateway.limiter",
+]
+
 [[capability]]
 name = "observability"
 factory = "aleph_runtime.capabilities:observability"
-protected = true
 
 [[capability]]
 name = "database"
 factory = "aleph_runtime.capabilities:database"
-protected = true
 
 [[capability]]
 name = "http"
 factory = "aleph_runtime.capabilities:http_clients"
-protected = true
 
 [[capability]]
 name = "redis"
 factory = "aleph_runtime.capabilities:redis_client"
-protected = true
 
 [[capability]]
 name = "gateway_limiter"
 factory = "aleph_runtime.capabilities:gateway_limiter"
-protected = true
 
 [[capability]]
 name = "models"
 factory = "aleph_runtime.capabilities:models"
-protected = true
 
 [[capability]]
 name = "assets"
 factory = "aleph_runtime.capabilities:assets"
-protected = true
 
 # The job buses. Protected: a worker that cannot enqueue is a worker that
 # silently drops the second half of every pipeline.
 [[capability]]
 name = "arq_pool"
 factory = "aleph_runtime.capabilities:arq_pool"
-protected = true
 
 [[capability]]
 name = "code_runner_pool"
 factory = "aleph_runtime.capabilities:code_runner_pool"
-protected = true
 
 [[capability]]
 name = "scholar"

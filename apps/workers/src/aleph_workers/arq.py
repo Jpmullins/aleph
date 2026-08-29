@@ -8,7 +8,7 @@ from typing import Any, ClassVar
 from arq.connections import RedisSettings
 
 from aleph_kernel import Context, EffectScope, Kernel
-from aleph_kernel.manifest import load_manifest, mount_manifest
+from aleph_kernel.manifest import load_manifest, load_pins, mount_manifest
 from aleph_runtime.capabilities import (
     ARQ_POOL,
     ASSET_STORE,
@@ -62,7 +62,11 @@ async def _startup(ctx: dict[str, Any]) -> None:
     no realtime listener; it has the two job buses, which the API does not.
     """
     settings = get_worker_settings()
-    kernel = Kernel()
+    # Pins come from the same manifest as the capabilities, and are handed to
+    # the Kernel at construction. There is no API a plugin can reach to add one
+    # — which is the property `protected` needed a refusal for and pins get
+    # structurally. `docs/decisions.md` D18.
+    kernel = Kernel(pins=load_pins(BOOT_MANIFEST))
     mount_manifest(kernel, load_manifest(BOOT_MANIFEST), settings=settings)
     await kernel.boot()
 

@@ -68,7 +68,6 @@ def core(name: str, *, provides: tuple[str, ...] = (), requires: tuple[str, ...]
         probe=spec.probe,
         provides=spec.provides,
         requires=spec.requires,
-        protected=True,
     )
 
 
@@ -106,14 +105,6 @@ async def test_a_refusal_explains_itself() -> None:
     assert outcome.detail.startswith("refused:")
 
 
-async def test_a_plugin_cannot_claim_protection() -> None:
-    _, api = await booted()
-    spec = working("sneaky")
-    outcome = await api.install(
-        CapabilitySpec(name=spec.name, setup=spec.setup, probe=spec.probe, protected=True)
-    )
-    assert not outcome.installed
-    assert "never from a plugin" in outcome.detail
 
 
 # -- the guardrail ------------------------------------------------------------
@@ -302,23 +293,6 @@ async def test_disable_without_unregister_keeps_the_registration() -> None:
     assert "paused" not in kernel._mounted
 
 
-async def test_unregister_refuses_a_protected_capability() -> None:
-    """`unregister` is addressed by NAME, which sidesteps the id guardrail.
-
-    The whole point of `PluginId` is that core capability has none, so removal
-    is unexpressible rather than refused. A name-addressed method has no such
-    property, so the `protected` check inside it is the only defence — and it
-    must be the first statement in the method.
-    """
-    from aleph_kernel.errors import ProtectedCapability
-
-    kernel = Kernel()
-    spec = working("the-ledger")
-    kernel.register_core(CapabilitySpec(**{**spec.__dict__, "protected": True}))
-
-    with pytest.raises(ProtectedCapability):
-        kernel.unregister("the-ledger")
-    assert "the-ledger" in kernel._mounted, "it was dropped before the check ran"
 
 
 async def test_unregister_refuses_an_active_capability() -> None:

@@ -36,7 +36,7 @@ import structlog
 from aleph_api.a2ui_handlers import build_action_router
 from aleph_api.settings import Settings, get_settings
 from aleph_kernel import Context, EffectScope, Kernel
-from aleph_kernel.manifest import load_manifest, mount_manifest
+from aleph_kernel.manifest import load_manifest, load_pins, mount_manifest
 from aleph_runtime.capabilities import (
     AGENT_STORE,
     AGENT_STORE_POOL,
@@ -63,7 +63,11 @@ if TYPE_CHECKING:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
-    kernel = Kernel()
+    # Pins come from the same manifest as the capabilities, and are handed to
+    # the Kernel at construction. There is no API a plugin can reach to add one
+    # — which is the property `protected` needed a refusal for and pins get
+    # structurally. `docs/decisions.md` D18.
+    kernel = Kernel(pins=load_pins(BOOT_MANIFEST))
     # The manifest is the only source of core capability, and the only place
     # `protected = true` can be set. Nothing mounted from it receives a
     # PluginId, so no argument value an agent can construct names it —

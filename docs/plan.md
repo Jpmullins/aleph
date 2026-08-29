@@ -753,7 +753,7 @@ belongs in `docs/decisions.md` either way.
 - Disable hands back a handle the agent can use
   <br>``::test_disable_returns_the_id_it_was_given` asserts `outcome.plugin_id == str(pid)` and that a subsequent `await api.replace(pid, better_spec)` succeeds. FAILS TODAY — `disable` returns `plugin_id=None` at agent_api.py:189-196.`
 - `unregister` cannot reach core capability
-  <br>``::test_unregister_refuses_a_protected_capability` and `::test_unregister_refuses_an_active_capability` both pass; the protected check must be the first statement in the method.`
+  <br>``::test_manifest_capability_has_no_id_to_deactivate_with` and `::test_unregister_refuses_an_active_capability` both pass; the protected check must be the first statement in the method.`
 - The agent surface is importable from the package root
   <br>``uv run python -c "from aleph_kernel import AgentPluginAPI, CapabilityView, InstallOutcome"` exits 0. FAILS TODAY.`
 - The suite grows and stays green under strict typing

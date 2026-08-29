@@ -779,3 +779,49 @@ The core inversion stands: the kernel is a loader, everything above it is a
 plugin, and the core depends on nothing above it. What changes is the agent
 layer — Aleph writes an Agent Protocol host and an allowlist, not a delegation
 framework.
+
+## D18 · `protected` is deleted; the operator pins keys instead — 2026-08-29
+
+**The choice.** `CapabilitySpec.protected` and `ProtectedCapability` are removed.
+The boot manifest gains `pins = [...]`: keys the OPERATOR declares this
+deployment exists to serve. Retiring the sole provider of a pinned key is
+refused, and `force` does not override it.
+
+**Why the flag was at the wrong level.** `protected` was a capability asserting
+its own importance. The same capability is load-bearing in an Aleph that serves
+requests and optional in one running purely as a plugin host, and nothing on the
+capability can know which deployment it is in. A pin says something about the
+deployment, which is where the claim belongs — and an Aleph that pins nothing is
+a legitimate configuration rather than a misconfiguration, which the flag could
+never express.
+
+**The guardrail is stronger, not weaker, and in two independent ways.**
+
+*Unnameable rather than refused.* `register_core` assigns no `PluginId`, so a
+manifest capability cannot be named by `deactivate`'s only argument. That was
+already true; `protected` restated it beside the real defence and the kernel
+carried a refusal marked `# pragma: no cover - unreachable via PluginId`. A check
+that cannot fire is not a defence.
+
+*Pins catch what the flag could not.* Retiring the sole provider of a pinned key
+is refused **even when its collateral is empty** — nothing depends on it yet, so
+`protected_collateral` would have waved it through, and the deployment still
+needs the key. `BlastRadius.pinned_collateral` reports the KEY rather than the
+capability, so a redundant provider retires cleanly while a sole provider does
+not.
+
+**A plugin cannot pin itself.** Pins are parsed from the manifest and handed to
+`Kernel(pins=...)` at construction. There is no API that adds one — the property
+`protected` needed an explicit refusal for, and that pins get structurally.
+
+**Pinned by default** in both manifests: `settings`, `db.sessions`, `litellm`,
+`asset_store`, and `gateway.limiter`. The last is the ceiling on gateway fan-out
+and was the one case the old test defended by asserting `protected = true`; it is
+now defended twice, and the pin survives a future in which the limiter is mounted
+as a plugin rather than from the manifest.
+
+**Postgres stays part of Aleph.** The owner's decision, and the right one: 13 of
+19 packages depend on `aleph-db`, its blast radius is the entire graph, and a
+plugin nobody can turn off is a plugin in name only. The value of this work was
+never the label — it was making the graph enforceable, which is what
+`optional`, write mediation, the duplicate-provider refusal and pins deliver.

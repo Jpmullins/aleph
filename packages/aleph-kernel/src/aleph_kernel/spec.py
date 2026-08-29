@@ -9,7 +9,7 @@ fail for a real reason.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
@@ -109,9 +109,6 @@ class CapabilitySpec:
     #: boot order. That last one is what lets the assistant start before the
     #: wiki and gain wiki tools when it arrives.
     optional: frozenset[str] = frozenset()
-    #: Set only by the boot manifest loader. Not settable from a plugin, and no
-    #: API mutates it — see manifest.py for why that matters.
-    protected: bool = field(default=False, compare=False)
 
     def __post_init__(self) -> None:
         if not self.name.strip():
