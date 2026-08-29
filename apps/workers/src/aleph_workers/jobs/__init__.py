@@ -3,6 +3,7 @@
 from aleph_workers.jobs.autoconfigure import autoconfigure_profile_job
 from aleph_workers.jobs.backfill_index import backfill_index_job
 from aleph_workers.jobs.background import background_task_job
+from aleph_workers.jobs.belief_rebuild import belief_rebuild_job
 from aleph_workers.jobs.bootstrap import bootstrap_project_job
 from aleph_workers.jobs.builder import builder_job
 from aleph_workers.jobs.chunk_embed import chunk_embed_job
@@ -24,6 +25,7 @@ __all__ = [
     "autoconfigure_profile_job",
     "backfill_index_job",
     "background_task_job",
+    "belief_rebuild_job",
     "bootstrap_project_job",
     "builder_job",
     "chunk_embed_job",

@@ -9,10 +9,11 @@ from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
 
+from arq.connections import RedisSettings, create_pool
 from fastapi import APIRouter, Body, Query, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from aleph_api.deps import LedgerDep, PrincipalDep, SessionDep
 from aleph_api.middleware.project_scope import ProjectScopeDep
@@ -27,6 +28,7 @@ from aleph_core.time import utcnow
 from aleph_db.models import Project
 from aleph_db.repos import model_profile as profile_repo
 from aleph_observability.tracing import current_trace_id
+from aleph_rks.models import DocumentChunk, Source
 from aleph_security.roles import ProjectRole, require_at_least
 from aleph_wiki.classify import classify_pages, propose_schema
 from aleph_wiki.export_evidence import (
@@ -42,7 +44,15 @@ from aleph_wiki.html_compiler import compile_page_html
 from aleph_wiki.index_service import IndexService
 from aleph_wiki.links import resolve_broken_links
 from aleph_wiki.lint import lint_wiki
-from aleph_wiki.models import WikiClaim, WikiIndex, WikiLink, WikiPage, WikiRevision
+from aleph_wiki.models import (
+    Citation,
+    SourcePage,
+    WikiClaim,
+    WikiIndex,
+    WikiLink,
+    WikiPage,
+    WikiRevision,
+)
 from aleph_wiki.navigation import HubPlan, build_index, plan_hubs, sync_hubs
 from aleph_wiki.schema import Category, WikiSchema
 from aleph_wiki.schema_service import SchemaService
@@ -1264,3 +1274,94 @@ def _slugify_filename(title: str) -> str:
     header value, and a header injection through a filename is a real one.
     """
     return re.sub(r"[^a-z0-9]+", "-", title.strip().lower()).strip("-")[:64]
+
+
+class BeliefRebuildOut(BaseModel):
+    """What a rebuild had to work with, and whether it was dispatched."""
+
+    rebuildable_sources: int
+    ungrounded_citations: int
+    enqueued: bool
+    #: What the job will actually read — `rebuildable_sources` capped by
+    #: `max_sources`. Reported so a bounded dispatch does not read as a full one.
+    sources_queued: int
+
+
+@router.post("/{project_id}/belief/rebuild", response_model=BeliefRebuildOut)
+async def rebuild_belief_graph(
+    project_id: ProjectScopeDep,
+    session: SessionDep,
+    principal: PrincipalDep,
+    request: Request,
+    max_sources: Annotated[int | None, Query(ge=1, le=1000)] = None,
+) -> BeliefRebuildOut:
+    """Re-derive this project's claims from the passages they stand on.
+
+    The route `BeliefService.rebuild` never had. Everything under the belief
+    layer — verbatim grounding, `claim_key` identity, derived confidence — has
+    been written and tested since the layer existed, and three comments on the
+    live write path name `rebuild` as the remedy for a claim stored without a
+    quote, a span, or a vector. Nothing called it, so the remedy named in those
+    comments could not be asked for.
+
+    Reports what it found *before* enqueueing — how many sources are actually
+    rebuildable, and how many citations currently lack an anchor — so the
+    caller learns whether there was anything to repair rather than only that a
+    job was dispatched. A rebuild over a corpus with nothing to fix is a real
+    answer, and an endpoint that only ever says "enqueued" cannot give it.
+
+    Safe to call repeatedly. `rebuild` upserts by `claim_key` and dedupes
+    evidence by locator, so a second run over an unchanged corpus leaves the
+    same graph.
+
+    `max_sources` bounds the pass. A rebuild is the most expensive operation
+    this system performs on a corpus — one synthesis call per batch of chunks,
+    per source — and without a bound the first trial of the repair is also the
+    largest. What it skipped is reported in the run's result payload and in the
+    ledger, never dropped silently.
+    """
+    require_at_least(principal, project_id, at_least=ProjectRole.EDITOR)
+
+    rebuildable = (
+        await session.execute(
+            select(func.count())
+            .select_from(Source)
+            .join(SourcePage, SourcePage.source_id == Source.id)
+            .where(
+                Source.project_id == project_id,
+                select(DocumentChunk.id).where(DocumentChunk.source_id == Source.id).exists(),
+            )
+        )
+    ).scalar_one()
+    ungrounded = (
+        await session.execute(
+            select(func.count())
+            .select_from(Citation)
+            .where(
+                Citation.project_id == project_id,
+                Citation.source_id.is_not(None),
+                or_(Citation.quote.is_(None), Citation.char_start.is_(None)),
+            )
+        )
+    ).scalar_one()
+
+    if not rebuildable:
+        return BeliefRebuildOut(
+            rebuildable_sources=0,
+            ungrounded_citations=int(ungrounded),
+            enqueued=False,
+            sources_queued=0,
+        )
+
+    settings = request.app.state.settings
+    pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+    try:
+        await pool.enqueue_job("belief_rebuild_job", str(project_id), max_sources)
+    finally:
+        await pool.aclose()
+    return BeliefRebuildOut(
+        rebuildable_sources=int(rebuildable),
+        ungrounded_citations=int(ungrounded),
+        enqueued=True,
+        sources_queued=min(int(rebuildable), max_sources or int(rebuildable)),
+    )
