@@ -705,6 +705,12 @@ run_shell G1a "the retrieval audit check is a known-answer probe, not a length a
   "grep -q 'body-phrase probe' audit/checks/wiki-first-retrieval.sh \
    && ! grep -q 'len} -ge 40 ] || fail \"retrieval composed_body_md too short' audit/checks/wiki-first-retrieval.sh \
    && echo 'known-answer probe in place'"
+# G4 exists because its absence was measured, not imagined: $141.43 and 1,766
+# model calls in sixty minutes, every dollar on `[e2e]` fixture projects whose
+# status was already `deleted`. Deleting a project stopped nothing — the queued
+# work ran, and the wiki chain enqueued more as it went.
+run_shell G4 "no worker job spends money on a deleted project" \
+  "./scripts/check-jobs-guard-deleted-projects.sh 2>&1 | tail -1"
 # G3 is the one that stops this list going stale. Three batches of work each
 # shipped a correct sweep that nothing ran; wiring them one at a time fixes
 # three files and not the pattern.

@@ -27,6 +27,7 @@ from aleph_db.repos.ledger import LedgerWriter
 from aleph_models.autoconfigure import autoconfigure_project
 from aleph_observability.tracing import current_trace_id, start_span
 from aleph_workers.gateway import gateways
+from aleph_workers.project_guard import refuse_if_project_is_gone
 
 _log = structlog.get_logger(__name__)
 
@@ -35,6 +36,12 @@ async def autoconfigure_profile_job(ctx: dict[str, Any], project_id_str: str) ->
     maker = ctx["session_maker"]
     http_client = ctx["gateway_http"]
     pid = UUID(project_id_str)
+
+    # Before anything that costs money. See `project_guard`: a deleted
+    # project's queued work kept running AND kept enqueueing more.
+    refusal = await refuse_if_project_is_gone(maker, pid)
+    if refusal is not None:
+        return refusal
 
     # WS-MEP-4. ONE resolution, read three ways: the catalog the names come
     # from, and the base URL and key each candidate is probed against. This

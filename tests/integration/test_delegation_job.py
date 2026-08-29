@@ -26,6 +26,7 @@ from aleph_db.models.agent import AgentRun, AgentThread
 from aleph_security.agent_token import mint_agent_token
 from aleph_security.principal import Principal
 from aleph_workers.jobs import delegation as deleg
+from tests.integration.conftest import ensure_project_row
 
 pytestmark = pytest.mark.integration
 
@@ -40,6 +41,7 @@ def test_subagent_of_parses_the_kind() -> None:
 
 
 async def _seed(maker: Any, project_id: uuid.UUID, *, status: str = "pending") -> tuple[Any, Any]:
+    await ensure_project_row(maker, project_id)
     thread = AgentThread(
         id=uuid7(),
         project_id=project_id,
@@ -216,6 +218,10 @@ async def test_a_run_that_is_not_a_delegation_is_refused_not_guessed(
 async def test_a_missing_run_is_reported_not_crashed(
     maker: Any, committed_project: uuid.UUID
 ) -> None:
+    # The project has to exist for this test to be about a missing RUN. Without
+    # it the job refuses on the project first, which is correct behaviour and a
+    # different assertion.
+    await ensure_project_row(maker, committed_project)
     ghost = uuid7()
     out = await deleg.delegated_subagent_job(
         _ctx(maker), str(ghost), _token(committed_project, ghost)

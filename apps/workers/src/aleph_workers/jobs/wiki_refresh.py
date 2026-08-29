@@ -45,6 +45,7 @@ from aleph_security.agent_token import mint_agent_token, verify_agent_token
 from aleph_security.principal import Principal
 from aleph_wiki.models import Citation, SourcePage, WikiClaim, WikiPage
 from aleph_workers.gateway import gateways
+from aleph_workers.project_guard import refuse_if_project_is_gone
 
 _log = structlog.get_logger(__name__)
 
@@ -208,6 +209,12 @@ async def wiki_refresh_job(
     pid = UUID(project_id)
     page_uuid = UUID(page_id)
     maker = ctx["session_maker"]
+
+    # Before anything that costs money. See `project_guard`: a deleted
+    # project's queued work kept running AND kept enqueueing more.
+    refusal = await refuse_if_project_is_gone(maker, pid)
+    if refusal is not None:
+        return refusal
     litellm = await gateways(ctx).litellm(pid)
     asset_store = ctx["asset_store"]
 
@@ -393,6 +400,12 @@ async def refresh_stale_pages_job(ctx: dict[str, Any], project_id: str) -> dict[
     """
     pid = UUID(project_id)
     maker = ctx["session_maker"]
+
+    # Before anything that costs money. See `project_guard`: a deleted
+    # project's queued work kept running AND kept enqueueing more.
+    refusal = await refuse_if_project_is_gone(maker, pid)
+    if refusal is not None:
+        return refusal
     redis_pool = ctx.get("redis_pool")
     secret: str = ctx["agent_token_secret"]
     now = utcnow()

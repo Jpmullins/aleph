@@ -277,6 +277,7 @@ The instruments. Without these, nothing above can be trusted.
 | G1 | Audit assertions observe behaviour, not shape | each `audit/checks/*.sh` must fail when its subject is broken; `wiki-first-retrieval.sh` rewritten as a known-answer probe | ✅ |
 | G2 | CI runs at least one behavioural gate | `ci.yml` contains a job that exercises a running system | ✅ |
 | G3 | The comprehensive check | `./scripts/acceptance.sh` runs every part's check and prints a per-part table with an overall verdict | ✅ |
+| G4 | No worker job spends money on a deleted project | `./scripts/check-jobs-guard-deleted-projects.sh` — every project-scoped job calls `refuse_if_project_is_gone` before it awaits anything. Measured before the guard: $141.43 and 1,766 model calls in sixty minutes, all on soft-deleted `[e2e]` fixtures | ✅ |
 | G1a | The retrieval audit check is a known-answer probe, not a length assertion | `audit/checks/wiki-first-retrieval.sh`, asserted by `acceptance.sh` G1a — `assert len(result) > 0` is the failure mode this whole document exists to prevent, and one audit check had it | ✅ |
 
 ---

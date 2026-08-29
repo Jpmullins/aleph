@@ -36,6 +36,7 @@ from aleph_security.agent_token import verify_agent_token
 from aleph_security.principal import Principal
 from aleph_wiki.wiki_service import WikiLinkDraft, WikiService
 from aleph_workers.gateway import gateways
+from aleph_workers.project_guard import refuse_if_project_is_gone
 
 _SCOPE_SYS = (
     "You are bootstrapping a research wiki for a new investigation. Given the "
@@ -122,6 +123,12 @@ async def bootstrap_project_job(
     project_id = UUID(project_id_str)
     agent_run_id = UUID(agent_run_id_str)
     maker = ctx["session_maker"]
+
+    # Before anything that costs money. See `project_guard`: a deleted
+    # project's queued work kept running AND kept enqueueing more.
+    refusal = await refuse_if_project_is_gone(maker, project_id)
+    if refusal is not None:
+        return refusal
     litellm = await gateways(ctx).litellm(project_id)
     settings = ctx["settings"]
     redis_pool = ctx["redis_pool"]

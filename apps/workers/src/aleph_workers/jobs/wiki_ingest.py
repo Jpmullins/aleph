@@ -19,6 +19,7 @@ from aleph_security.principal import Principal
 from aleph_wiki.agent.workflow import WikiIngestState, WikiIngestWorkflow
 from aleph_wiki.models import WikiRevision
 from aleph_workers.gateway import gateways
+from aleph_workers.project_guard import refuse_if_project_is_gone
 
 
 async def wiki_ingest_job(
@@ -37,6 +38,14 @@ async def wiki_ingest_job(
     normalized_id = UUID(normalized_id_str)
 
     maker = ctx["session_maker"]
+
+    # Before anything that costs money. See `project_guard`: a deleted
+    # project's queued work kept running AND kept enqueueing more. The
+    # project comes from the token's signed claim, which is the same one
+    # every write below is scoped to.
+    refusal = await refuse_if_project_is_gone(maker, claims.project_id)
+    if refusal is not None:
+        return refusal
     asset_store = ctx["asset_store"]
     litellm = await gateways(ctx).litellm(claims.project_id)
 

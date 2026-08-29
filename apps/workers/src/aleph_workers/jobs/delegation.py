@@ -47,6 +47,7 @@ from aleph_security.principal import Principal
 from aleph_security.request_context import bind_principal, reset_principal
 from aleph_workers.gateway import gateways
 from aleph_workers.jobs.background import _converge
+from aleph_workers.project_guard import refuse_if_project_is_gone
 
 _log = structlog.get_logger(__name__)
 
@@ -123,6 +124,14 @@ async def delegated_subagent_job(
         correlation_id=claims.correlation_id,
         project_id=claims.project_id,
     )
+
+    # Before anything that costs money. See `project_guard`: a deleted
+    # project's queued work kept running AND kept enqueueing more. Placed
+    # after the token is verified, because the signed claim is the only
+    # trustworthy statement of which project this job belongs to.
+    refusal = await refuse_if_project_is_gone(maker, claims.project_id)
+    if refusal is not None:
+        return refusal
 
     async with maker() as session:
         run = (

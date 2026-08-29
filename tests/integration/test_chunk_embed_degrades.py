@@ -91,7 +91,29 @@ class _RefusingEmbedder:
 async def _seed(
     session: AsyncSession, project_id: uuid.UUID, *, embed_model: str | None
 ) -> uuid.UUID:
-    """One source, one normalized document, one model profile. Committed."""
+    """One source, one normalized document, one model profile. Committed.
+
+    The `projects` row is part of "committed": `chunk_embed_job` refuses to run
+    for a project that is deleted or absent, and `committed_project` yields an
+    id without creating one. Before the guard existed this fiction was
+    invisible; now it is the difference between testing the job and testing the
+    refusal.
+    """
+    from aleph_db.models.project import Project
+
+    if (
+        await session.execute(select(Project.id).where(Project.id == project_id))
+    ).scalar_one_or_none() is None:
+        session.add(
+            Project(
+                id=project_id,
+                title="Chunk Embed Degradation Test",
+                description="",
+                status="active",
+                model_profile_id=uuid.uuid4(),
+                created_by=uuid.uuid4(),
+            )
+        )
     source_id = uuid.uuid4()
     bindings: dict[str, Any] = {
         "synthesis": {"model": "some-chat-model", "provider": "litellm"},

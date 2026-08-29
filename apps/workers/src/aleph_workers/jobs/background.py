@@ -50,6 +50,7 @@ from aleph_db.repos.ledger import LedgerWriter
 from aleph_observability.tracing import start_span
 from aleph_security.agent_token import mint_agent_token, verify_agent_token
 from aleph_security.principal import Principal
+from aleph_workers.project_guard import refuse_if_project_is_gone
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -214,6 +215,14 @@ async def background_task_job(
         agent_run_id=claims.agent_run_id,
         correlation_id=claims.correlation_id,
     )
+
+    # Before anything that costs money. See `project_guard`: a deleted
+    # project's queued work kept running AND kept enqueueing more. Placed
+    # after the token is verified, because the signed claim is the only
+    # trustworthy statement of which project this job belongs to.
+    refusal = await refuse_if_project_is_gone(maker, claims.project_id)
+    if refusal is not None:
+        return refusal
 
     with start_span("worker.background_task", **{"aleph.agent_run_id": agent_run_id_str}):
         async with maker() as session:

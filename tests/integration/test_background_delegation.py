@@ -81,6 +81,7 @@ from aleph_security.principal import Principal
 from aleph_security.roles import ProjectRole
 from aleph_workers.jobs.background import background_task_job
 from aleph_workers.jobs.background_kinds import BACKGROUND_TASK_HANDLERS
+from tests.integration.conftest import ensure_project_row
 
 pytestmark = pytest.mark.integration
 
@@ -211,6 +212,10 @@ async def _make_ticket(
     params: dict[str, Any] | None = None,
     parent: uuid.UUID | None = None,
 ) -> uuid.UUID:
+    # `background_task_job` refuses a project that is deleted or absent, and
+    # `committed_project` yields an id without creating a row. See
+    # `ensure_project_row`.
+    await ensure_project_row(maker, project_id)
     async with maker() as session:
         ticket = await create_ticket(
             session,
@@ -256,6 +261,7 @@ async def _ledger_kinds(maker: Callable[[], AsyncSession], target_id: uuid.UUID)
 async def _seed_unindexed_documents(
     maker: Callable[[], AsyncSession], project_id: uuid.UUID, count: int
 ) -> None:
+    await ensure_project_row(maker, project_id)
     """Normalized documents with no chunks — what `reindex_corpus` selects.
 
     No source rows: `normalized_documents` declares no foreign keys (verified in

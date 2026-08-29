@@ -31,6 +31,7 @@ from aleph_rks.normalization import NormalizationFailed, normalize_bytes
 from aleph_rks.source_service import mark_status
 from aleph_security.agent_token import verify_agent_token
 from aleph_security.principal import Principal
+from aleph_workers.project_guard import refuse_if_project_is_gone
 
 
 async def _set_run_status(
@@ -111,6 +112,14 @@ async def normalize_job(
     version_id = UUID(normalize_input_str)
 
     maker = ctx["session_maker"]
+
+    # Before anything that costs money. See `project_guard`: a deleted
+    # project's queued work kept running AND kept enqueueing more. The
+    # project comes from the token's signed claim, which is the same one
+    # every write below is scoped to.
+    refusal = await refuse_if_project_is_gone(maker, claims.project_id)
+    if refusal is not None:
+        return refusal
     asset_store = ctx["asset_store"]
 
     await _set_run_status(maker, claims.agent_run_id, status="running")

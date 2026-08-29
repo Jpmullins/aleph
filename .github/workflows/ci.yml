@@ -108,6 +108,8 @@ jobs:
       # everything while `grep -c permissions=` stays happily at 1.
       - name: The agent cannot rewrite its own skills
         run: ./scripts/check-agent-fs-permissions.sh
+      - name: Every project-scoped worker job refuses a deleted project
+        run: ./scripts/check-jobs-guard-deleted-projects.sh
 
       # Any one of 27 tools raising used to end the conversation: LangChain's
       # ToolNode re-raises anything that is not a schema-validation error. The

@@ -16,6 +16,7 @@ from aleph_reviewer.mechanical import MechanicalReviewerWorkflow
 from aleph_security.agent_token import verify_agent_token
 from aleph_security.principal import Principal
 from aleph_workers.gateway import gateways
+from aleph_workers.project_guard import refuse_if_project_is_gone
 
 
 async def mechanical_review_job(
@@ -39,6 +40,12 @@ async def mechanical_review_job(
     revision_id = UUID(revision_id_str)
     page_id = UUID(page_id_str)
     maker = ctx["session_maker"]
+
+    # Before anything that costs money. See `project_guard`: a deleted
+    # project's queued work kept running AND kept enqueueing more.
+    refusal = await refuse_if_project_is_gone(maker, project_id)
+    if refusal is not None:
+        return refusal
 
     # If wiki_ingest pre-created a pending AgentRun for this review,
     # promote it to running rather than inserting a duplicate (the
@@ -110,6 +117,12 @@ async def editorial_review_job(
     )
     project_id = UUID(project_id_str)
     maker = ctx["session_maker"]
+
+    # Before anything that costs money. See `project_guard`: a deleted
+    # project's queued work kept running AND kept enqueueing more.
+    refusal = await refuse_if_project_is_gone(maker, project_id)
+    if refusal is not None:
+        return refusal
     litellm = await gateways(ctx).litellm(project_id)
 
     async with maker() as session:

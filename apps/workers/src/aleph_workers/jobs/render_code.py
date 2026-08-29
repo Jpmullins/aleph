@@ -33,6 +33,7 @@ from aleph_db.models.agent import AgentRun
 from aleph_db.repos.ledger import LedgerWriter
 from aleph_security.agent_token import verify_agent_token
 from aleph_security.principal import Principal
+from aleph_workers.project_guard import refuse_if_project_is_gone
 
 # Must match aleph_code_runner.executor.CODE_RUNNER_QUEUE. Hardcoded (not
 # imported) because the isolated runner package is not installed here.
@@ -127,6 +128,12 @@ async def render_code_artifact_job(
     agent_run_id = claims.agent_run_id
     project_id = UUID(project_id_str)
     maker = ctx["session_maker"]
+
+    # Before anything that costs money. See `project_guard`: a deleted
+    # project's queued work kept running AND kept enqueueing more.
+    refusal = await refuse_if_project_is_gone(maker, project_id)
+    if refusal is not None:
+        return refusal
     asset_store = ctx["asset_store"]
     # Dedicated code-job Redis (isolated bus the sandbox shares) — NOT the
     # platform pool (which carries tokens + privileged queues the sandbox

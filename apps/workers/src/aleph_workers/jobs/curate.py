@@ -29,6 +29,7 @@ from aleph_observability.tracing import start_span
 from aleph_security.principal import Principal
 from aleph_wiki.curator_service import CuratorService
 from aleph_workers.gateway import gateways
+from aleph_workers.project_guard import refuse_if_project_is_gone
 
 _log = structlog.get_logger(__name__)
 
@@ -37,6 +38,11 @@ async def curate_page_job(ctx: dict[str, Any], project_id: str, page_id: str) ->
     maker = ctx["session_maker"]
     pid = UUID(project_id)
     page = UUID(page_id)
+    # Before anything that costs money. See `project_guard`: a deleted
+    # project's queued work kept running AND kept enqueueing more.
+    refusal = await refuse_if_project_is_gone(maker, pid)
+    if refusal is not None:
+        return refusal
     litellm = await gateways(ctx).litellm(pid)
 
     with start_span(

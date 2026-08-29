@@ -19,6 +19,7 @@ from aleph_db.models.agent import AgentRun
 from aleph_db.repos.ledger import LedgerWriter
 from aleph_security.agent_token import verify_agent_token
 from aleph_security.principal import Principal
+from aleph_workers.project_guard import refuse_if_project_is_gone
 
 
 async def _finish_run(
@@ -66,6 +67,12 @@ async def builder_job(
     wiki_page_ids = [UUID(s) for s in wiki_page_ids_str]
     dataset_version_ids = [UUID(s) for s in dataset_version_ids_str]
     maker = ctx["session_maker"]
+
+    # Before anything that costs money. See `project_guard`: a deleted
+    # project's queued work kept running AND kept enqueueing more.
+    refusal = await refuse_if_project_is_gone(maker, project_id)
+    if refusal is not None:
+        return refusal
     asset_store = ctx["asset_store"]
 
     async with maker() as session:

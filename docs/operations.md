@@ -421,8 +421,8 @@ Run them locally with the commands in [`CLAUDE.md`](../CLAUDE.md#commands).
 
 A **sweep** is `scripts/check-*.sh`: a shell check that asserts one invariant across the whole tree,
 for invariants a unit test cannot reach because they are about *absence* — a producer with no
-consumer, a route with no scope check, a generated file nobody regenerated. There are 21, every one
-of them is wired into `ci.yml`, and `check-sweeps-are-wired.sh` fails the build if a 22nd is added
+consumer, a route with no scope check, a generated file nobody regenerated. There are 22, every one
+of them is wired into `ci.yml`, and `check-sweeps-are-wired.sh` fails the build if a 23rd is added
 without a consumer.
 
 They are held to one rule rather than grandfathered past it: **a sweep must have a concrete failing
@@ -502,6 +502,13 @@ light.
   this measures the gap rather than asserting it is zero.
 - `check-sweeps-are-wired.sh` — every `scripts/check-*.sh` is run by `ci.yml`, `acceptance.sh` or
   `self_check.sh`. An unwired sweep is a file, not a gate.
+- `check-jobs-guard-deleted-projects.sh` — every project-scoped worker job calls
+  `refuse_if_project_is_gone` before it awaits anything. Deleting a project sets
+  `status = 'deleted'` and tells the QUEUE nothing, so work already enqueued kept running and
+  the wiki chain kept enqueueing more: measured at **$141.43 and 1,766 model calls in sixty
+  minutes**, every dollar against `[e2e]` fixture projects that were already deleted. The sweep
+  walks each job's AST rather than grepping, because a job that imports the guard and never
+  calls it — or calls it after the spend — satisfies a text search completely.
 - `check-acceptance-claims.sh` also VERIFIES counts now, not just paths. A ✅ row whose
   check is a bare `pytest <path>` and which asserts "N passed" is collected and compared.
   Row A1 claimed 142 against a suite of 165 and survived three audits, because the sweep

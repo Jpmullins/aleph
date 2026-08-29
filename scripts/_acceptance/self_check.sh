@@ -192,6 +192,11 @@ probe "check-graph-state-keys notices an undeclared state write" \
   's/        return \{"candidates": candidates, "seen_keys": sorted\(seen\)\}/        return {"candidates": candidates, "seen_keys": sorted(seen), "a_key_no_typed_dict_declares": 1}/' \
   "./scripts/check-graph-state-keys.sh"
 
+probe "check-jobs-guard-deleted-projects notices an unguarded job" \
+  apps/workers/src/aleph_workers/jobs/curate.py \
+  's/    refusal = await refuse_if_project_is_gone\(maker, pid\)/    refusal = None/' \
+  "./scripts/check-jobs-guard-deleted-projects.sh"
+
 probe "check-dead-refs notices a path that is not there" \
   docs/operations.md \
   's/^# Operations/# Operations\n\nSee `deploy\/definitely-not-a-real-directory\/README.md`./' \

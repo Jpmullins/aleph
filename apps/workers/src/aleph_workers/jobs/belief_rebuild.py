@@ -41,6 +41,7 @@ from aleph_observability.tracing import current_trace_id, start_span
 from aleph_rks.models import DocumentChunk, Source
 from aleph_security.principal import Principal
 from aleph_workers.gateway import gateways
+from aleph_workers.project_guard import refuse_if_project_is_gone
 
 _log = structlog.get_logger(__name__)
 
@@ -93,6 +94,12 @@ async def belief_rebuild_job(
 
     maker = ctx["session_maker"]
     pid = UUID(project_id_str)
+
+    # Before anything that costs money. See `project_guard`: a deleted
+    # project's queued work kept running AND kept enqueueing more.
+    refusal = await refuse_if_project_is_gone(maker, pid)
+    if refusal is not None:
+        return refusal
     litellm = await gateways(ctx).litellm(pid)
 
     with start_span("worker.belief_rebuild", **{"aleph.project_id": project_id_str}):

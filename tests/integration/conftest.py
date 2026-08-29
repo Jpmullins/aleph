@@ -30,6 +30,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -105,3 +106,43 @@ async def committed_project(
     project_id = uuid.uuid4()
     yield project_id
     await teardown_project(engine, maker, project_id)
+
+
+async def ensure_project_row(maker: Callable[[], AsyncSession], project_id: uuid.UUID) -> None:
+    """Put a real `projects` row behind a `committed_project` id.
+
+    `committed_project` yields an id and creates nothing — it exists to scope
+    teardown, not to seed — so for most of this suite the project a test writes
+    rows "for" has never existed. That was invisible until worker jobs started
+    refusing to run for a project that is deleted OR absent
+    (`aleph_workers.project_guard`), at which point fifteen job tests began
+    exercising the refusal instead of the job.
+
+    Absent has to keep counting as refused: `purge_deleted_projects`
+    hard-deletes the rows behind a dead project, so a job queued before the
+    purge and run after finds no row rather than a `deleted` one. Loosening the
+    guard to fix the tests would reopen exactly that window. Seeding the row the
+    tests were only pretending to have is the honest direction.
+
+    Idempotent, so a test that also builds its own `Project` is unaffected.
+    """
+    from aleph_core.ids import uuid7
+    from aleph_db.models.project import Project
+
+    async with maker() as session:
+        existing = (
+            await session.execute(select(Project.id).where(Project.id == project_id))
+        ).scalar_one_or_none()
+        if existing is not None:
+            return
+        session.add(
+            Project(
+                id=project_id,
+                title="Integration Test Project",
+                description="",
+                status="active",
+                model_profile_id=uuid7(),
+                created_by=uuid.uuid4(),
+            )
+        )
+        await session.commit()
