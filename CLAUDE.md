@@ -68,10 +68,18 @@ which supersedes the old decision that the wiki was being deleted.
   4.54 out of a possible 1.00 and scored higher the more the ranking repeated itself. Fixed
   (each source credited once, at its best position) and pinned by
   `packages/aleph-evals/tests/test_ndcg.py`, which asserts the bound exhaustively over every
-  ranking of up to four hits. **The nDCG number has not been re-measured on the 738-document set
-  since the fix** — the recall figures are unaffected, and no nDCG should be quoted until that run
-  happens. The old 12-document set scored **recall@1 = 1.00** — saturated, and unable to
-  resolve any change RS6 or RS10 might make. The generated set is NOT committed: the corpus is
+  ranking of up to four hits. **Re-measured 2026-08-29, and this is the first nDCG that means
+  anything**: on an 896-document set generated from this instance's own corpus (70 sources, 5,002
+  chunks, 88 questions), **nDCG@10 0.525, MRR 0.487, recall@1 0.39, @3 0.54, @8 0.62, @20 0.80**,
+  hybrid, rerank off. The recall figures land where the earlier 738-document run did (MRR 0.443,
+  @1 0.34, @3 0.51, @8 0.64, @20 0.78), which is the reason to trust the nDCG beside them rather
+  than the withdrawn 0.681. Two rows in that run are worth more than the headline: **abstain 0.00
+  (0 of 8 unanswerable questions declined)** — retrieval still answers questions its corpus cannot
+  answer, exactly as `docs/decisions.md` D10 says — and **sections 0.00 over 1,760 retrieved
+  passages**, because this generated set draws from sources that predate the docling rollout.
+  The old 12-document set scored **recall@1 = 1.00** — saturated, and unable to
+  resolve any change RS6 or RS10 might make; on the same run it reports nDCG@10 0.970, which is
+  what a saturated set looks like and is not a number to quote. The generated set is NOT committed: the corpus is
   published papers and redistributing them is not the eval's call. Point `ALEPH_RETRIEVAL_DATASET`
   at a generated one; CI measures the small committed set, lexical-only, with a floor on recall@1.
 
