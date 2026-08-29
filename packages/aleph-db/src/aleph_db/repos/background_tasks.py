@@ -69,7 +69,14 @@ if TYPE_CHECKING:
 #: ``apps/workers/tests/test_background_task_kinds.py::test_every_kind_has_a_handler``,
 #: which fails in both directions — an accepted kind with no handler is a ticket
 #: that can only ever fail, and a handler nobody can request is dead code.
-BACKGROUND_TASK_KINDS: tuple[str, ...] = ("reindex_corpus", "review_sweep")
+BACKGROUND_TASK_KINDS: tuple[str, ...] = (
+    "reindex_corpus",
+    "review_sweep",
+    # Hard-delete the rows behind soft-deleted projects. Without it a
+    # deployment keeps every project it has ever held: measured at 1.6M rows
+    # behind 1,135 dead projects on one instance. See `aleph_db.purge`.
+    "purge_deleted_projects",
+)
 
 #: Where the chat turn that asked for the work is recorded on the child run.
 PARENT_RUN_KEY = "parent_agent_run_id"

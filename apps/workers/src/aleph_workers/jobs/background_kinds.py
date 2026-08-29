@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from aleph_rks.backfill import unindexed_document_ids
 from aleph_wiki.models import WikiPage
@@ -122,10 +122,76 @@ async def review_sweep(task: BackgroundTask) -> dict[str, Any]:
 
 #: kind → handler. Keys must equal ``aleph_db.repos.background_tasks
 #: .BACKGROUND_TASK_KINDS``; the test asserts it in both directions.
+async def purge_deleted_projects(task: BackgroundTask) -> dict[str, Any]:
+    """Hard-delete the rows behind projects a person has already deleted.
+
+    Deleting a project sets `status = "deleted"` — correct, because someone who
+    deletes one by mistake should get it back. Nothing purged the rows behind
+    one, so a deployment accumulated every project it ever held: 1.6 million rows
+    behind 1,135 dead projects, measured on this instance.
+
+    **Capped like every other handler.** An uncapped purge over a year of dead
+    projects is one transaction holding locks on twenty tables; the cap makes it
+    resumable, and the result says when it bit so a partial sweep is never
+    mistaken for a complete one.
+
+    The append-only tables are deliberately left alone — see `aleph_db.purge`.
+    A scheduled job that disabled a database trigger to tidy up would have turned
+    an invariant into a suggestion.
+    """
+    from aleph_db.purge import purge_project_rows
+
+    maker = task.ctx["session_maker"]
+    purged: list[str] = []
+    totals: dict[str, int] = {}
+    truncated = False
+
+    async with maker() as session:
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT id FROM projects WHERE status = 'deleted' "
+                    "ORDER BY updated_at LIMIT :cap"
+                ),
+                {"cap": MAX_UNITS_PER_TASK + 1},
+            )
+        ).scalars().all()
+    if len(rows) > MAX_UNITS_PER_TASK:
+        rows = rows[:MAX_UNITS_PER_TASK]
+        truncated = True
+
+    for project_id in rows:
+        async with maker() as session:
+            removed = await purge_project_rows(session, project_id=project_id)
+            await session.commit()
+        purged.append(str(project_id))
+        for table, n in removed.items():
+            totals[table] = totals.get(table, 0) + n
+
+    return {
+        "projects_purged": len(purged),
+        "rows_removed": sum(totals.values()),
+        "by_table": dict(sorted(totals.items(), key=lambda kv: -kv[1])),
+        "truncated": truncated,
+        "note": (
+            "append-only tables are retained by design; see aleph_db.purge"
+            if totals
+            else "nothing to purge"
+        ),
+    }
+
+
 BACKGROUND_TASK_HANDLERS: dict[str, Callable[[BackgroundTask], Awaitable[dict[str, Any]]]] = {
     "reindex_corpus": reindex_corpus,
     "review_sweep": review_sweep,
+    "purge_deleted_projects": purge_deleted_projects,
 }
 
 
-__all__ = ["BACKGROUND_TASK_HANDLERS", "MAX_UNITS_PER_TASK", "reindex_corpus", "review_sweep"]
+__all__ = [
+    "BACKGROUND_TASK_HANDLERS",
+    "MAX_UNITS_PER_TASK",
+    "purge_deleted_projects",
+    "reindex_corpus",
+    "review_sweep",
+]
