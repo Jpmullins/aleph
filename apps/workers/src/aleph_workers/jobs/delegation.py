@@ -131,6 +131,22 @@ async def delegated_subagent_job(
     # trustworthy statement of which project this job belongs to.
     refusal = await refuse_if_project_is_gone(maker, claims.project_id)
     if refusal is not None:
+        # CONVERGE the run, do not merely return. This job is handed an
+        # `AgentRun` that already exists, so returning a skip and leaving the
+        # row at `running` strands the ticket exactly the way the module
+        # docstring says it must not be: "a delegated run left at `running` is
+        # what the stale-run reaper exists to clean up, and needing the reaper
+        # is a bug rather than a design." Measured after the first version of
+        # this guard: 19 runs stuck at `running` in deleted projects, which can
+        # never be picked up again because this same guard now refuses them.
+        await _converge(
+            maker,
+            run_id=run_id,
+            status=STATUS_FAILED,
+            actor_id=SYSTEM_ACTOR,
+            actor_kind="system",
+            error_text=f"refused: {refusal['skipped']}",
+        )
         return refusal
 
     async with maker() as session:

@@ -222,6 +222,18 @@ async def background_task_job(
     # trustworthy statement of which project this job belongs to.
     refusal = await refuse_if_project_is_gone(maker, claims.project_id)
     if refusal is not None:
+        # CONVERGE, do not merely return. The ticket already exists, so a bare
+        # return leaves it at `running` for a job that this same guard will
+        # refuse on every redelivery — a ticket that ends is the whole point of
+        # `_converge`, and one that disappears is what it was written against.
+        await _converge(
+            maker,
+            run_id=UUID(agent_run_id_str),
+            status=STATUS_FAILED,
+            actor_id=SYSTEM_ACTOR,
+            actor_kind="system",
+            error_text=f"refused: {refusal['skipped']}",
+        )
         return refusal
 
     with start_span("worker.background_task", **{"aleph.agent_run_id": agent_run_id_str}):

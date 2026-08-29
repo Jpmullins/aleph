@@ -70,6 +70,7 @@ async def curate_page_job(ctx: dict[str, Any], project_id: str, page_id: str) ->
                     agent_kind="curator",
                     correlation_id=corr,
                     status="running",
+                    started_at=utcnow(),
                     input_payload={"page_id": page_id},
                     created_by=owner,
                 )

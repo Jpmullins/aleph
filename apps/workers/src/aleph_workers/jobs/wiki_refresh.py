@@ -250,6 +250,7 @@ async def wiki_refresh_job(
                         agent_kind="wiki_refresh",
                         correlation_id=claims_tok.correlation_id or f"wiki-refresh-{run_id.hex}",
                         status="running",
+                        started_at=utcnow(),
                         input_payload={"page_id": page_id},
                         created_by=principal.user_id,
                     )

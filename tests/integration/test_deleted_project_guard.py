@@ -105,3 +105,76 @@ async def test_the_refusal_is_a_result_and_not_an_exception(
     await _set_status(maker, committed_project, "deleted")
     refusal = await refuse_if_project_is_gone(maker, committed_project)
     assert isinstance(refusal, dict)
+
+
+async def test_a_refused_delegation_converges_instead_of_stranding_its_run(
+    maker: Any, committed_project: uuid.UUID
+) -> None:
+    """The guard must END the ticket, not merely decline it.
+
+    `delegated_subagent_job` is handed an `AgentRun` that already exists. The
+    first version of this guard returned a skip and left the row at `running`,
+    which strands the ticket exactly the way `test_delegation_job`'s module
+    docstring says it must not be: needing the reaper is a bug, not a design.
+    And it strands it permanently — the run can never be picked up again,
+    because this same guard refuses every redelivery.
+
+    Measured after that first version: 19 runs stuck at `running` in deleted
+    projects.
+    """
+    from sqlalchemy import select as _select
+
+    from aleph_db.models.agent import AgentRun, AgentThread
+    from aleph_security.agent_token import mint_agent_token
+    from aleph_workers.jobs import delegation as deleg
+
+    secret = "test-only-delegation-secret-not-used-elsewhere"
+    await _create(maker, committed_project)
+    thread_id, run_id = uuid7(), uuid7()
+    async with maker() as s:
+        s.add(
+            AgentThread(
+                id=thread_id,
+                project_id=committed_project,
+                graph_id="retriever",
+                parent_agent_run_id=None,
+                values_jsonb={},
+                created_by=uuid.uuid4(),
+            )
+        )
+        s.add(
+            AgentRun(
+                id=run_id,
+                project_id=committed_project,
+                agent_kind="delegation:retriever",
+                correlation_id=str(run_id),
+                status="pending",
+                input_payload={"messages": []},
+                agent_thread_id=thread_id,
+                created_by=uuid.uuid4(),
+            )
+        )
+        await s.commit()
+
+    await _set_status(maker, committed_project, "deleted")
+
+    out = await deleg.delegated_subagent_job(
+        {"session_maker": maker, "agent_token_secret": secret, "settings": object()},
+        str(run_id),
+        mint_agent_token(
+            secret=secret,
+            user_id=uuid.uuid4(),
+            project_id=committed_project,
+            agent_run_id=run_id,
+            actor_kind="aleph_agent",
+            correlation_id="t",
+        ),
+    )
+    assert out["skipped"] == SKIPPED_REASON
+
+    async with maker() as s:
+        status = (
+            await s.execute(_select(AgentRun.status).where(AgentRun.id == run_id))
+        ).scalar_one()
+    assert status != "running", "the guard refused the work and stranded the ticket"
+    assert status == "failed"

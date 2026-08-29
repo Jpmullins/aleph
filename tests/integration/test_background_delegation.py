@@ -48,7 +48,7 @@ from typing import Annotated, Any
 import httpx
 import pytest
 from fastapi import Depends, FastAPI, Path
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from aleph_api.deps import principal_dep
@@ -707,8 +707,17 @@ async def test_a_ticket_from_another_project_is_not_readable(
         assert run is not None
         assert run.status == STATUS_PENDING, "a cross-project cancel changed the row"
     finally:
+        # The `projects` row too. `other_project` is a bare uuid with no
+        # `committed_project` teardown behind it, so this block IS the teardown
+        # — and `_make_ticket` now seeds a project row because the worker jobs
+        # refuse a project that does not exist. Leaving it behind put one
+        # non-fixture project in the database per test run, which
+        # `status.sh` number 3 then counted as the whole real corpus.
         async with maker() as session:
             await session.execute(delete(AgentRun).where(AgentRun.project_id == other_project))
+            await session.execute(
+                text("DELETE FROM projects WHERE id = :pid"), {"pid": other_project}
+            )
             await session.commit()
 
 
