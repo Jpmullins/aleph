@@ -21,8 +21,9 @@ refused; that is the whole point of having the column.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -211,7 +212,16 @@ class SourceText:
 #: Turns a source into claim drafts. Deliberately a plain callable: the rebuild
 #: machinery does not care whether it is an LLM, a rule set, or a fixture, and
 #: keeping it injectable is what makes the machinery testable without one.
-Extractor = Callable[[SourceText], Sequence["ClaimUpsert"]]
+#:
+#: **Sync or async, and the union is load-bearing.** This was
+#: `Callable[[SourceText], Sequence[ClaimUpsert]]` — sync only — while the only
+#: real extractor in the tree, `aleph_wiki.claim_extraction.extract_claims`, is
+#: `async def`. So the repair that three separate comments name as the remedy
+#: for an ungrounded claim ("`BeliefService.rebuild` re-derives later") could not
+#: be handed the thing that does the deriving. `rebuild` had no non-test caller
+#: at all, and that is why: not an oversight, an interface that excluded its own
+#: only implementation. Fixture extractors stay sync and keep working.
+Extractor = Callable[[SourceText], "Sequence[ClaimUpsert] | Awaitable[Sequence[ClaimUpsert]]"]
 
 
 @dataclass(frozen=True)
@@ -714,7 +724,9 @@ class BeliefService:
             rejected = 0
 
             for source in sources:
-                for draft in extract(source):
+                produced = extract(source)
+                drafts = await produced if inspect.isawaitable(produced) else produced
+                for draft in drafts:
                     result = await self.upsert_claim(
                         principal=principal,
                         ledger=ledger,

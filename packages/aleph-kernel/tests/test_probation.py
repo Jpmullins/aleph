@@ -53,9 +53,7 @@ def protected_core(name: str = "ledger"):
     async def probe(ctx: Context) -> ProbeResult:
         return ok()
 
-    return CapabilitySpec(
-        name=name, setup=setup, probe=probe, provides=frozenset({name})
-    )
+    return CapabilitySpec(name=name, setup=setup, probe=probe, provides=frozenset({name}))
 
 
 async def test_a_capability_that_degrades_is_retired() -> None:

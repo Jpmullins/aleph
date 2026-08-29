@@ -158,7 +158,9 @@ async def delegated_subagent_job(
         return {"ok": False, "error": "not a delegation"}
 
     try:
-        output = await _run_subagent(ctx, name=name, messages=messages, principal=principal)
+        output = await _run_subagent(
+            ctx, name=name, messages=messages, principal=principal, run_id=run_id
+        )
     except Exception as exc:
         _log.exception("delegation.failed", agent_run_id=agent_run_id_str, subagent=name)
         await _write_thread_values(
@@ -194,6 +196,7 @@ async def _run_subagent(
     name: str,
     messages: list[dict[str, Any]],
     principal: Principal,
+    run_id: UUID,
 ) -> list[dict[str, Any]]:
     """Build the named subagent and run it to completion.
 
@@ -205,6 +208,7 @@ async def _run_subagent(
     """
     from deepagents import create_deep_agent
 
+    from aleph_api.chat_runs import RUN_ID_KEY
     from aleph_api.copilot_agent import (
         bind_runtime,
         bindings_for_project,
@@ -288,7 +292,25 @@ async def _run_subagent(
                 # `_project_id_from_config` reads `projectId` from `configurable`;
                 # the API normally supplies it through a project-prefixed thread
                 # id, which a delegated run has no equivalent of.
-                config={"configurable": {"projectId": str(project_id)}},
+                #
+                # `RUN_ID_KEY` is the OTHER half, and leaving it out is not
+                # cosmetic. Tools that make model calls of their own read the
+                # turn they belong to out of `configurable` via
+                # `run_id_from_config`; `read_wiki_deeply` drives the retrieval
+                # router, which makes three more (`corpus_search.query_embed`,
+                # `page_selection`, `compose`). Omitting the key writes all
+                # three with `agent_run_id=NULL` while they still declare
+                # `purpose="assistant.*"` — which is precisely what status.sh
+                # number 5 counts, and precisely what it counted here: three
+                # orphans from ONE delegated wiki read, on a run that had a real
+                # `AgentRun` row the whole time. The run exists; this is the
+                # channel that says so.
+                config={
+                    "configurable": {
+                        "projectId": str(project_id),
+                        RUN_ID_KEY: str(run_id),
+                    }
+                },
             )
     finally:
         reset_principal(token)

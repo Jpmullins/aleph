@@ -24,6 +24,7 @@ from sqlalchemy import select
 from aleph_core.ids import uuid7
 from aleph_db.models.agent import AgentRun, AgentThread
 from aleph_security.agent_token import mint_agent_token
+from aleph_security.principal import Principal
 from aleph_workers.jobs import delegation as deleg
 
 pytestmark = pytest.mark.integration
@@ -82,6 +83,27 @@ def _token(project_id: uuid.UUID, run_id: uuid.UUID) -> str:
 async def _status(maker: Any, run_id: uuid.UUID) -> str:
     async with maker() as s:
         return (await s.execute(select(AgentRun.status).where(AgentRun.id == run_id))).scalar_one()
+
+
+class _Gateways:
+    """`gateways(ctx).litellm(project_id)` — the shape, not the client."""
+
+    async def litellm(self, _project_id: Any) -> None:
+        return None
+
+
+async def _none(*_a: Any, **_k: Any) -> None:
+    return None
+
+
+def _principal(project_id: uuid.UUID) -> Principal:
+    return Principal(
+        user_id=uuid.uuid4(),
+        subject="delegation-test",
+        email="delegation@test.invalid",
+        actor_kind="aleph_agent",
+        project_id=project_id,
+    )
 
 
 async def _values(maker: Any, thread_id: uuid.UUID) -> dict[str, Any]:
@@ -200,3 +222,72 @@ async def test_a_missing_run_is_reported_not_crashed(
     )
     assert out["ok"] is False
     assert out["error"] == "run not found"
+
+
+async def test_the_job_hands_the_runner_the_run_it_is_executing(
+    monkeypatch: Any, maker: Any, committed_project: uuid.UUID
+) -> None:
+    """The caller half of attribution.
+
+    Every other test in this file stubs `_run_subagent` entirely, which is
+    exactly how the defect below survived: the function that had to carry the
+    run id was the function the tests replaced. This one keeps the stub and
+    inspects what it was handed.
+    """
+    _thread, run = await _seed(maker, committed_project)
+    seen: dict[str, Any] = {}
+
+    async def fake(_ctx: Any, **kw: Any) -> list[dict[str, Any]]:
+        seen.update(kw)
+        return [{"role": "assistant", "content": "ok"}]
+
+    monkeypatch.setattr(deleg, "_run_subagent", fake)
+    await deleg.delegated_subagent_job(_ctx(maker), str(run.id), _token(committed_project, run.id))
+    assert seen["run_id"] == run.id
+
+
+async def test_the_delegated_graph_config_carries_the_run_id(monkeypatch: Any) -> None:
+    """The callee half, and the one that was actually broken.
+
+    A delegated subagent's tools make model calls of their own — `read_wiki_
+    deeply` drives the retrieval router, which makes three. Each reads the turn
+    it belongs to from `configurable` via `run_id_from_config`. The config here
+    carried `projectId` and nothing else, so all three were written with
+    `agent_run_id=NULL` while still declaring `purpose="assistant.*"` — which is
+    what `status.sh` number 5 counts, and what it counted: three orphans from
+    one delegated wiki read, on a run whose `AgentRun` row existed throughout.
+
+    Asserting on `projectId` too, because the fix adds a key to a dict and the
+    cheapest way to get this green is to replace the dict.
+    """
+    from aleph_api.chat_runs import RUN_ID_KEY
+
+    project_id, run_id = uuid7(), uuid7()
+    captured: dict[str, Any] = {}
+
+    class _Agent:
+        async def ainvoke(self, _state: Any, config: Any = None) -> dict[str, Any]:
+            captured.update(config or {})
+            return {"messages": []}
+
+    monkeypatch.setattr("deepagents.create_deep_agent", lambda **_: _Agent())
+    monkeypatch.setattr(deleg, "_api_settings", lambda: object())
+    monkeypatch.setattr(deleg, "gateways", lambda _ctx: _Gateways())
+    import aleph_api.copilot_agent as ca
+    import aleph_api.subagents as sa
+
+    monkeypatch.setattr(ca, "bind_runtime", lambda **_: None)
+    monkeypatch.setattr(ca, "bindings_for_project", _none)
+    monkeypatch.setattr(ca, "endpoint_for_project", _none)
+    monkeypatch.setattr(sa, "build_subagent", lambda _n, **_k: {"model": object(), "tools": []})
+
+    await deleg._run_subagent(
+        {"session_maker": None},
+        name="retriever",
+        messages=[],
+        principal=_principal(project_id),
+        run_id=run_id,
+    )
+    configurable = captured.get("configurable") or {}
+    assert configurable.get(RUN_ID_KEY) == str(run_id)
+    assert configurable.get("projectId") == str(project_id)

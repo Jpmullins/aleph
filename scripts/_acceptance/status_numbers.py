@@ -20,6 +20,41 @@ from datetime import UTC, datetime
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+#: What makes a project REAL rather than test litter.
+#:
+#: Defined once, and used both by the numbers that exclude fixtures and by the
+#: guard that asks whether anything is left. Those two have to mean exactly the
+#: same thing: a guard counting real projects by a different rule than the
+#: numbers exclude them by would report "there are real projects to measure"
+#: while every number's own predicate matched none of them — the vacuous green
+#: with an extra step between it and the reader.
+_NOT_A_FIXTURE = "p.title not ilike '[e2e]%' and p.title not ilike 'smoke test%'"
+
+
+def _in_a_real_project(fk: str, *, negate: bool = False) -> str:
+    """`AND [NOT] EXISTS (a non-fixture project owning this row)`."""
+    return (
+        f"   and {'not ' if negate else ''}exists ("
+        f"     select 1 from projects p where p.id = {fk} and {_NOT_A_FIXTURE}"
+        f"   )"
+    )
+
+
+#: How many projects the numbers above would actually look at.
+REAL_PROJECTS_SQL = f"select count(*) from projects p where {_NOT_A_FIXTURE}"
+
+#: Numbers that count defects "in real projects". Every one of them reads 0 when
+#: there are no real projects at all, and 0 is this scoreboard's word for "no
+#: defects". Guarded in `main` so that case prints `n/a` instead.
+REAL_PROJECT_SCOPED = frozenset(
+    {
+        "unindexed_documents",
+        "ungrounded_citations",
+        "sourceless_citations",
+        "degraded_indexes",
+    }
+)
+
 #: `key`, the SQL, the predicate for "good", and what it means in words.
 QUERIES: list[tuple[str, str, str, str]] = [
     (
@@ -48,10 +83,7 @@ QUERIES: list[tuple[str, str, str, str]] = [
         "select count(*) from normalized_documents nd"
         " where not exists ("
         "   select 1 from document_chunks c where c.normalized_document_id = nd.id)"
-        "   and exists ("
-        "     select 1 from projects p where p.id = nd.project_id"
-        "       and p.title not ilike '[e2e]%' and p.title not ilike 'smoke test%'"
-        "   )",
+        + _in_a_real_project("nd.project_id"),
         "== 0",
         "ingested documents with no chunks at all, in real projects",
     ),
@@ -60,10 +92,7 @@ QUERIES: list[tuple[str, str, str, str]] = [
         "select count(*) from normalized_documents nd"
         " where not exists ("
         "   select 1 from document_chunks c where c.normalized_document_id = nd.id)"
-        "   and not exists ("
-        "     select 1 from projects p where p.id = nd.project_id"
-        "       and p.title not ilike '[e2e]%' and p.title not ilike 'smoke test%'"
-        "   )",
+        + _in_a_real_project("nd.project_id", negate=True),
         ">= 0",
         "the same count in test-fixture and orphaned projects — excluded above, "
         "printed here so the scope cannot hide anything",
@@ -95,11 +124,7 @@ QUERIES: list[tuple[str, str, str, str]] = [
         # narrow the number and cannot hide anything behind it.
         "select count(*) from citations c"
         " where (c.quote is null or c.char_start is null)"
-        "   and c.source_id is not null"
-        "   and exists ("
-        "     select 1 from projects p where p.id = c.project_id"
-        "       and p.title not ilike '[e2e]%' and p.title not ilike 'smoke test%'"
-        "   )",
+        "   and c.source_id is not null" + _in_a_real_project("c.project_id"),
         "== 0",
         "citations with a source but no quote or span, in real projects — "
         "RE-DERIVABLE by re-reading the source (decisions.md D9)",
@@ -113,11 +138,7 @@ QUERIES: list[tuple[str, str, str, str]] = [
         # together made "run BeliefService.rebuild" the stated remedy for six
         # rows it cannot touch.
         "select count(*) from citations c"
-        " where c.source_id is null"
-        "   and exists ("
-        "     select 1 from projects p where p.id = c.project_id"
-        "       and p.title not ilike '[e2e]%' and p.title not ilike 'smoke test%'"
-        "   )",
+        " where c.source_id is null" + _in_a_real_project("c.project_id"),
         "== 0",
         "citations naming no source at all, in real projects — NOT re-derivable; "
         "the write path that produced them is the defect",
@@ -126,10 +147,7 @@ QUERIES: list[tuple[str, str, str, str]] = [
         "ungrounded_citations_fixtures",
         "select count(*) from citations c"
         " where (c.quote is null or c.char_start is null)"
-        "   and not exists ("
-        "     select 1 from projects p where p.id = c.project_id"
-        "       and p.title not ilike '[e2e]%' and p.title not ilike 'smoke test%'"
-        "   )",
+        + _in_a_real_project("c.project_id", negate=True),
         ">= 0",
         "the same count in test-fixture and orphaned projects — excluded above, "
         "printed here so the scope cannot hide anything",
@@ -185,22 +203,14 @@ QUERIES: list[tuple[str, str, str, str]] = [
         # counted on 2026-08-22 were in one `[e2e] chat project` — a browser-suite
         # fixture, soft-deleted, whose sources were never going to be embedded.
         "select count(*) from retrieval_index_records r"
-        " where r.state <> 'embedded'"
-        "   and exists ("
-        "     select 1 from projects p where p.id = r.project_id"
-        "       and p.title not ilike '[e2e]%' and p.title not ilike 'smoke test%'"
-        "   )",
+        " where r.state <> 'embedded'" + _in_a_real_project("r.project_id"),
         "== 0",
         "sources searchable by keyword only, in real projects",
     ),
     (
         "degraded_indexes_fixtures",
         "select count(*) from retrieval_index_records r"
-        " where r.state <> 'embedded'"
-        "   and not exists ("
-        "     select 1 from projects p where p.id = r.project_id"
-        "       and p.title not ilike '[e2e]%' and p.title not ilike 'smoke test%'"
-        "   )",
+        " where r.state <> 'embedded'" + _in_a_real_project("r.project_id", negate=True),
         ">= 0",
         "the same count in test-fixture and orphaned projects — excluded above, "
         "printed here so the scope cannot hide anything",
@@ -245,7 +255,29 @@ async def main() -> int:
     engine = create_async_engine(url)
     try:
         async with engine.connect() as conn:
+            # How many projects the fixture-scoped numbers can actually see.
+            #
+            # Each of them counts defects "in real projects", and each reads 0
+            # when there are none — which this scoreboard renders as `ok`. That
+            # is the failure the module docstring names, reached from the other
+            # direction: not a number nobody computed, but a number computed
+            # correctly over an empty set. It happened here. A database cleanup
+            # left one project titled "Smoke Test 2", the fixture patterns
+            # excluded it, and `ungrounded citations 0 ok` sat on the dashboard
+            # beside `...in test fixtures 544` — the whole corpus, reclassified
+            # as litter by its own title, with the green above it unchanged.
+            try:
+                real_projects = int((await conn.execute(text(REAL_PROJECTS_SQL))).scalar_one())
+            except Exception:  # the per-number handler below reports it properly
+                real_projects = -1
+
             for key, sql, predicate, note in QUERIES:
+                if key in REAL_PROJECT_SCOPED and real_projects == 0:
+                    print(
+                        f"{key}\tn/a\tunknown\tno project on this instance is anything but a "
+                        f"test fixture, so this cannot fail — {note}"
+                    )
+                    continue
                 if ":cutoff" in sql:
                     # A cutoff in the FUTURE makes "zero since the cutoff"
                     # arithmetically true and completely uninformative. Refuse

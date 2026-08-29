@@ -154,36 +154,106 @@ export function SettingsSurface({ component }: RendererProps) {
   const { projectId } = useSurface();
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-5 p-3" data-testid="settings-surface">
-      <div className="text-xs uppercase tracking-wider text-ink-muted">
-        {title}
+    <div className="flex h-full min-h-0 flex-col" data-testid="settings-surface">
+      {/*
+        A STICKY HEADER WITH JUMP LINKS, because this is a long document in a
+        small box. Settings runs Project, Cost, Members, Model gateway, Model
+        profile, per-capability bindings, connectors and plugins in one column;
+        a pane opens a few hundred pixels tall. Reaching the gateway endpoint
+        meant scrolling past everything else with no indication it was there,
+        which is why "I cannot set the model endpoint" was a reasonable thing to
+        conclude — the control existed and nothing said so.
+
+        Jump links rather than tabs: the sections are one document and a reader
+        scrolling through them in order is a normal thing to do. Tabs would
+        forbid that to solve a findability problem.
+      */}
+      <div className="sticky top-0 z-10 -mx-3 mb-1 border-b border-hairline bg-surface px-3 pb-2 pt-3">
+        <div className="text-xs uppercase tracking-wider text-ink-muted">{title}</div>
+        {sections.length > 1 && (
+          <nav
+            className="mt-2 flex flex-wrap gap-x-3 gap-y-1"
+            aria-label="Settings sections"
+            data-testid="settings-jump-nav"
+          >
+            {sections.map((section, index) => {
+              const anchor = sectionAnchor(section, index);
+              return (
+                <a
+                  key={anchor}
+                  href={`#${anchor}`}
+                  onClick={(e) => {
+                    // `href` alone navigates the whole app in a hash-routed
+                    // shell. The pane scrolls itself instead.
+                    e.preventDefault();
+                    document
+                      .getElementById(anchor)
+                      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  }}
+                  className="text-[11px] uppercase tracking-wider text-ink-muted underline-offset-4 hover:text-ink hover:underline focus-visible:text-ink focus-visible:underline"
+                >
+                  {section.title ?? section.kind.replace(/_/g, " ")}
+                </a>
+              );
+            })}
+          </nav>
+        )}
       </div>
-      {sections.length === 0 ? (
-        <p className="text-sm text-ink-muted" data-testid="settings-no-sections">
-          Waiting for this pane's sections…
-        </p>
-      ) : (
-        sections.map((section, index) => (
-          <SectionBlock
-            key={`${section.kind}-${section.title ?? index}`}
-            section={section}
-            projectId={projectId}
-          />
-        ))
-      )}
+
+      <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-3 pt-2">
+        {sections.length === 0 ? (
+          <p className="text-sm text-ink-muted" data-testid="settings-no-sections">
+            Waiting for this pane's sections…
+          </p>
+        ) : (
+          sections.map((section, index) => (
+            <SectionBlock
+              key={`${section.kind}-${section.title ?? index}`}
+              section={section}
+              anchor={sectionAnchor(section, index)}
+              projectId={projectId}
+            />
+          ))
+        )}
+      </div>
     </div>
   );
 }
 
-function SectionBlock({ section, projectId }: { section: Section; projectId: string }) {
+/** A stable id per section, so a jump link keeps working across re-renders. */
+function sectionAnchor(section: Section, index: number): string {
+  const slug = (section.title ?? section.kind)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  return `settings-${slug || section.kind}-${index}`;
+}
+
+function SectionBlock({
+  section,
+  anchor,
+  projectId,
+}: {
+  section: Section;
+  anchor: string;
+  projectId: string;
+}) {
   return (
-    <section data-testid={`settings-section-${section.kind}`}>
+    <section
+      id={anchor}
+      // `scroll-mt` so a jumped-to heading clears the sticky header rather than
+      // hiding underneath it — the classic bug that makes jump links feel broken.
+      className="scroll-mt-20"
+      data-testid={`settings-section-${section.kind}`}
+    >
       {section.title && (
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-muted">
+        <h3 className="mb-1 border-b border-hairline pb-1 text-xs font-semibold uppercase tracking-wider text-ink">
           {section.title}
         </h3>
       )}
-      {section.blurb && <p className="mb-2 text-xs text-ink-muted">{section.blurb}</p>}
+      {section.blurb && (
+        <p className="mb-2 max-w-prose text-xs leading-relaxed text-ink-muted">{section.blurb}</p>
+      )}
       <SectionBody section={section} projectId={projectId} />
     </section>
   );
@@ -231,6 +301,42 @@ function Fields({ rows }: { rows: FieldRow[] }) {
   );
 }
 
+/**
+ * Make a stored value readable without losing it.
+ *
+ * The pane showed `2026-08-29T14:22:18.380650+00:00` for CREATED and a bare
+ * uuid for a member. Both are the value the database holds and neither is the
+ * value a person came to read — a settings screen that makes you parse an ISO
+ * string with microseconds is asking you to do the rendering.
+ *
+ * The full value stays in `title`, so nothing is hidden: hovering gives the
+ * exact string back, which matters for an id somebody needs to copy.
+ */
+function humanize(value: string): { text: string; title?: string } {
+  const iso = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
+  if (iso.test(value)) {
+    const d = new Date(value);
+    if (!Number.isNaN(d.getTime())) {
+      const days = Math.round((Date.now() - d.getTime()) / 86_400_000);
+      const rel =
+        Math.abs(days) < 1 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
+      const shown = d.toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      });
+      return { text: `${shown} · ${rel}`, title: value };
+    }
+  }
+  // A bare currency figure with four decimals reads as precision nobody has.
+  const money = /^\$(\d+)\.(\d{3,})$/.exec(value);
+  if (money) {
+    const n = Number(value.slice(1));
+    return { text: n === 0 ? "$0.00" : `$${n.toFixed(n < 1 ? 4 : 2)}`, title: value };
+  }
+  return { text: value };
+}
+
 function Row({ label, value, mono = false, multiline = false }: FieldRow) {
   if (multiline) {
     return (
@@ -240,14 +346,15 @@ function Row({ label, value, mono = false, multiline = false }: FieldRow) {
       </div>
     );
   }
+  const shown = humanize(String(value ?? ""));
   return (
     <div className="flex items-baseline justify-between gap-3">
       <span className="text-xs uppercase tracking-wider text-ink-muted">{label}</span>
       <span
         className={`truncate text-right text-sm text-ink ${mono ? "font-mono text-xs" : ""}`}
-        title={value}
+        title={shown.title ?? shown.text}
       >
-        {value}
+        {shown.text}
       </span>
     </div>
   );
@@ -258,8 +365,13 @@ function Members({ members }: { members: { id: string; user_id: string; role: st
   return (
     <ul className="space-y-1">
       {members.map((m) => (
-        <li key={m.id} className="flex items-center justify-between">
-          <span className="truncate font-mono text-xs">{m.user_id}</span>
+        <li key={m.id} className="flex items-center justify-between gap-3">
+          {/* A bare uuid tells a person nothing about who this is. The short
+              form is recognisable enough to distinguish rows, and the full id
+              stays in `title` for anyone who needs to copy it. */}
+          <span className="truncate font-mono text-xs" title={m.user_id}>
+            {m.user_id.slice(0, 8)}…{m.user_id.slice(-4)}
+          </span>
           <span className="bg-elevated px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider">
             {m.role}
           </span>

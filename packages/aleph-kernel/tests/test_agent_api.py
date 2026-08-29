@@ -105,8 +105,6 @@ async def test_a_refusal_explains_itself() -> None:
     assert outcome.detail.startswith("refused:")
 
 
-
-
 # -- the guardrail ------------------------------------------------------------
 
 
@@ -291,8 +289,6 @@ async def test_disable_without_unregister_keeps_the_registration() -> None:
 
     await api.disable(pid, unregister=True)
     assert "paused" not in kernel._mounted
-
-
 
 
 async def test_unregister_refuses_an_active_capability() -> None:

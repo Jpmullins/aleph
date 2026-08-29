@@ -148,14 +148,18 @@ async def purge_deleted_projects(task: BackgroundTask) -> dict[str, Any]:
 
     async with maker() as session:
         rows = (
-            await session.execute(
-                text(
-                    "SELECT id FROM projects WHERE status = 'deleted' "
-                    "ORDER BY updated_at LIMIT :cap"
-                ),
-                {"cap": MAX_UNITS_PER_TASK + 1},
+            (
+                await session.execute(
+                    text(
+                        "SELECT id FROM projects WHERE status = 'deleted' "
+                        "ORDER BY updated_at LIMIT :cap"
+                    ),
+                    {"cap": MAX_UNITS_PER_TASK + 1},
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
     if len(rows) > MAX_UNITS_PER_TASK:
         rows = rows[:MAX_UNITS_PER_TASK]
         truncated = True

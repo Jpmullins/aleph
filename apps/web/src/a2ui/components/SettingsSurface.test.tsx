@@ -83,3 +83,85 @@ describe("SettingsSurface section dispatch", () => {
     expect(queryAllByTestId("settings-unknown-section")).toHaveLength(1);
   });
 });
+
+describe("SettingsSurface is navigable and readable", () => {
+  /**
+   * Settings is a long DOCUMENT rendered in a pane a few hundred pixels tall:
+   * project, cost, members, model gateway, model profile with a control per
+   * capability, connectors and plugin settings, in one column. Everything below
+   * the second section was invisible until you scrolled for it, with nothing
+   * indicating it was there — which is how "I cannot set the model endpoint"
+   * happens while the endpoint control is on the same screen.
+   */
+  it("offers a jump link per section so a control below the fold is findable", () => {
+    const { getByTestId } = renderKinds(SERVER_KINDS);
+    const nav = getByTestId("settings-jump-nav");
+    for (const kind of SERVER_KINDS) {
+      expect(nav.textContent).toContain(kind);
+    }
+  });
+
+  it("does not show a jump nav for a single section", () => {
+    // Navigation for one destination is furniture, not help.
+    const { queryByTestId } = renderKinds(["fields"]);
+    expect(queryByTestId("settings-jump-nav")).toBeNull();
+  });
+
+  it("gives every section an id its jump link can reach", () => {
+    const { getByTestId, container } = renderKinds(SERVER_KINDS);
+    const nav = getByTestId("settings-jump-nav");
+    const hrefs = [...nav.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+    expect(hrefs.length).toBe(SERVER_KINDS.length);
+    for (const href of hrefs) {
+      // A link to an id nothing carries scrolls nowhere and reads as broken.
+      expect(container.querySelector(href!)).not.toBeNull();
+    }
+  });
+
+  it("renders a stored timestamp as a date a person reads", () => {
+    // The pane showed `2026-08-29T14:22:18.380650+00:00`. That is the value the
+    // database holds and not the value anyone came to read.
+    const { getByText } = renderRows([
+      { label: "CREATED", value: "2026-08-29T14:22:18.380650+00:00" },
+    ]);
+    const cell = getByText(/2026/);
+    expect(cell.textContent).not.toContain("T14:22:18");
+    expect(cell.getAttribute("title")).toBe("2026-08-29T14:22:18.380650+00:00");
+  });
+
+  it("keeps the exact value in the title so an id stays copyable", () => {
+    const { getByText } = renderRows([{ label: "SPENT (USD)", value: "$0.0000" }]);
+    const cell = getByText("$0.00");
+    expect(cell.getAttribute("title")).toBe("$0.0000");
+  });
+
+  it("leaves a value it does not recognise alone", () => {
+    // Formatting must not be a guess: an unrecognised string is shown as stored.
+    const { getByText } = renderRows([{ label: "STATUS", value: "active" }]);
+    expect(getByText("active")).toBeTruthy();
+  });
+});
+
+function renderRows(rows: { label: string; value: string }[]) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={client}>
+      <WorkspaceUIProvider>
+        <SurfaceProvider projectId="p1" surface="settings">
+          <SettingsSurface
+            onAction={() => {
+              throw new Error("no section may dispatch a card action from the renderer");
+            }}
+            component={{
+              type: "SettingsSurface",
+              id: "settings-surface",
+              props: { title: "Settings", sections: [{ kind: "fields", title: "Project", rows }] },
+            }}
+          />
+        </SurfaceProvider>
+      </WorkspaceUIProvider>
+    </QueryClientProvider>,
+  );
+}

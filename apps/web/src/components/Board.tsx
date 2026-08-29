@@ -73,14 +73,34 @@ export function blockProvenance(
 }
 
 
+/**
+ * Panes that are DOCUMENTS rather than cards, and the size they open at.
+ *
+ * One default suits a card — a source, a claim, a chart — and badly misfits a
+ * pane that is a long form. Settings runs project, cost, members, the model
+ * gateway, the model profile with a control per capability, connectors and
+ * plugin settings, in one column. At 430x360 that is a few hundred pixels of
+ * viewport onto several thousand of content, so every control below the second
+ * section is invisible until you scroll for it — which is how "I cannot set the
+ * model endpoint" happens while the endpoint control is right there.
+ *
+ * Sized here rather than inside the renderer because the pane frame owns
+ * geometry; a surface that resized its own frame would fight the board.
+ */
+const DOCUMENT_PANES: Readonly<Record<string, { w: number; h: number }>> = {
+  settings: { w: 640, h: 720 },
+  inspector: { w: 640, h: 640 },
+};
+
 /** Lay a newly-opened block down where it does not cover the others. */
-function autoPlace(index: number): Rect {
+function autoPlace(index: number, kind?: string): Rect {
   const perRow = 3;
+  const size = (kind && DOCUMENT_PANES[kind]) || { w: DEFAULT_W, h: DEFAULT_H };
   return {
     x: GAP + (index % perRow) * (DEFAULT_W + GAP),
     y: GAP + Math.floor(index / perRow) * (DEFAULT_H + GAP),
-    w: DEFAULT_W,
-    h: DEFAULT_H,
+    w: size.w,
+    h: size.h,
   };
 }
 
@@ -126,7 +146,7 @@ function BoardCanvas({ projectId }: { projectId: string }) {
       const next = { ...prev };
       let i = Object.keys(prev).length;
       for (const p of fresh) {
-        next[p.id] = autoPlace(i);
+        next[p.id] = autoPlace(i, p.kind);
         i += 1;
       }
       return next;

@@ -187,8 +187,6 @@ async def test_refusal_names_what_would_break_and_changes_nothing() -> None:
     assert k.active() == before, "a refused deactivation still changed the system"
 
 
-
-
 async def test_teardown_runs_dependents_before_providers() -> None:
     log: list[str] = []
     k = Kernel()
@@ -222,8 +220,6 @@ async def test_core_capabilities_have_no_plugin_id() -> None:
     k.register_core(provider("db", "db"))
     with pytest.raises(KeyError):
         await k.deactivate(PluginId(__import__("uuid").uuid4()))
-
-
 
 
 # -- boot --------------------------------------------------------------------

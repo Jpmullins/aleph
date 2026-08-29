@@ -92,13 +92,17 @@ async def test_the_append_only_tables_are_never_purged(maker) -> None:
         targets = set(await purgeable_tables(s))
 
         trigger_rows = (
-            await s.execute(
-                text(
-                    "SELECT c.relname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid "
-                    "WHERE NOT t.tgisinternal AND t.tgname LIKE '%no_delete%'"
+            (
+                await s.execute(
+                    text(
+                        "SELECT c.relname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid "
+                        "WHERE NOT t.tgisinternal AND t.tgname LIKE '%no_delete%'"
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
     append_only = {str(r) for r in trigger_rows}
     assert append_only, "found no append-only triggers — wrong database?"
@@ -116,13 +120,18 @@ async def test_every_exemption_names_a_real_table_and_a_reason(maker) -> None:
     """A stale exemption is a table leaking under an excuse nobody rechecked."""
     async with maker() as s:
         rows = (
-            await s.execute(
-                text(
-                    "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
-                    "WHERE c.relkind='r' AND n.nspname='public'"
+            (
+                await s.execute(
+                    text(
+                        "SELECT c.relname FROM pg_class c "
+                        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                        "WHERE c.relkind='r' AND n.nspname='public'"
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
     existing = {str(r) for r in rows}
     for table, reason in PURGE_EXEMPT.items():
         assert table in existing, f"exempt table {table} does not exist"
