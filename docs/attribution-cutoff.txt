@@ -1,4 +1,4 @@
-2026-08-25T00:39:00Z
+2026-08-29T16:14:14Z
 
 # The moment the deployed stack started recording model calls with BOTH a price
 # and a run to attribute them to.
@@ -81,3 +81,35 @@
 #
 # `uncosted_model_calls_legacy` still prints the all-time figure beside it, so
 # what this timestamp forgives stays visible on the same screen.
+
+# A SIXTH (2026-08-29T16:14:14Z), and this one was a channel that a new caller did
+# not fill rather than a mechanism that was broken.
+#
+# The three rows this forgives are `assistant.corpus_search.query_embed`,
+# `assistant.page_selection` and `assistant.compose` at 2026-08-25 19:48 — the
+# same three purposes the THIRD deploy above fixed, from the same tool, orphaned
+# again by a path that did not exist when that fix was written.
+# `delegated_subagent_job` built its graph config with `projectId` and nothing
+# else, so a DELEGATED `read_wiki_deeply` drove the retrieval router with
+# `run_id_from_config` returning None. The API path was never affected; only
+# delegation was, and delegation was three days old.
+#
+# The lesson is the one the third deploy already stated and did not generalise:
+# attribution travels in `configurable`, so every NEW way of entering the graph
+# has to fill it. The fix threads the delegation's own `AgentRun` id — a row
+# that existed the whole time — and
+# `test_delegation_job.py::test_the_delegated_graph_config_carries_the_run_id`
+# pins the config's shape rather than the intent, because every other test in
+# that file stubs `_run_subagent` and so replaced the function that had the bug.
+#
+# Measured forward before moving, per D9. THREE delegated retriever runs plus
+# the acceptance gate's own chat and bootstrap traffic: **20 model calls across
+# 8 distinct purposes** — `assistant.turn`, the three router purposes above,
+# `rks.rerank.llm`, `bootstrap.scope`, `research.plan`, `research.triage` — with
+# ZERO unattributed on the agent path and ZERO unpriced.
+#
+# That window is smaller than the 143 the fifth move used, and the difference is
+# worth stating rather than glossing: this is not a broad sample, it is a
+# targeted one. Every one of the three purposes that was orphaned is present,
+# from the exact path that orphaned them, attributed 3 times out of 3. Breadth
+# of paths is what makes it evidence; volume is what it lacks.
