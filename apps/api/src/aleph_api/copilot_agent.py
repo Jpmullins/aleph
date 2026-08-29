@@ -44,7 +44,9 @@ from langchain_openai import ChatOpenAI
 from aleph_api.harness_profiles import ensure_harness_profiles_registered
 from aleph_core.errors import PermissionDenied
 from aleph_core.ids import uuid7
+from aleph_models.auth import api_key_or_placeholder
 from aleph_models.endpoints import ResolvedEndpoint, settings_endpoint
+from aleph_models.urls import openai_base_url
 from aleph_security.request_context import current_principal, require_project_access
 from aleph_security.roles import ProjectRole
 from aleph_wiki.index_service import IndexService
@@ -1891,8 +1893,7 @@ def _openai_base_url(base_url: str) -> str:
 
     Idempotent, so a `LITELLM_BASE_URL` that already ends in `/v1` still works.
     """
-    trimmed = base_url.rstrip("/")
-    return trimmed if trimmed.endswith("/v1") else f"{trimmed}/v1"
+    return openai_base_url(base_url)
 
 
 def _gateway_chat_model(settings: Settings, *, purpose: str, capability: Any = None) -> ChatOpenAI:
@@ -1940,7 +1941,13 @@ def _gateway_chat_model(settings: Settings, *, purpose: str, capability: Any = N
     return ChatOpenAI(
         model=model,
         base_url=base_url,
-        api_key=endpoint.api_key,
+        # A keyless endpoint gets the placeholder, not an empty string. The
+        # OpenAI SDK refuses to construct without a key at all, and an empty one
+        # becomes the header `Bearer ` that h11 rejects before the request is
+        # sent — which is how a reachable vLLM server presented as
+        # `LocalProtocolError: Illegal header value`. `EMPTY` is the placeholder
+        # vLLM's own docs use, so keyless servers already ignore it.
+        api_key=api_key_or_placeholder(endpoint.api_key),
         **optional,
         # The agent's traffic goes through the same metered door as everything
         # else. WS-MEP-2 built the limiter and left this seam unwired, so the

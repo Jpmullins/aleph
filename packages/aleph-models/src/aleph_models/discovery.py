@@ -38,15 +38,17 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, cast
+from typing import Any, Final, cast
 
 import httpx
 import structlog
 
 from aleph_core.schemas.model_profile import Capability
+from aleph_models.auth import gateway_auth_headers
 from aleph_models.hints import apply_hints
 from aleph_models.limiter import GatewayLimiter, limiter_for
 from aleph_models.pricing import PricingTable
+from aleph_models.urls import gateway_origin
 
 _log = structlog.get_logger(__name__)
 
@@ -54,6 +56,25 @@ _log = structlog.get_logger(__name__)
 #: returns bare ids, and `/model_group/info` omits the cache-token rates that
 #: prompt caching makes load-bearing, so neither is sufficient on its own.
 _MODEL_INFO_PATH = "/model/info"
+
+#: Statuses that mean "ask `/v1/models` instead", rather than "this gateway is
+#: broken".
+#:
+#: 401/403 is the LiteLLM case the fallback was written for: a virtual key
+#: restricted to `llm_api_routes` may call the completions endpoints and not the
+#: admin ones.
+#:
+#: **404/405 is every OTHER OpenAI-compatible server**, and it was missing.
+#: `/model/info` is a LiteLLM extension — vLLM, Ollama, llama.cpp and LM Studio
+#: simply do not have that route, so they answer 404 and the old code called
+#: `raise_for_status()` on it. Measured 2026-08-28 against a vLLM server that
+#: served `/v1/models` perfectly well: the endpoint probe recorded
+#: `HTTP 404 from .../model/info` and the fallback never ran.
+#:
+#: Same root cause as the `Bearer ` header bug fixed alongside it: the discovery
+#: path had only ever been exercised against LiteLLM, which is the one gateway
+#: for which both assumptions hold.
+_MODEL_INFO_UNAVAILABLE: Final[frozenset[int]] = frozenset({401, 403, 404, 405})
 #: Every key may call this one, but it returns bare ids — no mode, no context
 #: window, no rates. The fallback when `/model/info` is admin-gated.
 _V1_MODELS_PATH = "/v1/models"
@@ -269,15 +290,15 @@ async def discover_models(
     """
     owned = client is None
     http = client or httpx.AsyncClient(timeout=timeout_s)
-    base = base_url.rstrip("/")
-    headers = {"Authorization": f"Bearer {api_key}"}
+    base = gateway_origin(base_url)
+    headers = gateway_auth_headers(api_key)
     door = limiter or limiter_for(base_url)
     try:
         async with door.slot(purpose="discover"):
             resp = await http.get(f"{base}{_MODEL_INFO_PATH}", headers=headers)
-        if resp.status_code in (401, 403):
+        if resp.status_code in _MODEL_INFO_UNAVAILABLE:
             _log.info(
-                "gateway.model_info_forbidden",
+                "gateway.model_info_unavailable",
                 status=resp.status_code,
                 fallback=_V1_MODELS_PATH,
                 impact="ids only; capability metadata and rates must come from hints",
@@ -330,7 +351,7 @@ async def probe_model(
     owned = client is None
     http = client or httpx.AsyncClient(timeout=timeout_s)
     url = f"{base_url.rstrip('/')}"
-    headers = {"Authorization": f"Bearer {api_key}"}
+    headers = gateway_auth_headers(api_key)
     door = limiter or limiter_for(base_url)
     try:
         async with door.slot(purpose="probe"):

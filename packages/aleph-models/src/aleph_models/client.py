@@ -29,10 +29,12 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from aleph_core.errors import GatewayUnavailable, ValidationFailed
 from aleph_core.schemas.model_profile import Capability
 from aleph_core.time import utcnow
+from aleph_models.auth import gateway_auth_headers
 from aleph_models.limiter import GatewayLimiter, limiter_for
 from aleph_models.pricing import PricingTable
 from aleph_models.profile import resolve_binding
 from aleph_models.retry import gateway_retry
+from aleph_models.urls import gateway_origin
 from aleph_observability.metrics import record_llm_request, record_llm_usage
 from aleph_observability.tracing import current_trace_id, start_span
 
@@ -327,7 +329,11 @@ class LiteLLMClient:
             msg = "INSIGHTS_LITELLM_API_KEY is required"
             raise ValidationFailed(msg)
 
-        self._base_url = base_url.rstrip("/")
+        # A BARE ORIGIN. This class builds `{base}/v1/...` itself, so a
+        # configured value that already carries `/v1` — which is the form every
+        # vLLM/Ollama quickstart prints, because it is what the OpenAI SDK wants
+        # — would produce `/v1/v1/chat/completions`. See `aleph_models.urls`.
+        self._base_url = gateway_origin(base_url)
         self._api_key = api_key
         self._http = http_client
         self._pricing = pricing
@@ -384,7 +390,7 @@ class LiteLLMClient:
         try:
             resp = await self._http.get(
                 f"{self._base_url}/v1/models",
-                headers={"Authorization": f"Bearer {self._api_key}"},
+                headers=gateway_auth_headers(self._api_key),
                 timeout=5.0,
             )
             return resp.status_code == 200
@@ -395,7 +401,7 @@ class LiteLLMClient:
         async with self._limiter.slot(purpose="list_models"):
             resp = await self._http.get(
                 f"{self._base_url}/v1/models",
-                headers={"Authorization": f"Bearer {self._api_key}"},
+                headers=gateway_auth_headers(self._api_key),
                 timeout=10.0,
             )
         if resp.status_code != 200:
@@ -876,7 +882,7 @@ class LiteLLMClient:
 
     async def _post_once(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         headers = {
-            "Authorization": f"Bearer {self._api_key}",
+            **gateway_auth_headers(self._api_key),
             "Content-Type": "application/json",
             "X-Aleph-Request-Id": str(uuid4()),
         }

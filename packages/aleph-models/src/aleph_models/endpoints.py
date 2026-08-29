@@ -59,7 +59,9 @@ from aleph_core.errors import NotFound, ValidationFailed
 from aleph_core.ids import uuid7
 from aleph_core.time import utcnow
 from aleph_db.models.gateway_endpoint import GatewayEndpoint
+from aleph_models.auth import gateway_auth_headers
 from aleph_models.discovery import GatewayCatalog, discover_models
+from aleph_models.urls import gateway_origin
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -655,8 +657,8 @@ class GatewayEndpointService:
         http = client or httpx.AsyncClient(timeout=20.0)
         try:
             resp = await http.get(
-                f"{base_url.rstrip('/')}{MODEL_INFO_PATH}",
-                headers={"Authorization": f"Bearer {api_key}"},
+                f"{gateway_origin(base_url)}{MODEL_INFO_PATH}",
+                headers=gateway_auth_headers(api_key),
             )
         except httpx.HTTPError:
             return None
