@@ -187,6 +187,15 @@ class Kernel:
     def state_of(self, name: str) -> State:
         return self._mounted[name].state
 
+    def spec_for(self, name: str) -> CapabilitySpec:
+        """The registered spec, for callers that need to read a declaration.
+
+        Public because a probe asking "is every pinned key actually provided?"
+        should not have to reach into `_specs`, and a private read from outside
+        is how `agent_api` ended up touching `_mounted` directly.
+        """
+        return self._mounted[name].spec
+
     def active(self) -> frozenset[str]:
         return frozenset(n for n, m in self._mounted.items() if m.state is State.ACTIVE)
 

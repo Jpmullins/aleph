@@ -92,9 +92,23 @@ async def main() -> int:
         print(f"manifest capabilities are agent-addressable: {addressable}")
         return 1
 
-    protected = {e.name for e in entries if e.protected}
-    if not protected:
-        print("the manifest protects nothing")
+    # Pins, not `protected` (`docs/decisions.md` D18). The flag was a capability
+    # asserting its own importance; a pin is the operator naming a key this
+    # deployment exists to serve, and it catches the case the flag could not —
+    # retiring the sole provider of a pinned key even when nothing depends on it.
+    from aleph_kernel.manifest import load_pins
+
+    pins = load_pins(BOOT_MANIFEST)
+    if not pins:
+        print("the manifest pins nothing — an agent could retire any key")
+        return 1
+
+    provided: set[str] = set()
+    for name in kernel.active():
+        provided |= kernel.spec_for(name).provides
+    unprovided = sorted(pins - provided)
+    if unprovided:
+        print(f"pinned keys nothing provides: {unprovided}")
         return 1
 
     await kernel.shutdown()
@@ -104,7 +118,7 @@ async def main() -> int:
 
     print(
         f"{len(order)} capabilities booted from the manifest, all probes passed, "
-        f"{len(protected)} protected and none agent-addressable, "
+        f"{len(pins)} pinned key(s) all provided, none agent-addressable, "
         f"blast_radius(database)->{sorted(radius.collateral)}, shutdown clean"
     )
     return 0
