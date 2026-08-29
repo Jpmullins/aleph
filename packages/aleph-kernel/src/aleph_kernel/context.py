@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from aleph_kernel.errors import InactiveAccess, UndeclaredAccess
+from aleph_kernel.errors import InactiveAccess, UndeclaredAccess, UndeclaredProvide
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -73,6 +73,8 @@ class Context:
         owner: str,
         requires: frozenset[str],
         store: Store,
+        optional: frozenset[str] = frozenset(),
+        provides: frozenset[str] = frozenset(),
         scope: EffectScope,
         realms: dict[str, str] | None = None,
     ) -> None:
@@ -80,6 +82,12 @@ class Context:
         # and every one is private so it cannot collide with a service name.
         self._owner = owner
         self._requires = requires
+        self._optional = frozenset(optional)
+        self._provides = frozenset(provides)
+        #: What may be READ. Optional keys are mediated exactly like required
+        #: ones — an undeclared key is still refused — they simply do not make
+        #: the capability droppable when absent. See `CapabilitySpec.optional`.
+        self._readable = frozenset(requires) | self._optional
         self._store = store
         self._scope = scope
         self._realms: dict[str, str] = dict(realms or {})
@@ -105,7 +113,7 @@ class Context:
         a distinct error, because the capability did nothing wrong — its
         dependency is simply not up.
         """
-        if key not in self._requires:
+        if key not in self._readable:
             raise UndeclaredAccess(self._owner, key)
         realm = self._realms.get(key, ROOT_REALM)
         found, value = self._store.get(realm, key)
@@ -114,8 +122,15 @@ class Context:
         return value
 
     def has(self, key: str) -> bool:
-        """True when ``key`` is declared AND currently provided. Never raises."""
-        if key not in self._requires:
+        """True when ``key`` is declared AND currently provided. Never raises.
+
+        This is the question an OPTIONAL dependency exists to let a capability
+        ask. Before `optional`, the only way to make `has()` answer True was to
+        put the key in `requires`, which then made the capability droppable when
+        the key went away — so asking the question cost you the ability to
+        survive the answer.
+        """
+        if key not in self._readable:
             return False
         realm = self._realms.get(key, ROOT_REALM)
         found, _ = self._store.get(realm, key)
@@ -129,7 +144,16 @@ class Context:
         The inverse is pushed on the providing capability's own scope, so a
         binding disappears exactly when its provider is torn down. There is no
         way to publish without also registering the removal — that is the point.
+
+        **Refuses a key the owner did not declare.** This accepted ANY key from
+        ANY owner, which made `provides` a comment rather than a boundary: a
+        capability could publish `db.sessions` over the real one, and because
+        `provide` also registers the WITHDRAWAL, the hijacker's teardown then
+        deleted the genuine binding. Reads were mediated from the beginning;
+        writes were not, and the asymmetry is the more dangerous half.
         """
+        if key not in self._provides:
+            raise UndeclaredProvide(self._owner, key)
         realm = self._realms.get(key, ROOT_REALM)
         self._store.put(realm, key, value, self._owner)
 
@@ -153,10 +177,19 @@ class Context:
         return Context(
             owner=self._owner,
             requires=self._requires,
+            # Carried forward, both of them. A derived context is the SAME
+            # capability viewing one key through a different realm — it has not
+            # earned fewer rights and must not lose the ability to publish into
+            # the realm it just isolated, which is the whole point of isolating.
+            optional=self._optional,
+            provides=self._provides,
             store=self._store,
             scope=self._scope,
             realms={**self._realms, key: realm},
         )
 
     def __repr__(self) -> str:
-        return f"<Context {self._owner!r} requires={sorted(self._requires)}>"
+        return (
+            f"<Context {self._owner!r} requires={sorted(self._requires)} "
+            f"optional={sorted(self._optional)}>"
+        )

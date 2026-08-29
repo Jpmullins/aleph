@@ -4,8 +4,6 @@ version = "0.1.0"
 description = "Aleph kernel — revertible effects, declared capabilities, computed blast radius."
 requires-python = ">=3.13,<3.14"
 dependencies = [
-    "aleph-core",
-    "aleph-observability",
 ]
 
 [build-system]

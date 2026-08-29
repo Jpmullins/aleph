@@ -60,6 +60,12 @@ async def _mount(http: httpx.AsyncClient) -> tuple[Context, EffectScope]:
     ctx = Context(
         owner="models",
         requires=spec.requires | spec.provides,
+        # `provides` too: `Context.provide` refuses a key the owner did not
+        # declare, so a test double that omits it cannot run the real setup.
+        # The kernel passes this from the spec; a double must do the same or it
+        # is exercising a different object.
+        provides=spec.provides,
+        optional=spec.optional,
         store=store,
         scope=scope,
     )

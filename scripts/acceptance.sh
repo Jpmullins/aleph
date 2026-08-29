@@ -589,6 +589,13 @@ run_shell F6 "every built image declares a non-root USER" \
 # rebuilds, each of which reported success.
 run_shell F6a "every building compose service pins an image tag" \
   "./scripts/check-compose-images-pinned.sh"
+
+# A1b — the core depends on nothing above it. An import added for one
+# convenience is how that rule erodes: the kernel imported `aleph-core` for
+# `uuid7` and `aleph-observability` for `start_span`, and the second pulled
+# eight OpenTelemetry distributions plus a vendor SDK.
+run_shell A1b "the kernel imports stdlib only" \
+  "./scripts/check-kernel-is-leaf.sh"
 # F4 checks where the port is published and whether the origin list is shared.
 # F5 BOOTS the bridge and checks what it does on the wire — a source grep for
 # `cors:` passes against a config that does not do what it says.

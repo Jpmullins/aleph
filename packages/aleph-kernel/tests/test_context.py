@@ -17,20 +17,26 @@ def ctx(requires: set[str], store: Store, scope: EffectScope) -> Context:
 
 async def test_declared_and_provided_resolves() -> None:
     store, scope = Store(), EffectScope("p")
-    Context(owner="p", requires=frozenset(), store=store, scope=scope).provide("db", "POOL")
+    Context(
+        owner="p", requires=frozenset(), provides=frozenset({"db"}), store=store, scope=scope
+    ).provide("db", "POOL")
     assert ctx({"db"}, store, EffectScope("c")).get("db") == "POOL"
 
 
 async def test_attribute_access_is_the_same_as_get() -> None:
     store, scope = Store(), EffectScope("p")
-    Context(owner="p", requires=frozenset(), store=store, scope=scope).provide("db", "POOL")
+    Context(
+        owner="p", requires=frozenset(), provides=frozenset({"db"}), store=store, scope=scope
+    ).provide("db", "POOL")
     assert ctx({"db"}, store, EffectScope("c")).db == "POOL"
 
 
 async def test_undeclared_is_refused_even_when_it_exists() -> None:
     """Capability security: existing is not the same as being allowed to have it."""
     store, scope = Store(), EffectScope("p")
-    Context(owner="p", requires=frozenset(), store=store, scope=scope).provide("secrets", "S")
+    Context(
+        owner="p", requires=frozenset(), provides=frozenset({"secrets"}), store=store, scope=scope
+    ).provide("secrets", "S")
     with pytest.raises(UndeclaredAccess, match="without declaring it"):
         ctx({"db"}, store, EffectScope("c")).get("secrets")
 
@@ -62,7 +68,9 @@ async def test_has_is_false_for_an_undeclared_key_that_IS_provided() -> None:
     that key raises `UndeclaredAccess` in production.
     """
     store, scope = Store(), EffectScope("p")
-    Context(owner="p", requires=frozenset(), store=store, scope=scope).provide("secrets", "S")
+    Context(
+        owner="p", requires=frozenset(), provides=frozenset({"secrets"}), store=store, scope=scope
+    ).provide("secrets", "S")
 
     c = ctx({"db"}, store, EffectScope("c"))
     assert c.has("secrets") is False, (
@@ -85,7 +93,9 @@ async def test_private_names_stay_attribute_errors() -> None:
 async def test_provide_registers_its_own_withdrawal() -> None:
     """There is no way to publish a service without also registering its removal."""
     store, scope = Store(), EffectScope("p")
-    Context(owner="p", requires=frozenset(), store=store, scope=scope).provide("db", "POOL")
+    Context(
+        owner="p", requires=frozenset(), provides=frozenset({"db"}), store=store, scope=scope
+    ).provide("db", "POOL")
     consumer = ctx({"db"}, store, EffectScope("c"))
     assert consumer.has("db")
     await scope.unwind()
@@ -95,7 +105,13 @@ async def test_provide_registers_its_own_withdrawal() -> None:
 async def test_isolate_gives_independent_bindings_per_realm() -> None:
     """This is project scoping: same key, different tenant, different value."""
     store = Store()
-    root = Context(owner="p", requires=frozenset(), store=store, scope=EffectScope("p"))
+    root = Context(
+        owner="p",
+        requires=frozenset(),
+        provides=frozenset({"budget"}),
+        store=store,
+        scope=EffectScope("p"),
+    )
     root.provide("budget", "SHARED")
 
     a = root.isolate("budget", "project-a")

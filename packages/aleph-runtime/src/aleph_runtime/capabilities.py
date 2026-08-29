@@ -86,10 +86,26 @@ AGENT_STORE = "agent.store"
 AGENT_STORE_POOL = "agent.store_pool"
 
 
+def _install_kernel_tracer() -> None:
+    """Give the kernel a real tracer.
+
+    The kernel declares the SHAPE it needs (`aleph_kernel.tracing`) and imports
+    no tracing vendor, so its two spans are no-ops until something fills the
+    seam. This is that something, and the composition root is the right place:
+    it is the only layer that knows both what the kernel wants and what this
+    deployment installed.
+    """
+    from aleph_kernel.tracing import set_span_factory
+    from aleph_observability.tracing import start_span
+
+    set_span_factory(start_span)
+
+
 def observability(settings: Settings) -> CapabilitySpec:
     """Logging, tracing and Langfuse. Provides settings to everything else."""
 
     async def setup(ctx: Context) -> AsyncIterator[Callable[[], Awaitable[None]]]:
+        _install_kernel_tracer()
         configure_logging(environment=settings.aleph_env)
         init_otel(
             service_name=settings.service_name,

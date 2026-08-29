@@ -346,20 +346,31 @@ async def test_disabling_keeps_the_row_so_it_can_come_back(
     assert row.instructions, "the instructions were dropped, so it cannot be re-enabled"
 
 
-def test_the_kernel_still_has_no_database_dependency() -> None:
-    """A kernel you cannot boot without Postgres is not a kernel.
+def test_the_kernel_has_no_workspace_dependencies_at_all() -> None:
+    """A kernel you cannot boot without Postgres is not a kernel — and the
+    stronger form now holds: it has no workspace dependencies of any kind.
 
-    The service joining the two lives in `aleph-runtime`, the composition root.
-    This is the check that keeps it there.
+    This asserted the list was exactly `["aleph-core", "aleph-observability"]`,
+    which was the right check for the time and is now the weaker one. Those two
+    existed for a total of TWO functions — `uuid7` and `start_span` — and the
+    second pulled eight OpenTelemetry distributions and an LLM-observability
+    vendor SDK behind it. `uuid7` is kernel-local now (pinned equivalent by
+    `test_kernel_uuid7_matches_aleph_core`) and tracing is a seam the composition
+    root fills, so the dependency list is empty.
+
+    `scripts/check-kernel-is-leaf.sh` (acceptance A1b) is the sharper version of
+    this, AST-walking every import rather than reading the manifest — a
+    dependency can be used without being declared. Both are kept: this one
+    catches a declaration nobody imports yet, which is how the next one starts.
     """
     import pathlib
     import tomllib
 
     manifest = tomllib.loads(pathlib.Path("packages/aleph-kernel/pyproject.toml").read_text())
-    assert sorted(manifest["project"]["dependencies"]) == [
-        "aleph-core",
-        "aleph-observability",
-    ]
+    assert manifest["project"]["dependencies"] == [], (
+        "the kernel declared a dependency; the core must depend on nothing above "
+        "it — declare the SHAPE it needs and have aleph-runtime supply it"
+    )
 
 
 # ---------------------------------------------------------------------------

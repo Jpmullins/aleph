@@ -122,12 +122,22 @@ def topological_order(specs: Mapping[str, CapabilitySpec]) -> tuple[str, ...]:
 
     Ties break on name so boot order is deterministic and a failure reproduces.
     """
-    from aleph_kernel.errors import CyclicDependency, MissingProvider
+    from aleph_kernel.errors import AmbiguousProvider, CyclicDependency, MissingProvider
 
     providers: dict[str, str] = {}
     for name in sorted(specs):
         for key in sorted(specs[name].provides):
-            providers.setdefault(key, name)
+            # REFUSED, not resolved. This was `setdefault`, which meant two
+            # capabilities providing one key silently elected the
+            # alphabetically-first as the boot-order parent while the store
+            # binding went to whichever activated LAST — so the graph and the
+            # runtime disagreed about who supplied a service, with nothing
+            # anywhere saying so. cordis has the same behaviour and it is the
+            # one place Aleph should not copy it: an agent that installs a
+            # plugin shadowing `db.sessions` deserves an error, not a coin toss.
+            if key in providers and providers[key] != name:
+                raise AmbiguousProvider(key, (providers[key], name))
+            providers[key] = name
 
     for name in sorted(specs):
         missing = frozenset(k for k in specs[name].requires if k not in providers)

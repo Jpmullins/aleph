@@ -83,8 +83,12 @@ async def test_a_replacement_that_drops_a_service_others_need_is_refused() -> No
     await api.install(
         CapabilitySpec(
             name="dependent",
-            setup=versioned("x", 1).setup,
-            probe=versioned("x", 1).probe,
+            # `provides=()` so the borrowed setup publishes nothing: this spec
+            # declares no `provides`, and `Context.provide` now refuses a key the
+            # owner did not declare. Borrowing a setup that publishes was a
+            # fixture shortcut the write-mediation rule exposes.
+            setup=versioned("x", 1, provides=()).setup,
+            probe=versioned("x", 1, provides=()).probe,
             requires=frozenset({"thing"}),
         )
     )

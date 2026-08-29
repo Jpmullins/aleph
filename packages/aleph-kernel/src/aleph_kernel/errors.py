@@ -125,3 +125,43 @@ class DependentsWouldBreak(KernelError):
         self.name = name
         self.dependents = dependents
         self.protected = protected
+
+
+class UndeclaredProvide(KernelError):
+    """A capability published a key it never declared it provides.
+
+    The refusal matters more than it looks. `Context.provide` also registers the
+    WITHDRAWAL of the binding on the publisher's own scope, so an undeclared
+    publish did not merely add a wrong value — the publisher's teardown then
+    deleted whichever binding was live, including the real one. Reads were
+    mediated from the start; this closes the write side.
+    """
+
+    def __init__(self, owner: str, key: str) -> None:
+        super().__init__(
+            f"{owner!r} tried to provide {key!r}, which is not in its declared "
+            f"`provides`. Add it to the spec, or publish under a key you own."
+        )
+        self.owner = owner
+        self.key = key
+
+
+class AmbiguousProvider(KernelError):
+    """Two capabilities provide the same key.
+
+    Previously resolved by `setdefault` over a sorted list: the boot order was
+    computed against the alphabetically-first provider while the live binding
+    belonged to whichever activated last. Those are not always the same
+    capability, and nothing reported the disagreement — a plugin could shadow a
+    core service and the only symptom would be the wrong object at a call site.
+    """
+
+    def __init__(self, key: str, providers: tuple[str, ...]) -> None:
+        names = ", ".join(sorted(providers))
+        super().__init__(
+            f"{key!r} is provided by more than one capability ({names}). "
+            f"Two providers of one key make the boot order and the live binding "
+            f"disagree; rename one, or have one require the other."
+        )
+        self.key = key
+        self.providers = tuple(sorted(providers))

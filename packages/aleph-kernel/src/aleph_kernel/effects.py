@@ -27,7 +27,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING
 
-from aleph_observability.tracing import start_span
+from aleph_kernel.tracing import start_span
 
 if TYPE_CHECKING:
     from types import TracebackType

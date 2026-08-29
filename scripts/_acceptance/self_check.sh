@@ -133,7 +133,23 @@ probe "unwind is LIFO" \
 
 probe "undeclared access is refused" \
   packages/aleph-kernel/src/aleph_kernel/context.py \
-  's/if key not in self\._requires:/if False:/' \
+  's/if key not in self\._readable:/if False:/' \
+  "$KERNEL_TESTS"
+
+# The write half. Reads were mediated from the beginning and writes were not,
+# and the asymmetry was the more dangerous one: `provide` also registers the
+# binding's WITHDRAWAL, so an undeclared publish let the publisher's teardown
+# delete the real binding.
+probe "publishing an undeclared key is refused" \
+  packages/aleph-kernel/src/aleph_kernel/context.py \
+  's/if key not in self\._provides:/if False:/' \
+  "$KERNEL_TESTS"
+
+# Two capabilities providing one key resolved by `setdefault`, so the boot order
+# and the live binding could name different providers with nothing reporting it.
+probe "two providers of one key are refused" \
+  packages/aleph-kernel/src/aleph_kernel/support.py \
+  's/if key in providers and providers\[key\] != name:/if False:/' \
   "$KERNEL_TESTS"
 
 probe "a failed setup still unwinds" \
@@ -261,9 +277,14 @@ probe "check-acceptance-rows notices prose citing a row that does not exist" \
 # A row that ASSERTS a count must be able to be wrong about it. Row A1 claimed
 # "142 passed" against a suite of 165 and stayed green through three audits,
 # because this sweep resolved paths and node ids and never counted anything.
+# Count-AGNOSTIC on purpose. This named a literal (`165`, then `184`) and went
+# NO-OP twice as the kernel suite grew — a probe that matches nothing tests the
+# unbroken tree and reports "can fail" about a mutation it never applied. The
+# pattern now matches whatever number is there and replaces it with one that is
+# certainly wrong, so it keeps working as the suite grows.
 probe "check-acceptance-claims notices a stale test count" \
   docs/acceptance.md \
-  's/— 184 passed, 1 skipped/— 142 passed, 1 skipped/m' \
+  's/— \d+ passed, 1 skipped/— 3 passed, 1 skipped/m' \
   "./scripts/check-acceptance-claims.sh"
 
 # ---------------------------------------------------------------------------

@@ -88,6 +88,27 @@ class CapabilitySpec:
     probe: Probe
     provides: frozenset[str] = frozenset()
     requires: frozenset[str] = frozenset()
+    #: Keys this capability may READ but does not need in order to run.
+    #:
+    #: The kernel had no such thing, and that was its single biggest structural
+    #: gap. `Context.has()` returns False for an undeclared key, so a genuinely
+    #: optional dependency had to go in `requires` to be readable at all — and
+    #: once there, `support_set` dropped the capability the moment that key went
+    #: unprovided. A graceful degradation the code already implemented became a
+    #: boot failure the graph insisted on.
+    #:
+    #: Three real ones exist today: `reviewer` returns zero findings without
+    #: `scholar`, `notes` needs `wiki` only for its promote route, and the
+    #: assistant's retrieval router already answers from corpus hits alone when
+    #: no wiki page matches.
+    #:
+    #: Optional keys are MEDIATED like required ones — reading an undeclared key
+    #: is still refused — but they are invisible to `support_set`,
+    #: `dependent_closure` and `topological_order`. So an optional edge cannot
+    #: drop a dependent, cannot appear in a blast radius, and cannot constrain
+    #: boot order. That last one is what lets the assistant start before the
+    #: wiki and gain wiki tools when it arrives.
+    optional: frozenset[str] = frozenset()
     #: Set only by the boot manifest loader. Not settable from a plugin, and no
     #: API mutates it — see manifest.py for why that matters.
     protected: bool = field(default=False, compare=False)
@@ -108,4 +129,23 @@ class CapabilitySpec:
         overlap = self.provides & self.requires
         if overlap:
             msg = f"{self.name!r} both provides and requires {', '.join(sorted(overlap))}"
+            raise ValueError(msg)
+        # A key cannot be both needed and not needed. Silently preferring one
+        # reading would make the capability drop-able or not depending on which
+        # branch of the kernel you read.
+        both = self.requires & self.optional
+        if both:
+            msg = (
+                f"{self.name!r} declares {', '.join(sorted(both))} as both required "
+                f"and optional; it is one or the other"
+            )
+            raise ValueError(msg)
+        # Providing your own optional key is the same contradiction as providing
+        # your own requirement, and `support_set` would never see the cycle
+        # because optional edges are invisible to it.
+        self_opt = self.provides & self.optional
+        if self_opt:
+            msg = (
+                f"{self.name!r} both provides and optionally requires {', '.join(sorted(self_opt))}"
+            )
             raise ValueError(msg)

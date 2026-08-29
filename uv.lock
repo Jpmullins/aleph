@@ -415,16 +415,6 @@ requires-dist = [
 name = "aleph-kernel"
 version = "0.1.0"
 source = { editable = "packages/aleph-kernel" }
-dependencies = [
-    { name = "aleph-core" },
-    { name = "aleph-observability" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aleph-core", editable = "packages/aleph-core" },
-    { name = "aleph-observability", editable = "packages/aleph-observability" },
-]
 
 [[package]]
 name = "aleph-models"

@@ -39,7 +39,8 @@ The composability substrate. Everything else mounts on it.
 
 | # | part | check | status |
 |---|---|---|---|
-| A1 | Kernel core: revertible effects, declared capabilities, computed support set | `pytest packages/aleph-kernel/tests` — 184 passed, 1 skipped, incl. partial rollback, at-most-once unwind, undeclared-access refusal, transitive blast radius, cycle reporting | ✅ |
+| A1 | Kernel core: revertible effects, declared capabilities, computed support set | `pytest packages/aleph-kernel/tests` — 202 passed, 1 skipped, incl. partial rollback, at-most-once unwind, undeclared-access refusal, transitive blast radius, cycle reporting | ✅ |
+| A1b | The kernel imports the standard library and nothing else | `acceptance.sh` A1b — `scripts/check-kernel-is-leaf.sh`, an AST walk (a grep over import lines misses `importlib` and function-local imports, and `manifest.py` legitimately holds module paths that are not imports). It imported `aleph-core` for `uuid7` and `aleph-observability` for `start_span`; `uuid7` is now kernel-local and pinned equivalent, and tracing is a seam the composition root fills | ✅ |
 | A2 | API boots on the kernel | `acceptance.sh::kernel_boots_api` — boots all core capabilities against live Postgres+Redis, asserts every probe passes and shutdown leaves nothing active | ✅ |
 | A3 | Workers boot on the kernel | same capability set, arq worker entrypoint; asserts no duplicate wiring between API and worker | ✅ |
 | A4 | Generation loader — a plugin's behaviour is replaceable with no restart | `packages/aleph-kernel/tests/test_replace.py` — load g1, call it, replace with g2, call it, assert new behaviour AND that a reference captured under g1 still sees g1's code (Theorem 63). In-memory: nothing in the running app calls `replace` | ✅ |

@@ -25,13 +25,13 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, NewType
 from uuid import UUID
 
-from aleph_core.ids import uuid7
 from aleph_kernel.context import ROOT_REALM, Context, Store
 from aleph_kernel.effects import EffectScope
 from aleph_kernel.errors import DependentsWouldBreak, ProbeFailed, ProtectedCapability
+from aleph_kernel.ids import uuid7
 from aleph_kernel.spec import ProbeResult, problem
 from aleph_kernel.support import BlastRadius, dependent_closure, topological_order
-from aleph_observability.tracing import start_span
+from aleph_kernel.tracing import start_span
 
 if TYPE_CHECKING:
     from aleph_kernel.spec import CapabilitySpec
@@ -242,6 +242,8 @@ class Kernel:
             ctx = Context(
                 owner=name,
                 requires=spec.requires | spec.provides,
+                optional=spec.optional,
+                provides=spec.provides,
                 store=self._store,
                 scope=scope,
             )

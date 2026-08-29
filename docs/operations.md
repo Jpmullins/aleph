@@ -471,6 +471,13 @@ light.
   runs as root. It renders in a scratch directory with `.env.example` copied to `.env`, so it is
   hermetic and additionally proves the shipped example is sufficient to render the stack. Exit 0
   pass · 1 fail · **2 could not run** (no docker) — "could not measure" is never reported as "fine".
+- `check-kernel-is-leaf.sh` — AST-walks every import in `packages/aleph-kernel/src` and fails on
+  anything outside `sys.stdlib_module_names`. "The core cannot depend on plugins" is only
+  enforceable if the core depends on nothing above it, and an import added for one convenience is
+  how that erodes: the kernel imported `aleph-core` for `uuid7` and `aleph-observability` for
+  `start_span`, the second of which pulls eight OpenTelemetry distributions and a vendor SDK. A
+  grep would miss `importlib` and function-local imports, and `manifest.py` legitimately holds
+  module paths that are not imports. Acceptance row A1b.
 - `check-compose-images-pinned.sh` — asserts every service that BUILDS also pins an `image:` tag,
   read from the same rendered config. Without a tag compose derives one from the project directory,
   so `docker compose build` writes a tag a later `up` may not be running: the rebuild reports
