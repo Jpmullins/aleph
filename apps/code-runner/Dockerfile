@@ -14,7 +14,7 @@
 # Resolved 2026-08-21 with `docker buildx imagetools inspect python:3.13-slim`
 # — the multi-arch INDEX digest, so it resolves on linux/amd64 and linux/arm64
 # alike; a per-platform manifest digest would break every non-amd64 build.
-FROM python:3.13-slim@sha256:ffb752e139c0a19692a43af8d8523b274222dd68eebad5d583b45c2201c6e30a
+FROM python:3.14-slim@sha256:cae66f2ef0ec51a9891263eeee7f987dacf0a9879e8aa9353d5606e0530619a5
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
