@@ -9,9 +9,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@ag-ui/client": "0.0.57",
-    "@copilotkit/runtime": "1.63.2",
-    "tsx": "^4.19"
+    "@ag-ui/client": "0.0.59",
+    "@copilotkit/runtime": "1.69.3",
+    "tsx": "^4.23"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
@@ -20,8 +20,8 @@
     ]
   },
   "devDependencies": {
-    "typescript": "^5.9",
-    "@types/node": "^24"
+    "typescript": "^7.0",
+    "@types/node": "^26"
   },
   "overrides": {
     "fast-uri": ">=3.1.5"
