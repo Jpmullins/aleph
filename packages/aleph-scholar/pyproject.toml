@@ -6,7 +6,7 @@ requires-python = ">=3.13,<3.14"
 dependencies = [
     "httpx==0.28.1",
     "tenacity==9.1.4",
-    "mcp>=1.28,<2",
+    "mcp>=1.28,<3",
 ]
 
 [build-system]
