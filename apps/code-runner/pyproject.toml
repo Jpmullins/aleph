@@ -11,7 +11,7 @@ dependencies = [
     "arq==0.28.0",
     "matplotlib>=3.9,<4",
     "numpy>=2,<3",
-    "pandas>=2.2,<3",
+    "pandas>=2.2,<4",
     "altair>=5.4,<6",
 ]
 

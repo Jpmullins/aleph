@@ -56,9 +56,9 @@ aleph-code-runner = { workspace = true }
 
 [dependency-groups]
 dev = [
-    "ruff==0.15.14",
-    "pyright==1.1.409",
-    "pytest==9.0.3",
+    "ruff==0.16.5",
+    "pyright==1.1.411",
+    "pytest==9.1.1",
     "pytest-asyncio==1.4.0",
     "pytest-httpx==0.36.2",
 ]
