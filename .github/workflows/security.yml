@@ -84,7 +84,7 @@ jobs:
     name: base images pinned by digest
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: every FROM and COPY --from carries a digest
         run: |
@@ -182,7 +182,7 @@ jobs:
     name: pip-audit · uv closure
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
         with:
           version: ${{ env.UV_VERSION }}
@@ -437,11 +437,11 @@ jobs:
     name: pnpm audit · npm audit · overrides
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
         with:
           version: 11
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
 
@@ -598,7 +598,7 @@ jobs:
     outputs:
       refs: ${{ steps.collect.outputs.refs }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - id: collect
         run: |
           python3 - <<'PYEOF' >> "$GITHUB_OUTPUT"
@@ -660,7 +660,7 @@ jobs:
       matrix:
         ref: ${{ fromJSON(needs.base-image-refs.outputs.refs) }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: trivy (table, for the log)
         uses: aquasecurity/trivy-action@v0.36.0
@@ -719,7 +719,7 @@ jobs:
       matrix:
         language: [python, javascript-typescript]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: github/codeql-action/init@v4
         with:
