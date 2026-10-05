@@ -13,7 +13,7 @@ dependencies = [
     "opentelemetry-instrumentation-redis==0.63b1",
     "opentelemetry-exporter-prometheus==0.63b1",
     "langfuse==4.6.1",
-    "structlog==25.5.0",
+    "structlog==26.1.0",
     "httpx==0.28.1",
 ]
 
