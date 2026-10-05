@@ -29,7 +29,7 @@
 # shipped different Node runtimes, different bundled npm and different Alpine
 # packages with nothing in the diff to say so, and a CVE scan of "the image we
 # build" named an image nobody could reproduce.
-FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS build
+FROM node:26-alpine@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2eee500cfd9e80 AS build
 
 WORKDIR /app
 
@@ -71,7 +71,7 @@ RUN pnpm --dir /app/apps/web run build
 # Resolved 2026-08-21 with `docker buildx imagetools inspect nginx:1.29-alpine`
 # — the multi-arch INDEX digest, so it resolves on linux/amd64 and linux/arm64
 # alike; a per-platform manifest digest would break every non-amd64 build.
-FROM nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
+FROM nginx:1.31-alpine@sha256:df221db836e1754089190208cee7eeda94f233197056426eda74a43ab1abeac2
 
 # The whole config, written here rather than COPY'd, so this image is one file
 # with nothing to drift against.
