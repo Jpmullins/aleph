@@ -29,7 +29,7 @@
 # shipped different Node runtimes, different bundled npm and different Alpine
 # packages with nothing in the diff to say so, and a CVE scan of "the image we
 # build" named an image nobody could reproduce.
-FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS build
+FROM node:26-alpine@sha256:8996bb5821d62a8fd9bb27c1cb07462f3fdce6e47d640c6a881ead0b064ce216 AS build
 
 WORKDIR /app
 
